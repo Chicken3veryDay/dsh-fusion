@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -13,6 +14,10 @@ def smoke_sdk_fusion_delivery(executable: Path) -> None:
     repository = Path(__file__).resolve().parent.parent
     fixture = repository / "snapshots/sdk/fusion-delivery"
     expected = json.loads((repository / "scripts/snapshots/python-sdk-single-exe/fusion-delivery/result.json").read_text())
+    evidence = None
+    if os.environ.get("DSH_FUSION_DELIVERY_EVIDENCE"):
+        evidence = Path(os.environ["DSH_FUSION_DELIVERY_EVIDENCE"])
+        evidence.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix="python-fusion-delivery-") as temporary:
         root = Path(temporary).resolve()
         home = root / "home"
@@ -61,12 +66,16 @@ def smoke_sdk_fusion_delivery(executable: Path) -> None:
                 request_timeout_seconds=60,
             ) as harness:
                 result = harness.run("/delivery_fixture", session_id=f"controller-{process}")
+                if evidence is not None:
+                    (evidence / f"process-{process}.json").write_text(result.final_response)
                 assert result.finish_reason == "completed", result
                 assert json.loads(result.final_response) == expected, result.final_response
                 done = [event for event in result.events if event.get("type") == "command/done"]
                 assert len(done) == 1 and done[0]["data"]["kind"] == "success", done
         for session_id, original in originals.items():
             path = sessions / "_no-cwd" / session_id / "session.v4.jsonl"
+            if evidence is not None:
+                (evidence / f"{session_id}.jsonl").write_text(path.read_text())
             rows = [json.loads(line) for line in path.read_text().splitlines()]
             for row in rows[1:]:
                 row.pop("seq", None)

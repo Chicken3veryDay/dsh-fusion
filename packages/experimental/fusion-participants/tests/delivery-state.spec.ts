@@ -1,5 +1,5 @@
 /** Strict durable input, contained fold failures and real checkpoint/suffix restoration. */
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import { admissionProjection, receiverProjection, createIntent, DeliveryId, intentSchema, contentHash } from '../src/delivery-state.ts'
 import { mount, read } from './harness.ts'
@@ -132,5 +132,43 @@ it('rejects receiver checkpoints with reversed acceptance order or a nonterminal
     index === 1 ? { ...row, acceptanceSeq: SessionSeq(0) } : row) }).success).toBe(false)
   expect(receiverProjection.stateSchema.safeParse({ ...state, entries: state.entries.map((row, index) =>
     index === 1 ? { ...row, intent: { ...row.intent, targetParticipantId: task.roster.rootSessionId } } : row) }).success).toBe(false)
+  await task.dispose()
+})
+
+it('registers after history, falls back from unusable checkpoints and disposes drives while retaining its pure reader', async () => {
+  const { ctx } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const root = ctx.sessions.get(task.roster.rootSessionId)!
+  const input = { deliveryId: DeliveryId('late-projection'), targetParticipantId: task.roster.roles.participant!,
+    inboxTarget: 'next-turn' as const, correlationId: null, text: 'retained protocol data' }
+  await task.delivery.admitUser(input)
+  const definition = { ...admissionProjection, key: 'lateFusionAdmissions' }
+  const handle = await ctx.sessionProjections.register(definition)
+  const state = handle.stateOf(root)
+  expect(state.entries[0]?.intent.text).toBe(input.text)
+  const full = ctx.sessionProjections.checkpoint(root)
+  const events = await read(ctx, root.id)
+  for (const checkpoint of [
+    {},
+    { lateFusionAdmissions: { ...full.lateFusionAdmissions!, ver: 99 } },
+    { lateFusionAdmissions: { ...full.lateFusionAdmissions!, seq: SessionSeq(events.length + 1) } },
+  ]) {
+    expect(ctx.sessionProjections.restore(checkpoint, events, SessionLogOffset(0), root.header, root.inheritedEventCount)
+      .checkpoint.lateFusionAdmissions).toEqual(full.lateFusionAdmissions)
+  }
+  await expect(Promise.resolve(ctx.sessionProjections.register({ ...definition, stateVersion: definition.stateVersion + 1 }))).rejects.toThrow('already registered')
+  const open = vi.spyOn(ctx.sessionPersistence, 'open')
+  const append = vi.spyOn(root, 'append')
+  expect(handle.stateOf(root)).toBe(state)
+  expect(open).not.toHaveBeenCalled()
+  expect(append).not.toHaveBeenCalled()
+  await handle.dispose()
+  expect(ctx.sessionProjections.checkpoint(root)).not.toHaveProperty('lateFusionAdmissions')
+  root.append('session/end-seed', {})
+  const calls = append.mock.calls.length
+  expect(handle.stateOf(root)).toBe(state)
+  expect(handle.stateOf(root).entries[0]?.intent.text).toBe(input.text)
+  expect(append).toHaveBeenCalledTimes(calls)
+  expect(open).not.toHaveBeenCalled()
   await task.dispose()
 })

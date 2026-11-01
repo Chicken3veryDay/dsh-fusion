@@ -1,5 +1,7 @@
 /** Private order tests use synthetic phase cuts and deterministic latches only. */
 import { expect, it, vi } from 'vitest'
+import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
+import Participants from '../src/index.ts'
 import { TaskOrder } from '../src/task-order.ts'
 import { DeliveryId } from '../src/index.ts'
 import { mount, read } from './harness.ts'
@@ -38,16 +40,31 @@ it('retains an uncertain cut until explicit reconciliation and never runs its su
   await order.close()
 })
 
-it('drains delayed admission before writer close and suppresses receipts after disposal', async () => {
+it.each(['root', 'receiver', 'completion'].flatMap(phase => ['task', 'owner'].map(kind => ({ phase, kind }))))('drains delayed $phase persistence before writer close on $kind disposal and suppresses receipts', async ({ phase, kind }) => {
   const { ctx, root, adapter } = await mount()
   const task = await ctx.fusionParticipants.prepare('single-test')
-  const rootSession = ctx.sessions.get(task.roster.rootSessionId)!
+  const owner = [...ctx.registry.get(Participants)!.fibers][0]!
+  const sessions = ctx.sessions
+  const rootSession = sessions.get(task.roster.rootSessionId)!
   const target = task.roster.roles.participant!
   const flush = ctx.sessionPersistence.flushSessionDurably.bind(ctx.sessionPersistence)
+  const late: string[] = []
+  ctx.on('session/event', (session) => {
+    if ((session.id === rootSession.id || session.id === target) && sessions.get(session.id) !== session) late.push(session.id)
+  })
+  const closed: string[] = []
+  // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted writer as this.
+  const originalClose = JsonlSessionHandle.prototype.close
+  const close = vi.spyOn(JsonlSessionHandle.prototype, 'close').mockImplementation(function (this: JsonlSessionHandle) {
+    if (this.access === 'write') closed.push(this.id)
+    return originalClose.call(this)
+  })
   const entered = Promise.withResolvers<undefined>()
   const release = Promise.withResolvers<undefined>()
   const spy = vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockImplementation(async (session) => {
-    if (session === rootSession) { entered.resolve(undefined); await release.promise }
+    const completion = rootSession.snapshotEvents().some(row => row.type === 'fusion/delivery-completed')
+    if (session.id === (phase === 'receiver' ? target : rootSession.id)
+      && (phase === 'completion' ? completion : !completion)) { entered.resolve(undefined); await release.promise }
     return flush(session)
   })
   const input = { deliveryId: DeliveryId('dispose'), targetParticipantId: target, inboxTarget: 'next-turn' as const,
@@ -55,17 +72,22 @@ it('drains delayed admission before writer close and suppresses receipts after d
   const admission = task.delivery.admitUser(input)
   const rejected = expect(admission).rejects.toMatchObject({ code: 'fusion-participants/delivery-blocked' })
   await entered.promise
-  const disposal = task.dispose()
-  expect(ctx.sessions.get(rootSession.id)).toBe(rootSession)
+  const disposal = kind === 'owner' ? owner.dispose() : task.dispose()
+  expect(sessions.get(rootSession.id)).toBe(rootSession)
   await expect(ctx.sessionPersistence.open(rootSession.id, 'write')).rejects.toThrow()
+  const prematureCloses = [...closed]
   release.resolve(undefined)
   await rejected
   await disposal
+  expect(prematureCloses).toEqual([])
   spy.mockRestore()
-  expect(ctx.sessions.get(rootSession.id)).toBeUndefined()
-  expect((await read(ctx, target)).filter(row => row.type === 'fusion/delivery-accepted')).toHaveLength(0)
+  close.mockRestore()
+  expect(late).toEqual([])
+  expect(new Set(closed)).toEqual(new Set([rootSession.id, target]))
+  expect(sessions.get(rootSession.id)).toBeUndefined()
   expect(adapter.requests).toHaveLength(0)
   const second = await mount(root)
+  expect((await read(second.ctx, target)).filter(row => row.type === 'fusion/delivery-accepted')).toHaveLength(phase === 'root' ? 0 : 1)
   const recovered = await second.ctx.fusionParticipants.recover(rootSession.id)
   expect(await recovered.delivery.admitUser(input)).toMatchObject({ decisionInputRevision: 1 })
   expect(second.adapter.requests).toHaveLength(0)
