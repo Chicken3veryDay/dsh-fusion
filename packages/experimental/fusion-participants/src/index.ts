@@ -13,15 +13,25 @@ import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { captureRoster } from './roster.ts'
 import type { Roster } from './roster.ts'
+import { DeliveryOwner } from './delivery.ts'
+import type { DormantDelivery } from './delivery.ts'
+import { admissionProjection, receiverProjection } from './delivery-state.ts'
+import type { AdmissionState, ReceiverState } from './delivery-state.ts'
 import { rosterProjection } from './state.ts'
 import type { RosterState } from './state.ts'
 
+export { DeliveryId } from './delivery-state.ts'
+export type { TextDelivery } from './delivery-state.ts'
+export { DeliveryBlockedError } from './delivery.ts'
+export type { DormantDelivery, DeliveryReceipt, AdmissionSnapshot } from './delivery.ts'
 export type { Roster } from './roster.ts'
 
 /** Capability returned only after all required leases, routes and barriers succeed. */
 export interface PreparedParticipants {
   /** Immutable root roster; IDs and routes survive Agent detachment and process restart. */
   readonly roster: Roster
+  /** Host-only durable text transport; no execution authority. */
+  readonly delivery: DormantDelivery
   /** Publish one parked participant by its roster role; no input is claimed. */
   adopt(role: string): Promise<AgentHandle>
   /**
@@ -62,12 +72,16 @@ export default class FusionParticipants extends Service {
   private readonly abort = new AbortController()
   private readonly pending = new Set<Promise<PreparedParticipants>>()
   private readonly owned = new Set<PreparedParticipants>()
+  private admissions!: ProjectionHandle<AdmissionState>
+  private receivers!: ProjectionHandle<ReceiverState>
   private projection!: ProjectionHandle<RosterState>
 
   constructor(ctx: Context) { super(ctx, 'fusionParticipants') }
 
   protected async [Service.init](): Promise<void> {
     this.projection = await this.ctx.sessionProjections.register<'fusionRoster', RosterState>(rosterProjection)
+    this.admissions = await this.ctx.sessionProjections.register(admissionProjection)
+    this.receivers = await this.ctx.sessionProjections.register(receiverProjection)
     this.ctx.effect(() => async () => {
       this.abort.abort(new Error('participant owner disposed'))
       await Promise.allSettled([...this.pending])
@@ -124,8 +138,10 @@ export default class FusionParticipants extends Service {
     let composition: Scope | undefined
     let disposal: Promise<void> | undefined
     let prepared: PreparedParticipants | undefined
+    let delivery: DeliveryOwner | undefined
     const dispose = (): Promise<void> => disposal ??= (async () => {
       const errors: unknown[] = []
+      try { await delivery?.dispose() } catch (error: unknown) { errors.push(error) }
       for (const lease of [...leases].reverse()) {
         try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
       }
@@ -188,14 +204,22 @@ export default class FusionParticipants extends Service {
       }
       await this.barrier(root.session)
       signal.throwIfAborted()
+      delivery = new DeliveryOwner({
+        ctx: this.ctx, root: root.session, signal,
+        participants: new Map([...participants].map(([id, lease]) => [id, lease.session])),
+        projections: { admissions: this.admissions, receivers: this.receivers },
+      })
+      await delivery.reconcile()
+      const deliveryOwner = delivery
       prepared = Object.freeze({
         roster: deepFreeze(roster),
+        delivery: deliveryOwner,
         adopt: async (role: string): Promise<AgentHandle> => {
           signal.throwIfAborted()
           const id = roster.roles[role]
           const lease = id === undefined ? undefined : participants.get(id)
           if (disposal !== undefined || lease === undefined) throw new Error('participant is not owned by this prepared task')
-          return lease.adopt()
+          return deliveryOwner.adopt(() => lease.adopt())
         },
         dispose,
       })

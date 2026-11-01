@@ -29,6 +29,10 @@ kind: "package-reference"
 
 准备失败时，`ParticipantPreparationError.rootSessionId` 保留恢复身份，`cleanup` 标明清理已完成或结果未知。解决失败原因后使用该根身份恢复；再次调用准备会创建另一个任务。已建立的参与者历史缺失或损坏时，恢复被阻止，不会分配替代上下文。所有权与成员记录缺失、格式无效或重复时也会拒绝恢复；必读的生命周期记录使旧版标准读取器在激活前拒绝受管理历史。
 
+`PreparedParticipants.delivery` 将类型化用户文本或已认证的活跃同伴文本投递给名册参与者，不收养或唤醒 Agent。在主机入口构造一次 `DeliveryId`，重试复用它。相同重试保留顺序、修订与 MessageId；内容、来源或路由变化会冲突。所有普通文本（包括 `ok`）在传输完成后仍阻塞且未分类。`snapshot()` 返回不可变输入事实与同步待处理预留，不执行 I/O。
+
+根意图持久化先于接收方接受和收件箱插入。回执要求验证接收方与根完成记录的持久化屏障；只承诺一个逻辑指令，不承诺推理或效果结算。`reconcile()` 使用保留的文本和来源元数据修复仅有接受记录的前缀，不重新插入已消费或取消的消息。恢复在发布前协调，收养共享同一任务顺序。`DeliveryBlockedError` 保留原始身份供协调使用。可选调用方信号能停止未记录操作或调用方等待，但不能抹除已记录意图。任务释放取消回执发布，并在关闭写入器前排空传输。
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -44,6 +48,9 @@ kind: "package-reference"
 | [src/index.ts](src/index.ts) | 主机寿命、准备、恢复与组合 |
 | [src/roster.ts](src/roster.ts) | 不可变成员与精确绑定解析 |
 | [src/state.ts](src/state.ts) | 已验证的根恢复投影 |
+| [src/delivery.ts](src/delivery.ts) | 休眠文本准入与协调 |
+| [src/delivery-state.ts](src/delivery-state.ts) | 必需投递记录与永久输入身份 |
+| [src/task-order.ts](src/task-order.ts) | 共享的私有任务顺序 |
 
 </details>
 
@@ -67,7 +74,7 @@ kind: "package-reference"
 
 #### Token effect
 
-准备、发布和恢复期间没有推理请求。后续激活与投递需要独立授权。
+准备、发布和恢复期间没有推理请求。投递仅将文本排队；激活需要独立授权。
 
 #### KV Cache effect
 
@@ -75,7 +82,7 @@ kind: "package-reference"
 
 ## Known Limitations and Deferred Work
 
-- 产品激活、输入投递与去重、执行授权、约束和最终决策由下游负责。不向模型或客体工具导出激活控制。
+- 产品激活、输入分类与处置、执行授权、约束和最终决策由下游负责。不向模型或客体工具导出激活控制。
 - 恢复需要匹配的预设声明；组合已修改时拒绝准备。本包不保留历史预设目录或插件数据库。
 - 每个保留的 Agent、子插件、组合作用域和写入句柄均完成清理后，由主机处理任务释放的拒绝。清理失败使结果保持未知，包括先前直接释放的失败；重复释放保留原因，已释放的任务拒绝接管。
 
