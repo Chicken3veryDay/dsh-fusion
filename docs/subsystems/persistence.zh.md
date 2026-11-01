@@ -93,7 +93,10 @@ interface SessionHandle extends AsyncDisposable {
   /**
    * Release the handle: a read handle frees local resources; a write handle
    * completes pending durability and releases write ownership. Idempotent,
-   * asynchronous, and deliberately not cancellable.
+   * asynchronous, and deliberately not cancellable. An opted-in writer reservation
+   * fences dispatch synchronously and retains the exact writer, route and ownership
+   * until every admitted operation releases after cleanup and final durability.
+   * Uncertainty retains ownership; it never converts a pending close into success.
    */
   close(): Promise<void>
 }
@@ -104,6 +107,20 @@ interface SessionHandle extends AsyncDisposable {
 ## flush 检查点
 
 `session/event` 是一个*同步*通知；挂载的后端按会话 id 把它路由进活跃写句柄的有界 write-behind 窗口，而不阻塞生产方（后端一次性安装这些监听器，因为持久化已保证每个 id 只有一个活跃写句柄）。第一个待处理事件会开启固定的内部批处理窗口，后续事件会加入但不会重置其截止时间。窗口到期后会通过该会话的写句柄启动一次持久化 `append`；该次写入期间接纳的事件会获得自己的截止时间，并形成后续批次。`session/flush` 会取消等待并排空至完全停稳，因此循环仍将其用作在领取下一个普通轮次之前的顺序与错误观察检查点。后台写入被拒绝时会按序保留对应事件、暂停自动路径，并通过 logger 报告；下一次显式 flush 会重试，并向其调用方响亮地拒绝。`session/disposed` 会执行同样的最终排空并关闭句柄，而 `close()` 本身会经由仍然打开的存储排空已路由的缓冲，因此后端 teardown 的关闭清扫不丢任何数据。该窗口只限制有意的批处理等待，不限制事件循环调度或后端完成持久化的延迟。
+
+<a id="writerlifetimereservation"></a>
+
+<a id="sessionwriterreservation"></a>
+
+<a id="writerlifetimeflush"></a>
+
+<a id="writerlifetimereason"></a>
+
+## 写入器生命周期预留
+
+`reserveSessionWriter(session)` 在返回 `WriterLifetimeReservation` 前，同步认证声明服务的 provider、精确的存活 Session 和已路由的写入器。不支持此功能的 provider 会拒绝。预留成功的 `SessionWriterReservation` 提供单调取消信号和即时 `checkDispatch()` 拒绝检查；两者均不授予执行权限。关闭、provider 撤回和 Session 分离会阻止派发，同时保留路由、进程内占用和内核租约，直至每个已接纳操作完成清理。
+
+`flushDurably()` 在调用时捕获 Session 的排他事件边界，并排队验证同一写入器的前缀。`release()` 同步关闭接纳，返回同一个记忆化等待结果，等待此前的刷新并验证最终捕获的前缀，然后仅移除自己的预留。`WriterLifetimeFlush` 携带持久化边界，或带可选原因的 `WriterLifetimeReason` 拒绝结果。不确定性不可撤销且会保留所有权；普通无预留关闭及错误行为不变。消费者必须先完成自身清理再释放，并将即时写入器检查与自身最终同步派发检查结合。
 
 <a id="same-session-durability"></a>
 
@@ -373,6 +390,15 @@ Visibility: a created session is observable through `stat`/`list`/`open` in this
 Freshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.
 
 ```ts cordis-catalog
+/**
+ * Reserve exact provider/Session/writer lifetime before any await or effect-capable callback.
+ * Providers authenticate object identity and roll back partial setup on refusal or reentry.
+ * Close/withdrawal/detach fence dispatch synchronously, retaining routing and ownership through cleanup.
+ * @param session - exact live Session whose current writer must remain owned.
+ * @returns a private operation reservation; unsupported providers refuse by default.
+ */
+reserveSessionWriter(session: Session): WriterLifetimeReservation
+
 /**
  * Opt in to host-verified same-session writer durability. Ordinary callers keep
  * using `sessions.flush(session)`. No model receipt or prior result is input.

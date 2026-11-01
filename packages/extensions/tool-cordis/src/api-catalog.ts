@@ -2923,6 +2923,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Durable append-only session storage addressed through per-session handles.\n\nStorage semantics shared by every backend: events are contiguous from seq 0 and never rewritten; a torn physical tail is never returned to a reader and is truncated by the write path before its first append; reads validate current-format records only and refuse unknown vocabulary fail-closed. `append` persists best-effort; `flush` — per handle or service-wide — is the durability barrier.\n\nVisibility: a created session is observable through `stat`/`list`/`open` in this process from the moment `create` resolves, even while a backend defers physical materialization (a pure optimization); other processes see the session only once it materializes, and a session that never materialized before a crash never existed. `SessionHandle.flush` forces materialization.\n\nFreshness: once an `append` or `flush` resolves, reads started afterwards on this backend instance observe at least that prefix.',
     methods: [
       {
+        signature: 'reserveSessionWriter(session: Session): WriterLifetimeReservation',
+        description: 'Reserve exact provider/Session/writer lifetime before any await or effect-capable callback. Providers authenticate object identity and roll back partial setup on refusal or reentry. Close/withdrawal/detach fence dispatch synchronously, retaining routing and ownership through cleanup.',
+        parameters: [{ name: 'session', description: 'exact live Session whose current writer must remain owned.' }],
+        returns: 'a private operation reservation; unsupported providers refuse by default.',
+      },
+      {
         signature: 'readonly identity: symbol = Symbol(\'sessionPersistence\')',
         description: 'Process-local instance identity, stable through Context proxies and distinct after service replacement.',
         parameters: [],
@@ -6428,6 +6434,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EveryScheduleRecord {\n    readonly id: ScheduleId;\n    readonly kind: \'every\';\n    readonly title: string;\n    readonly prompt: string;\n    readonly everySeconds: number;\n    readonly scheduledAt: string;\n}',
   },
   {
+    name: 'ExecutionAttemptId',
+    declaration: 'export type ExecutionAttemptId = z.infer<typeof attempt>;',
+  },
+  {
+    name: 'ExecutionSnapshot',
+    declaration: 'export interface ExecutionSnapshot {\n    readonly incarnation: string;\n    readonly generation: number;\n    readonly owner: SessionId | null;\n    readonly phase: \'closed\' | \'granted\' | \'revoking\' | \'blocked\' | \'stopped\';\n    readonly attempts: readonly {\n        readonly attemptId: ExecutionAttemptId;\n        readonly phase: string;\n    }[];\n    readonly unknown: readonly ExecutionAttemptId[];\n    readonly blockers: readonly string[];\n}',
+  },
+  {
     name: 'FeedbackCategory',
     declaration: 'export type FeedbackCategory = \'task-result\' | \'instruction-following\' | \'product-interaction\' | \'service-stability\' | \'resource-cost\' | \'security-privacy-permission\' | \'other\';',
   },
@@ -7669,7 +7683,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedParticipants',
-    declaration: 'export interface PreparedParticipants {\n    readonly roster: Roster;\n    readonly delivery: DormantDelivery;\n    adopt(role: string): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
+    declaration: 'export interface PreparedParticipants {\n    readonly roster: Roster;\n    readonly delivery: DormantDelivery;\n    readonly execution: ExecutionSnapshot;\n    adopt(role: string): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
   },
   {
     name: 'PreparedReferencedMessage',
@@ -8946,6 +8960,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionWorkspacePathApplication',
     declaration: 'export type SessionWorkspacePathApplication = NativeFileApplication;',
+  },
+  {
+    name: 'SessionWriterReservation',
+    declaration: 'export interface SessionWriterReservation {\n    readonly signal: AbortSignal;\n    checkDispatch(): {\n        readonly kind: \'refused\';\n        readonly reason: WriterLifetimeReason;\n    } | undefined;\n    flushDurably(): Promise<WriterLifetimeFlush>;\n    release(): Promise<WriterLifetimeFlush>;\n}',
   },
   {
     name: 'SetRelayRequest',
@@ -10350,6 +10368,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceView',
     declaration: 'export interface WorkspaceView {\n    readonly workspaceId: WorkspaceId;\n    readonly path: string;\n    readonly title: string;\n    readonly sessionIds: readonly SessionId[];\n    readonly createdAt: string;\n    readonly updatedAt: string;\n}',
+  },
+  {
+    name: 'WriterLifetimeFlush',
+    declaration: 'export type WriterLifetimeFlush = {\n    readonly kind: \'durable\';\n    readonly boundary: SessionLogOffset;\n} | {\n    readonly kind: \'refused\';\n    readonly reason: WriterLifetimeReason;\n    readonly cause?: unknown;\n};',
+  },
+  {
+    name: 'WriterLifetimeReason',
+    declaration: 'export type WriterLifetimeReason = \'unsupported\' | \'not-live\' | \'missing-writer\' | \'fenced\' | \'released\' | \'uncertain\';',
+  },
+  {
+    name: 'WriterLifetimeReservation',
+    declaration: 'export type WriterLifetimeReservation = {\n    readonly kind: \'reserved\';\n    readonly reservation: SessionWriterReservation;\n} | {\n    readonly kind: \'refused\';\n    readonly reason: WriterLifetimeReason;\n};',
   },
 ]
 

@@ -9,8 +9,11 @@
   en: 283765de86ff454d
   zh: ef8fcf55a3071243
 /session-persistence/the-flush-checkpoint:
-  en: f2072ab4b85c7d89
-  zh: fe2df3bb946cdf66
+  en: d925a5e9cdbda688
+  zh: c9f1a13daaaafcb1
+/session-persistence/writer-lifetime-reservations:
+  en: b5b656175e8a9ac9
+  zh: a59d5e813db9546c
 /session-persistence/same-session-durability:
   en: acaed5cba25b6400
   zh: 705e706518a9aba3
