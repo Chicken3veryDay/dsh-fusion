@@ -71,6 +71,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   agentLoop: 'core.md',
   agentDefaultModel: 'core.md',
   agentPresets: 'core.md',
+  fusionConfig: 'core.md',
   agents: 'core.md',
   approval: 'approval.md',
   officeToPdf: 'office-to-pdf.md',
@@ -987,6 +988,8 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
 
 /** Project types deliberately documented outside the subsystems catalog. */
 export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
+  Selection: 'packages/preset/fusion-config/README.md',
+  PreflightReport: 'packages/preset/fusion-config/README.md',
   ActionCardDecision: 'packages/experimental/action-cards/README.md',
   ActionCardKind: 'packages/experimental/action-cards/README.md',
   ActionCardResult: 'packages/experimental/action-cards/README.md',

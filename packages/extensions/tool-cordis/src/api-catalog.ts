@@ -1615,6 +1615,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'fusionConfig',
+    summary: 'Immutable named configuration, pi-ai provider registration and non-inference inspection.',
+    description: 'Immutable named configuration, pi-ai provider registration and non-inference inspection.',
+    methods: [
+      {
+        signature: 'selection(id: string): Selection',
+        description: 'Read a named frozen selection without network or credential I/O.',
+        parameters: [{ name: 'id', description: 'exact configured name; unknown names throw a safe configuration error.' }],
+        returns: 'complete revisioned role map; later Loader replacement cannot mutate it.',
+      },
+      {
+        signature: 'preflight(id: string, signal?: AbortSignal): Promise<PreflightReport>',
+        description: 'Inspect current credentials, adapter declarations and complete metadata without inference.',
+        parameters: [{ name: 'id', description: 'named captured configuration.' }, { name: 'signal', description: 'caller cancellation; omission retains plugin disposal and per-listing deadlines.' }],
+        returns: 'frozen report; failures block readiness, disposal aborts and awaits owned traversal.',
+      },
+    ],
+  },
+  {
     key: 'goals',
     summary: 'Goal service (`ctx.goals`) backed exclusively by the owning session log.',
     description: 'Goal service (`ctx.goals`) backed exclusively by the owning session log.',
@@ -5740,8 +5759,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface BashEnvVariableInfo extends BashEnvVariable {\n    contributor: string;\n    key: DshEnvironmentKey;\n}',
   },
   {
+    name: 'Binding',
+    declaration: 'export type Binding = Readonly<Omit<ModelDefinition, \'leadEffort\' | \'executorEffort\' | \'alias\' | \'credentialRef\'> & {\n    credentialRef: ReturnType<typeof credentialRef>;\n    effort: z.infer<typeof effortSchema>;\n}>;',
+  },
+  {
     name: 'BindingOrigin',
     declaration: 'export type BindingOrigin = \'created\' | \'referenced\' | \'discovered\' | \'tracked\';',
+  },
+  {
+    name: 'BindingReadiness',
+    declaration: 'export interface BindingReadiness {\n    readonly binding: Binding;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly code: \'configured\' | \'missing-provider\' | \'route-mismatch\' | \'unknown-capability\' | \'unsupported-capability\' | \'unsupported-effort\' | \'missing-credential\' | \'credential-failed\' | \'adapter-failed\' | \'absent-model\' | \'metadata-unknown\' | \'cancelled\';\n    readonly membership?: Membership;\n}',
   },
   {
     name: 'BoxProps',
@@ -7132,6 +7159,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type McpResourceRequest = {\n    method: \'resources/list\' | \'resources/templates/list\';\n    cursor?: string;\n} | {\n    method: \'resources/read\';\n    uri: string;\n};',
   },
   {
+    name: 'Membership',
+    declaration: 'export type Membership = {\n    readonly kind: \'present\' | \'absent\';\n    readonly receipt: MetadataReceipt;\n} | {\n    readonly kind: \'unknown\';\n    readonly code: \'cancelled\' | \'timeout\' | \'limit\' | \'metadata-failed\' | \'invalid-page\' | \'invalid-continuation\' | \'conflicting-evidence\';\n};',
+  },
+  {
     name: 'Mergeability',
     declaration: 'export type Mergeability = \'mergeable\' | \'conflicting\' | \'unknown\';',
   },
@@ -7236,6 +7267,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n    \'system-prompt\': SystemPromptMessageSource;\n}',
   },
   {
+    name: 'MetadataReceipt',
+    declaration: 'export interface MetadataReceipt {\n    readonly host: string;\n    readonly endpoint: string;\n    readonly retrievedAt: string;\n    readonly pages: number;\n    readonly bytes: number;\n    readonly listingDigest: string;\n    readonly selectedId: string;\n    readonly providerEvidence: \'absent\' | \'consistent\';\n}',
+  },
+  {
     name: 'ModDefinition',
     declaration: 'export interface ModDefinition {\n    readonly name: string;\n    readonly version?: string;\n    readonly root?: string;\n    readonly options?: PluginOptions;\n    readonly register: ModRegister;\n}',
   },
@@ -7250,6 +7285,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ModelCatalogModel',
     declaration: 'export interface ModelCatalogModel {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n    readonly reasoning?: ModelReasoning;\n    readonly badge?: LlmModelBadge;\n}',
+  },
+  {
+    name: 'ModelDefinition',
+    declaration: 'export type ModelDefinition = z.infer<typeof definitionSchema>;',
   },
   {
     name: 'ModelMessageSource',
@@ -7546,6 +7585,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PostToolDecision',
     declaration: 'export type PostToolDecision = {\n    kind: \'accept\';\n    content?: ContentBlock[];\n    value?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'accept\';\n    value: JsonValue;\n    content?: never;\n    additionalContexts?: UserMessage[];\n} | {\n    kind: \'block\';\n    feedback: ContentBlock[];\n    additionalContexts?: UserMessage[];\n};',
+  },
+  {
+    name: 'PreflightReport',
+    declaration: 'export interface PreflightReport {\n    readonly selection: Selection;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly agentPreset: \'ready\' | \'blocked\';\n    readonly bindings: readonly BindingReadiness[];\n    readonly coverage: \'live-unverified\';\n    readonly defaultEligible: false;\n    readonly productAdmission: \'unavailable-until-runtime-safety-gates\';\n}',
   },
   {
     name: 'PreparedAdapterCall',
@@ -8158,6 +8201,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SearchResultView',
     declaration: 'export type SearchResultView = SearchMatchesResultView | SearchPathsResultView;',
+  },
+  {
+    name: 'Selection',
+    declaration: 'export interface Selection {\n    readonly id: string;\n    readonly revision: string;\n    readonly agentPreset: string;\n    readonly mode: \'fusion\' | \'single\';\n    readonly runtime: \'quickjs-script\';\n    readonly tier: \'top\' | \'middle\' | \'low\' | \'single\';\n    readonly roles: Readonly<Record<string, Binding>>;\n    readonly upgrades: readonly Binding[];\n}',
   },
   {
     name: 'SendTeamMessageRequest',

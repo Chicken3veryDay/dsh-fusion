@@ -207,9 +207,12 @@ Read these pages when the package-level contract is not enough. They move from t
 - [Twin LLM adapters](../../../.agents/notes/implemented/architecture/2026-06-13-twin-llm-adapters.md) — why the DeepSeek route ships two structurally different adapters.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-pi-ai) — every accepted config field and its source declaration.
 
+The package exports `resolveProfiles`, `credentialStoreFrom` and `authContextFrom` for explicit adapter consumers such as Fusion configuration. These reuse the same profile validation and credential adapters without mounting stock discovery or enabling a route by default.
+
 -----
 
 <a id="model-experience"></a>
+
 ## Model Experience
 
 ### Provider request through pi-ai

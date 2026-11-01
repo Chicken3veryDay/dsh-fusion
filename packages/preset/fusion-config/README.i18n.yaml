@@ -1,0 +1,55 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/preset/fusion-config/README.md
+/:
+  en: 56d37911503fb97b
+  zh: af37dadcdb32b1ca
+/deepseek-ai-dsh-fusion-config:
+  en: 22ada37575efe07f
+  zh: b21b54b63984662e
+/deepseek-ai-dsh-fusion-config/summary:
+  en: 704ea358a895b2f9
+  zh: b056e63ea4bb792a
+/deepseek-ai-dsh-fusion-config/table-of-contents:
+  en: 054c6d2af439db12
+  zh: b8595067a162d4ea
+/deepseek-ai-dsh-fusion-config/use-this-package:
+  en: bbff250eba0f1b89
+  zh: bbff250eba0f1b89
+/deepseek-ai-dsh-fusion-config/use-this-package/when-to-choose-it:
+  en: c0acce4f1f0523f2
+  zh: a532cc82041fcafb
+/deepseek-ai-dsh-fusion-config/use-this-package/minimal-configuration:
+  en: 60a778418c763f4d
+  zh: c8fbd89bc9004f39
+/deepseek-ai-dsh-fusion-config/use-this-package/reading-results:
+  en: 3f5c715395ba6832
+  zh: 0c9c200fbbbf81ab
+/deepseek-ai-dsh-fusion-config/understand-the-implementation:
+  en: 798d34fc727c24a5
+  zh: b358f67372ab40cc
+/deepseek-ai-dsh-fusion-config/further-exploration:
+  en: dc2dfc116cb563e8
+  zh: 81c640499c609b44
+/deepseek-ai-dsh-fusion-config/dev-note:
+  en: c1d5c504aa7a71ba
+  zh: 714197f362301d2b
+/deepseek-ai-dsh-fusion-config/model-experience:
+  en: 215e7ba838619b7b
+  zh: 215e7ba838619b7b
+/deepseek-ai-dsh-fusion-config/model-experience/preflight-command:
+  en: a0b14f10cd721b95
+  zh: a0b14f10cd721b95
+/deepseek-ai-dsh-fusion-config/model-experience/preflight-command/what-the-model-sees:
+  en: fcfecd5a6de5c65c
+  zh: 1bf93ddb5b2c7ec2
+/deepseek-ai-dsh-fusion-config/model-experience/preflight-command/token-effect:
+  en: 0a5df29adb188ffa
+  zh: 5d7a3c0a1b7e0146
+/deepseek-ai-dsh-fusion-config/model-experience/preflight-command/kv-cache-effect:
+  en: 115006574ae56a0f
+  zh: 14ad2a5ba062d1ba
+/deepseek-ai-dsh-fusion-config/known-limitations-and-deferred-work:
+  en: 60c260cb0e4817bd
+  zh: ebd13cc21b9d3cb5

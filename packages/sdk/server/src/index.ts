@@ -12,6 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Readable, Writable } from 'node:stream'
 import Schema from '@deepseek-ai/schemastery'
+import { CommandDefinitionId } from '@deepseek-ai/dsh-commands'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from './server.ts'
 
@@ -24,6 +25,8 @@ export const inject = ['agents', 'workingDirectory']
 export interface JsonRpcConfig {
   /** Report max-token turn/subagent termination as a successful SDK result. */
   maxTokensAsSuccess?: boolean
+  /** Exact additional command definition ids admitted by session.query; absent keeps stock routing. */
+  queryCommandDefinitions?: string[]
   /** Transport input override; production uses `process.stdin`. */
   input?: Readable
   /** Transport output override; production uses `process.stdout`. */
@@ -34,6 +37,7 @@ export interface JsonRpcConfig {
 
 export const Config: Schema<JsonRpcConfig> = Schema.object({
   maxTokensAsSuccess: Schema.boolean().default(false),
+  queryCommandDefinitions: Schema.array(Schema.string()).default([]),
 })
 
 /**
@@ -58,6 +62,9 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
   const transport = new JsonRpcLineTransport(input, output)
   const server = new HarnessSdkJsonRpcServer(ctx, transport, {
     maxTokensAsSuccess: resolvedConfig.maxTokensAsSuccess,
+    ...config.queryCommandDefinitions === undefined ? {} : {
+      queryCommandDefinitions: config.queryCommandDefinitions.map(CommandDefinitionId),
+    },
   })
   // Compositions can order Schedule after its activation handler is installed.
   // Like the app startup marker, this carries readiness, not another control API.

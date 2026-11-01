@@ -643,6 +643,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Folds logged plan/mode state, flushes user selections at turn boundaries, renders deployment-owned guidance, registers /plan, and keeps the plan-exit schema stable across transitions.',
   },
   {
+    key: 'fusionConfig',
+    pkg: 'fusion-config',
+    title: 'Opt-in Fusion configuration',
+    mode: 'core',
+    note: 'Captures immutable role selections and exposes non-inference readiness through an explicitly composed human command.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

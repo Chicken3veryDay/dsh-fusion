@@ -78,3 +78,13 @@ describe('SDK query text recognition', () => {
     expect(queryCommand('/权限 read-only', shadowed)).toBeUndefined()
   })
 })
+
+it('admits explicitly configured command identities and keeps absent or shadowed commands as prompts', () => {
+  const definitionId = CommandDefinitionId('fixture/preflight')
+  const configured = [{ name: 'fusion_preflight', definitionId, description: 'Inspect' }]
+  expect(queryCommand('/fusion_preflight top', configured)).toBeUndefined()
+  expect(queryCommand('/fusion_preflight top', configured, [definitionId])).toBe('/fusion_preflight top')
+  expect(queryCommand('/renamed top', [{ ...configured[0]!, name: 'renamed' }], [definitionId])).toBe('/renamed top')
+  expect(queryCommand('/fusion_preflight top', [{ name: 'fusion_preflight', description: 'Shadow' }], [definitionId])).toBeUndefined()
+  expect(queryCommand('/fusion_preflight top', [], [definitionId])).toBeUndefined()
+})

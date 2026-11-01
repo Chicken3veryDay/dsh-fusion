@@ -1600,6 +1600,23 @@ export type Config = LocalConfig
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-fs-sandbox -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-fusion-config -->
+<a id="deepseek-aidsh-fusion-config"></a>
+
+## `@deepseek-ai/dsh-fusion-config`
+
+- `inject`: `llm` · `credentials` · `commands` · `agentPresets`
+- `source`: [`packages/preset/fusion-config/src/index.ts:54`](../packages/preset/fusion-config/src/index.ts)
+
+```ts config-catalog
+/** Loader input; document is strictly parsed once before registrations become visible. */
+export interface Config {
+  /** Explicit versioned catalog, selections, provider declarations and metadata bounds. */
+  document: unknown
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-fusion-config -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-goal -->
 <a id="deepseek-aidsh-goal"></a>
 
@@ -2978,13 +2995,15 @@ export interface Config {
 
 - `inject`: `agents` · `workingDirectory`
 - `refs`: `Readable` (`node:stream`) · `Writable` (`node:stream`)
-- `source`: [`packages/sdk/server/src/index.ts:24`](../packages/sdk/server/src/index.ts)
+- `source`: [`packages/sdk/server/src/index.ts:25`](../packages/sdk/server/src/index.ts)
 
 ```ts config-catalog
 /** JSON-RPC deployment config plus runtime-only test hooks. */
 export interface JsonRpcConfig {
   /** Report max-token turn/subagent termination as a successful SDK result. */
   maxTokensAsSuccess?: boolean
+  /** Exact additional command definition ids admitted by session.query; absent keeps stock routing. */
+  queryCommandDefinitions?: string[]
   /** Transport input override; production uses `process.stdin`. */
   input?: Readable
   /** Transport output override; production uses `process.stdout`. */

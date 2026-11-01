@@ -1,0 +1,36 @@
+- id: sdk-jsonrpc-server
+  config:
+    queryCommandDefinitions:
+      - '@deepseek-ai/dsh-fusion-config/preflight'
+- id: credentials
+  name: './credentials.mjs'
+  disabled: false
+- insert:
+    - id: fusion-presets
+      name: '../../../packages/preset/agent-preset-registry/lib/index.js'
+      config:
+        default: fusion-inspection
+    - id: fusion-preset
+      name: '../../../packages/preset/agent-preset/lib/index.js'
+      config:
+        id: fusion-inspection
+        plugins: []
+    - id: fusion-config
+      name: '../../../packages/preset/fusion-config/lib/index.js'
+      config:
+        document:
+          credentialRef: FUSION_TEST_KEY
+          agentPreset: fusion-inspection
+          providers: {}
+          declarations: []
+          bindings: []
+          selections: []
+          metadataLimits:
+            responseBytes: 32768
+            totalBytes: 65536
+            pages: 10
+            timeoutMs: 5000
+    - id: fusion-capture
+      name: '../manual-compact/capture-requests.mjs'
+      config:
+        path: !!js dshHomePath('fusion-requests.jsonl')

@@ -64,6 +64,7 @@ Host 与桌面适配器共用 `dsh-commands/builtin` 的定义身份及中英文
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `maxTokensAsSuccess` | `false` | 把 max-token 轮次或 subagent 终止报告为成功的 SDK 结果 |
+| `queryCommandDefinitions` | `[]` | `session.query` 显式允许的额外命令定义 id；重命名仍按身份匹配，无关的同名定义仍作为提示 |
 
 profile 组合拥有每个根 agent 的工具。`input`、`output` 与 `exit` 是仅供测试的运行时传输钩子；生产环境使用进程 stdio 与 `process.exit`。生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sdk-jsonrpc-server)是每个受支持字段的穷尽式真源。
 

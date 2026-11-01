@@ -79,6 +79,8 @@ function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
 
 /** Deployment-specific status mapping for SDK turn and subagent outcomes. */
 export interface HarnessSdkJsonRpcServerOptions {
+  /** Explicitly admitted extra command definition ids; no additional commands when omitted. */
+  queryCommandDefinitions?: readonly import('@deepseek-ai/dsh-commands').CommandDefinitionId[]
   /** Report max-token termination as an accepted result instead of an infrastructure error. */
   maxTokensAsSuccess?: boolean
 }
@@ -304,7 +306,7 @@ export class HarnessSdkJsonRpcServer {
         const rec = await this.getOrCreateSession(params.sessionId)
         this.lifetime.signal.throwIfAborted()
         this.assertLiveAgent(rec, params.sessionId)
-        const line = queryCommand(text.text, commands.list(rec.handle.agent))
+        const line = queryCommand(text.text, commands.list(rec.handle.agent), this.options.queryCommandDefinitions)
         if (line !== undefined) {
           const images = queryCommandImages(params.contentBlocks, text)
           const activity: QueryActivity = new QueryActivity(this.ctx, rec.handle.agent, this.transport,

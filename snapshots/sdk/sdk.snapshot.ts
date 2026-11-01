@@ -112,6 +112,8 @@ interface SdkAssertions {
   modelRequestsFile?: string
   /** Replay caller-owned commands between turns; profile fixtures own any in-turn commands. */
   replayStandaloneCommands?: boolean
+  /** Scenario-owned non-secret input for commands that intentionally omit recorded arguments. */
+  redactedCommandInputs?: Readonly<Record<string, string>>
   /** Submit all manifest images with each standalone command, including rejected invocations. */
   commandAttachments?: boolean
   /** Native plan-review choices in the order the fixture requests them. */
@@ -146,6 +148,13 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
     patches: [fileURLToPath(new URL('./approval/runtime.cordis.yml', import.meta.url))],
   },
 
+  'fusion-preflight': {
+    expectedFinalResponse: 'SDK snapshot OK',
+    patches: [fileURLToPath(new URL('./fusion-preflight/runtime.cordis.yml', import.meta.url))],
+    modelRequestsFile: 'fusion-requests.jsonl',
+    replayStandaloneCommands: true,
+    redactedCommandInputs: { fusion_preflight: ' top' },
+  },
   'desktop-context': {
     expectedFinalResponse: 'SDK snapshot OK',
     runtimeContext: {
@@ -542,7 +551,7 @@ function modelFromSession(log: string): { provider: string; model: string } {
 }
 
 /** Replay caller inputs; profile fixtures recreate their own in-turn command activity. */
-function sdkActions(log: string, replayStandaloneCommands: boolean): SdkAction[] {
+function sdkActions(log: string, replayStandaloneCommands: boolean, redactedCommandInputs: Readonly<Record<string, string>> = {}): SdkAction[] {
   const actions: SdkAction[] = []
   const commandInputs = new Set<string>()
   let commandId: string | undefined
@@ -552,11 +561,13 @@ function sdkActions(log: string, replayStandaloneCommands: boolean): SdkAction[]
       if (!replayStandaloneCommands || current !== undefined) continue
       const data = record.data as JsonObject | undefined
       if ((data?.source as JsonObject | undefined)?.kind !== 'user') continue
-      if (typeof data?.name !== 'string' || typeof data.args !== 'string' || typeof data.commandId !== 'string') {
+      if (typeof data?.name !== 'string' || typeof data.commandId !== 'string') {
         throw new Error('SDK snapshot command/run requires commandId, name and recorded string arguments')
       }
+      const args = typeof data.args === 'string' ? data.args : redactedCommandInputs[data.name]
+      if (args === undefined) throw new Error('Redacted command requires explicit scenario-owned replay input')
       commandId = data.commandId
-      actions.push({ kind: 'command', line: `/${data.name}${data.args}` })
+      actions.push({ kind: 'command', line: `/${data.name}${args}` })
       continue
     }
     const data = record.data as JsonObject | undefined
@@ -792,7 +803,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
     ignoredRootEntries: RUNTIME_WORKSPACE_ENTRIES,
   })
   const [parentFixture, ...childFixtures] = replayFixtures
-  const actions = sdkActions(primaryFixture, assertions.replayStandaloneCommands === true)
+  const actions = sdkActions(primaryFixture, assertions.replayStandaloneCommands === true, assertions.redactedCommandInputs)
   const resumeReplayFile = scenario.name === 'session-resume' && !recording
     ? join(patchRoot, 'resume-replay.json') : undefined
   const prepareTurnReplay = async (turn: number): Promise<void> => {
@@ -1204,6 +1215,19 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       )
       reconcileCatalogCreationTimes(ordered.map(log => log.content), 'validate')
       const actualContext = contextOf(ordered, cwd)
+      if (scenario.name === 'fusion-preflight') {
+        const parent = ordered[0]
+        if (parent === undefined) throw new Error('Fusion preflight has no persisted Session')
+        const events = parseSessionLog(parent.content)
+        expect(modelRequests).toHaveLength(1)
+        expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
+        expect(events.filter(event => event.type === 'command/run')).toMatchObject([{ data: { name: 'fusion_preflight' } }])
+        expect(events.find(event => event.type === 'command/run')?.data).not.toHaveProperty('args')
+        expect(events.filter(event => event.type === 'command/done')).toMatchObject([{ data: {
+          kind: 'error', text: expect.stringContaining('No model was invoked.'),
+        } }])
+        expect(parent.content).not.toContain('fusion-sentinel-key')
+      }
       if (scenario.name === 'command-attachments') {
         const parent = ordered[0]
         if (parent === undefined) throw new Error('command attachments have no persisted Session')

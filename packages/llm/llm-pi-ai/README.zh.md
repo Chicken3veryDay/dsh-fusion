@@ -207,9 +207,12 @@ git add packages/llm/llm-pi-ai/src/provider-data.generated.ts
 - [孪生 LLM 适配器](../../../.agents/notes/implemented/architecture/2026-06-13-twin-llm-adapters.zh.md)——为什么 DeepSeek 路由交付两个结构不同的适配器。
 - [生成配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-pi-ai)——每个受支持配置字段及其源声明。
 
+此包导出 `resolveProfiles`、`credentialStoreFrom` 和 `authContextFrom`，供 Fusion 配置等显式适配器使用方复用相同的配置验证及凭证适配，无需挂载原有模型发现或默认启用路由。
+
 -----
 
 <a id="model-experience"></a>
+
 ## 模型体验
 
 ### 经 pi-ai 的提供方请求

@@ -458,6 +458,7 @@
       "@deepseek-ai/dsh-fs-patch": ["./packages/fs/fs-patch/src"],
       "@deepseek-ai/dsh-fs-sandbox": ["./packages/fs/fs-sandbox/src"],
       "@deepseek-ai/dsh-fs-ssh": ["./packages/ssh/fs-ssh/src"],
+      "@deepseek-ai/dsh-fusion-config": ["./packages/preset/fusion-config/src"],
       "@deepseek-ai/dsh-goal": ["./packages/goal/goal/src"],
       "@deepseek-ai/dsh-goal-round-driver": ["./packages/goal/goal-round-driver/src"],
       "@deepseek-ai/dsh-harness-dev-context": ["./packages/context/harness-dev-context/src"],

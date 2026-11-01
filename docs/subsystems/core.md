@@ -864,6 +864,31 @@ Types: [Session](session.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="ctxfusionconfig--fusionconfig"></a>
+
+### `ctx.fusionConfig` — `FusionConfig`
+
+Immutable named configuration, pi-ai provider registration and non-inference inspection.
+
+```ts cordis-catalog
+/**
+ * Read a named frozen selection without network or credential I/O.
+ * @param id - exact configured name; unknown names throw a safe configuration error.
+ * @returns complete revisioned role map; later Loader replacement cannot mutate it.
+ */
+selection(id: string): Selection
+
+/**
+ * Inspect current credentials, adapter declarations and complete metadata without inference.
+ * @param id - named captured configuration.
+ * @param signal - caller cancellation; omission retains plugin disposal and per-listing deadlines.
+ * @returns frozen report; failures block readiness, disposal aborts and awaits owned traversal.
+ */
+preflight(id: string, signal?: AbortSignal): Promise<PreflightReport>
+```
+
+Source: [`packages/preset/fusion-config/src/index.ts`](../../packages/preset/fusion-config/src/index.ts)
+
 <a id="agent-events"></a>
 
 ### `agent/*` events
