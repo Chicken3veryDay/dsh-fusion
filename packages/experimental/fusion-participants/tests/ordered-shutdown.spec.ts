@@ -10,7 +10,7 @@ import { DeliveryOwner } from '../src/delivery.ts'
 import { mount, read } from './harness.ts'
 
 const phases = ['root', 'receiver', 'completion'] as const
-const routes = ['root', 'root-restart', 'root-update', 'owner', 'loop', 'loop-restart', 'persistence', 'persistence-restart', 'task', 'caller'] as const
+const routes = ['root', 'root-restart', 'root-update', 'owner', 'owner-restart', 'loop', 'loop-restart', 'persistence', 'persistence-restart', 'task', 'caller'] as const
 const cases = [false, true].flatMap(loopFirst => ['writer', 'service'].flatMap(layer =>
   phases.flatMap(phase => routes.map(route => ({ loopFirst, layer, phase, route }))),
 ))
