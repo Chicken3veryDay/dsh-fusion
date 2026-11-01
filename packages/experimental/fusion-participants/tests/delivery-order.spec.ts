@@ -114,15 +114,15 @@ it('honors an aborted duplicate caller without canceling the original durable op
   const rejected = expect(duplicate).rejects.toThrow('caller stopped')
   await entered.promise
   cancellation.abort(new Error('caller stopped'))
+  await rejected
   release.resolve(undefined)
   const receipt = await first
-  await rejected
   expect(await task.delivery.admitUser(input)).toEqual(receipt)
   expect(task.delivery.snapshot().decisionInputRevision).toBe(1)
   await task.dispose()
 })
 
-it.each(['queued', 'recorded'] as const)('retains a %s canceled admission until explicit reconciliation', async (phase) => {
+it.each(['queued', 'recorded'] as const)('cancels only the caller wait after a %s reservation without blocking other sends', async (phase) => {
   const { ctx, adapter } = await mount()
   const task = await ctx.fusionParticipants.prepare('single-test')
   const root = ctx.sessions.get(task.roster.rootSessionId)!
@@ -138,18 +138,34 @@ it.each(['queued', 'recorded'] as const)('retains a %s canceled admission until 
     inboxTarget: 'next-turn' as const, correlationId: null, text: 'ok' }
   const cancellation = new AbortController()
   const admission = task.delivery.admitUser(input, cancellation.signal)
-  const rejected = expect(admission).rejects.toMatchObject({ code: 'fusion-participants/delivery-blocked' })
+  const rejected = expect(admission).rejects.toThrow('caller stopped')
   if (phase === 'recorded') await entered.promise
   cancellation.abort(new Error('caller stopped'))
-  release.resolve(undefined)
   await rejected
   expect(task.delivery.snapshot().classificationPending).toEqual([input.deliveryId])
-  await expect(task.delivery.admitUser(input)).rejects.toThrow()
-  await task.delivery.reconcile()
-  const receipt = await task.delivery.admitUser(input)
+  const retry = task.delivery.admitUser(input)
+  const unrelated = { ...input, deliveryId: DeliveryId('unrelated-call'), text: 'another caller' }
+  const next = task.delivery.admitUser(unrelated)
+  release.resolve(undefined)
+  const receipt = await retry
   expect(receipt.decisionInputRevision).toBe(1)
+  expect((await next).decisionInputRevision).toBe(2)
+  const parked = await task.adopt('participant')
+  await parked.dispose()
+  expect(task.delivery.snapshot().transportPending).toEqual([])
   expect((await read(ctx, input.targetParticipantId)).filter(row => row.type === 'agent/inbox/spliced'
-    && row.data.inserted.length > 0)).toHaveLength(1)
+    && row.data.inserted.some(message => message.id === receipt.messageId))).toHaveLength(1)
   expect(adapter.requests).toHaveLength(0)
+  await task.dispose()
+})
+
+it('admits nothing for a pre-aborted signal and preserves the next caller revision', async () => {
+  const { ctx } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const input = { deliveryId: DeliveryId('pre-aborted'), targetParticipantId: task.roster.roles.participant!,
+    inboxTarget: 'next-turn' as const, correlationId: null, text: 'not submitted' }
+  await expect(task.delivery.admitUser(input, AbortSignal.abort(new Error('already stopped')))).rejects.toThrow()
+  expect(task.delivery.snapshot()).toMatchObject({ decisionInputRevision: 0, reservations: [], classificationPending: [] })
+  expect((await task.delivery.admitUser(input)).decisionInputRevision).toBe(1)
   await task.dispose()
 })

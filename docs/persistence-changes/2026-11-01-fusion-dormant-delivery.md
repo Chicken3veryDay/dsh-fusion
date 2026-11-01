@@ -64,7 +64,7 @@ Existing stock records remain valid. Older readers reject every new required eve
 <a id="verification"></a>
 ## Verification
 
-119 focused participant, retained-lifecycle and writer-durability tests passed with per-file 100% coverage of every participant source file. The preserved upstream parser and stored validator reject each new event independently. New TypeScript SDK delivery and unchanged fusion-retained replay both passed. Rebuilt Python executable delivery is blocked: optional Fusion packages are absent from its closure and external loading mixes scoped-context identities. This record does not certify Python delivery or independent acceptance.
+The focused participant, retained-lifecycle and writer-durability suite passes with per-file 100% coverage of every participant source file. The preserved upstream parser and stored validator reject each new event independently. TypeScript SDK delivery and unchanged fusion-retained replay pass. The optional Python executable built with `--fusion` passes both delivery and retained smokes using one packaged core module closure; the default runtime remains isolated from experimental packages. This record does not certify independent acceptance.
 
 <a id="dev-note"></a>
 ## Dev Note

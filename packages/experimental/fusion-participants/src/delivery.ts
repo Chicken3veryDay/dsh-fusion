@@ -21,9 +21,9 @@ export interface AdmissionSnapshot {
 }
 /** Host-only text admission with no Agent activation or execution capability. */
 export interface DormantDelivery {
-  /** Admit user text; a signal can stop an unrecorded operation or its caller, never erase an intent. */
+  /** A pre-aborted signal admits nothing; after reservation it cancels only this caller's wait, not delivery. */
   admitUser(input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>
-  /** Authenticate the exact live peer against this retained task before reserving text. */
+  /** Authenticate the exact live peer; caller signals have the same wait-only semantics as admitUser. */
   admitPeer(sender: Agent, input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>
   /** Reconcile surviving prefixes and reprove current writer coverage before dependent operations. */
   reconcile(): Promise<void>
@@ -98,10 +98,7 @@ export class DeliveryOwner implements DormantDelivery {
       const digest = contentHash({ ...input, rootSessionId: this.owner.root.id, origin })
       if (prior !== undefined && prior.contentHash !== digest) throw new Error('delivery identity reused with changed input')
       if (existing?.promise != null) {
-        return caller === undefined ? existing.promise : existing.promise.then((receipt) => {
-          caller.throwIfAborted()
-          return receipt
-        })
+        return this.waitForReceipt(existing.promise, caller)
       }
       const next = Math.max(state.entries.at(-1)?.intent.order ?? 0,
         ...[...this.reservations.values()].map(row => row.intent.order)) + 1
@@ -110,10 +107,8 @@ export class DeliveryOwner implements DormantDelivery {
       // Reservation and revision are visible synchronously, before the task-order wait.
       this.reservations.set(input.deliveryId, reservation)
       const operation = this.order.reserve(async () => {
-        caller?.throwIfAborted()
         const receipt = await this.deliver(intent)
         this.signal.throwIfAborted()
-        caller?.throwIfAborted()
         this.proven.add(intent.deliveryId)
         this.reservations.delete(intent.deliveryId)
         return receipt
@@ -122,8 +117,16 @@ export class DeliveryOwner implements DormantDelivery {
         reservation.promise = null
         throw new DeliveryBlockedError(intent.deliveryId, error)
       })
-      return reservation.promise
+      return this.waitForReceipt(reservation.promise, caller)
     } catch (error: unknown) { return Promise.reject(new DeliveryBlockedError(input.deliveryId, error)) }
+  }
+
+  private waitForReceipt(operation: Promise<DeliveryReceipt>, caller?: AbortSignal): Promise<DeliveryReceipt> {
+    if (caller === undefined) return operation
+    const canceled = Promise.withResolvers<never>()
+    const abort = () => { canceled.reject(caller.reason) }
+    caller.addEventListener('abort', abort, { once: true })
+    return Promise.race([operation, canceled.promise]).finally(() => { caller.removeEventListener('abort', abort) })
   }
 
   snapshot(): AdmissionSnapshot {

@@ -3,10 +3,15 @@ import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import { DeliveryId } from '../src/index.ts'
 import { mount, read, message } from './harness.ts'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  syncBuiltinESMExports()
+})
 
 it('rejects foreign exact Agents and stale object identities before reserving, and rejects changed routing and content', async () => {
   const { ctx } = await mount()
@@ -141,8 +146,11 @@ it('observes active native, process, job, claim and provider seams across succes
   await new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', (code) => { if (code === 0) resolve(); else reject(new Error(`control exit ${code}`)) }) })
   expect(childProcess.spawnSync(process.execPath, ['-e', ''], { env: {} }).status).toBe(0)
   childProcess.execFileSync(process.execPath, ['-e', ''], { env: {} })
-  childProcess.execSync('true', { env: {} })
-  await new Promise<void>((resolve, reject) => { childProcess.exec('true', { env: {} }, (error) => { if (error instanceof Error) reject(error); else resolve() }) })
+  const command = `"${process.execPath}" -e ""`
+  childProcess.execSync(command, { env: {} })
+  await new Promise<void>((resolve, reject) => {
+    childProcess.exec(command, { env: {} }, (error) => { if (error instanceof Error) reject(error); else resolve() })
+  })
   await new Promise<void>((resolve, reject) => { childProcess.execFile(process.execPath, ['-e', ''], { env: {} }, (error) => { if (error instanceof Error) reject(error); else resolve() }) })
   const controlPath = join(directory, 'launch-control.cjs')
   await writeFile(controlPath, '')
