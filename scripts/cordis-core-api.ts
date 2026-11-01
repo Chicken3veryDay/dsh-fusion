@@ -54,6 +54,7 @@ export const CORDIS_CORE_API_PAGES: CordisCoreApiPage[] = [
       { kind: 'decl', file: 'vendor/cordis/src/fiber.ts', symbol: 'Effect' },
       { kind: 'decl', file: 'vendor/cordis/src/fiber.ts', symbol: 'Disposable' },
       { kind: 'decl', file: 'vendor/cordis/src/fiber.ts', symbol: 'EffectMeta' },
+      { kind: 'class', file: 'vendor/cordis/src/fiber.ts', symbol: 'CleanupObservation', heading: 'CleanupObservation', prefix: 'observation.' },
       { kind: 'decl', file: 'vendor/cordis/src/fiber.ts', symbol: 'CordisError' },
       { kind: 'decl', file: 'vendor/cordis/src/fiber.ts', symbol: 'ValidationError' },
     ],

@@ -219,7 +219,7 @@ loop 在发布工厂前等待必需的注册完成。它对模型选择和 inbox
 - **配置 agent 没有逐 agent persona 字段或 setup 钩子**：它们使用部署 persona；只有编程式 `ctx.agents.create()` / `resume()` 工厂选项支持带作用域的 persona 与工具组合。
 - **没有内置轮次预算**：工具调用或 steering 会让当前轮次继续；限制失控轮次的策略必须从既有生命周期扩展点（如 `agent/turn-stopping`）执行取消。
 
-- **主机保留的 Session** — `ctx.agents.retain()` 通过原始已注册的 Session 与写入句柄发布停驻的 Agent；分离不结束保留寿命。底层 Cordis 作用域释放会吞掉插件清理错误，因此该路径无法确认插件清理成功。
+- **主机保留的 Session** — `ctx.agents.retain()` 通过原始已注册的 Session 与写入句柄发布停驻的 Agent；分离不结束保留寿命。其主机通过[观测清理的作用域](../scope/README.zh.md#use-this-package)在完整清理后处理清理拒绝。初始化失败且清理结果未知时，禁止再次接管，并向后续释放保留失败。普通 Agent 作用域保留原有 Cordis 释放语义。
 
 <a id="dev-note"></a>
 ### 开发备注

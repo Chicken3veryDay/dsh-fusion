@@ -47,7 +47,7 @@ export async function retainSession(
   owner: Context,
   options: RetainAgentSessionOptions,
   factorySignal: AbortSignal,
-  initialize: (session: Session, signal: AbortSignal) => Promise<AgentHandle>,
+  initialize: (session: Session, signal: AbortSignal, onCleanupFailure: (dispose: () => Promise<void>) => void) => Promise<AgentHandle>,
   track: (dispose: () => Promise<void>) => () => void,
   authorities: WeakMap<RetainedAgentSession, RetainedAuthority>,
   storeSuffix: (session: Session, writer: SessionHandle, storedCount: number) => Promise<void>,
@@ -67,6 +67,7 @@ export async function retainSession(
   let detach: (() => void) | undefined
   let resident: AgentHandle | undefined
   let adoption: Promise<AgentHandle> | undefined
+  let failedCleanup: (() => Promise<void>) | undefined
   let disposal: Promise<void> | undefined
   let disposed = false
   const acquired = Promise.withResolvers<void>()
@@ -81,12 +82,13 @@ export async function retainSession(
     if (adoption !== undefined) {
       try { await adoption } catch (error: unknown) { errors.push(error) }
     }
+    try { await failedCleanup?.() } catch (error: unknown) { errors.push(error) }
     try { await resident?.dispose() } catch (error: unknown) { errors.push(error) }
     try { await writer?.close() } catch (error: unknown) { errors.push(error) }
     detach?.()
+    if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
     untrack()
     parent?.children.delete(dispose)
-    if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
   })()
   signal.throwIfAborted()
   parent?.children.add(dispose)
@@ -131,12 +133,13 @@ export async function retainSession(
       session,
       async adopt(): Promise<AgentHandle> {
         signal.throwIfAborted()
+        if (failedCleanup !== undefined) throw new Error('retained session cleanup remains unknown')
         if (disposed || resident !== undefined || adoption !== undefined) throw new Error('retained session cannot be adopted twice')
         adoption = (async () => {
           const durability = await persistence.flushSessionDurably(session)
           if (durability.kind !== 'durable') throw new Error(`retained adoption durability refused: ${durability.reason}`)
           signal.throwIfAborted()
-          const handle = await initialize(session, signal)
+          const handle = await initialize(session, signal, (cleanup) => { failedCleanup = cleanup })
           resident = handle
           signal.throwIfAborted()
           let detached: Promise<void> | undefined

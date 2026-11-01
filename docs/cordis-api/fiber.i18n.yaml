@@ -9,80 +9,98 @@
   en: b5b3510f4b6dd13a
   zh: a0c70471b6d779b5
 /fiber/ctx-effect-execute-label:
-  en: 38bab93cf931eec1
-  zh: 50fed09622da4926
+  en: 985e587b0dc89277
+  zh: 4285586a6363552b
 /fiber/ctx-fiber:
   en: a10e38bf26b4ecfe
   zh: 7c91817984c95c99
 /fiber/the-fiber-class:
-  en: 31ca1205552db9ef
-  zh: 5fa2e5b9a7396576
+  en: 856a5dd947b47e42
+  zh: 8fa62907ab7ed9c7
 /fiber/the-fiber-class/fiber-uid:
-  en: 2f0eb3658bb8497e
-  zh: 65d3c17ca8bd4f95
+  en: 16641f4d158dc94d
+  zh: e01d304700ef9e79
 /fiber/the-fiber-class/fiber-ctx:
-  en: 1b527d85759324f9
-  zh: 54aa40db2705b95c
+  en: 922c5c8ba5d99a46
+  zh: 50e5706382740010
 /fiber/the-fiber-class/fiber-config:
-  en: 73b05dc38761b681
-  zh: d663668f3e8fd33f
+  en: 1a79de8d5abb7e5a
+  zh: eb135b0cf7489707
 /fiber/the-fiber-class/fiber-state:
-  en: eda419fecddc4dc8
-  zh: 1a1b90f405cf3cbc
+  en: b1a2cae38da1f485
+  zh: a6a1949fe6b87ce9
 /fiber/the-fiber-class/fiber-dispose:
-  en: 43f4ad79a728a492
-  zh: 71b216695d0afb22
+  en: 0353078cb3af93b3
+  zh: 6fe0986b2eb6d568
 /fiber/the-fiber-class/fiber-committed:
-  en: 0485c9d782bf90da
-  zh: 74304cd05e9c0796
+  en: 4147d92238e8e37d
+  zh: f292612e6475caf9
 /fiber/the-fiber-class/fiber-provisions:
-  en: 1cf8235d0ca54124
-  zh: 3d2e39064853165f
+  en: 3c10a4072f302a3e
+  zh: c1578e60705548b1
 /fiber/the-fiber-class/fiber-inertia:
-  en: 2a3b1d3bc37bf986
-  zh: 83bd257ee685d38b
+  en: 8ef17c797b15b897
+  zh: 2c576a2fe70907af
 /fiber/the-fiber-class/fiber-name:
-  en: cdc0677ce1d83361
-  zh: a58305521a0626de
+  en: a63461e278c63eea
+  zh: 367bea491641f4b9
 /fiber/the-fiber-class/fiber-assertactive:
-  en: 0c3e8008ff2d69e2
-  zh: 7b454626d3e3a3b6
+  en: 29c57873e4cf33d9
+  zh: 1dcd8426857ae451
 /fiber/the-fiber-class/fiber-effect-execute-label:
-  en: 0e905aa798ce3830
-  zh: bbd0b0c537097d37
+  en: 53076278f21fae56
+  zh: 2538e733b233e3ab
 /fiber/the-fiber-class/fiber-geteffects:
-  en: 729a1000bda8ee36
-  zh: 5bfc19df3addab80
+  en: 05242a338832643b
+  zh: ae7791717061ad23
 /fiber/the-fiber-class/fiber-rawconfig:
-  en: 80d4007e42bd8b47
-  zh: 14c11dc09c6402ce
+  en: 1ae1c9b2cfddd5ff
+  zh: efdb1e04b1840978
 /fiber/the-fiber-class/fiber-effectiveconfig:
-  en: 8e9fcdcf458c8bde
-  zh: 36d21cafbf4f0198
+  en: f30cf0685c37b3a3
+  zh: 0bc60355fc5a8b74
 /fiber/the-fiber-class/fiber-resolveconfig-config:
-  en: f8a9ca27b288bd4c
-  zh: 03ce360b5200fbdb
+  en: b7b79e30ed773643
+  zh: 27e2e353d4de7a95
 /fiber/the-fiber-class/fiber-await:
-  en: 3f228c1861466386
-  zh: 43b3f3acfc3d314b
+  en: cc8ec9f0e7711ddb
+  zh: 3ea69da14c8febfb
 /fiber/the-fiber-class/fiber-restart:
-  en: 152116f669f52e95
-  zh: 11d3cd941ce32d88
+  en: 1786b45259c95cd1
+  zh: 45d380a0ea29d931
 /fiber/the-fiber-class/fiber-update-config-nosave:
-  en: a4f711258eb70e47
-  zh: fff4d880d820de10
+  en: a44cb68762216f8d
+  zh: ffb30adbe67c7323
 /fiber/effect:
-  en: 007d5b214e8a8610
-  zh: d74c26fbb1b8aeb6
+  en: b93870c41bfbf356
+  zh: 012d5d918c264b96
 /fiber/disposable:
-  en: 56e4218392fa7234
-  zh: 8fea671180cacf6f
+  en: f83297c8f91c4cd9
+  zh: 6a588197e71a5623
 /fiber/effectmeta:
-  en: 849aa91b8e67809f
-  zh: 4b31d7e2acd2a008
+  en: 5c76ac3976d76ac9
+  zh: 3af2ea4df7c5b535
+/fiber/cleanupobservation:
+  en: 61e1cda852e424f2
+  zh: de44f0351670d3ef
+/fiber/cleanupobservation/observation-record-reason:
+  en: 1a971ef25cb27ef6
+  zh: 60d7e314de3da472
+/fiber/cleanupobservation/observation-track-task:
+  en: 76364951ff4f4f00
+  zh: 48d601135da49661
+/fiber/cleanupobservation/observation-settle:
+  en: 20a77748b53a079b
+  zh: a7120b5eee8e38ed
+/fiber/static-members:
+  en: ceb197529207a8ed
+  zh: 7d444c03f8be0f0d
+/fiber/static-members/cleanupobservation-key:
+  en: 52c0a38b09b8f1c8
+  zh: a3416d480d4329ac
 /fiber/cordiserror:
-  en: d276771958d3c05f
-  zh: 0141656ade938d55
+  en: f095aeb28227cbca
+  zh: b556bcfa7a1e7581
 /fiber/validationerror:
-  en: 178782124cc15210
-  zh: 2b226f43f48af555
+  en: 6b0499989858e522
+  zh: a91f1920075041b4

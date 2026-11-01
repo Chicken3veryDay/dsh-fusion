@@ -105,11 +105,11 @@
   en: 339c8a8a56fa7b5a
   zh: 339c8a8a56fa7b5a
 /session-persistence-event-catalog/events/fusion/fusion-participant-established-log-only:
-  en: d55223cb94b9daf4
-  zh: 779b7fdc9522b7f2
+  en: b3da652737169816
+  zh: a94a699bdb4e15a9
 /session-persistence-event-catalog/events/fusion/fusion-roster-log-only:
-  en: f630bac83cc2a820
-  zh: a336b4d1c39a8317
+  en: 5191b19ae15c0646
+  zh: d0cf5ec686efb390
 /session-persistence-event-catalog/events/goal:
   en: d990c355971ee24c
   zh: d990c355971ee24c
@@ -2010,8 +2010,8 @@
   en: 1f60bd6aed6dd889
   zh: c6d408d21a1c3975
 /session-persistence-event-catalog/resolved-persistence-types/participantid:
-  en: b8e262809fa8cbe0
-  zh: f65df8ba812ffe60
+  en: 43869069f9f9cc59
+  zh: b7446ab9e244288d
 /session-persistence-event-catalog/resolved-persistence-types/policy-source:
   en: 88fd92dff7aa505f
   zh: b400712b3ef749aa

@@ -34,7 +34,7 @@ Register a cleanup-aware effect on this fiber.
 
 **Returns** a disposer that tears the effect down and settles once done.
 
-[Source](../../vendor/cordis/src/fiber.ts#L421)
+[Source](../../vendor/cordis/src/fiber.ts#L480)
 
 ### ctx.fiber
 
@@ -53,7 +53,7 @@ Runtime instance of one plugin application.
 
 A fiber tracks dependency state, raw and effective config, lifecycle effects, and cleanup for the plugin context returned by `ctx.plugin()`.
 
-[Source](../../vendor/cordis/src/fiber.ts#L184)
+[Source](../../vendor/cordis/src/fiber.ts#L241)
 
 ### fiber.uid
 
@@ -64,7 +64,7 @@ public uid: number | null
 
 Unique id within the registry; 0 for the root fiber, `null` once disposed.
 
-[Source](../../vendor/cordis/src/fiber.ts#L186)
+[Source](../../vendor/cordis/src/fiber.ts#L243)
 
 ### fiber.ctx
 
@@ -75,7 +75,7 @@ public readonly ctx: Context
 
 The context this fiber's plugin runs in (extends the parent context).
 
-[Source](../../vendor/cordis/src/fiber.ts#L188)
+[Source](../../vendor/cordis/src/fiber.ts#L245)
 
 ### fiber.config
 
@@ -86,7 +86,7 @@ public config: any
 
 Raw plugin input retained for the next activation.
 
-[Source](../../vendor/cordis/src/fiber.ts#L190)
+[Source](../../vendor/cordis/src/fiber.ts#L247)
 
 ### fiber.state
 
@@ -97,7 +97,7 @@ public state
 
 Current lifecycle state; transitions emit `internal/status`.
 
-[Source](../../vendor/cordis/src/fiber.ts#L192)
+[Source](../../vendor/cordis/src/fiber.ts#L249)
 
 ### fiber.dispose
 
@@ -108,7 +108,7 @@ public readonly dispose: () => Promise<void>
 
 Dispose this fiber: unload the plugin, then settle once cleanup finished.
 
-[Source](../../vendor/cordis/src/fiber.ts#L194)
+[Source](../../vendor/cordis/src/fiber.ts#L251)
 
 ### fiber.committed
 
@@ -119,7 +119,7 @@ public committed: Readonly<Dict<Impl>> | undefined
 
 Required implementations retained through dependent teardown.
 
-[Source](../../vendor/cordis/src/fiber.ts#L196)
+[Source](../../vendor/cordis/src/fiber.ts#L253)
 
 ### fiber.provisions
 
@@ -130,7 +130,7 @@ public readonly provisions: Set<Impl>
 
 Service implementations owned by this fiber, including isolated provisions.
 
-[Source](../../vendor/cordis/src/fiber.ts#L198)
+[Source](../../vendor/cordis/src/fiber.ts#L255)
 
 ### fiber.inertia
 
@@ -141,7 +141,7 @@ public inertia: Promise<void> | undefined
 
 The in-flight load/unload transition, if one is currently running.
 
-[Source](../../vendor/cordis/src/fiber.ts#L200)
+[Source](../../vendor/cordis/src/fiber.ts#L257)
 
 ### fiber.name
 
@@ -152,7 +152,7 @@ get name()
 
 The plugin's display name, inherited from the nearest named ancestor, else `'root'`.
 
-[Source](../../vendor/cordis/src/fiber.ts#L342)
+[Source](../../vendor/cordis/src/fiber.ts#L401)
 
 ### fiber.assertActive()
 
@@ -170,7 +170,7 @@ Throw if the fiber has already been disposed.
 
 **Returns** nothing when the fiber is still active.
 
-[Source](../../vendor/cordis/src/fiber.ts#L357)
+[Source](../../vendor/cordis/src/fiber.ts#L416)
 
 ### fiber.effect(execute, label?)
 
@@ -201,7 +201,7 @@ Register a cleanup-aware effect on this fiber.
 
 **Returns** a disposer that tears the effect down and settles once done.
 
-[Source](../../vendor/cordis/src/fiber.ts#L421)
+[Source](../../vendor/cordis/src/fiber.ts#L480)
 
 ### fiber.getEffects()
 
@@ -218,7 +218,7 @@ Return metadata for currently registered effects.
 
 **Returns** one `EffectMeta` tree per labeled live effect.
 
-[Source](../../vendor/cordis/src/fiber.ts#L574)
+[Source](../../vendor/cordis/src/fiber.ts#L644)
 
 ### fiber.rawConfig
 
@@ -229,7 +229,7 @@ get rawConfig(): unknown
 
 Raw input retained for the next activation, without evaluating expressions or validating it.
 
-[Source](../../vendor/cordis/src/fiber.ts#L649)
+[Source](../../vendor/cordis/src/fiber.ts#L719)
 
 ### fiber.effectiveConfig
 
@@ -244,7 +244,7 @@ get effectiveConfig(): unknown
 
 The object passed to plugin activation or the latest successful update that retained the instance. Candidate resolution does not publish it; volatile updates retain its references. Undefined before activation and readable after unload; callers requiring a live instance check `state`.
 
-[Source](../../vendor/cordis/src/fiber.ts#L664)
+[Source](../../vendor/cordis/src/fiber.ts#L734)
 
 ### fiber.resolveConfig(config)
 
@@ -266,7 +266,7 @@ Evaluate and validate a candidate using this fiber's `internal/config` hooks and
 
 **Returns** The candidate's resolved config, retaining the schema's result identity.
 
-[Source](../../vendor/cordis/src/fiber.ts#L676)
+[Source](../../vendor/cordis/src/fiber.ts#L746)
 
 ### fiber.await()
 
@@ -284,7 +284,7 @@ Wait for current lifecycle work and rethrow startup errors.
 
 **Returns** this fiber, once it has settled into a stable state.
 
-[Source](../../vendor/cordis/src/fiber.ts#L754)
+[Source](../../vendor/cordis/src/fiber.ts#L825)
 
 ### fiber.restart()
 
@@ -302,7 +302,7 @@ Dispose and immediately reload this plugin with its current config.
 
 **Returns** a promise resolving once the reload settled.
 
-[Source](../../vendor/cordis/src/fiber.ts#L768)
+[Source](../../vendor/cordis/src/fiber.ts#L839)
 
 ### fiber.update(config, noSave?)
 
@@ -324,7 +324,7 @@ Resolve a candidate, retain its raw config and apply it through the update water
 
 **Returns** The awaited update/restart result, or undefined when a synchronous listener handles it.
 
-[Source](../../vendor/cordis/src/fiber.ts#L783)
+[Source](../../vendor/cordis/src/fiber.ts#L854)
 
 ## Effect
 
@@ -345,7 +345,7 @@ type Effect<T = any> =
   | AsyncEffect<T>
 ```
 
-[Source](../../vendor/cordis/src/fiber.ts#L83)
+[Source](../../vendor/cordis/src/fiber.ts#L140)
 
 ## Disposable
 
@@ -363,7 +363,7 @@ Disposers run in reverse registration order when the owning fiber unloads; they 
 type Disposable<T = any> = () => T
 ```
 
-[Source](../../vendor/cordis/src/fiber.ts#L74)
+[Source](../../vendor/cordis/src/fiber.ts#L131)
 
 ## EffectMeta
 
@@ -379,7 +379,77 @@ interface EffectMeta {
 }
 ```
 
-[Source](../../vendor/cordis/src/fiber.ts#L96)
+[Source](../../vendor/cordis/src/fiber.ts#L153)
+
+## CleanupObservation
+
+Host-owned failure evidence for one disposable lifetime and its descendants. Install on a parent context under `key` before creating its owning fiber. Ordinary disposal still logs and contains failures. The host alone handles `settle()` rejection after stopping admission and joining fiber disposal. Use a fresh instance for each independent lifetime; evidence is never reset.
+
+[Source](../../vendor/cordis/src/fiber.ts#L73)
+
+### observation.record(reason)
+
+```ts cordis-catalog
+/**
+ * Retain a cleanup failure without changing ordinary Cordis propagation.
+ * @param reason - original cleanup cause.
+ */
+record(reason: unknown): void
+```
+
+Retain a cleanup failure without changing ordinary Cordis propagation.
+
+- `reason` — original cleanup cause.
+
+[Source](../../vendor/cordis/src/fiber.ts#L90)
+
+### observation.track(task)
+
+```ts cordis-catalog
+/**
+ * Join asynchronous cleanup even when its public single-shot disposer was claimed.
+ * @param task - cleanup completion whose rejection is retained and contained here.
+ */
+track(task: Promise<void>): void
+```
+
+Join asynchronous cleanup even when its public single-shot disposer was claimed.
+
+- `task` — cleanup completion whose rejection is retained and contained here.
+
+[Source](../../vendor/cordis/src/fiber.ts#L99)
+
+### observation.settle()
+
+```ts cordis-catalog
+/**
+ * Drain observed cleanup and report all known failures, including earlier raw disposal.
+ * Call only after the owner has stopped work and joined its fiber transitions.
+ * Repeated callers retain the same causes; successful calls do not erase evidence.
+ * @returns completion after every observed cleanup has settled.
+ * @throws {AggregateError} when cleanup failed or its outcome remains unknown.
+ */
+async settle(): Promise<void>
+```
+
+Drain observed cleanup and report all known failures, including earlier raw disposal. Call only after the owner has stopped work and joined its fiber transitions. Repeated callers retain the same causes; successful calls do not erase evidence.
+
+**Returns** completion after every observed cleanup has settled.
+
+[Source](../../vendor/cordis/src/fiber.ts#L115)
+
+## Static members
+
+### CleanupObservation.key
+
+```ts cordis-catalog
+/** Context metadata key; extending a context leaves its parent unchanged. */
+static readonly key: unique symbol
+```
+
+Context metadata key; extending a context leaves its parent unchanged.
+
+[Source](../../vendor/cordis/src/fiber.ts#L75)
 
 ## CordisError
 
@@ -405,7 +475,7 @@ namespace CordisError {
 }
 ```
 
-[Source](../../vendor/cordis/src/fiber.ts#L157)
+[Source](../../vendor/cordis/src/fiber.ts#L214)
 
 ## ValidationError
 
@@ -425,4 +495,4 @@ class ValidationError extends TypeError {
 }
 ```
 
-[Source](../../vendor/cordis/src/fiber.ts#L19)
+[Source](../../vendor/cordis/src/fiber.ts#L21)

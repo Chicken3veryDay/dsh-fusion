@@ -223,7 +223,12 @@ it('preserves retained ownership when initialization or its cleanup fails', asyn
   } })
   await expect(broken.adopt()).rejects.toThrow('initialization and cleanup failed')
   expect(ctx.sessions.get(SessionId('broken'))).toBe(broken.session)
-  await broken.dispose()
+  expect(ctx.agents.list()).toHaveLength(0)
+  await expect(broken.adopt()).rejects.toThrow('cleanup remains unknown')
+  await expect(broken.dispose()).rejects.toThrow('cleanup failed')
+  expect(ctx.sessions.get(SessionId('broken'))).toBeUndefined()
+  const writer = await ctx.sessionPersistence.open(SessionId('broken'), 'write')
+  await writer.close()
 })
 
 it('rejects test activation for stock drivers and in a production runtime', async () => {
@@ -236,4 +241,80 @@ it('rejects test activation for stock drivers and in a production runtime', asyn
   try { await expect(handle.agent.testOnlyTurn(message())).rejects.toThrow('unavailable') }
   finally { vi.unstubAllEnvs() }
   await retained.dispose()
+})
+
+it.each(['scope', 'factory'] as const)('joins retained teardown failure after %s initiates disposal', async (first) => {
+  const { ctx, adapter } = await mount()
+  const retained = await ctx.agents.retain({ ...options, setup: (owner) => {
+    owner.effect(() => () => { throw new Error('retained owner cleanup failed') })
+  } })
+  const handle = await retained.adopt()
+  const agents = ctx.agents
+  const sessions = ctx.sessions
+  const claims = vi.fn()
+  ctx.on('agent/inbox/claimed', claims)
+  handle.agent.followup(message())
+  if (first === 'scope') await handle.agent.ctx.fiber.dispose()
+  else await ctx.fiber.dispose()
+  const results = await Promise.allSettled([handle.dispose(), handle.dispose(), retained.dispose()])
+  expect(results.map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected'])
+  expect(agents.list()).toHaveLength(0)
+  expect(sessions.list()).toHaveLength(0)
+  expect(adapter.requests).toHaveLength(0)
+  expect(claims).not.toHaveBeenCalled()
+})
+
+it('retains a failed child outcome for a root disposed after the child', async () => {
+  const { ctx } = await mount()
+  const root = await ctx.agents.retain(options)
+  const child = await ctx.agents.retain({ ...options, sessionId: SessionId('failed-child'), root,
+    setup: (owner) => { owner.effect(() => () => { throw new Error('child cleanup') }) },
+  })
+  await child.adopt()
+  await expect(child.dispose()).rejects.toThrow('cleanup failed')
+  await expect(root.dispose()).rejects.toThrow('cleanup failed')
+  await expect(root.dispose()).rejects.toThrow('cleanup failed')
+  expect(ctx.sessions.list()).toHaveLength(0)
+})
+
+it('awaits adoption cancelled by disposal and retains its rejected outcome for all disposers', async () => {
+  const { ctx } = await mount()
+  const retained = await ctx.agents.retain(options)
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  const flush = ctx.sessionPersistence.flushSessionDurably.bind(ctx.sessionPersistence)
+  vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockImplementationOnce(async (session) => {
+    entered.resolve(undefined)
+    await release.promise
+    return flush(session)
+  })
+  const adopting = retained.adopt()
+  const rejected = expect(adopting).rejects.toThrow('disposed')
+  await entered.promise
+  const disposal = retained.dispose()
+  const failed = expect(disposal).rejects.toThrow('cleanup failed')
+  release.resolve(undefined)
+  await rejected
+  await failed
+  await expect(retained.dispose()).rejects.toThrow('cleanup failed')
+  expect(ctx.sessions.list()).toHaveLength(0)
+})
+
+it('re-adopts after clean setup rollback with fresh scope evidence for each residency', async () => {
+  const { ctx } = await mount()
+  let first = true
+  let cleaned = 0
+  const retained = await ctx.agents.retain({ ...options, setup: (owner) => {
+    owner.effect(() => () => { cleaned++ })
+    if (first) { first = false; throw new Error('recoverable setup failure') }
+  } })
+  await expect(retained.adopt()).rejects.toThrow('recoverable setup failure')
+  expect(cleaned).toBe(1)
+  const handle = await retained.adopt()
+  await handle.dispose()
+  expect(cleaned).toBe(2)
+  await retained.adopt()
+  await retained.dispose()
+  expect(cleaned).toBe(3)
+  expect(ctx.sessions.list()).toHaveLength(0)
 })

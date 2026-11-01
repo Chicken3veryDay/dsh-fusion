@@ -36,7 +36,7 @@ effect(execute: () => Effect, label?: string): AsyncDisposable<Promise<void>>
 
 **返回**一个用于撤销该作用的清理函数，并在清理完成后结算。
 
-[源码](../../vendor/cordis/src/fiber.ts#L421)
+[源码](../../vendor/cordis/src/fiber.ts#L480)
 
 ### ctx.fiber
 
@@ -55,7 +55,7 @@ fiber: Fiber
 
 fiber 会跟踪 `ctx.plugin()` 返回的插件上下文所对应的依赖状态、原始配置与有效配置、生命周期作用和清理操作。
 
-[源码](../../vendor/cordis/src/fiber.ts#L184)
+[源码](../../vendor/cordis/src/fiber.ts#L241)
 
 ### fiber.uid
 
@@ -66,7 +66,7 @@ public uid: number | null
 
 在注册表中的唯一 id；根 fiber 的 id 为 0，dispose 后为 `null`。
 
-[源码](../../vendor/cordis/src/fiber.ts#L186)
+[源码](../../vendor/cordis/src/fiber.ts#L243)
 
 ### fiber.ctx
 
@@ -77,7 +77,7 @@ public readonly ctx: Context
 
 此 fiber 的插件运行所在的上下文（扩展自父上下文）。
 
-[源码](../../vendor/cordis/src/fiber.ts#L188)
+[源码](../../vendor/cordis/src/fiber.ts#L245)
 
 ### fiber.config
 
@@ -88,7 +88,7 @@ public config: any
 
 为下次激活保留的原始插件输入。
 
-[源码](../../vendor/cordis/src/fiber.ts#L190)
+[源码](../../vendor/cordis/src/fiber.ts#L247)
 
 ### fiber.state
 
@@ -99,7 +99,7 @@ public state
 
 当前生命周期状态；状态转换会发出 `internal/status`。
 
-[源码](../../vendor/cordis/src/fiber.ts#L192)
+[源码](../../vendor/cordis/src/fiber.ts#L249)
 
 ### fiber.dispose
 
@@ -110,7 +110,7 @@ public readonly dispose: () => Promise<void>
 
 dispose 此 fiber：卸载插件，并在清理完成后结算。
 
-[源码](../../vendor/cordis/src/fiber.ts#L194)
+[源码](../../vendor/cordis/src/fiber.ts#L251)
 
 ### fiber.committed
 
@@ -121,7 +121,7 @@ public committed: Readonly<Dict<Impl>> | undefined
 
 在依赖方清理完成前保留的所需服务实现。
 
-[源码](../../vendor/cordis/src/fiber.ts#L196)
+[源码](../../vendor/cordis/src/fiber.ts#L253)
 
 ### fiber.provisions
 
@@ -132,7 +132,7 @@ public readonly provisions: Set<Impl>
 
 此 fiber 拥有的服务实现，包括隔离域中的服务。
 
-[源码](../../vendor/cordis/src/fiber.ts#L198)
+[源码](../../vendor/cordis/src/fiber.ts#L255)
 
 ### fiber.inertia
 
@@ -143,7 +143,7 @@ public inertia: Promise<void> | undefined
 
 当前正在进行的加载或卸载转换；如果没有此类转换，则为 undefined。
 
-[源码](../../vendor/cordis/src/fiber.ts#L200)
+[源码](../../vendor/cordis/src/fiber.ts#L257)
 
 ### fiber.name
 
@@ -154,7 +154,7 @@ get name()
 
 插件的显示名称，继承自最近的具名祖先；如果不存在，则为 `'root'`。
 
-[源码](../../vendor/cordis/src/fiber.ts#L342)
+[源码](../../vendor/cordis/src/fiber.ts#L401)
 
 ### fiber.assertActive()
 
@@ -172,7 +172,7 @@ assertActive()
 
 **返回**：fiber 仍处于活动状态时不返回任何内容。
 
-[源码](../../vendor/cordis/src/fiber.ts#L357)
+[源码](../../vendor/cordis/src/fiber.ts#L416)
 
 ### fiber.effect(execute, label?)
 
@@ -203,7 +203,7 @@ effect(execute: () => Effect, label?: string): AsyncDisposable<Promise<void>>
 
 **返回**一个用于撤销该作用的清理函数，并在清理完成后结算。
 
-[源码](../../vendor/cordis/src/fiber.ts#L421)
+[源码](../../vendor/cordis/src/fiber.ts#L480)
 
 ### fiber.getEffects()
 
@@ -220,7 +220,7 @@ getEffects()
 
 **返回**：每个带标签的活动作用对应一棵 `EffectMeta` 树。
 
-[源码](../../vendor/cordis/src/fiber.ts#L574)
+[源码](../../vendor/cordis/src/fiber.ts#L644)
 
 ### fiber.rawConfig
 
@@ -232,7 +232,7 @@ get rawConfig(): unknown
 
 保留供下次激活使用的原始输入，不执行表达式求值或验证。
 
-[源码](../../vendor/cordis/src/fiber.ts#L649)
+[源码](../../vendor/cordis/src/fiber.ts#L719)
 
 ### fiber.effectiveConfig
 
@@ -247,7 +247,7 @@ get effectiveConfig(): unknown
 
 传给插件激活过程或最近一次成功保留实例的更新的对象。候选配置求值不发布结果；volatile 更新保留其中的引用。激活前为 undefined，卸载后仍可读取；需要运行中实例的调用方还应检查 `state`。
 
-[源码](../../vendor/cordis/src/fiber.ts#L664)
+[源码](../../vendor/cordis/src/fiber.ts#L734)
 
 ### fiber.resolveConfig(config)
 
@@ -270,7 +270,7 @@ resolveConfig(config: unknown): unknown
 
 **返回**候选配置的解析结果，保留 schema 返回对象的身份。
 
-[源码](../../vendor/cordis/src/fiber.ts#L676)
+[源码](../../vendor/cordis/src/fiber.ts#L746)
 
 ### fiber.await()
 
@@ -288,7 +288,7 @@ async await()
 
 **返回**：进入稳定状态后的此 fiber。
 
-[源码](../../vendor/cordis/src/fiber.ts#L754)
+[源码](../../vendor/cordis/src/fiber.ts#L825)
 
 ### fiber.restart()
 
@@ -306,7 +306,7 @@ dispose 此插件，并立即使用其当前配置重新加载。
 
 **返回**一个在重新加载完成后兑现的 promise。
 
-[源码](../../vendor/cordis/src/fiber.ts#L768)
+[源码](../../vendor/cordis/src/fiber.ts#L839)
 
 ### fiber.update(config, noSave?)
 
@@ -328,7 +328,7 @@ update(config: any, noSave = false): Awaitable<void>
 
 **返回** 可等待的更新或重启结果；同步监听器处理更新时为 undefined。
 
-[源码](../../vendor/cordis/src/fiber.ts#L783)
+[源码](../../vendor/cordis/src/fiber.ts#L854)
 
 ## Effect
 
@@ -349,7 +349,7 @@ type Effect<T = any> =
   | AsyncEffect<T>
 ```
 
-[源码](../../vendor/cordis/src/fiber.ts#L83)
+[源码](../../vendor/cordis/src/fiber.ts#L140)
 
 ## Disposable
 
@@ -367,7 +367,7 @@ type Effect<T = any> =
 type Disposable<T = any> = () => T
 ```
 
-[源码](../../vendor/cordis/src/fiber.ts#L74)
+[源码](../../vendor/cordis/src/fiber.ts#L131)
 
 ## EffectMeta
 
@@ -383,7 +383,78 @@ interface EffectMeta {
 }
 ```
 
-[源码](../../vendor/cordis/src/fiber.ts#L96)
+[源码](../../vendor/cordis/src/fiber.ts#L153)
+
+## CleanupObservation
+
+由主机拥有的单个可释放生命周期及其后代的失败证据。在创建所属 fiber 之前，通过 `key` 将其安装到父上下文。普通释放仍记录并隔离失败。主机停止接纳工作并等待 fiber 释放后，单独负责处理 `settle()` 的拒绝。每个独立生命周期使用全新实例；证据不会重置。
+
+[源码](../../vendor/cordis/src/fiber.ts#L73)
+
+### observation.record(reason)
+
+```ts cordis-catalog
+/**
+ * Retain a cleanup failure without changing ordinary Cordis propagation.
+ * @param reason - original cleanup cause.
+ */
+record(reason: unknown): void
+```
+
+保留清理失败，不改变 Cordis 的普通错误传播行为。
+
+- `reason` — 原始清理失败原因。
+
+[源码](../../vendor/cordis/src/fiber.ts#L90)
+
+### observation.track(task)
+
+```ts cordis-catalog
+/**
+ * Join asynchronous cleanup even when its public single-shot disposer was claimed.
+ * @param task - cleanup completion whose rejection is retained and contained here.
+ */
+track(task: Promise<void>): void
+```
+
+即使公共单次清理函数已被调用，也等待异步清理。
+
+- `task` — 清理完成的 promise；其拒绝在此保留并隔离。
+
+[源码](../../vendor/cordis/src/fiber.ts#L99)
+
+### observation.settle()
+
+```ts cordis-catalog
+/**
+ * Drain observed cleanup and report all known failures, including earlier raw disposal.
+ * Call only after the owner has stopped work and joined its fiber transitions.
+ * Repeated callers retain the same causes; successful calls do not erase evidence.
+ * @returns completion after every observed cleanup has settled.
+ * @throws {AggregateError} when cleanup failed or its outcome remains unknown.
+ */
+async settle(): Promise<void>
+```
+
+等待观测到的清理完成，并报告所有已知失败，包括先前的原始释放失败。只能在所有者停止工作并等待其 fiber 状态转换后调用。重复调用保留相同原因；成功调用不会清除证据。
+
+**返回** 在每项观测到的清理均结束后完成的 promise。
+
+[源码](../../vendor/cordis/src/fiber.ts#L115)
+
+## 静态成员
+
+### CleanupObservation.key
+
+```ts cordis-catalog
+/** Context metadata key; extending a context leaves its parent unchanged. */
+static readonly key: unique symbol
+```
+
+上下文元数据键；扩展上下文不会更改其父级。
+
+[源码](../../vendor/cordis/src/fiber.ts#L75)
+
 
 ## CordisError
 
@@ -409,7 +480,7 @@ namespace CordisError {
 }
 ```
 
-[源码](../../vendor/cordis/src/fiber.ts#L157)
+[源码](../../vendor/cordis/src/fiber.ts#L214)
 
 ## ValidationError
 
@@ -429,4 +500,4 @@ class ValidationError extends TypeError {
 }
 ```
 
-[源码](../../vendor/cordis/src/fiber.ts#L19)
+[源码](../../vendor/cordis/src/fiber.ts#L21)

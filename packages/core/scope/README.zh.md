@@ -30,6 +30,8 @@ kind: "package-library"
 
 `createScope(ctx, key)` 在 `ctx` 的 fiber 下创建作用域：其 `ctx` 携带作用域标签，通过它进行的每项注册既具备作用域可见性，也服从作用域生命周期。`dispose()` 撤销通过该作用域进行的每项注册；`rawDispose` 是确切 Cordis disposer，用于把 teardown 嵌套进有序组合 effect。
 
+设置 `{ observeCleanup: true }` 时，由主机负责处理失败：`dispose()` 等待所有自有清理完成，并携带 effect 和后代插件保留的原因拒绝，包括先前的原始释放和设置回滚失败。并发和重复调用共享结果。失败的生命周期仍不安全；新的生命周期须使用全新作用域。不设置此选项时，释放保留 Cordis 的日志记录与错误隔离语义。
+
 ```text
 const scope = createScope(ctx, agent)
 scope.ctx.on('agent/status', ({ agent, status }) => track(agent, status))

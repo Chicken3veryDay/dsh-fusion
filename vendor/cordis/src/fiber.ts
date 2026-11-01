@@ -10,6 +10,8 @@ declare module './context.ts' {
   export interface Context extends Pick<Fiber, 'effect'> {
     /** The fiber (plugin runtime instance) that owns this context. */
     fiber: Fiber
+    /** Explicit host-owned cleanup observation, inherited by descendant contexts. */
+    [CleanupObservation.key]?: CleanupObservation
   }
 }
 
@@ -58,6 +60,61 @@ export function resolveConfig(runtime: Plugin.Runtime, config: any) {
     throw new ValidationError(result.issues)
   } else {
     return result.value
+  }
+}
+
+/**
+ * Host-owned failure evidence for one disposable lifetime and its descendants.
+ * Install on a parent context under `key` before creating its owning fiber.
+ * Ordinary disposal still logs and contains failures. The host alone handles
+ * `settle()` rejection after stopping admission and joining fiber disposal.
+ * Use a fresh instance for each independent lifetime; evidence is never reset.
+ */
+export class CleanupObservation {
+  /** Context metadata key; extending a context leaves its parent unchanged. */
+  static readonly key: unique symbol = Symbol('cordis.cleanupObservation')
+  private readonly failures = new Set<unknown>()
+  private readonly pending = new Set<Promise<void>>()
+
+  /**
+   * Keep descendant failures visible to an enclosing observed owner without
+   * importing that owner's earlier failures into this lifetime.
+   * @param parent - enclosing lifetime's observation, when the host owns both.
+   */
+  constructor(private readonly parent?: CleanupObservation) {}
+
+  /**
+   * Retain a cleanup failure without changing ordinary Cordis propagation.
+   * @param reason - original cleanup cause.
+   */
+  record(reason: unknown): void {
+    this.failures.add(reason)
+    this.parent?.record(reason)
+  }
+
+  /**
+   * Join asynchronous cleanup even when its public single-shot disposer was claimed.
+   * @param task - cleanup completion whose rejection is retained and contained here.
+   */
+  track(task: Promise<void>): void {
+    this.parent?.track(task)
+    const completion = task.then(
+      () => { this.pending.delete(completion) },
+      reason => { this.record(reason); this.pending.delete(completion) },
+    )
+    this.pending.add(completion)
+  }
+
+  /**
+   * Drain observed cleanup and report all known failures, including earlier raw disposal.
+   * Call only after the owner has stopped work and joined its fiber transitions.
+   * Repeated callers retain the same causes; successful calls do not erase evidence.
+   * @returns completion after every observed cleanup has settled.
+   * @throws {AggregateError} when cleanup failed or its outcome remains unknown.
+   */
+  async settle(): Promise<void> {
+    while (this.pending.size) await Promise.all(this.pending)
+    if (this.failures.size) throw new AggregateError([...this.failures], 'observed cleanup failed')
   }
 }
 
@@ -205,6 +262,7 @@ export class Fiber {
   // Same as `this.ctx`, but with a more specific type.
   protected context: Context
 
+  private readonly _cleanup: CleanupObservation | undefined
   private _error: any
   private _revision = 0
   private _configRevision = 0
@@ -230,6 +288,7 @@ export class Fiber {
     public runtime: Plugin.Runtime | null,
     getOuterStack: () => string[],
   ) {
+    this._cleanup = parent[CleanupObservation.key]
     this.config = config
     const collect = (dispose: Disposable) => {
       this._disposables.push(dispose)
@@ -433,6 +492,15 @@ export class Fiber {
     const dispose = () => {
       if (disposing) return disposalTask
       disposing = true
+      if (this._cleanup) {
+        return disposalTask = (async () => {
+          const errors: unknown[] = []
+          for (const disposable of disposables.splice(0).reverse()) {
+            try { await runDisposable(disposable) } catch (error) { errors.push(error) }
+          }
+          if (errors.length) throw new AggregateError(errors, 'effect cleanup failed')
+        })()
+      }
       let task!: void | Promise<void>
       for (const disposable of disposables.splice(0).reverse()) {
         if (task) {
@@ -493,6 +561,7 @@ export class Fiber {
       try {
         result = callback()
       } catch (error) {
+        this._cleanup?.record(error)
         removeWrapper()
         throw error
       }
@@ -501,6 +570,7 @@ export class Fiber {
           removeWrapper()
           if (inFlight === pending) inFlight = undefined
         })
+        this._cleanup?.track(pending)
         return inFlight = pending
       }
       removeWrapper()
@@ -725,6 +795,7 @@ export class Fiber {
           await runDisposable(dispose)
         }, this._runner.getOuterStack)
       } catch (reason) {
+        this._cleanup?.record(reason)
         this.ctx.logger.error(reason)
       }
     }))

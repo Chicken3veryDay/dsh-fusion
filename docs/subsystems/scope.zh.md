@@ -39,7 +39,10 @@ interface Scope {
   ctx: Context
   /** Exact Cordis disposer, used when nesting this scope in an ordered composite effect. */
   rawDispose: () => Promise<void> | void
-  /** Dispose every scope-owned registration; racing calls await the same completion. */
+  /**
+   * Dispose every scope-owned registration; racing calls await the same completion. Opted-in hosts handle rejection after
+   * full drain, including earlier raw failures.
+   */
   dispose(): Promise<void>
 }
 ```

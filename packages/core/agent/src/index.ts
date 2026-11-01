@@ -170,9 +170,15 @@ export interface AgentHandle {
 export interface RetainedAgentSession {
   /** Exact registered live Session; never reconstructed during adoption. */
   readonly session: Session
-  /** Publish a parked Agent using the retained writer and fixed composition. */
+  /**
+   * Publish a parked Agent using the retained writer and fixed composition. Refuse reuse after failed initialization leaves
+   * cleanup unknown.
+   */
   adopt(): Promise<AgentHandle>
-  /** Cancel pending adoption, drain the Agent, remove routing and close the writer. */
+  /**
+   * Cancel adoption, drain all Agent/child cleanup, remove routing and close the writer; the host handles aggregated cleanup
+   * failures. Repeated calls retain failures.
+   */
   dispose(): Promise<void>
 }
 

@@ -50,7 +50,7 @@ interface AgentHandle {
 
 `AgentFactory` is the creation interface behind the registry: the loop registers its factory via `ctx.agents.setFactory()`, so consumers use `ctx.agents` without depending on the concrete loop package. A runtime child creator sets `options.parentAgent`; the registry passes the options and caller Context to the factory without deriving one from the other. The exact `create`/`resume` signatures and rollback contracts are in the [generated section](#ctxagents--agentregistry) below.
 
-`RetainAgentSessionOptions` requests explicit creation or recovery and binds an optional exact root capability. `RetainedAgentSession` owns the registered Session and writer independently of Agent residency; `adopt()` returns a parked `AgentHandle`, while task disposal closes the retained lifetime. The opt-in Fusion consumer returns `PreparedParticipants`, which resolves roles only within its immutable roster; see [participant ownership](../../packages/experimental/fusion-participants/README.md).
+`RetainAgentSessionOptions` requests explicit creation or recovery and binds an optional exact root capability. `RetainedAgentSession` owns the registered Session and writer independently of Agent residency; `adopt()` returns a parked `AgentHandle`, while task disposal closes the retained lifetime after all cleanup settles. The host handles cleanup rejection; unknown initialization cleanup blocks re-adoption. The opt-in Fusion consumer returns `PreparedParticipants`, which resolves roles only within its immutable roster; see [participant ownership](../../packages/experimental/fusion-participants/README.md).
 
 ## The agent handle
 

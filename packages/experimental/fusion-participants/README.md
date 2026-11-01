@@ -77,7 +77,7 @@ This package preserves context lineage across Agent detachment and never copies 
 
 - Product activation, input delivery and deduplication, execution grants, containment and final decisions belong to downstream owners. No activation control is exported to model or guest tools.
 - Recovery requires the matching preset declaration; edited compositions refuse preparation. This package retains no historical preset catalog or plugin database.
-- Writer cleanup errors preserve a blocked outcome. The underlying scope disposer swallows plugin cleanup failures; task disposal cannot establish successful plugin cleanup for that failure class.
+- The host handles task disposal rejection after every retained Agent, child plugin, composition scope and writer has settled. Cleanup failures remain unknown, including earlier direct disposal; repeated disposal retains the causes and disposed tasks refuse adoption.
 
 <a id="dev-note"></a>
 ### Dev Note

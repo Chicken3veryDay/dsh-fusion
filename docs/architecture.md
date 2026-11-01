@@ -74,7 +74,7 @@ Events are the extension points, and picking the right domain is the first decis
 
 AgentLoop initializes Agents with rollback and awaits serial `agent/created` before queued work. Unload retains resources through Agent teardown; [agent-loop](../packages/core/agent-loop/README.md#understand-the-implementation) defines ordering.
 
-Retained Sessions keep writers across Agent detachment. Ownership records refuse ordinary resume; adoption borrows the registered Session and parks before inbox claim.
+Retained adoption reuses registered Sessions and writers, parks before inbox claim and rejects ordinary resume. The [host](../packages/core/agent-loop/README.md) drains cleanup; failures block reuse.
 
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
 

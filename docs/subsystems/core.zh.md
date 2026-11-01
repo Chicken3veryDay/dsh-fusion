@@ -54,7 +54,7 @@ interface AgentHandle {
 
 <a id="the-agent-handle"></a>
 
-`RetainAgentSessionOptions` 显式请求创建或恢复，并可绑定精确的根能力。`RetainedAgentSession` 独立于 Agent 驻留状态拥有已注册的 Session 与写入句柄；`adopt()` 返回停驻的 `AgentHandle`，任务释放则结束保留寿命。可选的 Fusion 消费方返回 `PreparedParticipants`，仅在不可变名册中解析角色；参见[参与者所有权](../../packages/experimental/fusion-participants/README.zh.md)。
+`RetainAgentSessionOptions` 显式请求创建或恢复，并可绑定精确的根能力。`RetainedAgentSession` 独立于 Agent 驻留状态拥有已注册的 Session 与写入句柄；`adopt()` 返回停驻的 `AgentHandle`，任务释放则结束保留寿命。可选的 Fusion 消费方返回 `PreparedParticipants`，仅在不可变名册中解析角色；参见[参与者所有权](../../packages/experimental/fusion-participants/README.zh.md)。 所有清理结束后，主机处理清理拒绝；初始化清理结果未知时禁止再次采用。
 
 ## Agent 句柄
 

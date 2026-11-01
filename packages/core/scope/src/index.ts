@@ -6,7 +6,7 @@
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
-import { Context as CordisContext } from '@deepseek-ai/cordis'
+import { CleanupObservation, Context as CordisContext } from '@deepseek-ai/cordis'
 
 export { AnonymousEntries, NamedEntries, ScopedLayers } from './store.ts'
 export type { ScopeLayer } from './store.ts'
@@ -107,7 +107,10 @@ export interface Scope {
   ctx: Context
   /** Exact Cordis disposer, used when nesting this scope in an ordered composite effect. */
   rawDispose: () => Promise<void> | void
-  /** Dispose every scope-owned registration; racing calls await the same completion. */
+  /**
+   * Dispose every scope-owned registration; racing calls await the same completion. Opted-in hosts handle rejection after
+   * full drain, including earlier raw failures.
+   */
   dispose(): Promise<void>
 }
 
@@ -124,6 +127,11 @@ function scope(): void {}
 export interface CreateScopeOptions {
   /** Enclosing scope bound via {@link bindScopeParent} before the scope is usable; the binding stays internal. */
   parent?: ScopeKey
+  /**
+   * Host handles cleanup rejection after full drain; raw disposal keeps Cordis semantics. Fresh evidence belongs to this
+   * scope lifetime.
+   */
+  observeCleanup?: boolean
 }
 
 /**
@@ -136,13 +144,17 @@ export interface CreateScopeOptions {
  */
 export function createScope(ctx: Context, key: ScopeKey, options?: CreateScopeOptions): Scope {
   if (options?.parent !== undefined) bindScopeParent(key, options.parent)
-  const fiber = ctx.plugin(scope)
+  const observation = options?.observeCleanup ? new CleanupObservation(ctx[CleanupObservation.key]) : undefined
+  const fiber = (observation === undefined ? ctx : ctx.extend({ [CleanupObservation.key]: observation })).plugin(scope)
   const scoped: Context = fiber.ctx.extend({ [kScope]: key })
   let disposing: Promise<void> | undefined
   return {
     ctx: scoped,
     rawDispose: fiber.dispose,
-    dispose: () => (disposing ??= quiesceFiber(fiber)),
+    dispose: () => (disposing ??= (async () => {
+      await quiesceFiber(fiber)
+      await observation?.settle()
+    })()),
   }
 }
 

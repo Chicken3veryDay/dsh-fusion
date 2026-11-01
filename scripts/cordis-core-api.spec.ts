@@ -31,6 +31,8 @@ describe('Cordis core API generation', () => {
     expect(fiber).toContain('```\n\nRegister a cleanup-aware effect on this fiber.')
     expect(fiber).toContain('- `execute` — the effect body; see `Effect` for accepted shapes.')
     expect(fiber).toContain('**Returns** a disposer that tears the effect down and settles once done.')
+    expect(fiber).toContain('observation.settle()')
+    expect(fiber).toContain('The host alone handles')
   })
 
   it('rejects a public core class without source JSDoc', () => {

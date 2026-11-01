@@ -169,6 +169,7 @@ interface StoredSession {
 /** Acquired Session resources and composition inputs for one Agent initialization. */
 interface AgentInitializationOptions {
   readonly retained?: true
+  readonly onCleanupFailure?: (dispose: () => Promise<void>) => void
 
   readonly session: Session
   readonly agentOptions: AgentOptions
@@ -665,7 +666,10 @@ export class AgentLoop extends Service implements AgentFactory {
       })
     } catch (error: unknown) {
       try { await dispose() } catch (cleanup: unknown) {
-        if (options.retained) throw new AggregateError([error, cleanup], 'retained Agent initialization and cleanup failed')
+        if (options.retained) {
+          options.onCleanupFailure?.(dispose)
+          throw new AggregateError([error, cleanup], 'retained Agent initialization and cleanup failed')
+        }
         // Stock initialization preserves its original error after cleanup reaches quiescence.
       }
       throw error
@@ -681,8 +685,8 @@ export class AgentLoop extends Service implements AgentFactory {
   retain(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession> {
     const captured = { ...options, agentOptions: Object.freeze({ ...options.agentOptions }) }
     const operation = retainSession(this.runtime.ctx, ownerCtx, captured, this.ownership.signal,
-      (session, signal) => this.initializeAgent(ownerCtx, {
-        session, retained: true, agentOptions: captured.agentOptions, setup: captured.setup,
+      (session, signal, onCleanupFailure) => this.initializeAgent(ownerCtx, {
+        session, retained: true, onCleanupFailure, agentOptions: captured.agentOptions, setup: captured.setup,
         signal, source: options.mode === 'create' ? 'startup' : 'resume',
       }), dispose => this.ownership.track(dispose), this.retainedAuthorities,
       (session, handle, storedCount) => this.appendUnstoredSuffix({ handle, storedCount }, session))

@@ -146,7 +146,7 @@ export class ReactLoopAgent implements Agent {
   ) {
     this.requestSurfaceGeneration = session.surface.contentGeneration
     this.dispatch = agentEvents(loopCtx, this)
-    this.scope = createScope(loopCtx, this)
+    this.scope = createScope(loopCtx, this, { observeCleanup: parked })
     this.ctx = this.scope.ctx
     this.model = new AgentModel(projections.modelSelection, session, options)
     this.inbox = new ReactLoopInbox(projections.inbox, session, this.dispatch)

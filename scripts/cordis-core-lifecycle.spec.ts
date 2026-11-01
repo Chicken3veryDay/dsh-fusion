@@ -186,3 +186,123 @@ describe('Cordis rc.11 lifecycle', () => {
     expect(() => { ctx.waterfall(waterfall, () => 1) }).toThrow('next() called multiple times')
   })
 })
+
+describe('host-owned cleanup observation', () => {
+  it.each(['raw', 'parent', 'strict'] as const)('retains descendant failure after %s starts disposal and drains peers', async (first) => {
+    const { CleanupObservation } = await import('@deepseek-ai/cordis')
+    const ctx = root()
+    const observation = new CleanupObservation()
+    const owner = await ctx.extend({ [CleanupObservation.key]: observation }).plugin(() => {})
+    const entered = barrier()
+    const release = barrier()
+    const events: string[] = []
+    const cause = new Error('nested teardown rejected')
+    const child = await owner.ctx.plugin((nested) => {
+      nested.effect(() => async () => { entered.resolve(undefined); await release.promise; events.push('delayed'); throw cause })
+      nested.effect(() => () => { events.push('peer') })
+    })
+    const join = async () => {
+      await owner.dispose()
+      while (owner.inertia) await owner.inertia
+      await observation.settle()
+    }
+    let started: Promise<void>
+    if (first === 'raw') started = Promise.resolve(child.dispose())
+    else if (first === 'parent') started = ctx.fiber.dispose()
+    else started = Promise.resolve(owner.dispose())
+    await entered.promise
+    const one = join()
+    const two = join()
+    let settled = false
+    const results = Promise.allSettled([one, two]).then((result) => { settled = true; return result })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(events).toContain('peer')
+    release.resolve(undefined)
+    await started
+    expect((await results).map(result => result.status)).toEqual(['rejected', 'rejected'])
+    expect(events).toContain('delayed')
+    await expect(observation.settle()).rejects.toMatchObject({ errors: [expect.objectContaining({ errors: [cause] })] })
+    expect(child.uid).toBeNull()
+    expect(owner.committed).toBeUndefined()
+  })
+
+  it.each([false, true])('drains collected cleanup after effect setup failure (async: %s)', async (asyncSetup) => {
+    const { CleanupObservation } = await import('@deepseek-ai/cordis')
+    const ctx = root()
+    const observation = new CleanupObservation()
+    const owner = await ctx.extend({ [CleanupObservation.key]: observation }).plugin(() => {})
+    const setup = new Error('setup failed')
+    const cleanup = new Error('cleanup failed')
+    const ran = vi.fn()
+    if (asyncSetup) {
+      const effect = owner.ctx.effect(async function* () {
+        yield () => { ran() }
+        yield () => { throw cleanup }
+        throw setup
+      })
+      await expect(Promise.resolve(effect)).rejects.toBe(setup)
+    } else {
+      expect(() => owner.ctx.effect(function* () {
+        yield () => { ran() }
+        yield () => { throw cleanup }
+        throw setup
+      })).toThrow(setup)
+    }
+    await owner.dispose()
+    await expect(observation.settle()).rejects.toThrow('observed cleanup failed')
+    expect(ran).toHaveBeenCalledOnce()
+  })
+
+  it('keeps raw effect failure evidence after its single-shot disposer is exhausted', async () => {
+    const { CleanupObservation } = await import('@deepseek-ai/cordis')
+    const ctx = root()
+    const observation = new CleanupObservation()
+    const owner = await ctx.extend({ [CleanupObservation.key]: observation }).plugin(() => {})
+    const dispose = owner.ctx.effect(() => () => { throw new Error('raw failure') })
+    await expect(dispose()).rejects.toThrow('effect cleanup failed')
+    expect(dispose()).toBeUndefined()
+    await owner.dispose()
+    await expect(observation.settle()).rejects.toThrow('observed cleanup failed')
+    const fresh = new CleanupObservation()
+    const next = await ctx.extend({ [CleanupObservation.key]: fresh }).plugin(() => {})
+    await next.dispose()
+    await expect(fresh.settle()).resolves.toBeUndefined()
+  })
+
+  it('retains plugin setup rollback failures without changing stock await or disposal', async () => {
+    const { CleanupObservation } = await import('@deepseek-ai/cordis')
+    const ctx = root()
+    const observation = new CleanupObservation()
+    const cause = new Error('plugin cleanup')
+    const owner = ctx.extend({ [CleanupObservation.key]: observation }).plugin(function* () {
+      yield () => { throw cause }
+      throw new Error('plugin setup')
+    })
+    await expect(owner.await()).rejects.toThrow('plugin setup')
+    await expect(owner.dispose()).resolves.toBeUndefined()
+    await expect(observation.settle()).rejects.toMatchObject({ errors: [cause] })
+    const stock = await ctx.plugin((nested) => { nested.effect(() => () => { throw new Error('stock cleanup') }) })
+    await expect(stock.dispose()).resolves.toBeUndefined()
+  })
+})
+
+it('observes reentrant setup disposal without reporting completion before rollback', async () => {
+  const { CleanupObservation } = await import('@deepseek-ai/cordis')
+  const ctx = root()
+  const observation = new CleanupObservation()
+  const owner = await ctx.extend({ [CleanupObservation.key]: observation }).plugin(() => {})
+  const release = barrier()
+  const entered = barrier()
+  let disposing: Promise<void> | undefined
+  owner.ctx.effect(function* () {
+    disposing = owner.dispose()
+    yield async () => { entered.resolve(undefined); await release.promise; throw new Error('reentrant cleanup') }
+  })
+  await entered.promise
+  const settled = observation.settle()
+  const refused = expect(settled).rejects.toThrow('observed cleanup failed')
+  release.resolve(undefined)
+  await disposing
+  await refused
+})

@@ -280,3 +280,100 @@ it('refuses a root without a roster, composition replacement, and service dispos
   expect(resident.agent.status).toBe('idle')
   await expect(recovered.adopt('participant')).rejects.toThrow()
 })
+
+it('refuses successful task cleanup after a retained descendant rejects, before any claims or requests', async () => {
+  const { ctx, adapter } = await mount()
+  const claims = vi.fn()
+  ctx.on('agent/inbox/claimed', claims)
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const handle = await task.adopt('participant')
+  handle.agent.followup(message('must stay parked'))
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  let peerCleaned = false
+  const nested = await handle.agent.ctx.plugin((owner) => {
+    owner.effect(() => async () => { entered.resolve(undefined); await release.promise; throw new Error('retained nested cleanup unknown') })
+    owner.effect(() => () => { peerCleaned = true })
+  })
+  const raw = nested.dispose()
+  await entered.promise
+  const cleanup = task.dispose()
+  let finished = false
+  const observed = cleanup.finally(() => { finished = true })
+  const refused = expect(observed).rejects.toThrow('participant task cleanup failed')
+  await Promise.resolve()
+  expect(finished).toBe(false)
+  expect(peerCleaned).toBe(true)
+  release.resolve(undefined)
+  await raw
+  await refused
+  await expect(task.dispose()).rejects.toThrow('participant task cleanup failed')
+  await expect(task.adopt('participant')).rejects.toThrow('not owned')
+  expect(ctx.agents.list()).toHaveLength(0)
+  expect(ctx.sessions.list()).toHaveLength(0)
+  for (const id of [task.roster.rootSessionId, ...task.roster.participants.map(row => row.id)]) {
+    const writer = await ctx.sessionPersistence.open(id, 'write')
+    await writer.close()
+  }
+  const independent = await ctx.fusionParticipants.prepare('single-test')
+  const next = await independent.adopt('participant')
+  await next.dispose()
+  await independent.dispose()
+  expect(adapter.requests).toHaveLength(0)
+  expect(claims).not.toHaveBeenCalled()
+})
+
+it('reports unknown preparation rollback when a real composition effect rejects cleanup', async () => {
+  const { ctx, adapter } = await mount()
+  const mountPreset = ctx.agentPresets.mount.bind(ctx.agentPresets)
+  let mounts = 0
+  vi.spyOn(ctx.agentPresets, 'mount').mockImplementation(async (owner, preset) => {
+    const mounted = await mountPreset(owner, preset)
+    if (++mounts === 2) {
+      owner.effect(() => () => { throw new Error('composition cleanup failed') })
+      throw new Error('witness setup failed')
+    }
+    return mounted
+  })
+  await expect(ctx.fusionParticipants.prepare('single-test')).rejects.toMatchObject({ cleanup: 'unknown' })
+  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.agents.list()).toHaveLength(0)
+  expect(adapter.requests).toHaveLength(0)
+})
+
+it('refuses re-adoption after nested plugin setup and rollback fail in the Loader task', async () => {
+  const { ctx, adapter } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const claims = vi.fn()
+  ctx.on('agent/inbox/claimed', claims)
+  ctx.on('agent/created', async ({ agent }) => {
+    agent.followup(message('queued during failed setup'))
+    await agent.ctx.plugin(async function* () {
+      yield () => { throw new Error('nested rollback unknown') }
+      await Promise.resolve()
+      throw new Error('nested setup rejected')
+    })
+  })
+  await expect(task.adopt('participant')).rejects.toThrow('initialization and cleanup failed')
+  expect(ctx.agents.list()).toHaveLength(0)
+  expect(ctx.sessions.list().length).toBeGreaterThan(0)
+  await expect(task.adopt('participant')).rejects.toThrow('cleanup remains unknown')
+  await expect(task.dispose()).rejects.toThrow('participant task cleanup failed')
+  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(adapter.requests).toHaveLength(0)
+  expect(claims).not.toHaveBeenCalled()
+})
+
+it('reports unknown witness cleanup even when composition mounting succeeds', async () => {
+  const { ctx, adapter } = await mount()
+  const mountPreset = ctx.agentPresets.mount.bind(ctx.agentPresets)
+  let mounts = 0
+  vi.spyOn(ctx.agentPresets, 'mount').mockImplementation(async (owner, preset) => {
+    const mounted = await mountPreset(owner, preset)
+    if (++mounts === 2) owner.effect(() => () => { throw new Error('witness cleanup unknown') })
+    return mounted
+  })
+  await expect(ctx.fusionParticipants.prepare('single-test')).rejects.toMatchObject({ cleanup: 'unknown' })
+  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(adapter.requests).toHaveLength(0)
+})

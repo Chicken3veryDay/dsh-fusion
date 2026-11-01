@@ -220,3 +220,42 @@ describe('scope parent chain', () => {
     expect(seen.sort()).toEqual(['preset', 'untagged'])
   })
 })
+
+it('opts in to retained failures after raw teardown and keeps independent scopes clean', async () => {
+  const ctx = new Context()
+  const observed = createScope(ctx, {}, { observeCleanup: true })
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  observed.ctx.effect(() => async () => { entered.resolve(undefined); await release.promise; throw new Error('scope failed') })
+  const raw = observed.rawDispose()
+  await entered.promise
+  const strict = observed.dispose()
+  const repeated = observed.dispose()
+  expect(strict).toBe(repeated)
+  const rejected = expect(strict).rejects.toThrow('observed cleanup failed')
+  release.resolve(undefined)
+  await raw
+  await rejected
+  await expect(observed.dispose()).rejects.toThrow('observed cleanup failed')
+  const clean = createScope(ctx, {}, { observeCleanup: true })
+  await expect(clean.dispose()).resolves.toBeUndefined()
+  const stock = createScope(ctx, {})
+  stock.ctx.effect(() => () => { throw new Error('stock cleanup') })
+  await expect(stock.dispose()).resolves.toBeUndefined()
+  await ctx.fiber.dispose()
+})
+
+it('reports a nested observed scope failure to its enclosing owner without contaminating siblings', async () => {
+  const ctx = new Context()
+  const parent = createScope(ctx, {}, { observeCleanup: true })
+  const child = createScope(parent.ctx, {}, { observeCleanup: true })
+  const sibling = createScope(parent.ctx, {}, { observeCleanup: true })
+  child.ctx.effect(() => () => { throw new Error('nested observed cleanup') })
+  await child.rawDispose()
+  await expect(child.dispose()).rejects.toThrow('observed cleanup failed')
+  await expect(sibling.dispose()).resolves.toBeUndefined()
+  await expect(parent.dispose()).rejects.toThrow('observed cleanup failed')
+  const fresh = createScope(ctx, {}, { observeCleanup: true })
+  await expect(fresh.dispose()).resolves.toBeUndefined()
+  await ctx.fiber.dispose()
+})

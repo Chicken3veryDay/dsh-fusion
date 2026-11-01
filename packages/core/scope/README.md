@@ -30,6 +30,8 @@ Plugin authors use `dsh-scope` to give one agent (or one group) its own registra
 
 `createScope(ctx, key)` creates a scope under `ctx`'s fiber: its `ctx` carries the scope tag, and everything registered through it is both scope-visible and scope-lifetime. `dispose()` unwinds every registration through the scope; `rawDispose` is the exact Cordis disposer for nesting the teardown in an ordered composite effect.
 
+With `{ observeCleanup: true }`, the host owns failure handling: `dispose()` waits for all owned cleanup and rejects with retained causes from effects and descendant plugins, including earlier raw disposal and setup rollback. Racing and repeated callers share the result. A failed lifetime remains unsafe; use a fresh scope for a new lifetime. Without this option, disposal keeps Cordis logging and containment semantics.
+
 ```text
 const scope = createScope(ctx, agent)
 scope.ctx.on('agent/status', ({ agent, status }) => track(agent, status))

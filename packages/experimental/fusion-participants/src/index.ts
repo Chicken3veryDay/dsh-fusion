@@ -24,7 +24,10 @@ export interface PreparedParticipants {
   readonly roster: Roster
   /** Publish one parked participant by its roster role; no input is claimed. */
   adopt(role: string): Promise<AgentHandle>
-  /** Cancel preparation/adoption, await cleanup, remove live routing and close retained writers. */
+  /**
+   * Cancel preparation/adoption and drain all owned cleanup; the host handles rejection with retained causes after routing
+   * and writers close.
+   */
   dispose(): Promise<void>
 }
 
@@ -127,8 +130,8 @@ export default class FusionParticipants extends Service {
         try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
       }
       try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
-      if (prepared !== undefined) this.owned.delete(prepared)
       if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
+      if (prepared !== undefined) this.owned.delete(prepared)
     })()
     try {
       signal.throwIfAborted()
@@ -143,11 +146,11 @@ export default class FusionParticipants extends Service {
       const roster = state.roster
       if (roster === null || roster.rootSessionId !== rootSessionId) throw new Error('missing or mismatched root roster')
       const key = {}
-      composition = createScope(this.ctx, key)
+      composition = createScope(this.ctx, key, { observeCleanup: true })
       await this.ctx.agentPresets.mount(composition.ctx, roster.agentPreset)
       const document = await this.ctx.agentPresets.readDocument(roster.agentPreset)
       const witnessKey = {}
-      const witness = createScope(this.ctx, witnessKey)
+      const witness = createScope(composition.ctx, witnessKey, { observeCleanup: true })
       try {
         await this.ctx.agentPresets.mount(witness.ctx, roster.agentPreset)
         // Replaced generations cannot be resurrected. Equal parents bracket the document read.
@@ -155,7 +158,13 @@ export default class FusionParticipants extends Service {
           || createHash('sha256').update(document.content).digest('hex') !== roster.compositionDigest) {
           throw new Error('participant composition changed')
         }
-      } finally { await witness.dispose() }
+      } catch (error: unknown) {
+        try { await witness.dispose() } catch (cleanup: unknown) {
+          throw new AggregateError([error, cleanup], 'participant composition setup and cleanup failed')
+        }
+        throw error
+      }
+      await witness.dispose()
       const pinned = composition
       for (const participant of roster.participants) {
         signal.throwIfAborted()
