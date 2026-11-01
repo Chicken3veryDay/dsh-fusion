@@ -815,6 +815,8 @@ export class JsonlBackendTracker {
    * @param session - exact live Session, never an id or caller receipt.
    * @param provider - current persistence service identity.
    * @returns verified transient coverage or a refusal that blocks dependent work.
+   *   Joins any earlier drain before requesting the fresh store checkpoint;
+   *   failures are reported without retrying storage operations.
    */
   async flushSessionDurably(ctx: Context, session: Session, provider: symbol): Promise<SessionDurabilityResult> {
     const boundary = session.seq
@@ -831,6 +833,11 @@ export class JsonlBackendTracker {
       && this.writers.get(session.id) === writer && this.bindings.get(writer) === session
       && sessions.get(session.id) === session && ctx.get('sessionPersistence')?.identity === provider
     try {
+      if (!current()) return { kind: 'refused', reason: 'stale-writer' }
+      // An earlier empty drain may still be shared after the captured prefix
+      // entered the buffer. The store checkpoint must start after that join.
+      await writer.drainLive()
+      if (!current()) return { kind: 'refused', reason: 'stale-writer' }
       const participated = await sessions.flush(session)
       if (!current()) return { kind: 'refused', reason: 'stale-writer' }
       if (!participated || (this.flushReceipts.get(writer) ?? 0) <= receipt

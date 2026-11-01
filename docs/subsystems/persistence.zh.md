@@ -128,7 +128,7 @@ JSONL 关闭在释放进程内所有权之前，会等待实际保留监听器�
 
 ## 同会话耐久性
 
-主机协议通过 `ctx.sessionPersistence.flushSessionDurably(session)` 显式启用验证。操作在等待 `sessions.flush(session)` 之前，捕获确切活动 Session 的排他事件结束位置 `seq`。成功要求存储调用返回 true、同一个当前持有所有权的 JSONL 写入句柄仍绑定到该 Session 对象，以及实际句柄完成本次刷写，覆盖已经确认且连续匹配的前缀。存储头部、继承位置和事件内容都必须匹配；仅凭数量相等不能证明种子或恢复历史已持久化。有界异步方法 `Session.matchesDurabilityPrefix(events, end)` 仅确认内容相等。
+主机协议通过 `ctx.sessionPersistence.flushSessionDurably(session)` 显式启用验证。操作在等待 `sessions.flush(session)` 之前，捕获确切活动 Session 的排他事件结束位置 `seq`。JSONL 首先等待较早的活动排空完成，再重新检查确切的 Session、提供方和写入器，然后请求该存储检查点；较早的空排空不能覆盖它尚未接收的追加。排空失败会返回原始原因，不会重试。成功要求存储调用返回 true、同一个当前持有所有权的 JSONL 写入句柄仍绑定到该 Session 对象，以及实际句柄完成本次刷写，覆盖已经确认且连续匹配的前缀。存储头部、继承位置和事件内容都必须匹配；仅凭数量相等不能证明种子或恢复历史已持久化。有界异步方法 `Session.matchesDurabilityPrefix(events, end)` 仅确认内容相等。
 
 <a id="sessiondurabilityresult"></a>
 

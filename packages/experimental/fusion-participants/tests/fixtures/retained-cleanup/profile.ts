@@ -32,6 +32,7 @@ export function apply(ctx: Context): void {
     name: 'retained_cleanup_probe', description: 'Exercise fake retained cleanup and report its observed result.', parameters: {},
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute() {
+      assert.ok(ctx.get('sessionProjectionCache'), 'actual projection cache must remain enabled')
       const outcomes: string[] = []
       for (const fault of [false, true]) {
         const task = await ctx.fusionParticipants.prepare('single-test')

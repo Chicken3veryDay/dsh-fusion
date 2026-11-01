@@ -100,11 +100,12 @@ if (!child) {
     const f = await publicFixture(route === 'enclosing' ? async (ctx, task, provider) => {
       scope = createScope(ctx, {})
       return scope.ctx.get('fusionParticipants')!.registerExecutionHost(task, provider)
-    } : undefined)
+    } : undefined, process.env.DSH_RETAINED_CACHE !== '0')
     const sessions = f.ctx.sessions, persistence = f.ctx.sessionPersistence
     const inventory = () => ({
       writers: [...writers].map(writer => ({ writer: [...writers].indexOf(writer), session: writer.id, pins: writer['pins'].size,
         uncertain: writer.lifetimeUncertain, close: closed.get(writer) ?? 'pending',
+        generation: writer.durabilityGeneration, receipt: [...trackers].find(tracker => tracker['writers'].get(writer.id) === writer)?.['flushReceipts'].get(writer) ?? 0,
         cursor: writer['state'].cursor, flushed: writer['flushedCursor'], buffered: writer['buffered'].map((event: SessionEvent) => event.seq),
         sameSession: [...trackers].some(tracker => tracker['bindings'].has(writer)
           && tracker['bindings'].get(writer) === sessions.get(writer.id)),
@@ -234,7 +235,7 @@ if (!child) {
       await expect(persistence.open(root.id, 'write')).rejects.toThrow()
       retainUntilProcessExit(f.ctx, f.root)
     }
-    const observation = { root: f.root, route, phase, rawDisposal, finalRawRoot, leaseProbes, drain, cleanupState,
+    const observation = { root: f.root, route, phase, cacheEnabled: Boolean(f.ctx.get('sessionProjectionCache')),  rawDisposal, finalRawRoot, leaseProbes, drain, cleanupState,
       resources: { before, atBarrier, after: after ?? inventory() },
       trace, files, removalFaults, removalCalls, cleanupErrors: cleanupErrors.map(String), prefixes, bodies: f.control.bodies,
       cleanups: f.control.cleanups, requests: f.model.requests.length }

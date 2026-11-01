@@ -7,8 +7,9 @@ import { gate } from './execution-harness.ts'
 
 export async function publicFixture(
   register?: (ctx: Context, task: PreparedParticipants, provider: ExecutionHostProvider) => Promise<TaskExecutionHost>,
+  projectionCache = false,
 ) {
-  const { ctx, adapter: model, root } = await mount()
+  const { ctx, adapter: model, root } = await mount(undefined, 'none', false, projectionCache)
   const task = await ctx.fusionParticipants.prepare('single-test')
   const adopted = await task.adopt('participant')
   const control = {

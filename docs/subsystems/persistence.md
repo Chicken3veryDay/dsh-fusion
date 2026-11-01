@@ -128,7 +128,7 @@ JSONL close joins the actual retained listener removal before releasing its in-p
 
 ## Same-session durability
 
-Host protocols opt in through `ctx.sessionPersistence.flushSessionDurably(session)`. The operation captures the exact live Session’s exclusive `seq` boundary before awaiting `sessions.flush(session)`. Success requires that store call to return true, the same currently owned JSONL write handle to remain bound to that Session object, and a fresh actual handle flush to cover the acknowledged contiguous matching prefix. Stored header, inherited cut and event contents must match; equal counts alone cannot certify seeded or resumed history. The bounded asynchronous `Session.matchesDurabilityPrefix(events, end)` comparison establishes content equality only.
+Host protocols opt in through `ctx.sessionPersistence.flushSessionDurably(session)`. The operation captures the exact live Session’s exclusive `seq` boundary before awaiting `sessions.flush(session)`. JSONL first joins any earlier live drain, then rechecks the exact Session, provider and writer before requesting that store checkpoint; an earlier empty drain cannot cover an append it did not receive. Drain failure returns its original cause without retrying. Success requires that store call to return true, the same currently owned JSONL write handle to remain bound to that Session object, and a fresh actual handle flush to cover the acknowledged contiguous matching prefix. Stored header, inherited cut and event contents must match; equal counts alone cannot certify seeded or resumed history. The bounded asynchronous `Session.matchesDurabilityPrefix(events, end)` comparison establishes content equality only.
 
 <a id="sessiondurabilityresult"></a>
 

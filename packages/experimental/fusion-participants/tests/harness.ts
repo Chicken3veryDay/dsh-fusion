@@ -17,6 +17,10 @@ import Preset from '@deepseek-ai/dsh-agent-preset'
 import Commands from '@deepseek-ai/dsh-commands'
 import FusionConfig from '@deepseek-ai/dsh-fusion-config'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
+import Storage from '@deepseek-ai/dsh-storage'
+import * as Json from '@deepseek-ai/dsh-storage-json'
+import * as Domain from '@deepseek-ai/dsh-storage-domain'
+import Cache from '@deepseek-ai/dsh-session-projection-cache'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -39,7 +43,7 @@ export function retainUntilProcessExit(ctx: Context, root: string): void {
   const rootIndex = roots.indexOf(root)
   if (rootIndex !== -1) roots.splice(rootIndex, 1)
 }
-export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false) {
+export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false, projectionCache = false) {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
   if (!roots.includes(root)) roots.push(root)
   const ctx = new Context()
@@ -49,6 +53,7 @@ export async function mount(root?: string, compression: 'none' | 'zstd' = 'none'
     group: Group, llm: Llm, sessions: Sessions, projections: Projections, prompt: Prompt, tools: Tools,
     native: Native, agents: Agents, loop: Loop, presets: Presets, preset: Preset, commands: Commands,
     credentials: FakeCredentials, config: FusionConfig, jsonl: Jsonl, participants: Participants,
+    storage: Storage, json: Json, domain: Domain, cache: Cache,
   })
   const entries = [
     ...['llm', 'sessions', 'projections', 'prompt', 'tools', 'native', 'agents'].map(name => ({ name: `cordis:${name}` })),
@@ -67,6 +72,14 @@ export async function mount(root?: string, compression: 'none' | 'zstd' = 'none'
   ]
   if (loopFirst) [entries[7], entries[8]] = [entries[8]!, entries[7]!]
   for (const entry of entries) await ctx.loader.create(entry)
+  if (projectionCache) {
+    for (const entry of [
+      { name: 'cordis:storage' },
+      { name: 'cordis:json', config: { root: join(root, 'projection-data') } },
+      { name: 'cordis:domain', config: { backend: 'json' } },
+      { name: 'cordis:cache', config: { writeEveryEvents: 100, writeIntervalMs: 60000 } },
+    ]) await ctx.loader.create(entry)
+  }
   await ctx.loader.await()
   const adapter = new MockAdapter(Array.from({ length: 8 }, () => textResponse('retained answer')), {
     efforts: ['low', 'medium', 'high'].map(effort => ({ id: ReasoningEffortId(effort), name: effort })),

@@ -371,3 +371,70 @@ it('cannot borrow another session’s successful flush coverage through a listen
   expect(await read(remounted.ctx, left.session)).toEqual([])
   expect(await read(remounted.ctx, right.session)).toEqual(right.session.snapshotEvents())
 })
+
+it('covers an append admitted while an earlier empty drain is still shared', async () => {
+  const { ctx } = await mount()
+  const { session, writer } = await owned(ctx)
+  const earlier = ctx.sessions.flush(session)
+  session.append('turn/start', { turn: 1 })
+  expect(writer['buffered'].map((event: SessionEvent) => event.seq)).toEqual([0])
+  expect(writer['draining']).toBeDefined()
+  const result = await ctx.sessionPersistence.flushSessionDurably(session)
+  expect(await earlier).toBe(true)
+  expect(result).toMatchObject({ kind: 'durable', session, boundary: 1, writer: writer.durabilityIdentity })
+  expect(await read(ctx, session)).toEqual(session.snapshotEvents())
+})
+
+it('leaves ordinary overlapping empty drains and their I/O ordering unchanged', async () => {
+  const { ctx } = await mount()
+  const { session, writer } = await owned(ctx)
+  const storage = writer['storage']
+  const header = vi.spyOn(storage, 'persistHeader')
+  const batch = vi.spyOn(storage, 'persistBatch')
+  const earlier = ctx.sessions.flush(session)
+  session.append('turn/start', { turn: 1 })
+  const overlapping = ctx.sessions.flush(session)
+  expect(await earlier).toBe(true)
+  expect(await overlapping).toBe(true)
+  expect(header).toHaveBeenCalledTimes(1)
+  expect(batch).not.toHaveBeenCalled()
+  expect(writer['buffered'].map((event: SessionEvent) => event.seq)).toEqual([0])
+  expect(writer['state'].cursor).toBe(0)
+  expect(writer['flushedCursor']).toBe(0)
+  expect(writer.durabilityGeneration).toBe(2)
+  expect(await ctx.sessions.flush(session)).toBe(true)
+  expect(batch).toHaveBeenCalledTimes(1)
+  expect(await read(ctx, session)).toEqual(session.snapshotEvents())
+})
+
+it.each(['provider', 'session', 'writer'] as const)('refuses %s replacement during the preliminary drain without a store checkpoint', async (replacement) => {
+  const { ctx } = await mount()
+  const { session, writer } = await owned(ctx)
+  const gate = barrier()
+  const drain = writer.drainLive.bind(writer)
+  vi.spyOn(writer, 'drainLive').mockImplementationOnce(async () => {
+    gate.entered.resolve(undefined)
+    await gate.release.promise
+    await drain()
+  })
+  const store = vi.spyOn(ctx.sessions, 'flush')
+  const pending = ctx.sessionPersistence.flushSessionDurably(session)
+  await gate.entered.promise
+  if (replacement === 'provider') vi.spyOn(ctx, 'get').mockReturnValue(undefined)
+  if (replacement === 'session') vi.spyOn(ctx.sessions, 'get').mockReturnValue(Session.create(session.id))
+  if (replacement === 'writer') await writer.close()
+  gate.release.resolve(undefined)
+  expect(await pending).toMatchObject({ kind: 'refused', reason: 'stale-writer' })
+  expect(store).not.toHaveBeenCalled()
+})
+
+it('refuses a provider already replaced before starting any drain', async () => {
+  const { ctx } = await mount()
+  const { session, writer } = await owned(ctx)
+  const service = ctx.sessionPersistence
+  const sessions = ctx.sessions
+  const drain = vi.spyOn(writer, 'drainLive')
+  vi.spyOn(ctx, 'get').mockReturnValueOnce(sessions).mockReturnValue(undefined)
+  expect(await service.flushSessionDurably(session)).toMatchObject({ kind: 'refused', reason: 'stale-writer' })
+  expect(drain).not.toHaveBeenCalled()
+})

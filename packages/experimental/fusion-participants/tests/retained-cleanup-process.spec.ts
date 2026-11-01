@@ -28,7 +28,7 @@ it('exits the writer before matching built recovery and refuses a separately hel
     const base = join(repo, 'snapshots/session/fusion-host-service-discovery/cordis.snapshot.yml')
     const sources = [join(repo, 'snapshots/session/text-turn/cordis.yml'), base, join(fixture, 'runtime.cordis.yml')]
     const local = join(cwd, 'process.yml')
-    await writeFile(local, `- id: agent-default-model\n  config: { provider: retained-process, model: fake }\n- id: session-title\n  disabled: true\n- insert:\n    - id: retained-cleanup-process-fixture\n      name: '${new URL('./fixtures/retained-cleanup/process.ts', import.meta.url).href}'\n`)
+    await writeFile(local, `- id: llm-replay\n  disabled: true\n- id: agent-default-model\n  config: { provider: retained-process, model: fake }\n- id: session-title\n  disabled: true\n- insert:\n    - id: retained-cleanup-process-fixture\n      name: '${new URL('./fixtures/retained-cleanup/process.ts', import.meta.url).href}'\n`)
     const patches = sources.map((source, index) => materializeProfilePatch(source, cwd, 'headless', patchesDir, index))
     patches.push(materializeProfilePatch(local, cwd, 'headless', patchesDir, sources.length))
     const launch = (mode: string, root?: string, participant?: string) => {

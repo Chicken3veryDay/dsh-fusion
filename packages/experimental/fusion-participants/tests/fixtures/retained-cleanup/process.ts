@@ -40,6 +40,7 @@ export function apply(ctx: Context): void {
     name: 'retained_process_probe', description: 'Exercise public retained writer restart without inference.', parameters: {},
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute() {
+      assert.ok(ctx.get('sessionProjectionCache'), 'actual projection cache must remain enabled')
       if (mode === 'hold') {
         const id = SessionId(process.env.DSH_RETAINED_PARTICIPANT!)
         const writer = await ctx.sessionPersistence.open(id, 'write')

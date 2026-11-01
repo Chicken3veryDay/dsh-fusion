@@ -1,7 +1,3 @@
-# Initial retained prefixes are tested without eager projection-cache checkpoints.
-- id: session-projection-cache
-  disabled: true
-
 - id: credentials
   name: '@deepseek-ai/dsh-credentials-local'
   disabled: false
