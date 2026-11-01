@@ -122,12 +122,12 @@ export default class FusionParticipants extends Service {
    * @returns prepared capability only after every writer passes its own durability barrier.
    */
   prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track(async (ownedSignal, quiescent) => {
+    return this.track(async (ownedSignal, quiescent, releaseCaller) => {
       const selection = this.lifetime.ctx.fusionConfig.selection(selectionId)
       const document = await this.lifetime.ctx.agentPresets.readDocument(selection.agentPreset)
       ownedSignal.throwIfAborted()
       const compositionDigest = createHash('sha256').update(document.content).digest('hex')
-      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, ownedSignal, quiescent)
+      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, ownedSignal, quiescent, releaseCaller)
     }, signal)
   }
 
@@ -138,21 +138,29 @@ export default class FusionParticipants extends Service {
    * @returns a prepared capability using the original roster and context lineages.
    */
   recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track((ownedSignal, quiescent) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent), signal)
+    return this.track((ownedSignal, quiescent, releaseCaller) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent, releaseCaller), signal)
   }
 
   private track(
-    work: (signal: AbortSignal, quiescent: () => void) => Promise<PreparedParticipants>,
+    work: (signal: AbortSignal, quiescent: () => void, releaseCaller: () => Promise<void>) => Promise<PreparedParticipants>,
     caller?: AbortSignal,
   ): Promise<PreparedParticipants> {
     const operation = Promise.withResolvers<PreparedParticipants>()
     const abort = new AbortController()
     const signal = AbortSignal.any([this.abort.signal, abort.signal, ...caller === undefined ? [] : [caller]])
+    let settled = false
+    let removeCaller: () => void | Promise<void>
+    const releaseCaller = async (): Promise<void> => {
+      // Removing an effect runs its cleanup; a settled task must not join itself.
+      settled = true
+      await removeCaller()
+    }
     try {
       signal.throwIfAborted()
       this.ctx.fiber.assertActive()
       // Caller scopes cancel and join; only the captured resource scope owns leases.
-      this.ctx.effect(() => async () => {
+      removeCaller = this.ctx.effect(() => async () => {
+        if (settled) return
         abort.abort(new Error('participant caller disposed'))
         let task: PreparedParticipants
         try { task = await operation.promise } catch (_preparation: unknown) { return /* Rollback belongs to the pending operation. */ }
@@ -165,17 +173,19 @@ export default class FusionParticipants extends Service {
     // Reserve before invoking provider code, including synchronous reentrant callbacks.
     void Promise.resolve().then(() => {
       signal.throwIfAborted()
-      return work(signal, quiescent.resolve)
-    }).then(operation.resolve, operation.reject).finally(quiescent.resolve)
+      return work(signal, quiescent.resolve, releaseCaller)
+    }).then(operation.resolve, async (error: unknown) => {
+      await releaseCaller()
+      operation.reject(error)
+    }).finally(quiescent.resolve)
     return operation.promise
   }
 
   private async barrier(session: Session): Promise<void> {
     const result = await this.lifetime.ctx.sessionPersistence.flushSessionDurably(session)
     if (result.kind !== 'durable') {
-      throw new Error(`participant durability refused: ${result.reason}`, {
-        cause: result.reason === 'flush-failed' ? result.cause : undefined,
-      })
+      throw new Error(`participant durability refused: ${result.reason}`,
+        result.reason === 'flush-failed' ? { cause: result.cause } : undefined)
     }
   }
 
@@ -183,6 +193,7 @@ export default class FusionParticipants extends Service {
     request: { kind: 'create'; roster: Roster } | { kind: 'resume'; rootSessionId: SessionId },
     caller: AbortSignal,
     quiescent: () => void,
+    releaseCaller: () => Promise<void>,
   ): Promise<PreparedParticipants> {
     const rootSessionId = request.kind === 'create' ? request.roster.rootSessionId : request.rootSessionId
     const taskAbort = new AbortController()
@@ -202,15 +213,17 @@ export default class FusionParticipants extends Service {
       const completion = Promise.withResolvers<void>()
       disposal = completion.promise
       void (async () => {
-        const errors: unknown[] = []
-        try { await drain() } catch (error: unknown) { errors.push(error) }
-        if (this.stopping !== undefined) await this.release.promise
-        for (const lease of [...leases].reverse()) {
-          try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
-        }
-        try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
-        if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
-        if (prepared !== undefined) this.owned.delete(prepared)
+        try {
+          const errors: unknown[] = []
+          try { await drain() } catch (error: unknown) { errors.push(error) }
+          if (this.stopping !== undefined) await this.release.promise
+          for (const lease of [...leases].reverse()) {
+            try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
+          }
+          try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
+          if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
+          if (prepared !== undefined) this.owned.delete(prepared)
+        } finally { await releaseCaller() }
       })().then(completion.resolve, completion.reject)
       return completion.promise
     }
@@ -271,7 +284,6 @@ export default class FusionParticipants extends Service {
         }
       }
       await this.barrier(root.session)
-      signal.throwIfAborted()
       signal.throwIfAborted()
       delivery = new DeliveryOwner({
         ctx: this.lifetime.ctx, root: root.session, signal,

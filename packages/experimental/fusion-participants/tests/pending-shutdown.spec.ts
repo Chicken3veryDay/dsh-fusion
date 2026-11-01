@@ -433,7 +433,7 @@ it.each(['flush-failed', 'coverage'] as const)('retains %s preparation refusal t
       ? { kind: 'refused', reason, cause: failure } : { kind: 'refused', reason }) : flush(session),
   )
   await expect(ctx.fusionParticipants.prepare('single-test')).rejects.toMatchObject({
-    cleanup: 'complete', cause: { message: `participant durability refused: ${reason}`, cause: reason === 'flush-failed' ? failure : undefined },
+    cleanup: 'complete', cause: { message: `participant durability refused: ${reason}`, ...reason === 'flush-failed' ? { cause: failure } : {} },
   })
   expect(ctx.sessions.list()).toHaveLength(0)
   expect(adapter.requests).toHaveLength(0)

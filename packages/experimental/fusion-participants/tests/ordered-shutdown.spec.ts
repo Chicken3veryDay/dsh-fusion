@@ -29,6 +29,7 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   const entered = Promise.withResolvers<undefined>()
   const release = Promise.withResolvers<undefined>()
   const draining = Promise.withResolvers<undefined>()
+  const firstClose = Promise.withResolvers<undefined>()
   const closes: string[] = []
   const events: string[] = []
   let held = false
@@ -47,7 +48,7 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
     return rawDrain.call(this).then(() => { drainSettled = true; events.push('drained') })
   })
   vi.spyOn(JsonlSessionHandle.prototype, 'close').mockImplementation(function (this: JsonlSessionHandle) {
-    if (this.access === 'write') { closes.push(this.id); events.push(`close:${this.id}`) }
+    if (this.access === 'write') { closes.push(this.id); events.push(`close:${this.id}`); firstClose.resolve(undefined) }
     return rawClose.call(this)
   })
   const shouldHold = (id: string): boolean => !held && id === (phase === 'receiver' ? target.id : root.id)
@@ -82,7 +83,7 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
         : route === 'task' ? task.dispose() : route === 'caller' ? caller.dispose()
           : route.endsWith('restart') ? fiber.restart() : fiber.dispose()
   const disposal = Promise.resolve(dispose).then(() => { disposalSettled = true })
-  await draining.promise
+  await Promise.race([draining.promise, firstClose.promise])
   // One event-loop turn lets every independently scheduled Cordis disposer enter its barrier.
   await setImmediate()
   try {
