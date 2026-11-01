@@ -13,6 +13,7 @@ packages:
   # Deploy root of the single-exe build: a pure dependency manifest whose
   # closure is what the exe bundles and what the Python runtime distributes.
   - python/sdk-runtime
+  - python/fusion-sdk-runtime
 
 overrides:
   'extract-zip>yauzl': '3.4.0'

@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import { loadCordisYaml } from './cordis-yaml.ts'
 import { verifyRuntimeClosure } from './verify-runtime-closure.ts'
 
@@ -39,6 +40,40 @@ afterEach(() => {
 })
 
 describe('verifyRuntimeClosure', () => {
+  it('keeps the optional Fusion closure a strict superset of the default closure and validates its peers and presets', async () => {
+    const repository = resolve(import.meta.dirname, '..')
+    const { readFile } = await import('node:fs/promises')
+    const parse = async (path: string): Promise<{ dependencies: Record<string, string> }> => z.object({ dependencies: z.record(z.string(), z.string()) }).parse(JSON.parse(await readFile(join(repository, path), 'utf8')))
+    const stock = await parse('python/sdk-runtime/package.json')
+    const optional = await parse('python/fusion-sdk-runtime/package.json')
+    expect(optional.dependencies).toMatchObject(stock.dependencies)
+    expect(Object.keys(optional.dependencies).filter(key => !(key in stock.dependencies)).sort()).toEqual([
+      '@deepseek-ai/dsh-experimental-fusion-participants', '@deepseek-ai/dsh-fusion-config',
+    ])
+    expect((await verifyRuntimeClosure(repository, 'python/fusion-sdk-runtime/package.json')).failures).toEqual([])
+    expect((await verifyRuntimeClosure(repository)).failures).toEqual([])
+  })
+
+  it('rejects an optional carrier missing either Fusion capability before deployment', async () => {
+    const path = 'python/fusion-sdk-runtime/package.json'
+    const root = fixture({
+      'python/sdk-runtime/package.json': { dependencies: {} },
+      [path]: { name: 'fusion', dependencies: {} },
+    })
+    expect((await verifyRuntimeClosure(root, path, false)).failures).toEqual([
+      'fusion must retain @deepseek-ai/dsh-fusion-config@workspace:*',
+      'fusion must retain @deepseek-ai/dsh-experimental-fusion-participants@workspace:*',
+    ])
+  })
+
+  it('rejects a missing required peer in an explicitly selected optional carrier', async () => {
+    const path = 'python/optional-runtime/package.json'
+    const root = fixture({ [path]: { name: 'fusion', dependencies: { '@scope/fusion': 'workspace:*' } } })
+    workspace(root, '@scope/fusion', { peerDependencies: { '@scope/core': 'workspace:*' } })
+    workspace(root, '@scope/core', {})
+    expect((await verifyRuntimeClosure(root, path, false)).failures).toEqual(['fusion -> @scope/fusion -> @scope/core'])
+  })
+
   it('checks a private worker closure without requiring application presets', async () => {
     const manifestPath = 'packages/ssh/ssh-helper-runtime/package.json'
     const root = fixture({ [manifestPath]: { name: 'helper', dependencies: { '@scope/worker': 'workspace:^' } } })

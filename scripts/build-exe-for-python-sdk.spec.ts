@@ -23,6 +23,17 @@ function run(env: NodeJS.ProcessEnv, ...args: string[]) {
 }
 
 describe('Python runtime executable builder CLI', () => {
+  it('builds the explicit Fusion closure without writing the default runtime carrier or products', () => {
+    const result = run({ npm_execpath: 'C:\\\\tools\\\\pnpm.cjs' }, '--fusion', '--skip-build', '--dry-run', '--targets=node24-linux-x64')
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('verify-runtime-closure --manifest=python/fusion-sdk-runtime/package.json')
+    expect(result.stdout).toContain('--filter dsh-python-fusion-runtime-closure deploy')
+    expect(result.stdout).toContain(join(root, 'python/fusion-sdk-runtime/runtime/node'))
+    expect(result.stdout).toContain(join(root, 'dist-exe/fusion/deepseek-harness-sdk-runtime-linux-x64'))
+    expect(result.stdout).not.toContain(join(root, 'python/sdk-runtime/src/deepseek_harness_runtime/runtime'))
+    expect(result.stdout).toContain('--sea --compress Brotli')
+  })
+
   it.each([
     { flags: [], command: 'run build' },
     { flags: ['--build-artifacts'], command: 'run build:artifacts' },

@@ -935,7 +935,7 @@ def main() -> None:
         if args.scenario in {"all", "sdk-snapshot", "sdk-recovery"}:
             assert args.exe is not None
             smoke_sdk_scheduler_recovery(model.url, args.exe.resolve(), args.update_snapshots)
-        if args.scenario in {"all", "sdk-fusion-delivery"}:
+        if args.scenario == "sdk-fusion-delivery":
             assert args.exe is not None
             from smoke_python_fusion_delivery import smoke_sdk_fusion_delivery
             smoke_sdk_fusion_delivery(args.exe)
@@ -951,7 +951,7 @@ def main() -> None:
         if args.scenario in {"all", "direct"}:
             assert args.exe is not None
             smoke_direct(model.url, args.exe.resolve())
-        if args.scenario == "sdk-retained":
+        if args.scenario in {"sdk-retained", "sdk-fusion-delivery"}:
             if MockModelHandler.requests:
                 raise AssertionError("retained replay made an unauthorized model request")
         elif not MockModelHandler.requests:

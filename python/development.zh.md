@@ -17,6 +17,8 @@ pnpm exec tsx scripts/build-exe-for-python-sdk.ts
 
 构建器按冻结版本部署已审查的工作区锁文件，然后使用相同的已审查允许/拒绝策略运行依赖构建脚本，并将工作区文件标识解析为绝对 URL。Office sidecar 归档仍必须具备工作区锁文件中的 SHA-512 完整性信息；仅完成注入的可执行文件不代表完整构建。
 
+私有的显式启用休眠 Fusion 载体使用 `--fusion`。它通过同一构建器和原版引导程序验证并部署 `python/fusion-sdk-runtime/package.json`，将产物写入 `dist-exe/fusion/`，且仅同步 `python/fusion-sdk-runtime/runtime/`。其依赖清单包含完整的默认闭包以及 Fusion 配置和参与者；闭包测试会拒绝偏离。默认 wheel 的依赖和产物仍不包含实验包。将源码 SDK 加入 `PYTHONPATH` 后，显式运行 `scripts/smoke-python-runtime.py --scenario sdk-fusion-delivery --exe dist-exe/fusion/deepseek-harness-sdk-runtime-linux-x64`；不具备能力的产物会失败。默认的 `all` 选择保留原版场景，不包含这个显式启用的场景。可选打包不授予执行权限。
+
 ## 验证 SDK
 
 请将虚拟环境放在 `python/` 之外，安装测试组，然后运行 Python 测试套件：

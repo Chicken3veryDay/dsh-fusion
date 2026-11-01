@@ -67,6 +67,15 @@ export async function verifyRuntimeClosure(
   }
 
   const failures: string[] = []
+  if (manifestPath === 'python/fusion-sdk-runtime/package.json') {
+    const stock = await loadManifest(resolve(root, 'python/sdk-runtime/package.json'))
+    const required = { ...stock.dependencies,
+      '@deepseek-ai/dsh-fusion-config': 'workspace:*',
+      '@deepseek-ai/dsh-experimental-fusion-participants': 'workspace:*' }
+    for (const [name, version] of Object.entries(required)) {
+      if (runtimeDependencies[name] !== version) failures.push(`${runtimeName} must retain ${name}@${version}`)
+    }
+  }
   if (includePresets && presetPaths.length === 0) failures.push(`no agent presets matched ${AGENT_PRESET_GLOB}`)
   if (includePresets && targets.length === 0) failures.push('python/sdk-runtime/platforms.json defines no runtime targets')
   failures.push(...await missingPresetPlugins(root, runtimeDependencies, presetPaths, targets))
@@ -108,7 +117,7 @@ if (import.meta.main) {
   })
   const result = await verifyRuntimeClosure(root, values.manifest)
   if (result.failures.length > 0) {
-    console.error('verify-runtime-closure: preset plugins or required workspace peers are missing from python/sdk-runtime dependencies:')
+    console.error('verify-runtime-closure: preset plugins or required workspace peers are missing from the selected runtime dependencies:')
     for (const failure of result.failures) console.error(`  ${failure}`)
     process.exitCode = 1
   } else {

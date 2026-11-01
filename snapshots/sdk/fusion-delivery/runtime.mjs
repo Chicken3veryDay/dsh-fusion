@@ -1,6 +1,6 @@
 /** Dormant Fusion fixture over retained writers; no inference or guest tool is installed. */
 export const name = 'snapshot-fusion-delivery'
-export const inject = ['commands', 'agents', 'fusionParticipants', 'sessionPersistence']
+export const inject = ['commands', 'agents', 'fusionParticipants', 'sessionPersistence', 'deliveryFixtureGuard']
 
 export function apply(ctx) {
   let claims = 0
@@ -11,6 +11,7 @@ export function apply(ctx) {
     name: 'delivery_fixture', definitionId: 'snapshot/delivery-fixture',
     description: 'Reconcile recorded dormant Fusion text',
     handler: async () => {
+      ctx.deliveryFixtureGuard.assertDormant()
       let task
       try { task = await ctx.fusionParticipants.recover('delivery-root') }
       catch (error) { throw new Error(JSON.stringify(error, ['message', 'cause', 'errors'])) }
@@ -31,6 +32,7 @@ export function apply(ctx) {
         if (accepted.length !== 1 || instructions.length !== 1 || requests !== 0 || claims !== 0) {
           throw new Error('Delivery replay duplicated input or started work')
         }
+        ctx.deliveryFixtureGuard.assertDormant()
         const state = task.delivery.snapshot()
         return { kind: 'success', text: JSON.stringify({ revision: state.decisionInputRevision,
           unclassified: state.classificationPending.length, queued: parked.agent.inbox.nextTurn.length,

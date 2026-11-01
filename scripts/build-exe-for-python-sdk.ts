@@ -184,6 +184,8 @@ class BuildCli {
     readonly compress: CompressType,
     /** Print every command and config patch instead of executing. */
     readonly dryRun: boolean,
+    /** Include the private dormant Fusion closure, with separate artifact destinations. */
+    readonly fusion: boolean,
   ) {}
 
   /**
@@ -224,7 +226,7 @@ class BuildCli {
     if (!isCompressType(compress)) {
       throw new Error(`build-exe-for-python-sdk: --compress must be one of ${COMPRESS_TYPES.join(' | ')}, got ${JSON.stringify(compress)}.`)
     }
-    return new BuildCli(targets, values['skip-build'], values['build-artifacts'], compress, values['dry-run'])
+    return new BuildCli(targets, values['skip-build'], values['build-artifacts'], compress, values['dry-run'], values.fusion)
   }
 
   private static parseRaw(argv: string[]) {
@@ -236,6 +238,7 @@ class BuildCli {
         'build-artifacts': { type: 'boolean', default: false },
         'compress': { type: 'string' },
         'dry-run': { type: 'boolean', default: false },
+        'fusion': { type: 'boolean', default: false },
         'help': { type: 'boolean', default: false },
       },
     }).values
@@ -250,6 +253,7 @@ class BuildCli {
       '  --skip-build           skip `pnpm run build` (lib/ artifacts must already exist).',
       '  --build-artifacts      run `pnpm run build:artifacts` instead, omitting the aggregate test and script typechecks.',
       '  --compress=<type>      pkg archive compression: None | GZip | Brotli | Zstd. Default: Brotli (smallest, slowest).',
+      '  --fusion               build the private opt-in Fusion carrier in dist-exe/fusion; leave default wheel artifacts unchanged.',
       '  --dry-run              print every command and config patch without executing.',
       '  --help                 print this help.',
       '',
@@ -277,14 +281,21 @@ class SingleExeBuild {
   /**
    * The cleared deploy target, pkg input, and Python node-mode carrier.
    */
-  readonly staging = resolve(root, PYTHON_RUNTIME_DIR, PYTHON_NODE_SUBDIR)
-  private readonly outDir = resolve(root, OUT_DIR)
+  readonly staging: string
+  private readonly outDir: string
+  private readonly runtimeDir: string
+  private readonly deployPackage: string
 
-  constructor(private readonly cli: BuildCli) {}
+  constructor(private readonly cli: BuildCli) {
+    this.runtimeDir = cli.fusion ? 'python/fusion-sdk-runtime/runtime' : PYTHON_RUNTIME_DIR
+    this.staging = resolve(root, this.runtimeDir, PYTHON_NODE_SUBDIR)
+    this.outDir = resolve(root, OUT_DIR, ...(cli.fusion ? ['fusion'] : []))
+    this.deployPackage = cli.fusion ? 'dsh-python-fusion-runtime-closure' : DEPLOY_ROOT_PACKAGE
+  }
 
   /** Verify the closure before compiling or packaging. */
   async verifyClosure(): Promise<void> {
-    await this.runPnpm('runtime dependency closure', ['run', 'verify-runtime-closure'])
+    await this.runPnpm('runtime dependency closure', ['run', 'verify-runtime-closure', ...(this.cli.fusion ? ['--manifest=python/fusion-sdk-runtime/package.json'] : [])])
   }
 
   /** Build all package artifacts unless `--skip-build` was passed. */
@@ -306,7 +317,7 @@ class SingleExeBuild {
     else await rm(this.staging, { recursive: true, force: true })
     try { await this.runPnpm('deploy', [
       '--filter',
-      DEPLOY_ROOT_PACKAGE,
+      this.deployPackage,
       'deploy',
       '--prod',
       '--frozen-lockfile',
@@ -346,7 +357,7 @@ class SingleExeBuild {
       console.log('build-exe-for-python-sdk: [dry-run] restore direct dependencies omitted by legacy deploy')
       return
     }
-    const restored = await restoreLegacyHoists(this.staging, resolve(root, DEPLOY_SOURCE_NODE_MODULES))
+    const restored = await restoreLegacyHoists(this.staging, resolve(root, this.cli.fusion ? 'python/fusion-sdk-runtime/node_modules' : DEPLOY_SOURCE_NODE_MODULES))
     if (restored.length > 0) console.log(`build-exe-for-python-sdk: restored legacy deploy hoists: ${restored.join(', ')}`)
   }
 
@@ -377,6 +388,15 @@ class SingleExeBuild {
     }
     if (!existsSync(manifestPath)) {
       throw new Error(`build-exe-for-python-sdk: ${manifestPath} missing — pnpm deploy did not produce a staged package.`)
+    }
+    if (this.cli.fusion) {
+      await copyFile(join(root, 'python/sdk-runtime', ENTRY_BIN), join(this.staging, ENTRY_BIN))
+      // Profile resolution exposes the installation manifest's declared packages.
+      const installationPath = join(this.staging, 'node_modules/@deepseek-ai/dsh/package.json')
+      const installation = JSON.parse(await readFile(installationPath, 'utf8')) as { dependencies: Record<string, string> }
+      installation.dependencies['@deepseek-ai/dsh-fusion-config'] = 'workspace:*'
+      installation.dependencies['@deepseek-ai/dsh-experimental-fusion-participants'] = 'workspace:*'
+      await writeFile(installationPath, JSON.stringify(installation, null, 2) + '\n')
     }
     if (!existsSync(join(this.staging, ENTRY_BIN))) {
       throw new Error(`build-exe-for-python-sdk: staged bootstrap ${join(this.staging, ENTRY_BIN)} is missing.`)
@@ -572,7 +592,7 @@ class SingleExeBuild {
    * @param products - the product paths returned by {@link pack}.
    */
   async syncToPythonRuntime(products: string[]): Promise<void> {
-    const destDir = resolve(root, PYTHON_RUNTIME_DIR)
+    const destDir = resolve(root, this.runtimeDir)
     if (this.cli.dryRun) {
       for (const path of products) {
         console.log(`build-exe-for-python-sdk: [dry-run] cp ${path} ${join(destDir, basename(path))}`)
