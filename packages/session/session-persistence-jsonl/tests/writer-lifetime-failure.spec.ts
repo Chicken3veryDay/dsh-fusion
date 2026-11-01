@@ -218,7 +218,7 @@ for (const timing of ['before', 'after'] as const) {
       expect(f.tracker['bindings'].get(f.writer)).toBe(f.session)
       expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(true)
       expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(timing === 'before')
-      expect(() => f.tracker.claimWrite(f.writer.id)).toThrow()
+      expect(() => { f.tracker.claimWrite(f.writer.id) }).toThrow()
       expect(f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity)).toMatchObject({ reason: 'uncertain' })
       await expect(f.ctx.fiber.dispose()).resolves.toBeUndefined()
       expect(calls).toBe(1)
@@ -234,13 +234,13 @@ it('joins an already-started actual remover without awaiting the enclosing close
   const unregister = events['unregister']
   const hooks = events['_hooks']['session/event'] ?? []
   const callback = hooks[hooks.length - 1]!.callback
-  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<undefined>(), resume = Promise.withResolvers<undefined>()
   let calls = 0, settled = false
   Object.defineProperty(events, 'unregister', { configurable: true,
     value: (...args: Parameters<typeof unregister>) => {
       if (args[0] !== 'session/event' || args[1] !== callback) return unregister.apply(events, args)
       calls++
-      entered.resolve()
+      entered.resolve(undefined)
       return resume.promise.then(() => unregister.apply(events, args))
     },
   })
@@ -256,7 +256,7 @@ it('joins an already-started actual remover without awaiting the enclosing close
     expect(settled).toBe(false)
     expect(f.tracker.openHandles.has(f.writer)).toBe(true)
     expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(true)
-    resume.resolve()
+    resume.resolve(undefined)
     await other
     await closed
     expect(calls).toBe(1)
@@ -265,7 +265,7 @@ it('joins an already-started actual remover without awaiting the enclosing close
     expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(false)
     await f.ctx.fiber.dispose()
   } finally {
-    resume.resolve()
+    resume.resolve(undefined)
     Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
   }
 })
@@ -277,4 +277,67 @@ it('releases ordinary handle bookkeeping synchronously', async () => {
   expect(f.tracker.hasPending(f.writer.id)).toBe(false)
   expect(f.tracker['writers'].has(f.writer.id)).toBe(false)
   await f.writer.close()
+})
+
+it('preserves the setup cause when actual route rollback also fails', async () => {
+  const f = await fixture()
+  const events = f.ctx.events, unregister = events['unregister']
+  const setup = new Error('setup failed'), removal = new Error('route rollback failed')
+  const on = f.ctx.root.on.bind(f.ctx.root)
+  let registered = false
+  vi.spyOn(f.ctx.root, 'on').mockImplementation((...args) => {
+    if (registered) throw setup
+    registered = true
+    return on(...args)
+  })
+  Object.defineProperty(events, 'unregister', { configurable: true,
+    value: (...args: Parameters<typeof unregister>) => {
+      if (args[0] === 'session/event') throw removal
+      return unregister.apply(events, args)
+    },
+  })
+  try {
+    expect(() => f.reserve()).toThrow(expect.objectContaining({
+      errors: [setup, expect.objectContaining({ errors: [removal] })],
+    }))
+    expect(f.writer.hasReservations).toBe(false)
+    expect(f.writer.lifetimeUncertain).toBe(true)
+    expect(f.tracker.openHandles.has(f.writer)).toBe(true)
+    await expect(f.writer.close()).rejects.toMatchObject({ errors: [removal] })
+  } finally {
+    Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
+  }
+})
+
+it('observes grouped close rejection while preserving ordinary unpinned drain failure', async () => {
+  const f = await fixture(), pin = f.reserve()
+  expect(await pin.release()).toMatchObject({ kind: 'durable' })
+  const failure = new Error('ordinary close drain failure')
+  vi.spyOn(f.writer, 'drainLive').mockRejectedValue(failure)
+  await expect(f.writer.close()).rejects.toBe(failure)
+  await f.ctx.fiber.dispose()
+  expect(f.writer.lifetimeUncertain).toBe(false)
+  expect(f.tracker.openHandles.has(f.writer)).toBe(false)
+  expect(f.tracker['writers'].has(f.writer.id)).toBe(false)
+  expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(false)
+})
+
+it('preserves setup and lifecycle-listener rollback causes without releasing another pin', async () => {
+  const f = await fixture(), first = f.reserve()
+  const setup = new Error('later setup failed'), cleanup = new Error('own lifecycle cleanup failed')
+  const on = f.ctx.root.on.bind(f.ctx.root)
+  let registrations = 0
+  vi.spyOn(f.ctx.root, 'on').mockImplementation((...args) => {
+    if (++registrations === 2) throw setup
+    const remove = on(...args)
+    return () => { remove(); throw cleanup }
+  })
+  expect(() => f.reserve()).toThrow(expect.objectContaining({
+    errors: [setup, expect.objectContaining({ errors: [expect.objectContaining({ errors: [cleanup] })] })],
+  }))
+  expect(f.writer.hasReservations).toBe(true)
+  expect(f.writer.lifetimeUncertain).toBe(true)
+  expect(first.checkDispatch()).toMatchObject({ kind: 'refused', reason: 'uncertain' })
+  expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(true)
+  expect(f.tracker.openHandles.has(f.writer)).toBe(true)
 })

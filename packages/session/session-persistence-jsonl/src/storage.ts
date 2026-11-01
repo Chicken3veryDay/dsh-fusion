@@ -630,10 +630,15 @@ export class JsonlBackendTracker {
    */
   release(handle: JsonlSessionHandle, materialized: boolean): void | Promise<void> {
     const route = this.retainedRoutes.get(handle)
-    if (route === undefined) return this.releaseBookkeeping(handle, materialized)
+    if (route === undefined) {
+      this.releaseBookkeeping(handle, materialized)
+      return
+    }
     return route.remove().then(() => {
       // The group joins this same close. Its rejection is observed, never awaited here.
-      void Promise.resolve(route.dispose()).catch((error: unknown) => { handle.retainFailure(error) })
+      void Promise.resolve(route.dispose()).catch((_error: unknown) => {
+        // The exact remover has succeeded; only this same close can reject the group.
+      })
       this.retainedRoutes.delete(handle)
       this.releaseBookkeeping(handle, materialized)
     }, (error: unknown) => {
@@ -744,7 +749,7 @@ export class JsonlBackendTracker {
       if (!this.retainedRoutes.has(writer)) {
         let removeListener!: () => void
         let removal: Promise<void> | undefined
-        const remove = (): Promise<void> => removal ??= Promise.resolve().then(() => removeListener())
+        const remove = (): Promise<void> => removal ??= Promise.resolve().then(removeListener)
         newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
           removeListener = ctx.root.on('session/event', (exact: Session, event) => {
             if (exact !== session || this.writers.get(session.id) !== writer) return
