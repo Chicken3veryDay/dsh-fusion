@@ -30,7 +30,7 @@ class FakeCredentials extends Credentials {
 }
 const [mode, directory, plane, rootId] = process.argv.slice(2)
 assert(directory !== undefined)
-const { default: Participants } = await import(plane === 'src' ? '../src/index.ts' : '../lib/types/index.js') as typeof import('../src/index.ts')
+const { default: Participants } = await import(plane === 'src' ? '../src/index.ts' : '@deepseek-ai/dsh-experimental-fusion-participants') as typeof import('../src/index.ts')
 const ctx = new Context()
 await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(Loader)

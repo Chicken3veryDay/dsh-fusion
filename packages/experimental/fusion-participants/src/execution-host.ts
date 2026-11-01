@@ -102,6 +102,6 @@ export interface TaskExecutionHost {
    * @returns drain of all admitted phases and original result durability.
    */
   revoke(controller: ExecutionController, reason: 'handoff' | 'stop' | 'cancel'): Promise<void>
-  /** @returns memoized terminal withdrawal, joining owner and delivery before releasing task pins. */
+  /** @returns memoized terminal withdrawal, joining admitted owner work before releasing its lifetime pins. */
   dispose(): Promise<void>
 }

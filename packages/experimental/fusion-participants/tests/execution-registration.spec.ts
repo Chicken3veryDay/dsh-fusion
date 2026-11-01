@@ -136,6 +136,8 @@ for (const phase of ['prepare', 'body', 'cleanup', 'start', 'result'] as const) 
       successor = f.grant().then(() => { granted = true })
       await setImmediate()
       expect(granted).toBe(false)
+      expect(f.task.execution.attempts).toHaveLength(1)
+      if (phase === 'cleanup') expect(f.adopted.agent.session.ownEvents().some(e => e.type === 'fusion/effect-settled')).toBe(false)
       hold.resume.resolve(undefined)
       await work; await revoked; await successor
       expect(f.control.cleanups).toBe(1)
