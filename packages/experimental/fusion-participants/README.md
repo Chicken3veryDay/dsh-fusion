@@ -25,7 +25,7 @@ Prepare durable participant contexts before publishing parked Agents. A task ret
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this opt-in host service alongside `agents`, `sessionPersistence`, `sessionProjections`, `fusionConfig` and `agentPresets`. It has no configurable fields. The owning host calls `ctx.fusionParticipants.prepare(selectionId)` or `recover(rootSessionId)`, then retains the returned `PreparedParticipants` capability until task disposal. `adopt(role)` returns a parked Agent; disposing that Agent preserves its Session and writer for another adoption. Dispose the task to drain Agents, remove routing and close writers.
+Mount this opt-in host service alongside `agentLoop`, `agents`, `sessionPersistence`, `sessionProjections`, `fusionConfig` and `agentPresets`. It has no configurable fields. The owning host calls `ctx.fusionParticipants.prepare(selectionId)` or `recover(rootSessionId)`, then retains the returned `PreparedParticipants` capability until task disposal. `adopt(role)` returns a parked Agent; disposing that Agent preserves its Session and writer for another adoption. Dispose the task to cancel and drain its work before removing routing and closing writers. The initiating caller scope owns cancellation and joining; the Fusion owner retains all leases and compositions independently of that caller.
 
 `PreparedParticipants.delivery` admits typed user text or authenticated live peer text to a roster participant without adopting or waking an Agent. Construct `DeliveryId` once at host ingress and reuse it on retries. Identical retries preserve the order, revision and MessageId; changed content, origin or routing conflicts. All ordinary text, including `ok`, stays blocking and unclassified after transport completion. `snapshot()` returns immutable input facts and synchronous pending reservations; it performs no I/O.
 
@@ -41,7 +41,7 @@ Preparation failures expose `ParticipantPreparationError.rootSessionId` for reco
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The root lease precedes participant acquisition in persisted identity order. Required log-only records retain the immutable roster and successful provisioning evidence. Each retained Session passes the persistence owner's same-writer durability barrier before preparation succeeds. Agent adoption borrows that exact registered Session through the existing loop factory. A retained preset scope keeps the composed generation alive independently of resident Agents; generation identities bracket the declaration digest read so a concurrent replacement refuses preparation.
+The root lease precedes participant acquisition in persisted identity order. Required log-only records retain the immutable roster and successful provisioning evidence. Each retained Session passes the persistence owner's same-writer durability barrier before preparation succeeds. Agent adoption borrows that exact registered Session through the existing loop factory. An observed resource scope captures the constructor owner context and adopts its exact Cordis disposer into ordered cleanup. Pending operations reserve their work boundary before provider callbacks; rollback and task release wait for every admitted operation to stop using resources. The explicit loop dependency retains the factory during direct loop teardown. A retained preset scope keeps the composed generation alive independently of resident Agents; generation identities bracket the declaration digest read so a concurrent replacement refuses preparation.
 
 | Source | Responsibility |
 |---|---|
@@ -83,7 +83,7 @@ This package preserves context lineage across Agent detachment and never copies 
 ## Known Limitations and Deferred Work
 
 - Product activation, input classification and disposition, execution grants, containment and final decisions belong to downstream owners. No activation control is exported to model or guest tools.
-- Concurrent disposal of the whole root Context is unordered and behaves like a crash: no receipt is returned and restart reconciles surviving prefixes. Hosts must drain the Fusion owner before closing retained writers, or provide a core drain hook, before enabling participant activation or execution rights.
+- The opt-in owner closes admission synchronously on teardown, joins pending preparation and recovery, and drains all published task work before releasing retained writers. Root, owner, caller, loop and persistence teardown share this order. A nonsettling operation keeps graceful teardown pending; forced process termination remains crash-equivalent. Raw Cordis disposal logs cleanup failures; observed scope cleanup and task disposal reject with retained causes.
 - Recovery requires the matching preset declaration; edited compositions refuse preparation. This package retains no historical preset catalog or plugin database.
 - The host handles task disposal rejection after every retained Agent, child plugin, composition scope and writer has settled. Cleanup failures remain unknown, including earlier direct disposal; repeated disposal retains the causes and disposed tasks refuse adoption.
 

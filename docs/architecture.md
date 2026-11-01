@@ -76,6 +76,8 @@ AgentLoop initializes Agents with rollback and awaits serial `agent/created` bef
 
 Retained adoption reuses registered Sessions and writers, parks before inbox claim and rejects ordinary resume before writes. The [host](../packages/core/agent-loop/README.md) drains cleanup; failures block reuse.
 
+Optional [Fusion participants](../packages/experimental/fusion-participants/README.md) retain an ordered resource lifetime: owner work drains before retained writers close. Stock teardown is unchanged.
+
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
 
 ## Turn flow

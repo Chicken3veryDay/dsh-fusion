@@ -8,6 +8,7 @@ import type { AgentHandle, RetainedAgentSession } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-agent-loop'
 import type {} from '@deepseek-ai/dsh-fusion-config'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
@@ -68,27 +69,51 @@ export class ParticipantPreparationError extends Error {
 
 /** Loader-mounted task owner; exposes no model tools or product activation operation. */
 export default class FusionParticipants extends Service {
-  static inject = ['agents', 'sessionPersistence', 'sessionProjections', 'fusionConfig', 'agentPresets']
+  static inject = ['agentLoop', 'agents', 'sessionPersistence', 'sessionProjections', 'fusionConfig', 'agentPresets']
   private readonly abort = new AbortController()
-  private readonly pending = new Set<Promise<PreparedParticipants>>()
-  private readonly owned = new Set<PreparedParticipants>()
+  private readonly pending = new Map<Promise<PreparedParticipants>, Promise<void>>()
+  private readonly owned = new Map<PreparedParticipants, () => Promise<void>>()
+  private readonly release = Promise.withResolvers<void>()
+  private readonly lifetime: { ctx: Context; resources: Scope }
+  private stopping: Promise<void> | undefined
+  private readonly cleanupErrors: unknown[] = []
   private admissions!: ProjectionHandle<AdmissionState>
   private receivers!: ProjectionHandle<ReceiverState>
   private projection!: ProjectionHandle<RosterState>
 
-  constructor(ctx: Context) { super(ctx, 'fusionParticipants') }
+  constructor(ctx: Context) {
+    super(ctx, 'fusionParticipants')
+    const resources = createScope(ctx, {}, { observeCleanup: true })
+    this.lifetime = { ctx: resources.ctx, resources }
+    ctx.effect(function* (this: FusionParticipants) {
+      yield resources.rawDispose
+      yield () => this.stop()
+    }.bind(this), 'fusion-participants.lifetime')
+  }
+
+  private stop(): Promise<void> {
+    if (this.stopping !== undefined) return this.stopping
+    const completion = Promise.withResolvers<void>()
+    this.stopping = completion.promise
+    // Publish the join before cancellation callbacks can reenter this owner.
+    this.abort.abort(new Error('participant owner disposed'))
+    void (async () => {
+      const drains = await Promise.allSettled([...this.pending.values(), ...[...this.owned.values()].map(drain => drain())])
+      // Preparations have stopped provisioning; their rollback may now release resources.
+      this.release.resolve()
+      await Promise.allSettled([...this.pending.keys()])
+      const results = await Promise.allSettled([...this.owned.keys()].map(task => task.dispose()))
+      const errors = [...this.cleanupErrors, ...[...drains, ...results].flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])]
+      try { await this.lifetime.resources.dispose() } catch (error: unknown) { errors.push(error) }
+      if (errors.length > 0) throw new AggregateError(errors, 'participant owner cleanup failed')
+    })().then(completion.resolve, completion.reject)
+    return completion.promise
+  }
 
   protected async [Service.init](): Promise<void> {
-    this.projection = await this.ctx.sessionProjections.register<'fusionRoster', RosterState>(rosterProjection)
-    this.admissions = await this.ctx.sessionProjections.register(admissionProjection)
-    this.receivers = await this.ctx.sessionProjections.register(receiverProjection)
-    this.ctx.effect(() => async () => {
-      this.abort.abort(new Error('participant owner disposed'))
-      await Promise.allSettled([...this.pending])
-      const results = await Promise.allSettled([...this.owned].map(task => task.dispose()))
-      const errors: unknown[] = results.filter(result => result.status === 'rejected').map((result): unknown => result.reason)
-      if (errors.length > 0) throw new AggregateError(errors, 'participant owner cleanup failed')
-    }, 'fusion-participants.tasks')
+    this.projection = await this.lifetime.ctx.sessionProjections.register<'fusionRoster', RosterState>(rosterProjection)
+    this.admissions = await this.lifetime.ctx.sessionProjections.register(admissionProjection)
+    this.receivers = await this.lifetime.ctx.sessionProjections.register(receiverProjection)
   }
 
   /**
@@ -98,12 +123,13 @@ export default class FusionParticipants extends Service {
    * @returns prepared capability only after every writer passes its own durability barrier.
    */
   prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track((async () => {
-      const selection = this.ctx.fusionConfig.selection(selectionId)
-      const document = await this.ctx.agentPresets.readDocument(selection.agentPreset)
+    return this.track(async (ownedSignal, quiescent) => {
+      const selection = this.lifetime.ctx.fusionConfig.selection(selectionId)
+      const document = await this.lifetime.ctx.agentPresets.readDocument(selection.agentPreset)
+      ownedSignal.throwIfAborted()
       const compositionDigest = createHash('sha256').update(document.content).digest('hex')
-      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, signal)
-    })())
+      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, ownedSignal, quiescent)
+    }, signal)
   }
 
   /**
@@ -113,62 +139,101 @@ export default class FusionParticipants extends Service {
    * @returns a prepared capability using the original roster and context lineages.
    */
   recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track(this.acquire({ kind: 'resume', rootSessionId }, signal))
+    return this.track((ownedSignal, quiescent) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent), signal)
   }
 
-  private track(operation: Promise<PreparedParticipants>): Promise<PreparedParticipants> {
-    this.pending.add(operation)
-    void operation.then(() => this.pending.delete(operation), () => this.pending.delete(operation))
-    return operation
+  private track(
+    work: (signal: AbortSignal, quiescent: () => void) => Promise<PreparedParticipants>,
+    caller?: AbortSignal,
+  ): Promise<PreparedParticipants> {
+    const operation = Promise.withResolvers<PreparedParticipants>()
+    const abort = new AbortController()
+    const signal = AbortSignal.any([this.abort.signal, abort.signal, ...caller === undefined ? [] : [caller]])
+    try {
+      signal.throwIfAborted()
+      this.ctx.fiber.assertActive()
+      // Caller scopes cancel and join; only the captured resource scope owns leases.
+      this.ctx.effect(() => async () => {
+        abort.abort(new Error('participant caller disposed'))
+        let task: PreparedParticipants
+        try { task = await operation.promise } catch (_preparation: unknown) { return /* Rollback belongs to the pending operation. */ }
+        await task.dispose()
+      }, 'fusion-participants.caller')
+    } catch (error: unknown) { operation.reject(error); return operation.promise }
+    const quiescent = Promise.withResolvers<void>()
+    this.pending.set(operation.promise, quiescent.promise)
+    void operation.promise.then(() => this.pending.delete(operation.promise), () => this.pending.delete(operation.promise))
+    // Reserve before invoking provider code, including synchronous reentrant callbacks.
+    void Promise.resolve().then(() => {
+      signal.throwIfAborted()
+      return work(signal, quiescent.resolve)
+    }).then(operation.resolve, operation.reject).finally(quiescent.resolve)
+    return operation.promise
   }
 
   private async barrier(session: Session): Promise<void> {
-    const result = await this.ctx.sessionPersistence.flushSessionDurably(session)
+    const result = await this.lifetime.ctx.sessionPersistence.flushSessionDurably(session)
     if (result.kind !== 'durable') throw new Error(`participant durability refused: ${result.reason}`)
   }
 
   private async acquire(
     request: { kind: 'create'; roster: Roster } | { kind: 'resume'; rootSessionId: SessionId },
-    caller?: AbortSignal,
+    caller: AbortSignal,
+    quiescent: () => void,
   ): Promise<PreparedParticipants> {
     const rootSessionId = request.kind === 'create' ? request.roster.rootSessionId : request.rootSessionId
-    const signal = AbortSignal.any([this.abort.signal, ...caller === undefined ? [] : [caller]])
+    const taskAbort = new AbortController()
+    const signal = AbortSignal.any([this.abort.signal, taskAbort.signal, caller])
     const leases: RetainedAgentSession[] = []
     const participants = new Map<SessionId, RetainedAgentSession>()
     let composition: Scope | undefined
     let disposal: Promise<void> | undefined
     let prepared: PreparedParticipants | undefined
     let delivery: DeliveryOwner | undefined
-    const dispose = (): Promise<void> => disposal ??= (async () => {
-      const errors: unknown[] = []
-      try { await delivery?.dispose() } catch (error: unknown) { errors.push(error) }
-      for (const lease of [...leases].reverse()) {
-        try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
-      }
-      try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
-      if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
-      if (prepared !== undefined) this.owned.delete(prepared)
-    })()
+    const drain = (): Promise<void> => {
+      taskAbort.abort(new Error('participant task disposed'))
+      return delivery?.dispose() ?? Promise.resolve()
+    }
+    const dispose = (): Promise<void> => {
+      if (disposal !== undefined) return disposal
+      const completion = Promise.withResolvers<void>()
+      disposal = completion.promise
+      void (async () => {
+        const errors: unknown[] = []
+        try { await drain() } catch (error: unknown) { errors.push(error) }
+        if (this.stopping !== undefined) await this.release.promise
+        for (const lease of [...leases].reverse()) {
+          try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
+        }
+        try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
+        if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
+        if (prepared !== undefined) this.owned.delete(prepared)
+      })().then(completion.resolve, completion.reject)
+      return completion.promise
+    }
     try {
       signal.throwIfAborted()
-      const root = await this.ctx.agents.retain({ sessionId: rootSessionId, mode: request.kind, agentOptions: {}, signal })
+      const root = await this.lifetime.ctx.agents.retain({ sessionId: rootSessionId, mode: request.kind, agentOptions: {}, signal })
       leases.push(root)
       signal.throwIfAborted()
       if (request.kind === 'create') {
         root.session.append('fusion/roster', request.roster)
         await this.barrier(root.session)
       }
+      signal.throwIfAborted()
       const state = this.projection.stateOf(root.session)
       const roster = state.roster
       if (roster === null || roster.rootSessionId !== rootSessionId) throw new Error('missing or mismatched root roster')
       const key = {}
-      composition = createScope(this.ctx, key, { observeCleanup: true })
-      await this.ctx.agentPresets.mount(composition.ctx, roster.agentPreset)
-      const document = await this.ctx.agentPresets.readDocument(roster.agentPreset)
+      composition = createScope(this.lifetime.ctx, key, { observeCleanup: true })
+      await this.lifetime.ctx.agentPresets.mount(composition.ctx, roster.agentPreset)
+      signal.throwIfAborted()
+      const document = await this.lifetime.ctx.agentPresets.readDocument(roster.agentPreset)
+      signal.throwIfAborted()
       const witnessKey = {}
       const witness = createScope(composition.ctx, witnessKey, { observeCleanup: true })
       try {
-        await this.ctx.agentPresets.mount(witness.ctx, roster.agentPreset)
+        await this.lifetime.ctx.agentPresets.mount(witness.ctx, roster.agentPreset)
         // Replaced generations cannot be resurrected. Equal parents bracket the document read.
         if (scopeParentOf(key) !== scopeParentOf(witnessKey)
           || createHash('sha256').update(document.content).digest('hex') !== roster.compositionDigest) {
@@ -184,15 +249,15 @@ export default class FusionParticipants extends Service {
       const pinned = composition
       for (const participant of roster.participants) {
         signal.throwIfAborted()
-        const existing = await this.ctx.sessionPersistence.stat(participant.id, { signal })
+        const existing = await this.lifetime.ctx.sessionPersistence.stat(participant.id, { signal })
         if (existing === undefined && state.established.includes(participant.id)) throw new Error('established participant is absent')
-        const lease = await this.ctx.agents.retain({
+        const lease = await this.lifetime.ctx.agents.retain({
           sessionId: participant.id, root, mode: existing === undefined ? 'create' : 'resume', signal,
           agentOptions: {
             provider: participant.binding.providerId, model: participant.binding.wireModelId,
             reasoningEffort: ReasoningEffortId(participant.binding.effort),
           },
-          setup: (ctx) => { this.ctx.agentPresets.composeFrom(ctx, pinned.ctx) },
+          setup: (ctx) => { this.lifetime.ctx.agentPresets.composeFrom(ctx, pinned.ctx) },
         })
         leases.push(lease)
         participants.set(participant.id, lease)
@@ -204,29 +269,33 @@ export default class FusionParticipants extends Service {
       }
       await this.barrier(root.session)
       signal.throwIfAborted()
+      signal.throwIfAborted()
       delivery = new DeliveryOwner({
-        ctx: this.ctx, root: root.session, signal,
+        ctx: this.lifetime.ctx, root: root.session, signal,
         participants: new Map([...participants].map(([id, lease]) => [id, lease.session])),
         projections: { admissions: this.admissions, receivers: this.receivers },
       })
       await delivery.reconcile()
       const deliveryOwner = delivery
+      signal.throwIfAborted()
       prepared = Object.freeze({
         roster: deepFreeze(roster),
         delivery: deliveryOwner,
         adopt: async (role: string): Promise<AgentHandle> => {
-          signal.throwIfAborted()
           const id = roster.roles[role]
           const lease = id === undefined ? undefined : participants.get(id)
           if (disposal !== undefined || lease === undefined) throw new Error('participant is not owned by this prepared task')
+          signal.throwIfAborted()
           return deliveryOwner.adopt(() => lease.adopt())
         },
         dispose,
       })
-      this.owned.add(prepared)
+      this.owned.set(prepared, drain)
+      quiescent()
       return prepared
     } catch (error: unknown) {
-      try { await dispose() } catch (cleanup: unknown) { throw new ParticipantPreparationError(rootSessionId, 'unknown', new AggregateError([error, cleanup], 'participant preparation and cleanup failed')) }
+      quiescent()
+      try { await dispose() } catch (cleanup: unknown) { this.cleanupErrors.push(cleanup); throw new ParticipantPreparationError(rootSessionId, 'unknown', new AggregateError([error, cleanup], 'participant preparation and cleanup failed')) }
       throw new ParticipantPreparationError(rootSessionId, 'complete', error)
     }
   }

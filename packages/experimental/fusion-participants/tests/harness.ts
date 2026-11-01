@@ -31,7 +31,7 @@ afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
-export async function mount(root?: string, compression: 'none' | 'zstd' = 'none') {
+export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false) {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
   if (!roots.includes(root)) roots.push(root)
   const ctx = new Context()
@@ -57,6 +57,7 @@ export async function mount(root?: string, compression: 'none' | 'zstd' = 'none'
     } } },
     { name: 'cordis:participants' },
   ]
+  if (loopFirst) [entries[7], entries[8]] = [entries[8]!, entries[7]!]
   for (const entry of entries) await ctx.loader.create(entry)
   await ctx.loader.await()
   const adapter = new MockAdapter(Array.from({ length: 8 }, () => textResponse('retained answer')), {
