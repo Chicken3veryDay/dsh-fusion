@@ -10,7 +10,7 @@
  */
 
 import { isDeepStrictEqual } from 'node:util'
-import type { Context } from '@deepseek-ai/cordis'
+import { FiberState, type Context } from '@deepseek-ai/cordis'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import {
@@ -25,6 +25,9 @@ import {
 } from '@deepseek-ai/dsh-session-persistence'
 import type {
   SessionDurabilityResult,
+  WriterLifetimeReservation,
+  WriterLifetimeFlush,
+  SessionWriterReservation,
   SessionAccess,
   SessionHandle,
   SessionHandleAppendOptions,
@@ -87,6 +90,68 @@ export interface StorageHandleState {
 export class JsonlSessionHandle implements SessionHandle {
   /** Transient identity of this exact handle, never a persisted Session field. */
   readonly durabilityIdentity = Symbol('jsonl-writer')
+  private readonly pins = new Set<{ fence(): void; done: Promise<void> }>()
+  private retainedEver = false
+  private lifetimeFailure: { readonly cause: unknown } | undefined
+  /**
+   * Register an operation before any lifecycle callback may run.
+   * @param pin - synchronous fence and completion owned by the reservation.
+   * @returns removal of this operation only; other pins remain owned.
+   */
+  retain(pin: { fence(): void; done: Promise<void> }): () => void {
+    this.retainedEver = true
+    this.pins.add(pin)
+    return () => { this.pins.delete(pin) }
+  }
+  /** Whether another reservation still owns this writer during setup rollback. */
+  get hasReservations(): boolean { return this.pins.size > 0 }
+  /** Whether a new exact-writer reservation may be admitted. */
+  get lifetimeOpen(): boolean { return !this.lifetimeUncertain && this.durabilityOpen }
+  /** Sticky storage uncertainty; only process recovery may abandon this ownership. */
+  get lifetimeUncertain(): boolean { return this.lifetimeFailure !== undefined }
+  /**
+   * Retain the first uncertain storage outcome and synchronously fence every operation.
+   * @param cause - original durability or lease failure.
+   */
+  retainFailure(cause: unknown): void {
+    this.lifetimeFailure ??= { cause }
+    for (const pin of [...this.pins]) pin.fence()
+  }
+
+  /**
+   * Flush and verify the already reserved writer while close waits for its operation.
+   * @param session - exact pinned Session, including a detached known prefix.
+   * @param boundary - exclusive boundary captured at the public reservation call.
+   * @returns actual same-writer durability, or sticky ownership-retaining uncertainty.
+   */
+  async flushRetained(session: Session, boundary: SessionLogOffset): Promise<WriterLifetimeFlush> {
+    try {
+      await this.drainLive()
+      await this.enqueueChain(async () => {
+        if (!this.state.materialized) {
+          await this.ensureLease()
+          await this.storage.persistHeader(this.header, this.state.inheritedEventCount)
+          this.state.materialized = true
+        }
+        this.flushedCursor = this.state.cursor
+        this.flushGeneration += 1
+      })
+      if (this.lease === undefined || this.flushedCursor < boundary || this.state.cursor < boundary
+        || !isDeepStrictEqual(this.header, session.header)
+        || this.inheritedEventCount !== session.inheritedEventCount) throw new Error('unproven exact writer coverage')
+      await this.lease.assertOwned(this.id)
+      const path = await this.storage.resolveCurrentLog(this.id)
+      if (path === undefined) throw new Error('missing exact writer artifact')
+      const stored = await this.storage.readStoredLog(path, this.id)
+      if (!await session.matchesDurabilityPrefix(stored.events.slice(0, boundary), boundary)) throw new Error('unproven exact writer prefix')
+      await this.lease.assertOwned(this.id)
+      if (this.lifetimeUncertain) return { kind: 'refused', reason: 'uncertain', cause: this.lifetimeFailure?.cause }
+      return { kind: 'durable', boundary }
+    } catch (cause: unknown) {
+      this.retainFailure(cause)
+      return { kind: 'refused', reason: 'uncertain', cause }
+    }
+  }
   private flushedCursor = -1
   private flushGeneration = 0
   private chain: Promise<unknown> = Promise.resolve()
@@ -256,42 +321,68 @@ export class JsonlSessionHandle implements SessionHandle {
    * @returns settlement of the release.
    */
   close(): Promise<void> {
-    return this.closing ??= (async () => {
-      let drainFailure: unknown
-      // Producers on other fibers may still publish while close waits for
-      // in-flight mutations (root disposal is concurrent), so drain again
-      // until a full pass leaves the routed buffer empty. The chain never
-      // rejects because run() swallows each operation's rejection after its
-      // caller observed it.
-      for (;;) {
-        try {
-          await this.drainLive()
-        } catch (error: unknown) {
-          drainFailure = error
-          break
-        }
-        await this.chain
-        if (this.buffered.length === 0) break
-      }
-      // After a drain failure the chain may still hold in-flight mutations.
-      await this.chain
-      // Free the in-process claim no matter how the kernel-lock release
-      // fares: a skipped releaseHandle would wedge the id in this process
-      // behind a lock the kernel may already have dropped.
-      const failures: Error[] = []
-      if (drainFailure !== undefined) {
-        failures.push(drainFailure instanceof Error ? drainFailure : new Error(errorChain(drainFailure)))
-      }
+    if (this.closing !== undefined) return this.closing
+    if (!this.retainedEver) return this.closeStock()
+    // Publish the join before abort callbacks: they may reenter close/release.
+    const result = Promise.withResolvers<void>()
+    this.closing = result.promise
+    for (const pin of [...this.pins]) pin.fence()
+    void (async () => {
+      await Promise.all([...this.pins].map(pin => pin.done))
+      if (this.lifetimeFailure !== undefined) throw this.lifetimeFailure.cause
+      await this.finishClose()
+    })().then(result.resolve, result.reject)
+    return result.promise
+  }
+
+  private closeStock(): Promise<void> {
+    return this.closing ??= this.finishClose()
+  }
+  private async finishClose(): Promise<void> {
+    let drainFailure: unknown
+    // Producers on other fibers may still publish while close waits for
+    // in-flight mutations (root disposal is concurrent), so drain again
+    // until a full pass leaves the routed buffer empty. The chain never
+    // rejects because run() swallows each operation's rejection after its
+    // caller observed it.
+    for (;;) {
       try {
-        await this.lease?.release()
-      } catch (releaseFailure: unknown) {
-        /* v8 ignore next -- lock releases reject with Error */
-        failures.push(releaseFailure instanceof Error ? releaseFailure : new Error(errorChain(releaseFailure)))
+        await this.drainLive()
+      } catch (error: unknown) {
+        drainFailure = error
+        break
       }
-      this.storage.releaseHandle(this, this.state.materialized)
-      if (failures.length > 1) throw new AggregateError(failures, `session "${this.id}": close failed to drain and to release its write lock`)
-      if (failures[0] !== undefined) throw failures[0]
-    })()
+      await this.chain
+      if (this.buffered.length === 0) break
+    }
+    // After a drain failure the chain may still hold in-flight mutations.
+    await this.chain
+    // Free the in-process claim no matter how the kernel-lock release
+    // fares: a skipped releaseHandle would wedge the id in this process
+    // behind a lock the kernel may already have dropped.
+    const failures: Error[] = []
+    if (drainFailure !== undefined) {
+      failures.push(drainFailure instanceof Error ? drainFailure : new Error(errorChain(drainFailure)))
+    }
+    const drainError = failures[0]
+    if (this.retainedEver && drainError !== undefined) {
+      this.retainFailure(drainError)
+      throw drainError
+    }
+    try {
+      await this.lease?.release()
+    } catch (releaseFailure: unknown) {
+      /* v8 ignore next -- lock releases reject with Error */
+      failures.push(releaseFailure instanceof Error ? releaseFailure : new Error(errorChain(releaseFailure)))
+    }
+    const releaseError = failures[0]
+    if (this.retainedEver && releaseError !== undefined) {
+      this.retainFailure(releaseError)
+      throw releaseError
+    }
+    this.storage.releaseHandle(this, this.state.materialized)
+    if (failures.length > 1) throw new AggregateError(failures, `session "${this.id}": close failed to drain and to release its write lock`)
+    if (failures[0] !== undefined) throw failures[0]
   }
 
   /** `await using` support: delegates to {@link close}. */
@@ -433,6 +524,7 @@ export class JsonlBackendTracker {
   private active = false
   private readonly bindings = new Map<JsonlSessionHandle, Session>()
   private readonly flushReceipts = new Map<JsonlSessionHandle, number>()
+  private readonly retainedRoutes = new Map<JsonlSessionHandle, () => void>()
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
   constructor(private readonly name: string) {}
@@ -531,12 +623,146 @@ export class JsonlBackendTracker {
    * @param materialized - whether the session reached durable storage.
    */
   release(handle: JsonlSessionHandle, materialized: boolean): void {
+    this.retainedRoutes.get(handle)?.()
+    this.retainedRoutes.delete(handle)
     this.openHandles.delete(handle)
     this.bindings.delete(handle)
     this.flushReceipts.delete(handle)
     if (handle.access !== 'write') return
     this.writers.delete(handle.id)
     if (!materialized) this.pending.delete(handle.id)
+  }
+
+  /**
+   * Synchronously authenticate and retain one exact writer operation.
+   * @param ctx - declaring provider lifetime, captured before Service context rebinding.
+   * @param session - exact live Session.
+   * @param provider - declaring service identity.
+   * @returns a registered private reservation or a lifecycle refusal.
+   */
+  reserveSessionWriter(ctx: Context, session: Session, provider: symbol): WriterLifetimeReservation {
+    const sessions = ctx.get('sessions')
+    if (sessions?.get(session.id) !== session) return { kind: 'refused', reason: 'not-live' }
+    const writer = this.writers.get(session.id)
+    if (writer?.lifetimeUncertain) return { kind: 'refused', reason: 'uncertain' }
+    if (writer == null || !writer.lifetimeOpen || this.bindings.get(writer) !== session || !this.active) {
+      return { kind: 'refused', reason: 'missing-writer' }
+    }
+    const ancestors = new Set<Context['fiber']>()
+    for (let fiber = ctx.fiber; !ancestors.has(fiber); fiber = fiber.parent.fiber) ancestors.add(fiber)
+    const providerLive = (): boolean => [...ancestors].every(fiber => fiber.uid !== null && fiber.state === FiberState.ACTIVE)
+      && ctx.get('sessionPersistence')?.identity === provider
+    if (!providerLive()) return { kind: 'refused', reason: 'fenced' }
+    const abort = new AbortController()
+    const done = Promise.withResolvers<void>()
+    let phase: 'active' | 'releasing' | 'released' | 'uncertain' = 'active'
+    let releasePromise: Promise<WriterLifetimeFlush> | undefined
+    let flushTail: Promise<WriterLifetimeFlush> | undefined
+    const fence = (): void => { abort.abort(new Error('writer lifetime fenced')) }
+    const current = (): boolean => providerLive() && this.active && writer.lifetimeOpen
+      && this.writers.get(session.id) === writer && this.bindings.get(writer) === session
+      && sessions.get(session.id) === session
+    const checkDispatch = (): ReturnType<SessionWriterReservation['checkDispatch']> => {
+      if (writer.lifetimeUncertain || phase === 'uncertain') return { kind: 'refused', reason: 'uncertain' }
+      if (phase !== 'active' || abort.signal.aborted || !current()) {
+        fence()
+        return { kind: 'refused', reason: phase === 'released' ? 'released' : 'fenced' }
+      }
+      return undefined
+    }
+    const flushExact = async (boundary: SessionLogOffset): Promise<WriterLifetimeFlush> => {
+      if (phase === 'released') return { kind: 'refused', reason: 'released' }
+      if (phase === 'uncertain' || writer.lifetimeUncertain) return { kind: 'refused', reason: 'uncertain' }
+      if (this.writers.get(session.id) !== writer || this.bindings.get(writer) !== session
+        || !this.retainedRoutes.has(writer)) {
+        phase = 'uncertain'
+        writer.retainFailure(new Error('reserved writer route lost'))
+        return { kind: 'refused', reason: 'uncertain' }
+      }
+      const result = await writer.flushRetained(session, boundary)
+      if (result.kind === 'refused') { phase = 'uncertain'; fence() }
+      return result
+    }
+    const flushDurably = (): Promise<WriterLifetimeFlush> => {
+      if (phase !== 'active') return Promise.resolve({ kind: 'refused', reason: phase === 'uncertain' ? 'uncertain' : 'released' })
+      const boundary = session.seq
+      const next = (flushTail ?? Promise.resolve()).then(() => flushExact(boundary))
+      flushTail = next
+      return next
+    }
+    const removers: (() => void)[] = []
+    let unpin: (() => void) | undefined
+    let newRoute: (() => void) | undefined
+    const cleanup = (): void => {
+      const errors: unknown[] = []
+      for (const remove of removers.splice(0).reverse()) {
+        try { remove() } catch (error: unknown) { errors.push(error) }
+      }
+      if (errors.length > 0) throw new AggregateError(errors, 'reservation listener cleanup failed')
+    }
+    const rollback = (): void => {
+      try { cleanup() } finally {
+        unpin?.()
+        try {
+          if (newRoute !== undefined && !writer.hasReservations) {
+            newRoute()
+            this.retainedRoutes.delete(writer)
+          }
+        } finally { done.resolve() }
+      }
+    }
+    try {
+      unpin = writer.retain({ fence, done: done.promise })
+      // Routing belongs to the pinned writer until actual close, including provider withdrawal.
+      // Root teardown may remove this registration; missing coverage then retains uncertainty.
+      if (!this.retainedRoutes.has(writer)) {
+        newRoute = ctx.root.on('session/event', (exact: Session, event) => {
+          if (exact !== session || this.writers.get(session.id) !== writer) return
+          writer.enqueueLive(event, (error) => {
+            writer.retainFailure(error)
+            ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
+          })
+        })
+        this.retainedRoutes.set(writer, newRoute)
+      }
+      removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
+      removers.push(ctx.root.on('internal/status', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
+      removers.push(ctx.root.on('session/disposed', (exact) => { if (exact === session) fence() }))
+      // Listener registration may synchronously reenter host lifecycle code.
+      if (!current() || abort.signal.aborted) {
+        rollback()
+        return { kind: 'refused', reason: 'fenced' }
+      }
+    } catch (error: unknown) {
+      try { rollback() } catch (rollbackError: unknown) {
+        throw new AggregateError([error, rollbackError], 'reservation setup and rollback failed')
+      }
+      throw error
+    }
+    const releasePin = unpin
+    const reservation: SessionWriterReservation = {
+      signal: abort.signal, checkDispatch, flushDurably,
+      release() {
+        if (releasePromise !== undefined) return releasePromise
+        const result = Promise.withResolvers<WriterLifetimeFlush>()
+        releasePromise = result.promise
+        const boundary = session.seq
+        phase = phase === 'uncertain' ? 'uncertain' : 'releasing'
+        fence()
+        void (async () => {
+          await flushTail
+          const flushed = await flushExact(boundary)
+          if (flushed.kind === 'refused') return flushed
+          phase = 'released'
+          cleanup()
+          releasePin()
+          done.resolve()
+          return flushed
+        })().then(result.resolve, result.reject)
+        return result.promise
+      },
+    }
+    return { kind: 'reserved', reservation }
   }
 
   /**
@@ -624,7 +850,9 @@ export class JsonlBackendTracker {
       }
       yield () => {
         this.active = false
-        bindings.clear()
+        for (const writer of bindings.keys()) {
+          if (!this.retainedRoutes.has(writer)) bindings.delete(writer)
+        }
         flushReceipts.clear()
       }
       yield ctx.on('session/created', (session: Session) => {
@@ -633,6 +861,7 @@ export class JsonlBackendTracker {
       })
       yield ctx.on('session/event', (session: Session, event) => {
         const writer = writers.get(session.id)
+        if (writer != null && this.retainedRoutes.has(writer)) return
         if (writer != null && !bindings.has(writer)) bindings.set(writer, session)
         writer?.enqueueLive(event, (error) => {
           ctx.logger.warn(`session-persistence: background write for session "${session.id}" failed (buffered events retained): ${String(error)}`)

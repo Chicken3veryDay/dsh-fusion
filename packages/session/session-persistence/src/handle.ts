@@ -111,7 +111,10 @@ export interface SessionHandle extends AsyncDisposable {
   /**
    * Release the handle: a read handle frees local resources; a write handle
    * completes pending durability and releases write ownership. Idempotent,
-   * asynchronous, and deliberately not cancellable.
+   * asynchronous, and deliberately not cancellable. An opted-in writer reservation
+   * fences dispatch synchronously and retains the exact writer, route and ownership
+   * until every admitted operation releases after cleanup and final durability.
+   * Uncertainty retains ownership; it never converts a pending close into success.
    */
   close(): Promise<void>
 }

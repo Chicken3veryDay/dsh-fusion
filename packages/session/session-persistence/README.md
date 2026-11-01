@@ -11,6 +11,9 @@ English | [中文](README.zh.md)
 
 This package lets applications persist and resume session event logs through a backend-independent API. Readers can create, open, inspect, list, append to, read, flush, and close stored sessions while preserving contiguous append-only history. A completed flush is the durability barrier; readers never receive torn tails or invalid records, and only one writer per session is allowed within a backend instance. Use the shipped [JSONL backend](../session-persistence-jsonl/README.md) for one compressed log per session, or implement another backend with the same observable guarantees.
 
+
+`reserveSessionWriter(session)` is a synchronous, host-only opt-in and defaults to `unsupported`. A reservation authenticates the declaring provider, exact live Session and writer before any await. Its private signal and final `checkDispatch()` fence close, replacement, withdrawal and detach; they confer no execution permission. `flushDurably()` captures its boundary at invocation and verifies the pinned writer, including cleanup during close. After owned work and cleanup finish, `release()` closes admission, joins prior flushes and verifies final durability. A failed proof remains uncertain and retains the writer and lease; there is no timeout-success or live unpin operation.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)

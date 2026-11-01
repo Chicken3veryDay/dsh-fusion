@@ -25,7 +25,7 @@ import {
   SessionPersistenceCorruptionError,
   SessionAlreadyExistsError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
-  type SessionAccess, type SessionHandle, type SessionDurabilityResult,
+  type SessionAccess, type SessionHandle, type SessionDurabilityResult, type WriterLifetimeReservation,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
@@ -313,8 +313,11 @@ class JsonlSessionPersistence extends SessionPersistence {
   /** One joinable decode/migration operation per selected historical Session file revision. */
   private readonly migrationPreparations = new Map<SessionId, MigrationPreparation>()
 
+  private readonly lifetimeOwner: Context
+
   constructor(ctx: Context, public config: Config, private readonly tracker: JsonlBackendTracker) {
     super(ctx)
+    this.lifetimeOwner = ctx
     /* v8 ignore next 5 -- generated catalog and Session source share one build-time version owner. */
     if (sessionFormatCatalog.currentVersion !== SESSION_FORMAT_VERSION) {
       throw new Error(
@@ -462,6 +465,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       }
       throw failure
     }
+  }
+
+  override reserveSessionWriter(session: Session): WriterLifetimeReservation {
+    return this.tracker.reserveSessionWriter(this.lifetimeOwner, session, this.identity)
   }
 
   override flushSessionDurably(session: Session): Promise<SessionDurabilityResult> {

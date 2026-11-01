@@ -142,6 +142,37 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/** Refusal leaves dispatch closed; uncertainty retains the writer and its storage ownership. */
+export type WriterLifetimeReason = 'unsupported' | 'not-live' | 'missing-writer' | 'fenced' | 'released' | 'uncertain'
+/** Verified prefix on the reserved writer, or a refusal that never implies rollback. */
+export type WriterLifetimeFlush = { readonly kind: 'durable'; readonly boundary: SessionLogOffset }
+  | { readonly kind: 'refused'; readonly reason: WriterLifetimeReason; readonly cause?: unknown }
+/** Private host operation lifetime; never a model/SDK credential or permission grant. */
+export interface SessionWriterReservation {
+  /** Monotonic cancellation request; cancellation alone does not establish cleanup. */
+  readonly signal: AbortSignal
+  /**
+   * Reauthenticate the declaring provider, exact live Session and writer immediately before dispatch.
+   * @returns refusal when fenced, released or uncertain; otherwise undefined.
+   */
+  checkDispatch(): { readonly kind: 'refused'; readonly reason: WriterLifetimeReason } | undefined
+  /**
+   * Capture the current Session boundary synchronously and verify storage on the pinned writer.
+   * Fenced reservations may finish cleanup while public handle operations remain closed.
+   * @returns durable prefix or sticky uncertainty; earlier receipts authorize nothing.
+   */
+  flushDurably(): Promise<WriterLifetimeFlush>
+  /**
+   * Close admission synchronously, join earlier flushes and verify the final captured prefix.
+   * Call only after the owned operation and cleanup finish. Idempotent; uncertainty retains ownership.
+   * @returns the memoized durability join, never the handle's close join.
+   */
+  release(): Promise<WriterLifetimeFlush>
+}
+/** Synchronously registered exact-writer operation, or explicit unsupported/lifecycle refusal. */
+export type WriterLifetimeReservation = { readonly kind: 'reserved'; readonly reservation: SessionWriterReservation }
+  | { readonly kind: 'refused'; readonly reason: WriterLifetimeReason }
+
 /**
  * Durable append-only session storage addressed through per-session handles.
  *
@@ -163,6 +194,18 @@ declare module '@deepseek-ai/cordis' {
  * on this backend instance observe at least that prefix.
  */
 export abstract class SessionPersistence extends Service {
+  /**
+   * Reserve exact provider/Session/writer lifetime before any await or effect-capable callback.
+   * Providers authenticate object identity and roll back partial setup on refusal or reentry.
+   * Close/withdrawal/detach fence dispatch synchronously, retaining routing and ownership through cleanup.
+   * @param session - exact live Session whose current writer must remain owned.
+   * @returns a private operation reservation; unsupported providers refuse by default.
+   */
+  reserveSessionWriter(session: Session): WriterLifetimeReservation {
+    void session
+    return { kind: 'refused', reason: 'unsupported' }
+  }
+
   /** Process-local instance identity, stable through Context proxies and distinct after service replacement. */
   readonly identity: symbol = Symbol('sessionPersistence')
 

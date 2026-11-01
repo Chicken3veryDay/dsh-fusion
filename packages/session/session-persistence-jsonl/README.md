@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
 
 `dsh-session-persistence-jsonl` stores each session in a current append-only JSONL log and retains immutable historical format generations — checksummed Zstandard frames by default, raw newline-delimited lines when compression is disabled. It serves the current logical `SessionEvent` stream through persistence handles, so format migration, compression, historical decoding, and crash recovery remain storage-internal details. Choose it when consumers need a per-session file on disk; the logs are readable as plain lines when `compression: 'none'` is selected. A root directory is the one required configuration; durability, lazy materialization, [supported historical-format migration](../session-format-catalog/README.md), and torn-tail crash recovery come with the backend.
 
+Exact-writer reservations retain their live event route, in-process claim and kernel lease through operation cleanup and settlement durability. Close publishes its stable join and synchronously fences all reservations before waiting. Private cleanup can flush only the pinned writer; public closed-handle operations still refuse. Release captures its boundary before waiting, joins earlier flushes and removes only its own pin. Any retained-writer durability or ownership uncertainty is sticky and blocks release. Writers that never reserve retain the ordinary buffering, fsync and close/error behavior.
+
 ## Table of Contents
 
 - [Use this package](#use-this-package)
