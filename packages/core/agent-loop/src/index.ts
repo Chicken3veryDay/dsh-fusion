@@ -478,10 +478,6 @@ export class AgentLoop extends Service implements AgentFactory {
     options: AgentInitializationOptions,
   ): Promise<AgentHandle> {
     const { session, agentOptions, source, stored, setup, signal: callerSignal, parentAgent } = options
-    if (!options.retained && this.runtimeOwnerHandle.stateOf(session).rootSessionId !== null) {
-      await stored?.handle.close()
-      throw new Error('managed session requires its retained runtime owner')
-    }
     const id = session.id
     const loopCtx = this.runtime.ctx
 
@@ -569,6 +565,9 @@ export class AgentLoop extends Service implements AgentFactory {
     }
     const untrack = this.ownership.track(dispose)
     try {
+      if (!options.retained && this.runtimeOwnerHandle.stateOf(session).rootSessionId !== null) {
+        throw new Error('managed session requires its retained runtime owner')
+      }
       assertAgentOptions(agentOptions)
       ownerCtx.fiber.assertActive()
       // Factory dispatch and resume's load barrier already require a live owner.
@@ -838,6 +837,9 @@ export class AgentLoop extends Service implements AgentFactory {
           const coldRead = await handle.read(0, undefined, { signal: fused })
           fused.throwIfAborted()
           const persisted = coldRead.events
+          if (persisted.some(event => event.type === 'agent/runtime-owner')) {
+            throw new Error('managed session requires its retained runtime owner')
+          }
           const closers = interruptedTurnClosers(persisted)
           if (closers.length > 0) await handle.append(closers)
           preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, {

@@ -219,7 +219,7 @@ These limits define when the loop needs special care. They are current package c
 - **Config agents have no per-agent persona field or setup hook** — they use the deployment persona; scoped persona and tool composition are available only through the programmatic `ctx.agents.create()` / `resume()` factory options.
 - **No built-in turn budget** — tool calls or steering continue the current turn; a policy that bounds runaway turns must cancel from an existing lifecycle extension point such as `agent/turn-stopping`.
 
-- **Retained host Sessions** — `ctx.agents.retain()` publishes parked Agents on the same registered Session and writer; detachment retains that lifetime. Its host handles cleanup rejection after full drain through [observed scopes](../scope/README.md#use-this-package). Failed initialization with unknown cleanup blocks re-adoption and remains visible to later disposal. Stock Agent scopes retain ordinary Cordis disposal semantics.
+- **Retained host Sessions** — `ctx.agents.retain()` publishes parked Agents on the same registered Session and writer; detachment retains that lifetime. Ordinary resume rejects any owner marker before recovery appends and releases its writer; seeded creation also releases its writer when ownership validation fails. Its host handles cleanup rejection after full drain through [observed scopes](../scope/README.md#use-this-package). Failed initialization with unknown cleanup blocks re-adoption and remains visible to later disposal. Stock Agent scopes retain ordinary Cordis disposal semantics.
 
 <a id="dev-note"></a>
 ### Dev Note

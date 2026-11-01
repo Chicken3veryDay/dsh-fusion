@@ -1,13 +1,15 @@
 /** Real JSONL leases and driver publication for inert retained contexts. */
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import AgentLoop from '../src/index.ts'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
+import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
+import { sessionDir } from '../../../session/session-persistence-jsonl/src/format.ts'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { MockAdapter, textResponse } from './mock-adapter.ts'
 
@@ -93,6 +95,84 @@ it('leaves stock creation and followup active', async () => {
   await handle.agent.whenIdle()
   expect(adapter.requests).toHaveLength(1)
   await handle.dispose()
+})
+
+it.each(['valid', 'interrupted', 'duplicate', 'malformed'] as const)(
+  'refuses ordinary resume of %s managed history without writes or a leaked lease', async (kind) => {
+    const { ctx, root, adapter } = await mount()
+    const retained = await ctx.agents.retain(options)
+    if (kind === 'interrupted') {
+      retained.session.append('turn/start', { turn: 1 })
+      retained.session.append('step/start', { turn: 1, step: 1 })
+    }
+    await retained.dispose()
+    const path = join(sessionDir(root, undefined, id), 'session.v4.jsonl')
+    if (kind === 'duplicate' || kind === 'malformed') {
+      const rows = (await readFile(path, 'utf8')).trim().split('\n')
+        .map((line) => {
+          const row: unknown = JSON.parse(line)
+          if (typeof row !== 'object' || row === null) throw new Error('expected recorded JSONL object')
+          return row
+        })
+      const index = rows.findIndex(row => 'type' in row && row.type === 'agent/runtime-owner')
+      const marker = rows[index]
+      if (marker === undefined) throw new Error('missing recorded runtime owner')
+      if (kind === 'duplicate') rows.splice(index, 0, marker)
+      else rows[index] = { ...marker, data: {} }
+      await writeFile(path, rows.map((row, offset) => JSON.stringify(offset === 0 ? row : { ...row, seq: offset - 1 })).join('\n') + '\n')
+    }
+    const before = await readFile(path)
+    const claims = vi.fn()
+    ctx.on('agent/inbox/claimed', claims)
+    const open = ctx.sessionPersistence.open.bind(ctx.sessionPersistence)
+    const handles: SessionHandle[] = []
+    vi.spyOn(ctx.sessionPersistence, 'open').mockImplementation(async (...args) => {
+      const writer = await open(...args)
+      handles.push(writer)
+      return writer
+    })
+    try {
+      await expect.soft(ctx.agents.resume({ resumeSessionId: id })).rejects.toThrow('retained runtime owner')
+      expect.soft(await readFile(path), 'refusal must preserve the managed log byte for byte').toEqual(before)
+      const replacement = await open(id, 'write')
+      await replacement.close()
+      expect(claims).not.toHaveBeenCalled()
+      expect(adapter.requests).toHaveLength(0)
+      expect(ctx.agents.list()).toHaveLength(0)
+      expect(ctx.sessions.list()).toHaveLength(0)
+    } finally {
+      await Promise.all(handles.map(writer => writer.close()))
+    }
+  },
+)
+
+it.each(['valid', 'duplicate', 'malformed'] as const)('releases a seeded creation writer after %s ownership refuses', async (kind) => {
+  const { ctx } = await mount()
+  const retained = await ctx.agents.retain(options)
+  await retained.dispose()
+  const seed = [...structuredClone(await read(ctx))]
+  const marker = seed.find(event => event.type === 'agent/runtime-owner')
+  if (marker === undefined) throw new Error('missing recorded runtime owner')
+  const seededId = SessionId(`seeded-${kind}`)
+  const create = ctx.sessionPersistence.create.bind(ctx.sessionPersistence)
+  let writer: SessionHandle | undefined
+  vi.spyOn(ctx.sessionPersistence, 'create').mockImplementationOnce(async (...args) => {
+    writer = await create(...args)
+    return writer
+  })
+  if (kind === 'duplicate') seed.push({ ...marker, seq: SessionSeq(seed.length) })
+  else if (kind === 'malformed') Object.assign(marker, { data: {} })
+  try {
+    await expect(ctx.agents.create({ sessionId: seededId, seed })).rejects
+      .toThrow(/retained runtime owner|duplicate runtime owner|rootSessionId/u)
+    expect(writer, 'seed validation must reach the real persistence writer').toBeDefined()
+    const replacement = await create({ ...retained.session.header, id: seededId })
+    await replacement.close()
+    expect(ctx.agents.list()).toHaveLength(0)
+    expect(ctx.sessions.list()).toHaveLength(0)
+  } finally {
+    await writer?.close()
+  }
 })
 
 it('rejects retention without persistence and stock factories without the optional seam', async () => {
