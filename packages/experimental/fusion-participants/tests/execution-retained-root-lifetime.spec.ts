@@ -101,6 +101,8 @@ if (!child) {
       scope = createScope(ctx, {})
       return scope.ctx.get('fusionParticipants')!.registerExecutionHost(task, provider)
     } : undefined, process.env.DSH_RETAINED_CACHE !== '0')
+    const cacheEnabled = Boolean(f.ctx.get('sessionProjectionCache'))
+    expect(cacheEnabled).toBe(process.env.DSH_RETAINED_CACHE !== '0')
     const sessions = f.ctx.sessions, persistence = f.ctx.sessionPersistence
     const inventory = () => ({
       writers: [...writers].map(writer => ({ writer: [...writers].indexOf(writer), session: writer.id, pins: writer['pins'].size,
@@ -235,7 +237,7 @@ if (!child) {
       await expect(persistence.open(root.id, 'write')).rejects.toThrow()
       retainUntilProcessExit(f.ctx, f.root)
     }
-    const observation = { root: f.root, route, phase, cacheEnabled: Boolean(f.ctx.get('sessionProjectionCache')),  rawDisposal, finalRawRoot, leaseProbes, drain, cleanupState,
+    const observation = { root: f.root, route, phase, cacheEnabled,  rawDisposal, finalRawRoot, leaseProbes, drain, cleanupState,
       resources: { before, atBarrier, after: after ?? inventory() },
       trace, files, removalFaults, removalCalls, cleanupErrors: cleanupErrors.map(String), prefixes, bodies: f.control.bodies,
       cleanups: f.control.cleanups, requests: f.model.requests.length }

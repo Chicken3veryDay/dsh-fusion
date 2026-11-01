@@ -2,19 +2,23 @@
 import { readFile, writeFile, rm } from 'node:fs/promises'
 import { expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { JsonlBackendTracker } from '../../../session/session-persistence-jsonl/src/storage.ts'
+import { JsonlBackendTracker, JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import { publicFixture } from './execution-public-harness.ts'
 import { mount } from './harness.ts'
 
 for (const enabled of [false, true]) it(`provisions before granting or preparing effects with eager cache ${enabled}`, async () => {
   const trace: object[] = []
+  const writers = new Map<JsonlSessionHandle, number>()
+  const providers = new Map<symbol, number>()
   // oxlint-disable-next-line typescript/unbound-method -- invoked with the exact tracker receiver.
   const flush = JsonlBackendTracker.prototype.flushSessionDurably
   vi.spyOn(JsonlBackendTracker.prototype, 'flushSessionDurably').mockImplementation(async function (this: JsonlBackendTracker, ctx, session, provider) {
     const writer = this['writers'].get(session.id)
     if (writer == null) throw new Error('Expected actual current writer')
+    if (!writers.has(writer)) writers.set(writer, writers.size)
+    if (!providers.has(provider)) providers.set(provider, providers.size)
     const inventory = () => ({
-      session: session.id, boundary: session.seq, sameSession: this['bindings'].get(writer) === session,
+      session: session.id, writer: writers.get(writer), provider: providers.get(provider), boundary: session.seq, sameSession: this['bindings'].get(writer) === session,
       sameWriter: this['writers'].get(session.id) === writer, sameProvider: ctx.get('sessionPersistence')?.identity === provider,
       cursor: writer['state'].cursor, flushed: writer['flushedCursor'], buffered: writer['buffered'].map((e: SessionEvent) => e.seq),
       generation: writer.durabilityGeneration, receipt: this['flushReceipts'].get(writer) ?? 0,
@@ -81,4 +85,37 @@ it('blocks participant publication and all requests when the actual JSONL direct
   } finally {
     await rm(root, { force: true })
   }
+})
+
+it('blocks provisioning after an actual owner flush rejects with a causally identified strict refusal', async () => {
+  const { ctx, adapter } = await mount(undefined, 'none', false, true)
+  const failure = new Error('owner flush failed')
+  // oxlint-disable-next-line typescript/unbound-method -- invoked with the exact tracker receiver.
+  const strict = JsonlBackendTracker.prototype.flushSessionDurably
+  const refusals: object[] = []
+  vi.spyOn(JsonlBackendTracker.prototype, 'flushSessionDurably').mockImplementation(async function (this: JsonlBackendTracker, ctx, session, provider) {
+    const result = await strict.call(this, ctx, session, provider)
+    if (result.kind === 'refused') refusals.push(result)
+    return result
+  })
+  // oxlint-disable-next-line typescript/unbound-method -- invoked with the exact handle receiver.
+  const flush = JsonlSessionHandle.prototype.flush
+  let failures = 0
+  vi.spyOn(JsonlSessionHandle.prototype, 'flush').mockImplementation(function (this: JsonlSessionHandle, options) {
+    if (this['state'].cursor > 0 && failures === 0) {
+      failures++
+      return Promise.reject(failure)
+    }
+    return flush.call(this, options)
+  })
+  const result = await ctx.fusionParticipants.prepare('single-test').then(() => undefined, (error: unknown) => error)
+  expect(failures).toBe(1)
+  expect(result).toMatchObject({ code: 'fusion-participants/preparation-blocked', cleanup: 'complete' })
+  if (!(result instanceof Error) || !(result.cause instanceof Error)) throw new Error('Missing durability cause')
+  expect(result.cause.message).toBe('retained session durability refused: flush-failed')
+  expect(refusals).toEqual([{ kind: 'refused', reason: 'flush-failed', cause: failure }])
+  // The existing retained Agent wrapper reports the refusal but omits its cause.
+  expect(result.cause.cause).toBeUndefined()
+  expect(adapter.requests).toHaveLength(0)
+  expect(ctx.agents.list()).toHaveLength(0)
 })
