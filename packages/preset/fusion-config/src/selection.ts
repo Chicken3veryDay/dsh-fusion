@@ -5,7 +5,7 @@ import { bind, FusionConfigError, referenceSchema } from './catalog.ts'
 import type { Binding, BindingReference, ModelDefinition } from './catalog.ts'
 
 const topologySchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('top'), coLeads: z.tuple([referenceSchema, referenceSchema]), executor: referenceSchema }),
+  z.strictObject({ kind: z.literal('top'), userFacingLead: referenceSchema, otherCoLead: referenceSchema, executor: referenceSchema }),
   z.strictObject({ kind: z.enum(['middle', 'low']), lead: referenceSchema, executor: referenceSchema, upgrades: z.array(referenceSchema) }),
   z.strictObject({ kind: z.literal('single'), participant: referenceSchema }),
 ])
@@ -30,8 +30,14 @@ export interface Selection {
   readonly runtime: 'quickjs-script'
   readonly tier: 'top' | 'middle' | 'low' | 'single'
   readonly roles: Readonly<Record<string, Binding>>
+  /** Role links preserve context reuse; checkpoint admission still enforces implementation separation. */
+  readonly authority: Readonly<{
+    decider: 'userFacingLead' | 'otherCoLead' | 'lead' | 'participant' | 'decider'
+    takeover: 'userFacingLead' | 'otherCoLead' | 'lead' | null
+  }>
   readonly upgrades: readonly Binding[]
 }
+type LeadRole = Exclude<Selection['authority']['decider'], 'decider'>
 
 const ref = (presetId: string): BindingReference => ({ catalogRevision: 'v1', presetId })
 
@@ -43,8 +49,8 @@ const ref = (presetId: string): BindingReference => ({ catalogRevision: 'v1', pr
 export function shippingSelections(agentPreset: string): readonly SelectionDefinition[] {
   const common = { revision: 'v1', agentPreset, auxiliaries: {} }
   return deepFreeze([
-    { ...common, id: 'top', topology: { kind: 'top', coLeads: [ref('Fable'), ref('Astra')], executor: ref('Sol') } },
-    { ...common, id: 'top-opus', topology: { kind: 'top', coLeads: [ref('Fable'), ref('Astra')], executor: ref('Opus') } },
+    { ...common, id: 'top', topology: { kind: 'top', userFacingLead: ref('Astra'), otherCoLead: ref('Fable'), executor: ref('Sol') } },
+    { ...common, id: 'top-opus', topology: { kind: 'top', userFacingLead: ref('Astra'), otherCoLead: ref('Fable'), executor: ref('Opus') } },
     { ...common, id: 'middle', topology: { kind: 'middle', lead: ref('Astra'), executor: ref('Sonnet'), upgrades: [ref('Opus')] } },
     { ...common, id: 'middle-fable-terra', topology: { kind: 'middle', lead: ref('Fable'), executor: ref('Terra'), upgrades: [ref('Sol')] } },
     { ...common, id: 'low', topology: { kind: 'low', lead: ref('Sol'), executor: ref('Haiku'), upgrades: [ref('Sonnet'), ref('Opus')] } },
@@ -62,14 +68,18 @@ export function captureSelection(catalog: readonly ModelDefinition[], definition
   const roles: Record<string, Binding> = {}
   const upgrades: Binding[] = []
   const topology = definition.topology
+  const leads: [LeadRole, Binding][] = []
+  let defaultAuthority: Binding
   switch (topology.kind) {
     case 'top': {
-      const first = bind(catalog, topology.coLeads[0], 'lead')
-      const second = bind(catalog, topology.coLeads[1], 'lead')
+      const first = bind(catalog, topology.userFacingLead, 'lead')
+      const second = bind(catalog, topology.otherCoLead, 'lead')
       if (first.family === second.family) throw new FusionConfigError('topology')
-      roles.coLead1 = first
-      roles.coLead2 = second
+      roles.userFacingLead = first
+      roles.otherCoLead = second
       roles.executor = bind(catalog, topology.executor, 'executor')
+      leads.push(['userFacingLead', first], ['otherCoLead', second])
+      defaultAuthority = first
       break
     }
     case 'middle':
@@ -78,6 +88,8 @@ export function captureSelection(catalog: readonly ModelDefinition[], definition
       const executor = bind(catalog, topology.executor, 'executor')
       roles.lead = lead
       roles.executor = executor
+      leads.push(['lead', lead])
+      defaultAuthority = lead
       const seen = new Set([executor.canonicalModelId])
       for (const next of [executor, ...topology.upgrades.map(row => bind(catalog, row, 'executor'))]) {
         if (next.family === lead.family || (next !== executor && seen.has(next.canonicalModelId))) {
@@ -86,12 +98,12 @@ export function captureSelection(catalog: readonly ModelDefinition[], definition
         seen.add(next.canonicalModelId)
         if (next !== executor) upgrades.push(next)
       }
-      // Shipping revisions have fixed upgrade order. A changed topology needs its own revision.
+      // Edges belong to canonical models; changing a route revision cannot add or skip one.
       const chain = [executor, ...upgrades]
       const allowed = topology.kind === 'middle'
         ? [['Sonnet', 'Opus'], ['Terra', 'Sol']]
         : [['Haiku', 'Sonnet', 'Opus'], ['Luna', 'Terra', 'Sol']]
-      if (chain.every(row => catalog.some(known => known.catalogRevision === 'v1' && known.canonicalModelId === row.canonicalModelId)) && !allowed.some((path) => {
+      if (upgrades.length > 0 && !allowed.some((path) => {
         const canonicalPath = path.map(id => catalog.find(row => row.catalogRevision === 'v1' && row.presetId === id)?.canonicalModelId)
         const start = canonicalPath.indexOf(executor.canonicalModelId)
         return start >= 0 && chain.every((row, index) => canonicalPath[start + index] === row.canonicalModelId)
@@ -100,13 +112,25 @@ export function captureSelection(catalog: readonly ModelDefinition[], definition
     }
     case 'single':
       roles.participant = bind(catalog, topology.participant, 'lead')
+      leads.push(['participant', roles.participant])
+      defaultAuthority = roles.participant
       break
   }
-  if (definition.decider !== undefined) roles.decider = bind(catalog, definition.decider, 'lead')
-  if (definition.takeover !== undefined) roles.takeover = bind(catalog, definition.takeover, 'lead')
+  const leadRole = (binding: Binding) => leads.find(([, candidate]) => JSON.stringify(candidate) === JSON.stringify(binding))?.[0]
+  roles.decider = definition.decider === undefined ? defaultAuthority : bind(catalog, definition.decider, 'lead')
+  const decider = leadRole(roles.decider) ?? 'decider'
+  let takeover: Selection['authority']['takeover'] = null
+  if (topology.kind === 'single') {
+    if (decider !== 'participant' || definition.takeover !== undefined) throw new FusionConfigError('topology')
+  } else {
+    roles.takeover = definition.takeover === undefined ? defaultAuthority : bind(catalog, definition.takeover, 'lead')
+    const role = leadRole(roles.takeover)
+    if (role === undefined || role === 'participant') throw new FusionConfigError('topology')
+    takeover = role
+  }
   for (const [name, reference] of Object.entries(definition.auxiliaries)) roles[`auxiliary:${name}`] = bind(catalog, reference, 'lead')
   return deepFreeze({
     id: definition.id, revision: definition.revision, agentPreset: definition.agentPreset,
-    mode: topology.kind === 'single' ? 'single' : 'fusion', runtime: 'quickjs-script', tier: topology.kind, roles, upgrades,
+    mode: topology.kind === 'single' ? 'single' : 'fusion', runtime: 'quickjs-script', tier: topology.kind, roles, authority: { decider, takeover }, upgrades,
   })
 }

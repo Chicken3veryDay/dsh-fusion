@@ -75,11 +75,13 @@ kind: "package-reference"
 
 提供方配置需要 `api`（`openai-responses` 或 `anthropic-messages`）、`baseURL`、`apiKeyEnv`、`transport: sse` 和显式 `models` 列表。模型允许精确 `id`、可选 `reasoningEfforts`（low/medium/high 到同名线上参数值的映射）及可选 `compat.forceAdaptiveThinking`。内联凭证、额外请求头、自动传输和不支持的协议会被拒绝。配置解析复用 pi-ai 验证器及适配器。Anthropic 力度需要物化模型明确支持自适应思考；`cc/` 别名或力度映射本身不构成证据。仅依据适配器及路由证据配置这些字段；示例未声明任何路由受支持。
 
-选择拓扑为 `top`（两个 `coLeads` 和一个 `executor`）、`middle` 或 `low`（`lead`、`executor` 和有序 `upgrades`），或 `single`（`participant`）。每个引用包含 `catalogRevision` 和 `presetId`；可选 `effort` 必须等于目录中的角色力度。可选 `decider` 和 `takeover` 是独立的主导力度角色；决策者可以和参与者属于同一家族。`auxiliaries` 显式映射辅助角色。加载时解析所有引用，包括升级及辅助角色。已知模型身份不能更改家族标签，别名必须精确映射到规范身份。自定义路由使用新目录版本。
+选择拓扑为 `top`（`userFacingLead`、`otherCoLead` 和 `executor`）、`middle` 或 `low`（`lead`、`executor` 和有序 `upgrades`），或 `single`（`participant`）。Middle/Low 的 lead 负责用户沟通。每个引用包含 `catalogRevision` 和 `presetId`；可选 `effort` 必须等于目录中的角色力度。`auxiliaries` 显式映射辅助角色。加载时解析所有引用。自定义路由使用新目录版本；已知身份保留其家族，别名必须精确映射到规范身份。每次升级都必须沿该层级列出的规范模型边进行，自定义路由也不例外。自定义跨家族测试配对可以不配置升级。
+
+`decider` 和 `takeover` 默认采用 Top 的用户沟通主导者或 Middle/Low 的 lead。内置 Top 将 Astra 绑定为用户沟通主导者，Fable 绑定为另一共同主导者。显式接管必须完全匹配已配置主导者的绑定；Top 可独立于决策模型选择任一共同主导者。显式决策者可使用任一已配置家族。捕获的 `authority` 将决策和接管链接到匹配的主导角色，独立决策路由则链接到 `decider`；`roles` 保留各角色的完整绑定。检查点准入仍须将决策上下文与执行过该工作的参与者分离。单智能体完成链接到 `participant`，拒绝不同的决策绑定，且没有接管角色。
 
 ### Reading results
 
-`selection(id)` 返回深度冻结的完整角色映射，不执行 I/O。`preflight(id, signal?)` 检查预设、pi-ai 适配器、精确协议、端点及凭证引用、显式能力和力度、当前凭证解析，再检查完整元数据中的精确模型成员关系。命令使用普通 `command/run` 和 `command/done` 记录结果，不记录原始输入、凭证或提供方错误正文。修复所报告的配置或元数据问题后重新检查。报告不证明推理可用性、后端身份或运行时安全性。
+`selection(id)` 返回深度冻结的完整角色映射，不执行 I/O。`preflight(id, signal?)` 检查预设、pi-ai 适配器、精确协议、端点及凭证引用、显式能力和力度、当前凭证解析，再检查完整元数据中的精确模型成员关系。每个不同绑定只检查一次，报告保留全部角色名，包括 `upgrade:1` 及后续步骤。命令使用普通 `command/run` 和 `command/done` 记录结果，不记录原始输入、凭证或提供方错误正文。修复所报告的配置或元数据问题后重新检查。报告不证明推理可用性、后端身份或运行时安全性。
 
 `structural: ready` 只表示不进行推理的检查通过。覆盖仍为 `live-unverified`，`defaultEligible` 始终为 false，`productAdmission` 在下游安全验证完成前仍不可用。即使显式配置满足结构检查，缺失的提供方能力元数据仍会在凭据中标为 absent。可用元数据与配置冲突时阻止绑定。
 

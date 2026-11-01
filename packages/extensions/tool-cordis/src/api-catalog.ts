@@ -7588,7 +7588,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreflightReport',
-    declaration: 'export interface PreflightReport {\n    readonly selection: Selection;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly agentPreset: \'ready\' | \'blocked\';\n    readonly bindings: readonly BindingReadiness[];\n    readonly coverage: \'live-unverified\';\n    readonly defaultEligible: false;\n    readonly productAdmission: \'unavailable-until-runtime-safety-gates\';\n}',
+    declaration: 'export interface PreflightReport {\n    readonly selection: Selection;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly agentPreset: \'ready\' | \'blocked\';\n    readonly bindings: readonly (BindingReadiness & {\n        readonly roles: readonly string[];\n    })[];\n    readonly coverage: \'live-unverified\';\n    readonly defaultEligible: false;\n    readonly productAdmission: \'unavailable-until-runtime-safety-gates\';\n}',
   },
   {
     name: 'PreparedAdapterCall',
@@ -8204,7 +8204,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'Selection',
-    declaration: 'export interface Selection {\n    readonly id: string;\n    readonly revision: string;\n    readonly agentPreset: string;\n    readonly mode: \'fusion\' | \'single\';\n    readonly runtime: \'quickjs-script\';\n    readonly tier: \'top\' | \'middle\' | \'low\' | \'single\';\n    readonly roles: Readonly<Record<string, Binding>>;\n    readonly upgrades: readonly Binding[];\n}',
+    declaration: 'export interface Selection {\n    readonly id: string;\n    readonly revision: string;\n    readonly agentPreset: string;\n    readonly mode: \'fusion\' | \'single\';\n    readonly runtime: \'quickjs-script\';\n    readonly tier: \'top\' | \'middle\' | \'low\' | \'single\';\n    readonly roles: Readonly<Record<string, Binding>>;\n    readonly authority: Readonly<{\n        decider: \'userFacingLead\' | \'otherCoLead\' | \'lead\' | \'participant\' | \'decider\';\n        takeover: \'userFacingLead\' | \'otherCoLead\' | \'lead\' | null;\n    }>;\n    readonly upgrades: readonly Binding[];\n}',
   },
   {
     name: 'SendTeamMessageRequest',

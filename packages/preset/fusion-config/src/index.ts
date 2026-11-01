@@ -58,7 +58,7 @@ export interface Config {
 /** Runtime document parser owns identity validation; schemastery supplies the Loader field. */
 export const Config = schema.object({ document: schema.any().required() })
 
-/** One role's non-inference configuration result. Coverage never follows from an advertisement. */
+/** One binding's non-inference configuration result. Coverage never follows from an advertisement. */
 export interface BindingReadiness {
   readonly binding: Binding
   readonly structural: 'ready' | 'blocked'
@@ -71,7 +71,7 @@ export interface PreflightReport {
   readonly selection: Selection
   readonly structural: 'ready' | 'blocked'
   readonly agentPreset: 'ready' | 'blocked'
-  readonly bindings: readonly BindingReadiness[]
+  readonly bindings: readonly (BindingReadiness & { readonly roles: readonly string[] })[]
   readonly coverage: 'live-unverified'
   readonly defaultEligible: false
   readonly productAdmission: 'unavailable-until-runtime-safety-gates'
@@ -200,13 +200,16 @@ export class FusionConfig extends Service {
     let agentPreset: 'ready' | 'blocked' = 'blocked'
     try { agentPreset = (await this.ctx.agentPresets.resolve(selection.agentPreset)).broken === undefined ? 'ready' : 'blocked' }
     catch (_error) { /* Registry diagnostics are not safe command output; the blocked preset remains visible. */ }
-    const bindings: BindingReadiness[] = []
-    const seen = new Set<string>()
-    for (const binding of [...Object.values(selection.roles), ...selection.upgrades]) {
+    const grouped = new Map<string, { binding: Binding; roles: string[] }>()
+    for (const [role, binding] of [...Object.entries(selection.roles), ...selection.upgrades.map((binding, index): [string, Binding] => [`upgrade:${index + 1}`, binding])]) {
       const key = JSON.stringify(binding)
-      if (seen.has(key)) continue
-      seen.add(key)
-      bindings.push(await this.inspectBinding(binding, signal))
+      const existing = grouped.get(key)
+      if (existing === undefined) grouped.set(key, { binding, roles: [role] })
+      else existing.roles.push(role)
+    }
+    const bindings: (BindingReadiness & { roles: string[] })[] = []
+    for (const { binding, roles } of grouped.values()) {
+      bindings.push({ ...await this.inspectBinding(binding, signal), roles })
     }
     return deepFreeze({
       selection, structural: agentPreset === 'ready' && bindings.every(row => row.structural === 'ready') ? 'ready' : 'blocked',

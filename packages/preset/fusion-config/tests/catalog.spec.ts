@@ -36,13 +36,13 @@ it('preserves all eight exact shipping identities and materializes both low-effo
 
 it('resolves defaults, alternatives, upgrades and unrestricted same-family decider roles', () => {
   const selections = shippingSelections('standard').map(row => captureSelection(catalog, row))
-  expect(selections.map(row => [row.id, Object.values(row.roles).map(role => `${role.presetId}:${role.effort}`), row.upgrades.map(role => `${role.presetId}:${role.effort}`)])).toEqual([
-    ['top', ['Fable:high', 'Astra:high', 'Sol:medium'], []],
-    ['top-opus', ['Fable:high', 'Astra:high', 'Opus:medium'], []],
-    ['middle', ['Astra:high', 'Sonnet:high'], ['Opus:medium']],
-    ['middle-fable-terra', ['Fable:high', 'Terra:medium'], ['Sol:medium']],
-    ['low', ['Sol:high', 'Haiku:high'], ['Sonnet:high', 'Opus:medium']],
-    ['low-opus-luna', ['Opus:high', 'Luna:medium'], ['Terra:medium', 'Sol:medium']],
+  expect(selections.map(row => [row.id, Object.fromEntries(Object.entries(row.roles).map(([role, binding]) => [role, `${binding.presetId}:${binding.effort}`])), row.upgrades.map(role => `${role.presetId}:${role.effort}`)])).toEqual([
+    ['top', { userFacingLead: 'Astra:high', otherCoLead: 'Fable:high', executor: 'Sol:medium', decider: 'Astra:high', takeover: 'Astra:high' }, []],
+    ['top-opus', { userFacingLead: 'Astra:high', otherCoLead: 'Fable:high', executor: 'Opus:medium', decider: 'Astra:high', takeover: 'Astra:high' }, []],
+    ['middle', { lead: 'Astra:high', executor: 'Sonnet:high', decider: 'Astra:high', takeover: 'Astra:high' }, ['Opus:medium']],
+    ['middle-fable-terra', { lead: 'Fable:high', executor: 'Terra:medium', decider: 'Fable:high', takeover: 'Fable:high' }, ['Sol:medium']],
+    ['low', { lead: 'Sol:high', executor: 'Haiku:high', decider: 'Sol:high', takeover: 'Sol:high' }, ['Sonnet:high', 'Opus:medium']],
+    ['low-opus-luna', { lead: 'Opus:high', executor: 'Luna:medium', decider: 'Opus:high', takeover: 'Opus:high' }, ['Terra:medium', 'Sol:medium']],
   ])
   const captured = captureSelection(catalog, { ...base, decider: reference('Sol'), takeover: reference('Astra'), auxiliaries: { title: reference('Haiku') } })
   expect(captured.roles.decider?.family).toBe(captured.roles.lead?.family)
@@ -54,7 +54,7 @@ it('resolves defaults, alternatives, upgrades and unrestricted same-family decid
 describe('configuration admission guards', () => {
   it.each(['pair', 'upgrade', 'top', 'cycle', 'downgrade'] as const)('rejects invalid %s without provider-based family guesses', (which) => {
     const invalid: SelectionDefinition = structuredClone(base)
-    if (which === 'top') invalid.topology = { kind: 'top', coLeads: [reference('Astra'), reference('Sol')], executor: reference('Haiku') }
+    if (which === 'top') invalid.topology = { kind: 'top', userFacingLead: reference('Astra'), otherCoLead: reference('Sol'), executor: reference('Haiku') }
     else invalid.topology = {
       kind: 'middle', lead: reference('Astra'), executor: reference(which === 'pair' ? 'Sol' : which === 'downgrade' ? 'Opus' : 'Sonnet'),
       upgrades: which === 'pair' ? [] : [reference(which === 'upgrade' ? 'Terra' : which === 'cycle' ? 'Sonnet' : which === 'downgrade' ? 'Sonnet' : 'Opus')],

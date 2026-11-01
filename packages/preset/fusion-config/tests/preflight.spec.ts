@@ -197,6 +197,13 @@ it.each(shippingSelections('standard'))('preflights the complete $id pairing and
   const report = await ctx.fusionConfig.preflight(fixture.id)
   expect(report.structural).toBe('ready')
   expect(report.bindings.every(row => row.membership?.kind === 'present')).toBe(true)
+  for (const [role, binding] of Object.entries(report.selection.roles)) {
+    const rows = report.bindings.filter(row => row.roles.includes(role))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.binding).toEqual(binding)
+  }
+  expect(report.bindings.find(row => row.roles.includes('decider'))?.roles).toContain('takeover')
+  expect(http.requests).toHaveLength(report.bindings.length)
   expect(http.inference).toBe(0)
 })
 
