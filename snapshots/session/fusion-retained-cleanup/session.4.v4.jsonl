@@ -1,0 +1,5 @@
+{"type":"session","version":4,"id":"{{session:5}}","createdAt":1793572007844,"isSeeded":false,"delegationDepth":0}
+{"type":"agent/runtime-owner","data":{"rootSessionId":"{{session:4}}"}}
+{"type":"permission/preset","data":{"preset":"danger-full-access"}}
+{"type":"sandbox/mode","data":{"mode":"danger-full-access"}}
+{"type":"approval/policy","data":{"policy":"never"}}

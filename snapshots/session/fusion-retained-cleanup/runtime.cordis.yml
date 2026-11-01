@@ -1,0 +1,39 @@
+# Initial retained prefixes are tested without eager projection-cache checkpoints.
+- id: session-projection-cache
+  disabled: true
+
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+  disabled: false
+
+- insert:
+    - id: retained-cleanup-presets
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config: { default: retained-cleanup-test }
+    - id: retained-cleanup-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: retained-cleanup-test
+        plugins: []
+    - id: retained-cleanup-config
+      name: '@deepseek-ai/dsh-fusion-config'
+      config:
+        document:
+          credentialRef: RETAINED_FAKE
+          agentPreset: retained-cleanup-test
+          providers: {}
+          declarations: []
+          bindings: []
+          selections:
+            - id: single-test
+              revision: test-v1
+              agentPreset: retained-cleanup-test
+              topology:
+                kind: single
+                participant: { catalogRevision: v1, presetId: Sol }
+              auxiliaries: {}
+          metadataLimits: { responseBytes: 32768, totalBytes: 262144, pages: 32, timeoutMs: 5000 }
+    - id: retained-cleanup-participants
+      name: '@deepseek-ai/dsh-experimental-fusion-participants'
+    - id: retained-cleanup-profile-fixture
+      name: '../../../packages/experimental/fusion-participants/tests/fixtures/retained-cleanup/profile.ts'

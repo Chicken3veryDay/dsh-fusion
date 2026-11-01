@@ -251,6 +251,25 @@ async function primaryFixtureFile(dir: string): Promise<string> {
   return primary
 }
 
+/** Preserve Fusion incarnation equality across root events without rewriting user or tool text. */
+function retainedCleanupIncarnations(logs: readonly string[]): string[] {
+  const tokens = new Map<string, string>()
+  return logs.map(log => records(log).map((record) => {
+    if (record.type !== 'fusion/execution-opened' && record.type !== 'fusion/execution-granted'
+      && record.type !== 'fusion/execution-revoked') return JSON.stringify(record)
+    const data = record.data as JsonObject
+    const incarnation = data.incarnation
+    if (typeof incarnation !== 'string') throw new Error('missing Fusion incarnation')
+    if (record.type === 'fusion/execution-opened') {
+      expect(tokens.has(incarnation)).toBe(false)
+      tokens.set(incarnation, `{{fusionIncarnation:${tokens.size + 1}}}`)
+    }
+    const token = tokens.get(incarnation)
+    if (token === undefined) throw new Error('Fusion event references an unopened incarnation')
+    return JSON.stringify({ ...record, data: { ...data, incarnation: token } })
+  }).join('\n') + '\n')
+}
+
 async function writeSessionFixtures(
   scenario: HeadlessScenario,
   actualLogs: readonly SessionLog[],
@@ -268,12 +287,14 @@ async function writeSessionFixtures(
     if (replacement.from === ctx.cwd) replacements.push({ from: ctx.cwd.split(sep).join('/'), to: replacement.to })
   }
   const fresh = actualLogs.map((log, index) => {
-    const stable = tokenizeSessionFixtureCwd(mode === 'refresh'
+    const stable = mode === 'refresh'
       ? stabilizeRefreshLog(log.content, prior[index] as string, replacements, ctx)
-      : log.content)
-    return scrubSessionSnapshot(prepareSessionSnapshotFixtureForComparison(stable))
+      : log.content
+    const tokenized = headerOf(stable).cwd === undefined ? stable : tokenizeSessionFixtureCwd(stable)
+    return scrubSessionSnapshot(prepareSessionSnapshotFixtureForComparison(tokenized))
   })
-  const output = redactSessionSnapshotIds(stabilizeFixtureMessageIds(fresh, prior))
+  const identified = scenario.name === 'fusion-retained-cleanup' ? retainedCleanupIncarnations(fresh) : fresh
+  const output = redactSessionSnapshotIds(stabilizeFixtureMessageIds(identified, prior))
   await Promise.all(output.map((content, index) => writeFile(join(scenario.dir, names[index] as string), content)))
   return output
 }
@@ -1434,6 +1455,19 @@ describe('headless recorded-session snapshots', () => {
               expect(results.every(result => result.isError === false)).toBe(true)
               expect(log).toContain('# Office task routing')
             }
+            if (scenario.name === 'fusion-retained-cleanup') {
+              const results = parseSessionLog(actualLogs[0]!.content)
+                .flatMap(event => event.type === 'tool/result' ? [event.data.message] : [])
+              expect(results).toHaveLength(1)
+              expect(results[0]).toMatchObject({ isError: false, content: [{ type: 'text', text: [
+                'normal: cleanup fulfilled; bodies 0; cleanups 1; removals 0; hooks 0; complete prefixes',
+                'fault: cleanup rejected; bodies 0; cleanups 1; removals 2; hooks 0; complete prefixes',
+              ].join('\n') }] })
+              expect(actualLogs).toHaveLength(5)
+              for (const log of actualLogs.slice(1)) {
+                expect(records(log.content).some(event => event.type === 'request/context')).toBe(false)
+              }
+            }
             if (scenario.name === 'advanced-toolchain') verifyAdvancedToolchain(actualLogs)
             if (scenario.name === 'session-query-spill') {
               await verifySessionQuerySpill(actualLogs[0]!.content, spillRoot, locatorRoot)
@@ -1512,8 +1546,11 @@ describe('headless recorded-session snapshots', () => {
         }
         expect(await fixtureSessions(scenario), 'historical replay input remains unchanged').toEqual(fixtures)
       }
-      const actualSnapshots = normalizeSessionSnapshots(actualLogs.map(log => log.content), actualContext, { nativeWriterOutput: true })
-      const expectedSnapshots = normalizeSessionSnapshots(expected, contextOf(expected), { nativeWriterOutput: true })
+      const actualInput = actualLogs.map(log => log.content)
+      const actualSnapshots = normalizeSessionSnapshots(scenario.name === 'fusion-retained-cleanup'
+        ? retainedCleanupIncarnations(actualInput) : actualInput, actualContext, { nativeWriterOutput: true })
+      const expectedSnapshots = normalizeSessionSnapshots(scenario.name === 'fusion-retained-cleanup'
+        ? retainedCleanupIncarnations(expected) : expected, contextOf(expected), { nativeWriterOutput: true })
       for (const [index, actual] of actualSnapshots.entries()) {
         const actualRecords = records(actual)
         const expectedRecords = scenario.name === 'session-reference-spill' && index === 0

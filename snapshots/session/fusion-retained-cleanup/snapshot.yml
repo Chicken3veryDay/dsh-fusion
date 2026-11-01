@@ -1,0 +1,9 @@
+version: 1
+scenario: fusion-retained-cleanup
+profile: headless
+composition: fusion-retained-cleanup
+recording: authored
+header:
+  class: advanced
+  pin: true
+  systemPromptSource: cordis-inspect-jsdoc

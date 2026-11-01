@@ -1,0 +1,7 @@
+{"type":"session","version":4,"id":"{{session:2}}","createdAt":1793572007797,"isSeeded":false,"delegationDepth":0}
+{"type":"agent/runtime-owner","data":{"rootSessionId":"{{session:2}}"}}
+{"type":"fusion/roster","data":{"version":1,"rootSessionId":"{{session:2}}","compositionDigest":"37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570","selectionId":"single-test","selectionRevision":"test-v1","agentPreset":"retained-cleanup-test","mode":"single","runtime":"quickjs-script","tier":"single","participants":[{"id":"{{session:3}}","role":"participant","binding":{"catalogRevision":"v1","presetId":"Sol","canonicalModelId":"gpt-6.1-sol","family":"OpenAI","providerId":"omniroute-openai","adapterId":"llm-pi-ai","transport":"openai-responses","wireModelId":"cx/gpt-6.1-sol","baseURL":"http://127.0.0.1:20128/v1","credentialRef":"RETAINED_FAKE","effort":"high"}}],"upgrades":[],"roles":{"participant":"{{session:3}}","decider":"{{session:3}}"}}}
+{"type":"fusion/participant-established","data":{"participantId":"{{session:3}}"}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:2}}","incarnation":"{{fusionIncarnation:1}}","openingId":"{{id:1}}","previous":null}}
+{"type":"fusion/execution-granted","data":{"rootSessionId":"{{session:2}}","incarnation":"{{fusionIncarnation:1}}","generation":1,"participantId":"{{session:3}}","previousRevoke":null}}
+{"type":"fusion/execution-revoked","data":{"rootSessionId":"{{session:2}}","incarnation":"{{fusionIncarnation:1}}","generation":1,"reason":"stop","stopped":true}}
