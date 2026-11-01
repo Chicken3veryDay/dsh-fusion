@@ -28,7 +28,7 @@ describe('Python runtime executable builder CLI', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('verify-runtime-closure --manifest=python/fusion-sdk-runtime/package.json')
     expect(result.stdout).toContain('--filter dsh-python-fusion-runtime-closure deploy')
-    expect(result.stdout).toContain(join(root, 'python/fusion-sdk-runtime/runtime/node'))
+    expect(result.stdout).toContain(join(root, 'dist-exe/fusion/runtime/node'))
     expect(result.stdout).toContain(join(root, 'dist-exe/fusion/deepseek-harness-sdk-runtime-linux-x64'))
     expect(result.stdout).not.toContain(join(root, 'python/sdk-runtime/src/deepseek_harness_runtime/runtime'))
     expect(result.stdout).toContain('--sea --compress Brotli')

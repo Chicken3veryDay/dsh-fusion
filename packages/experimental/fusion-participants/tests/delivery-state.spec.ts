@@ -172,3 +172,29 @@ it('registers after history, falls back from unusable checkpoints and disposes d
   expect(open).not.toHaveBeenCalled()
   await task.dispose()
 })
+
+it('restores receiver protocol data through version fallback and removes late registration without fold effects', async () => {
+  const { ctx } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const target = ctx.sessions.get(task.roster.roles.participant!)!
+  const input = { deliveryId: DeliveryId('receiver-lifecycle'), targetParticipantId: target.id,
+    inboxTarget: 'next-turn' as const, correlationId: null, text: 'receiver original protocol' }
+  await task.delivery.admitUser(input)
+  const handle = await ctx.sessionProjections.register({ ...receiverProjection, key: 'lateFusionReceiver' })
+  const state = handle.stateOf(target)
+  const checkpoint = ctx.sessionProjections.checkpoint(target)
+  const events = await read(ctx, target.id)
+  const stale = { lateFusionReceiver: { ...checkpoint.lateFusionReceiver!, ver: 99 } }
+  expect(ctx.sessionProjections.restore(stale, events, SessionLogOffset(0), target.header, target.inheritedEventCount)
+    .checkpoint.lateFusionReceiver).toEqual(checkpoint.lateFusionReceiver)
+  const open = vi.spyOn(ctx.sessionPersistence, 'open')
+  const emit = vi.spyOn(ctx, 'emit')
+  expect(handle.stateOf(target)).toBe(state)
+  expect(state.entries[0]?.intent.text).toBe(input.text)
+  expect(open).not.toHaveBeenCalled()
+  expect(emit).not.toHaveBeenCalled()
+  await handle.dispose()
+  expect(ctx.sessionProjections.checkpoint(target)).not.toHaveProperty('lateFusionReceiver')
+  expect(handle.stateOf(target)).toBe(state)
+  await task.dispose()
+})

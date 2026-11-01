@@ -287,7 +287,7 @@ class SingleExeBuild {
   private readonly deployPackage: string
 
   constructor(private readonly cli: BuildCli) {
-    this.runtimeDir = cli.fusion ? 'python/fusion-sdk-runtime/runtime' : PYTHON_RUNTIME_DIR
+    this.runtimeDir = cli.fusion ? 'dist-exe/fusion/runtime' : PYTHON_RUNTIME_DIR
     this.staging = resolve(root, this.runtimeDir, PYTHON_NODE_SUBDIR)
     this.outDir = resolve(root, OUT_DIR, ...(cli.fusion ? ['fusion'] : []))
     this.deployPackage = cli.fusion ? 'dsh-python-fusion-runtime-closure' : DEPLOY_ROOT_PACKAGE
