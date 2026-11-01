@@ -1662,6 +1662,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'rootSessionId', description: 'persisted root identity; absence/corruption is a blocking failure.' }, { name: 'signal', description: 'optional cancellation; omission keeps owner disposal cancellation.' }],
         returns: 'a prepared capability using the original roster and context lineages.',
       },
+      {
+        signature: 'registerExecutionHost(task: PreparedParticipants, provider: ExecutionHostProvider): Promise<TaskExecutionHost>',
+        description: 'Enroll one trusted held host on this exact prepared task. The declaring fiber owns withdrawal; its teardown fences admission immediately and joins cleanup before releasing dependencies. No provider, capability or callback is transported through model tools or SDK requests.',
+        parameters: [{ name: 'task', description: 'exact live object returned by this service, never a roster or snapshot copy.' }, { name: 'provider', description: 'one exact provider identity per task incarnation and declaring fiber.' }],
+        returns: 'memoized enrollment after exact retained writer reservations; replacement refuses.',
+      },
     ],
   },
   {
@@ -6406,6 +6412,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EditGoalRequest {\n    readonly objective?: string;\n    readonly maxGoalRounds?: number;\n}',
   },
   {
+    name: 'EffectClass',
+    declaration: 'export type EffectClass = \'read\' | \'mutation\' | \'infrastructure\';',
+  },
+  {
     name: 'EncodedFileAttachment',
     declaration: 'export interface EncodedFileAttachment {\n    data: string;\n    name?: string;\n}',
   },
@@ -6436,6 +6446,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ExecutionAttemptId',
     declaration: 'export type ExecutionAttemptId = z.infer<typeof attempt>;',
+  },
+  {
+    name: 'ExecutionBlockReason',
+    declaration: 'export type ExecutionBlockReason = \'identity\' | \'lifecycle\' | \'not-owner\' | \'not-registered\' | \'unclassified\' | \'writer\' | \'durability\' | \'cleanup-unknown\' | \'outcome-unknown\';',
+  },
+  {
+    name: 'ExecutionController',
+    declaration: 'export interface ExecutionController {\n    readonly [credential]: \'controller\';\n}',
+  },
+  {
+    name: 'ExecutionHostProvider',
+    declaration: 'export interface ExecutionHostProvider {\n    readonly name: string;\n    readonly revision: string;\n    classify(operation: string): EffectClass | undefined;\n    registerHeld(attempt: HeldAttempt, attemptId: ExecutionAttemptId, agent: Agent, operation: string, signal: AbortSignal): HeldProducer;\n}',
+  },
+  {
+    name: 'ExecutionIssuer',
+    declaration: 'export interface ExecutionIssuer {\n    readonly [credential]: \'issuer\';\n}',
+  },
+  {
+    name: 'ExecutionRun',
+    declaration: 'export interface ExecutionRun {\n    readonly [credential]: \'run\';\n}',
+  },
+  {
+    name: 'ExecutionSettlement',
+    declaration: 'export type ExecutionSettlement = {\n    readonly kind: \'settled\';\n    readonly outcome: \'completed\' | \'failed\' | \'not-dispatched\';\n} | {\n    readonly kind: \'blocked\';\n    readonly reason: ExecutionBlockReason;\n    readonly attemptId: ExecutionAttemptId;\n    readonly cause: unknown;\n};',
   },
   {
     name: 'ExecutionSnapshot',
@@ -6728,6 +6762,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GrantRecord',
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
+  },
+  {
+    name: 'HeldAttempt',
+    declaration: 'export interface HeldAttempt {\n    readonly [credential]: \'attempt\';\n}',
+  },
+  {
+    name: 'HeldProducer',
+    declaration: 'export interface HeldProducer {\n    prepare(): Promise<SynchronousInvocation>;\n    cancel(reason: \'handoff\' | \'stop\' | \'cancel\'): void;\n    cleanup(): Promise<void>;\n}',
   },
   {
     name: 'HookBudget',
@@ -9462,6 +9504,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SurfaceSnapshot {\n    readonly generation: number;\n    readonly tree: readonly SerializedNode[] | null;\n}',
   },
   {
+    name: 'SynchronousInvocation',
+    declaration: 'export interface SynchronousInvocation {\n    invoke(): Promise<\'completed\' | \'failed\' | \'uncertain\'>;\n}',
+  },
+  {
     name: 'SystemMessage',
     declaration: 'export interface SystemMessage extends MessageBase {\n    readonly role: \'system\';\n    readonly source: MessageSourceMap[\'system-prompt\'];\n}',
   },
@@ -9484,6 +9530,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TableValueOf',
     declaration: 'export type TableValueOf<S extends DomainSpec, N extends keyof S[\'tables\']> = S[\'tables\'][N] extends DomainTableSpec<string, infer V> ? V : never;',
+  },
+  {
+    name: 'TaskExecutionHost',
+    declaration: 'export interface TaskExecutionHost {\n    readonly issuer: ExecutionIssuer;\n    readonly controller: ExecutionController;\n    bindRun(issuer: ExecutionIssuer, agent: Agent, signal: AbortSignal): ExecutionRun;\n    reserve(run: ExecutionRun, operation: string): HeldAttempt;\n    register(attempt: HeldAttempt): Promise<void>;\n    release(attempt: HeldAttempt): Promise<ExecutionSettlement>;\n    grant(controller: ExecutionController, participant: SessionId): Promise<void>;\n    revoke(controller: ExecutionController, reason: \'handoff\' | \'stop\' | \'cancel\'): Promise<void>;\n    dispose(): Promise<void>;\n}',
   },
   {
     name: 'TeamId',

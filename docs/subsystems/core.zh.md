@@ -940,9 +940,19 @@ prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants
  * @returns a prepared capability using the original roster and context lineages.
  */
 recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants>
+
+/**
+ * Enroll one trusted held host on this exact prepared task. The declaring fiber owns withdrawal;
+ * its teardown fences admission immediately and joins cleanup before releasing dependencies.
+ * No provider, capability or callback is transported through model tools or SDK requests.
+ * @param task - exact live object returned by this service, never a roster or snapshot copy.
+ * @param provider - one exact provider identity per task incarnation and declaring fiber.
+ * @returns memoized enrollment after exact retained writer reservations; replacement refuses.
+ */
+registerExecutionHost(task: PreparedParticipants, provider: ExecutionHostProvider): Promise<TaskExecutionHost>
 ```
 
-Types: [PreparedParticipants](../../packages/experimental/fusion-participants/README.zh.md)
+Types: [ExecutionHostProvider](../../packages/experimental/fusion-participants/README.zh.md) · [PreparedParticipants](../../packages/experimental/fusion-participants/README.zh.md) · [TaskExecutionHost](../../packages/experimental/fusion-participants/README.zh.md)
 
 Source: [`packages/experimental/fusion-participants/src/index.ts`](../../packages/experimental/fusion-participants/src/index.ts)
 

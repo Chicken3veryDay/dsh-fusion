@@ -386,6 +386,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   RetainedAgentSession: 'core.md',
   RetainAgentSessionOptions: 'core.md',
   PreparedParticipants: '../../packages/experimental/fusion-participants/README.md',
+  ExecutionHostProvider: '../../packages/experimental/fusion-participants/README.md',
+  TaskExecutionHost: '../../packages/experimental/fusion-participants/README.md',
   DormantDelivery: '../../packages/experimental/fusion-participants/README.md',
   TextDelivery: '../../packages/experimental/fusion-participants/README.md',
   DeliveryReceipt: '../../packages/experimental/fusion-participants/README.md',

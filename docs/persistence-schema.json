@@ -251,7 +251,7 @@
     {"digest":"3e4e7683b0192c9f0e6a75c59076108f017892cdb302a98032c2632fd79c356f","names":[],"sources":["packages/compaction/compaction/src/types.ts:24"]},
     {"digest":"3e8cd6770564678059fa61e2fe6fc642b215ec5b003261e96849eacd6970881b","names":[],"sources":[]},
     {"digest":"3ee93b06f3a125850337602bcdf155d2538c43a5c944ec55b1b3c365152d6796","names":[],"sources":[]},
-    {"digest":"3f5502c23b839bae247f05615d85333b0e4ea11bab79c1aea570192ba1b98072","names":[],"sources":["packages/experimental/fusion-participants/src/index.ts:59"]},
+    {"digest":"3f5502c23b839bae247f05615d85333b0e4ea11bab79c1aea570192ba1b98072","names":[],"sources":["packages/experimental/fusion-participants/src/index.ts:62"]},
     {"digest":"3f74ba74acd10644c1ed6947a411d8088bd2cfac74f61bb8540f96d68e31f004","names":[],"sources":[]},
     {"digest":"3fdf9582c3b5597df104d32d97dab6c6ee3a93794f3034ec6ada6272404ea27f","names":["packages/schedule/schedule/src/types.ts#LegacyAfterScheduleRecord"],"sources":["packages/schedule/schedule/src/types.ts:161"]},
     {"digest":"4061394be113f480cb8def464525f921a8b90b0e81c9c066d2fbda67caac0222","names":[],"sources":["packages/core/agent/src/types.ts:24"]},

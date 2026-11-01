@@ -681,7 +681,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:109`]
 'fusion/participant-established': { participantId: SessionId }
 ```
 
-Source: [`packages/experimental/fusion-participants/src/index.ts:59`](../packages/experimental/fusion-participants/src/index.ts)
+Source: [`packages/experimental/fusion-participants/src/index.ts:62`](../packages/experimental/fusion-participants/src/index.ts)
 
 <a id="fusionroster--log-only"></a>
 
@@ -692,7 +692,7 @@ Source: [`packages/experimental/fusion-participants/src/index.ts:59`](../package
 'fusion/roster': Roster
 ```
 
-Source: [`packages/experimental/fusion-participants/src/index.ts:57`](../packages/experimental/fusion-participants/src/index.ts)
+Source: [`packages/experimental/fusion-participants/src/index.ts:60`](../packages/experimental/fusion-participants/src/index.ts)
 
 ### `goal/*`
 
@@ -8782,7 +8782,7 @@ Sources: [`packages/sandbox/sandbox-policy/src/session-mode.ts:33`](../packages/
 
 SHA-256: `3f5502c23b839bae247f05615d85333b0e4ea11bab79c1aea570192ba1b98072`
 
-Sources: [`packages/experimental/fusion-participants/src/index.ts:59`](../packages/experimental/fusion-participants/src/index.ts)
+Sources: [`packages/experimental/fusion-participants/src/index.ts:62`](../packages/experimental/fusion-participants/src/index.ts)
 
 | Property | Presence | Type |
 |---|---|---|
