@@ -208,6 +208,9 @@ export class DeliveryOwner implements DormantDelivery {
     this.signal.throwIfAborted()
     const boundary = session.seq
     const result = await this.owner.ctx.sessionPersistence.flushSessionDurably(session)
+    if (result.kind === 'refused' && result.reason === 'flush-failed') {
+      throw new Error('delivery writer flush failed', { cause: result.cause })
+    }
     this.signal.throwIfAborted()
     if (result.kind !== 'durable' || result.session !== session || result.boundary < boundary
       || this.writers.has(session) && this.writers.get(session) !== result.writer) throw new Error('delivery writer coverage unproven')

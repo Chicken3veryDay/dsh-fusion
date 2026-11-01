@@ -69,8 +69,9 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
     inboxTarget: 'next-turn' as const, correlationId: null, text: 'kept until drained' }
   const admission = task.delivery.admitUser(input).finally(() => { admissionSettled = true; events.push('admission') })
   const rejected = expect(admission).rejects.toMatchObject({ code: 'fusion-participants/delivery-blocked' })
-  const queued = task.delivery.admitUser({ ...input, deliveryId: DeliveryId('queued') })
-  const queueRejected = expect(queued).rejects.toThrow()
+  const queueRejected = Promise.all(['queued-a', 'queued-b'].map(id =>
+    expect(task.delivery.admitUser({ ...input, deliveryId: DeliveryId(id) })).rejects.toThrow(),
+  ))
   await entered.promise
   const fiber = route.startsWith('loop') ? [...ctx.registry.get(Loop)!.fibers][0]!
     : route.startsWith('persistence') ? [...ctx.registry.get(Jsonl)!.fibers][0]!

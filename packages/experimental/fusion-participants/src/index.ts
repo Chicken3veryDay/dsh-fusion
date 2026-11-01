@@ -172,7 +172,11 @@ export default class FusionParticipants extends Service {
 
   private async barrier(session: Session): Promise<void> {
     const result = await this.lifetime.ctx.sessionPersistence.flushSessionDurably(session)
-    if (result.kind !== 'durable') throw new Error(`participant durability refused: ${result.reason}`)
+    if (result.kind !== 'durable') {
+      throw new Error(`participant durability refused: ${result.reason}`, {
+        cause: result.reason === 'flush-failed' ? result.cause : undefined,
+      })
+    }
   }
 
   private async acquire(

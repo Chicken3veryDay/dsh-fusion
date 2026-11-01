@@ -370,7 +370,9 @@ it.each(['reject', 'lost-writer'] as const)('retains writers until the actual he
     return close.call(this)
   })
   const admission = task.delivery.admitUser({ deliveryId: DeliveryId('failed-held'), targetParticipantId: target.id, inboxTarget: 'next-turn', correlationId: null, text: 'held' })
-  const blocked = expect(admission).rejects.toThrow()
+  const blocked = fault === 'reject'
+    ? expect(admission).rejects.toMatchObject({ cause: { cause: failure } })
+    : expect(admission).rejects.toThrow()
   await entered.promise
   let settled = false
   const stop = ctx.fiber.dispose().then(() => { settled = true })
@@ -383,5 +385,56 @@ it.each(['reject', 'lost-writer'] as const)('retains writers until the actual he
   } finally { release.resolve(undefined) }
   await Promise.all([stop, blocked])
   expect(new Set(closes)).toEqual(new Set([root.id, target.id]))
+  expect(adapter.requests).toHaveLength(0)
+})
+
+it('joins writer close settlement through repeated raw root and observed task disposal', async () => {
+  const { ctx, adapter } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  const closed: string[] = []
+  // oxlint-disable-next-line typescript/unbound-method -- real receiver preserved.
+  const close = JsonlSessionHandle.prototype.close
+  vi.spyOn(JsonlSessionHandle.prototype, 'close').mockImplementation(async function (this: JsonlSessionHandle) {
+    if (this.access === 'write') {
+      closed.push(this.id)
+      if (this.id === task.roster.rootSessionId) { entered.resolve(undefined); await release.promise }
+    }
+    return close.call(this)
+  })
+  let rootSettled = false
+  const root = ctx.fiber.dispose().then(() => { rootSettled = true })
+  await entered.promise
+  const repeatedRaw = ctx.fiber.dispose()
+  const observed = task.dispose()
+  expect(task.dispose()).toBe(observed)
+  let observedSettled = false
+  void observed.then(() => { observedSettled = true })
+  await setImmediate()
+  try {
+    expect(rootSettled).toBe(false)
+    expect(observedSettled).toBe(false)
+    expect(new Set(closed).size).toBe(2)
+    expect(closed).toHaveLength(2)
+  } finally { release.resolve(undefined) }
+  await Promise.all([root, repeatedRaw, observed])
+  expect(closed).toHaveLength(2)
+  expect(adapter.requests).toHaveLength(0)
+})
+
+it.each(['flush-failed', 'coverage'] as const)('retains %s preparation refusal through rollback', async (reason) => {
+  const { ctx, adapter } = await mount()
+  const failure = new Error('preparation storage failed')
+  const flush = ctx.sessionPersistence.flushSessionDurably.bind(ctx.sessionPersistence)
+  let calls = 0
+  vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockImplementation(session =>
+    ++calls === 2 ? Promise.resolve(reason === 'flush-failed'
+      ? { kind: 'refused', reason, cause: failure } : { kind: 'refused', reason }) : flush(session),
+  )
+  await expect(ctx.fusionParticipants.prepare('single-test')).rejects.toMatchObject({
+    cleanup: 'complete', cause: { message: `participant durability refused: ${reason}`, cause: reason === 'flush-failed' ? failure : undefined },
+  })
+  expect(ctx.sessions.list()).toHaveLength(0)
   expect(adapter.requests).toHaveLength(0)
 })
