@@ -31,6 +31,14 @@ afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
+/** Keep a failed lifetime owned until its isolated test process exits. */
+export function retainUntilProcessExit(ctx: Context, root: string): void {
+  if (process.env.DSH_RETAINED_LIFETIME_CHILD !== '1') throw new Error('unknown lifetime requires an owned child process')
+  const index = contexts.indexOf(ctx)
+  if (index !== -1) contexts.splice(index, 1)
+  const rootIndex = roots.indexOf(root)
+  if (rootIndex !== -1) roots.splice(rootIndex, 1)
+}
 export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false) {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
   if (!roots.includes(root)) roots.push(root)

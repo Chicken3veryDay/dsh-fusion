@@ -524,7 +524,7 @@ export class JsonlBackendTracker {
   private active = false
   private readonly bindings = new Map<JsonlSessionHandle, Session>()
   private readonly flushReceipts = new Map<JsonlSessionHandle, number>()
-  private readonly retainedRoutes = new Map<JsonlSessionHandle, () => void>()
+  private readonly retainedRoutes = new Map<JsonlSessionHandle, () => void | Promise<void>>()
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
   constructor(private readonly name: string) {}
@@ -623,7 +623,8 @@ export class JsonlBackendTracker {
    * @param materialized - whether the session reached durable storage.
    */
   release(handle: JsonlSessionHandle, materialized: boolean): void {
-    this.retainedRoutes.get(handle)?.()
+    // This may reenter the grouped close join. Never await it from finishClose.
+    void this.retainedRoutes.get(handle)?.()
     this.retainedRoutes.delete(handle)
     this.openHandles.delete(handle)
     this.bindings.delete(handle)
@@ -692,7 +693,8 @@ export class JsonlBackendTracker {
     }
     const removers: (() => void)[] = []
     let unpin: (() => void) | undefined
-    let newRoute: (() => void) | undefined
+    let newRoute: (() => void | Promise<void>) | undefined
+    let routeArmed = false
     const cleanup = (): void => {
       const errors: unknown[] = []
       for (const remove of removers.splice(0).reverse()) {
@@ -701,28 +703,39 @@ export class JsonlBackendTracker {
       if (errors.length > 0) throw new AggregateError(errors, 'reservation listener cleanup failed')
     }
     const rollback = (): void => {
-      try { cleanup() } finally {
-        unpin?.()
-        try {
-          if (newRoute !== undefined && !writer.hasReservations) {
-            newRoute()
-            this.retainedRoutes.delete(writer)
-          }
-        } finally { done.resolve() }
+      const errors: unknown[] = []
+      try { cleanup() } catch (error: unknown) { errors.push(error) }
+      unpin?.()
+      try {
+        if (newRoute !== undefined && !writer.hasReservations) {
+          routeArmed = false
+          void newRoute()
+          this.retainedRoutes.delete(writer)
+        }
+      } catch (error: unknown) { errors.push(error) }
+      done.resolve()
+      if (errors.length > 0) {
+        const failure = new AggregateError(errors, 'reservation rollback failed')
+        writer.retainFailure(failure)
+        throw failure
       }
     }
     try {
       unpin = writer.retain({ fence, done: done.promise })
-      // Routing belongs to the pinned writer until actual close, including provider withdrawal.
-      // Root teardown may remove this registration; missing coverage then retains uncertainty.
+      // Transfer the actual listener into the writer's ordered root effect. Its close
+      // fences admission before waiting for pins; terminal facts still use this route.
       if (!this.retainedRoutes.has(writer)) {
-        newRoute = ctx.root.on('session/event', (exact: Session, event) => {
-          if (exact !== session || this.writers.get(session.id) !== writer) return
-          writer.enqueueLive(event, (error) => {
-            writer.retainFailure(error)
-            ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
+        newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
+          yield ctx.root.on('session/event', (exact: Session, event) => {
+            if (exact !== session || this.writers.get(session.id) !== writer) return
+            writer.enqueueLive(event, (error) => {
+              writer.retainFailure(error)
+              ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
+            })
           })
-        })
+          // Setup rollback must never close a writer belonging to an earlier pin.
+          yield () => routeArmed ? writer.close() : undefined
+        }.bind(this), 'retained JSONL writer and event route')
         this.retainedRoutes.set(writer, newRoute)
       }
       removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
@@ -733,6 +746,7 @@ export class JsonlBackendTracker {
         rollback()
         return { kind: 'refused', reason: 'fenced' }
       }
+      routeArmed = true
     } catch (error: unknown) {
       try { rollback() } catch (rollbackError: unknown) {
         throw new AggregateError([error, rollbackError], 'reservation setup and rollback failed')

@@ -118,7 +118,7 @@ interface SessionHandle extends AsyncDisposable {
 
 ## 写入器生命周期预留
 
-`reserveSessionWriter(session)` 在返回 `WriterLifetimeReservation` 前，同步认证声明服务的 provider、精确的存活 Session 和已路由的写入器。不支持此功能的 provider 会拒绝。预留成功的 `SessionWriterReservation` 提供单调取消信号和即时 `checkDispatch()` 拒绝检查；两者均不授予执行权限。关闭、provider 撤回和 Session 分离会阻止派发，同时保留路由、进程内占用和内核租约，直至每个已接纳操作完成清理。
+`reserveSessionWriter(session)` 在返回 `WriterLifetimeReservation` 前，同步认证声明服务的 provider、精确的存活 Session 和已路由的写入器。不支持此功能的 provider 会拒绝。预留成功的 `SessionWriterReservation` 提供单调取消信号和即时 `checkDispatch()` 拒绝检查；两者均不授予执行权限。关闭、provider 撤回和 Session 分离会阻止派发，同时保留路由、进程内占用和内核租约，直至每个已接纳操作完成清理。 JSONL 将精确保留的根事件监听器清理排在写入方关闭之后，因此根撤回时，关闭等待这些操作期间仍可传递终态事件。
 
 `flushDurably()` 在调用时捕获 Session 的排他事件边界，并排队验证同一写入器的前缀。`release()` 同步关闭接纳，返回同一个记忆化等待结果，等待此前的刷新并验证最终捕获的前缀，然后仅移除自己的预留。`WriterLifetimeFlush` 携带持久化边界，或带可选原因的 `WriterLifetimeReason` 拒绝结果。不确定性不可撤销且会保留所有权；普通无预留关闭及错误行为不变。消费者必须先完成自身清理再释放，并将即时写入器检查与自身最终同步派发检查结合。
 

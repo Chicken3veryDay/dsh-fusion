@@ -43,9 +43,16 @@ async function fixture() {
   const writer = tracker.adopt(new JsonlSessionHandle(storage, session.id, session.header, 'write', state))
   const detach = ctx.sessions.enter(session)
   ctx.sessions.announce(session)
-  // These handles have no OS lease or file resource. Keep unknown pins intact while removing only
-  // the fake teardown's wait; real unknown-lock tests own a child process until kernel release on exit.
-  disposals.push(async () => { tracker.openHandles.clear(); detach(); await ctx.fiber.dispose() })
+  disposals.push(async () => {
+    if (writer.hasReservations || writer.lifetimeUncertain) {
+      // Vitest owns this fork until exit; fake uncertain resources are never reported cleaned.
+      expect(tracker.openHandles.has(writer)).toBe(true)
+      expect(writer.lifetimeUncertain || writer.hasReservations).toBe(true)
+      return
+    }
+    detach()
+    await ctx.fiber.dispose()
+  })
   const reserve = () => {
     const result = tracker.reserveSessionWriter(ctx, session, ctx.sessionPersistence.identity)
     if (result.kind !== 'reserved') throw new Error(`reservation refused: ${result.reason}`)
@@ -104,7 +111,9 @@ for (const fault of ['registration', 'cleanup', 'reentry'] as const) {
     if (fault === 'reentry') expect(f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity)).toMatchObject({ reason: 'fenced' })
     else expect(() => f.reserve()).toThrow(fault === 'cleanup' ? 'reservation setup and rollback failed' : 'registration failed')
     expect(f.writer.hasReservations).toBe(false)
-    if (fault === 'cleanup') await expect(f.writer.close()).rejects.toThrow('cleanup failed')
+    if (fault === 'cleanup') await expect(f.writer.close()).rejects.toMatchObject({
+      message: 'reservation rollback failed', errors: [expect.objectContaining({ message: 'cleanup failed' })],
+    })
     else await f.writer.close()
   })
 }
