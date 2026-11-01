@@ -1,0 +1,10 @@
+version: 1
+scenario: fusion-host-service-discovery
+profile: headless
+composition: fusion-host-service-discovery
+recording: authored
+header:
+  class: advanced
+  pin: true
+  systemPromptSource: cordis-inspect-jsdoc
+  toolSchemasSource: cordis-inspect-jsdoc
