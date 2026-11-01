@@ -27,6 +27,10 @@ kind: "package-reference"
 
 显式挂载此主机服务，并同时提供 `agentLoop`、`agents`、`sessionPersistence`、`sessionProjections`、`fusionConfig` 和 `agentPresets`。本服务没有配置字段。主机调用 `ctx.fusionParticipants.prepare(selectionId)` 或 `recover(rootSessionId)`，并持有返回的 `PreparedParticipants` 能力直到任务释放。`adopt(role)` 返回停驻的 Agent；释放该 Agent 后，其 Session 与写入句柄仍可再次采用。释放任务先取消并排空其工作，再移除路由并关闭写入句柄。发起调用的作用域仅负责取消和等待；Fusion 所有者独立于调用者保留全部租约与组合。
 
+`PreparedParticipants.execution` 只返回深度不可变的权限事实。准备和恢复会持久化新的关闭状态实例；历史授权不赋予执行权限。生产环境不安装执行签发者或效果适配器，因此执行保持 `integration-missing` 阻塞。快照不暴露运行、授权、控制器或模型可执行回调。
+
+私有执行所有者同步预留提供方的精确写入器，在调度前持久化来源 Session 的开始记录，并在最后的同步调用位置检查当前运行、代次、策略与写入器准入。撤销立即关闭准入，然后持久化撤销事实，等待已接纳工作、清理和结果持久化，之后才允许后继授权。结果未知或持久化失败时保留写入所有权，并拒绝成功释放。恢复仅折叠必读日志事实，不重放效果；独立协调记录证据，不伪造生产方结算。任务释放在保留写入器释放前等待执行与现有交付工作。
+
 准备失败时，`ParticipantPreparationError.rootSessionId` 保留恢复身份，`cleanup` 标明清理已完成或结果未知。解决失败原因后使用该根身份恢复；再次调用准备会创建另一个任务。已建立的参与者历史缺失或损坏时，恢复被阻止，不会分配替代上下文。所有权与成员记录缺失、格式无效或重复时也会拒绝恢复；必读的生命周期记录使旧版标准读取器在激活前拒绝受管理历史。
 
 `PreparedParticipants.delivery` 将类型化用户文本或已认证的活跃同伴文本投递给名册参与者，不收养或唤醒 Agent。在主机入口构造一次 `DeliveryId`，重试复用它。相同重试保留顺序、修订与 MessageId；内容、来源或路由变化会冲突。所有普通文本（包括 `ok`）在传输完成后仍阻塞且未分类。`snapshot()` 返回不可变输入事实与同步待处理预留，不执行 I/O。
@@ -50,6 +54,8 @@ kind: "package-reference"
 | [src/state.ts](src/state.ts) | 已验证的根恢复投影 |
 | [src/delivery.ts](src/delivery.ts) | 休眠文本准入与协调 |
 | [src/delivery-state.ts](src/delivery-state.ts) | 必需投递记录与永久输入身份 |
+| [src/execution.ts](src/execution.ts) | 关闭状态的任务权限、写入器预留与效果清理 |
+| [src/execution-state.ts](src/execution-state.ts) | 必读执行历史与恢复验证 |
 | [src/task-order.ts](src/task-order.ts) | 共享的私有任务顺序 |
 
 </details>
@@ -70,7 +76,7 @@ kind: "package-reference"
 
 #### What the model sees
 
-准备和采用不会提交模型输入。`fusion/roster` 与 `agent/runtime-owner` 事件仅保留在日志中；续接沿用参与者自己的历史与已选预设组合。
+准备和采用不会提交模型输入。`fusion/roster`、`agent/runtime-owner` 与 `fusion/execution-opened` 是必读且仅保留在日志中的事件；续接沿用参与者自己的历史与已选预设组合。
 
 #### Token effect
 
@@ -84,8 +90,9 @@ kind: "package-reference"
 
 - 此可选所有者在拆卸时同步关闭准入，等待待完成的准备与恢复，并在释放保留写入器之前排空全部已发布任务工作。根、所有者、调用者、循环和持久化拆卸遵循同一顺序。永不完成的操作使正常拆卸持续等待；强制终止进程仍等同于崩溃。原始 Cordis 释放记录清理失败；观察清理的作用域与任务释放携带保留原因拒绝。
 - 产品激活、输入分类与处置、执行授权、约束和最终决策由下游负责。不向模型或客体工具导出激活控制。
+- 来源 Session 在结算前分离可能阻止必读结果追加。清理保持阻塞并保留写入器；恢复绝不伪造缺失的生产方记录。
 - 恢复需要匹配的预设声明；组合已修改时拒绝准备。本包不保留历史预设目录或插件数据库。
-- 每个保留的 Agent、子插件、组合作用域和写入句柄均完成清理后，由主机处理任务释放的拒绝。清理失败使结果保持未知，包括先前直接释放的失败；重复释放保留原因，已释放的任务拒绝接管。
+- 主机处理任务释放的拒绝；执行不确定状态会保留任务写入器，直到独立证据支持恢复或进程退出。清理失败使结果保持未知，包括先前直接释放的失败；重复释放保留原因，已释放的任务拒绝接管。
 
 <a id="dev-note"></a>
 ### 开发备注

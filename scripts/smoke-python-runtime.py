@@ -852,7 +852,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
-        choices=("all", "sdk-default", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-dynamic-tools", "sdk-fs-search", "sdk-spawn-node", "sdk-mcp", "sdk-snapshot", "sdk-recovery", "sdk-retained", "sdk-fusion-delivery", "sdk-restart", "sdk-profile-plugin", "sdk-plugin-manager", "sdk-office", "sdk-authoring", "sdk-live", "runner", "direct"),
+        choices=("all", "sdk-default", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-dynamic-tools", "sdk-fs-search", "sdk-spawn-node", "sdk-mcp", "sdk-snapshot", "sdk-recovery", "sdk-retained", "sdk-fusion-delivery", "sdk-fusion-execution", "sdk-restart", "sdk-profile-plugin", "sdk-plugin-manager", "sdk-office", "sdk-authoring", "sdk-live", "runner", "direct"),
         default="all",
     )
     parser.add_argument("--exe", type=Path)
@@ -871,7 +871,7 @@ def main() -> None:
         parser.error("--scenario sdk-profile-plugin requires --installed-wheel")
     if args.installed_wheel:
         args.exe = assert_installed_wheel_environment()
-    if args.scenario in {"all", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-dynamic-tools", "sdk-fs-search", "sdk-spawn-node", "sdk-snapshot", "sdk-recovery", "sdk-retained", "sdk-fusion-delivery", "sdk-restart", "sdk-office", "sdk-authoring", "sdk-plugin-manager", "runner", "direct"} and args.exe is None:
+    if args.scenario in {"all", "sdk-custom", "sdk-minimal", "sdk-minimal-in-history", "sdk-dynamic-tools", "sdk-fs-search", "sdk-spawn-node", "sdk-snapshot", "sdk-recovery", "sdk-retained", "sdk-fusion-delivery", "sdk-fusion-execution", "sdk-restart", "sdk-office", "sdk-authoring", "sdk-plugin-manager", "runner", "direct"} and args.exe is None:
         parser.error("--exe is required for custom, minimal, dynamic-tools, fs-search, spawn-node, snapshot, recovery, retained, restart, office, runner, and direct scenarios")
     if args.update_snapshots and args.scenario not in {"all", "sdk-minimal", "sdk-minimal-in-history", "sdk-dynamic-tools", "sdk-snapshot", "sdk-recovery", "sdk-restart", "sdk-authoring"}:
         parser.error("--update-snapshots requires --scenario sdk-minimal, sdk-minimal-in-history, sdk-dynamic-tools, sdk-snapshot, sdk-recovery, sdk-restart, sdk-authoring, or all")
@@ -935,6 +935,9 @@ def main() -> None:
         if args.scenario in {"all", "sdk-snapshot", "sdk-recovery"}:
             assert args.exe is not None
             smoke_sdk_scheduler_recovery(model.url, args.exe.resolve(), args.update_snapshots)
+        if args.scenario == "sdk-fusion-execution":
+            assert args.exe is not None
+            smoke_sdk_fusion_execution(args.exe.resolve())
         if args.scenario == "sdk-fusion-delivery":
             assert args.exe is not None
             from smoke_python_fusion_delivery import smoke_sdk_fusion_delivery
@@ -952,12 +955,76 @@ def main() -> None:
         if args.scenario in {"all", "direct"}:
             assert args.exe is not None
             smoke_direct(model.url, args.exe.resolve())
-        if args.scenario in {"sdk-retained", "sdk-fusion-delivery"}:
+        if args.scenario in {"sdk-retained", "sdk-fusion-delivery", "sdk-fusion-execution"}:
             if MockModelHandler.requests:
                 raise AssertionError("retained replay made an unauthorized model request")
         elif not MockModelHandler.requests:
             raise AssertionError("mock model endpoint received no requests")
     print(f"smoke-python-runtime: {args.scenario} passed")
+
+
+def smoke_sdk_fusion_execution(executable: Path) -> None:
+    """Replay required execution facts through the exact artifact's closed production owner."""
+    from deepseek_harness import DeepSeekHarness
+    import hashlib
+
+    repository = Path(__file__).resolve().parent.parent
+    fixture = repository / "snapshots/sdk/fusion-execution"
+    expected = json.loads((fixture / "result.expected.json").read_text())
+    artifact_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="python-fusion-execution-") as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        sessions = home / "sessions"
+        for suffix, session_id in (("", "execution-root"), (".1", "execution-child")):
+            text = (fixture / f"session{suffix}.v4.jsonl").read_text()
+            for token, value in (("{{session:1}}", "execution-root"), ("{{session:2}}", "execution-child"),
+                                 ("{{message:1}}", "execution-input")):
+                text = text.replace(token, value)
+            rows = [json.loads(line) for line in text.splitlines()]
+            physical = [rows[0], *({**row, "seq": index, "time": 1785097381465 + index}
+                                   for index, row in enumerate(rows[1:]))]
+            directory = sessions / "_no-cwd" / session_id
+            directory.mkdir(parents=True)
+            (directory / "session.v4.jsonl").write_text("".join(json.dumps(row) + "\n" for row in physical))
+        patch = root / "execution.patch.json"
+        patch.write_text(json.dumps([
+            {"id": "session-persistence-jsonl", "config": {"root": str(sessions), "compression": "none"}},
+            {"id": "session-telemetry-otel", "disabled": True},
+            {"id": "sdk-jsonrpc-server", "inject": ["sdkAppStartup", "loader", "fusionParticipants"],
+             "config": {"queryCommandDefinitions": ["snapshot/execution-fixture"]}},
+            {"insert": [
+                {"id": "execution-registry", "name": "@deepseek-ai/dsh-agent-preset-registry", "config": {"default": "delivery-empty"}},
+                {"id": "execution-preset", "name": "@deepseek-ai/dsh-agent-preset", "config": {"id": "delivery-empty", "plugins": []}},
+                {"id": "execution-config", "name": str(repository / "packages/preset/fusion-config/lib/index.js"),
+                 "config": {"document": {"credentialRef": "DELIVERY_TEST", "agentPreset": "delivery-empty", "providers": {},
+                  "declarations": [], "bindings": [], "selections": [],
+                  "metadataLimits": {"responseBytes": 32768, "totalBytes": 262144, "pages": 32, "timeoutMs": 5000}}}},
+                {"id": "execution-participants", "name": str(repository / "packages/experimental/fusion-participants/lib/index.js")},
+                {"id": "execution-fixture", "name": str(fixture / "runtime.mjs")},
+            ]},
+        ]))
+        for process in range(2):
+            with DeepSeekHarness(
+                provider="deepseek-official", model="deepseek-v4-flash", cwd=str(root),
+                dsh_bin=str(executable), dsh_home=str(home), patches=(str(patch),),
+                env={"DSH_TELEMETRY_DISABLED": "1", "DSH_AGENTS_HOME": str(root / "agents"), "HOME": str(root / "os-home")},
+                request_timeout_seconds=60,
+            ) as harness:
+                result = harness.run("/execution_fixture", session_id=f"execution-controller-{process}")
+                assert result.finish_reason == "completed", result
+                assert json.loads(result.final_response) == expected, result.final_response
+        for session_id in ("execution-root", "execution-child"):
+            rows = [json.loads(line) for line in (sessions / "_no-cwd" / session_id / "session.v4.jsonl").read_text().splitlines()]
+            assert not any(row["type"] in {"request/header", "turn/start"} for row in rows)
+            if session_id == "execution-root":
+                assert sum(row["type"] == "fusion/execution-opened" for row in rows) == 3
+            else:
+                assert sum(row["type"] == "fusion/effect-started" for row in rows) == 2
+                assert sum(row["type"] == "fusion/effect-settled" for row in rows) == 1
+                assert sum(row["type"] == "fusion/effect-reconciled" for row in rows) == 1
+    assert hashlib.sha256(executable.read_bytes()).hexdigest() == artifact_hash
+    print(json.dumps({"scenario": "sdk-fusion-execution", "artifactSha256": artifact_hash, "requests": 0, "claims": 0}))
 
 
 def smoke_sdk_fusion_ordered_shutdown(executable: Path) -> None:

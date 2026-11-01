@@ -5,4 +5,14 @@
 {"type":"fusion/delivery-intent","data":{"version":1,"rootSessionId":"{{session:1}}","deliveryId":"recorded-delivery-id","origin":{"kind":"user"},"targetParticipantId":"{{session:2}}","inboxTarget":"next-turn","correlationId":null,"contentHash":"a6d544640b0c32f9ddbe3b667fb8d91bc6a2deb87d9c6582ec2c338c0e0e6280","order":1,"decisionInputRevision":1,"text":"ok\r\nretained delivery","instruction":{"id":"{{message:1}}","role":"user","content":[{"type":"text","text":"ok\r\nretained delivery"}],"source":{"kind":"fusion-delivery","form":"relay","rootSessionId":"{{session:1}}","deliveryId":"recorded-delivery-id","origin":{"kind":"user"},"targetParticipantId":"{{session:2}}","inboxTarget":"next-turn","correlationId":null,"contentHash":"a6d544640b0c32f9ddbe3b667fb8d91bc6a2deb87d9c6582ec2c338c0e0e6280","order":1,"decisionInputRevision":1}}}}
 {"type":"session/end-seed","data":{}}
 {"type":"fusion/delivery-completed","data":{"deliveryId":"recorded-delivery-id","contentHash":"a6d544640b0c32f9ddbe3b667fb8d91bc6a2deb87d9c6582ec2c338c0e0e6280","order":1,"decisionInputRevision":1,"targetParticipantId":"{{session:2}}","acceptanceSeq":1,"instructionSeq":3,"receiverBoundary":4}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000001","bootId":"b0000000-0000-4000-8000-000000000001","previous":null}}
 {"type":"session/end-seed","data":{}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000002","bootId":"b0000000-0000-4000-8000-000000000002","previous":"a0000000-0000-4000-8000-000000000001"}}
+{"type":"session/end-seed","data":{}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000003","bootId":"b0000000-0000-4000-8000-000000000003","previous":"a0000000-0000-4000-8000-000000000002"}}
+{"type":"session/end-seed","data":{}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000004","bootId":"b0000000-0000-4000-8000-000000000004","previous":"a0000000-0000-4000-8000-000000000003"}}
+{"type":"session/end-seed","data":{}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000005","bootId":"b0000000-0000-4000-8000-000000000005","previous":"a0000000-0000-4000-8000-000000000004"}}
+{"type":"session/end-seed","data":{}}
+{"type":"fusion/execution-opened","data":{"version":1,"rootSessionId":"{{session:1}}","incarnation":"a0000000-0000-4000-8000-000000000006","bootId":"b0000000-0000-4000-8000-000000000006","previous":"a0000000-0000-4000-8000-000000000005"}}

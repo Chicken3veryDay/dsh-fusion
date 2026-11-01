@@ -1,0 +1,7 @@
+version: 1
+scenario: fusion-execution
+profile: sdk
+recording: authored
+composition: sdk-desktop
+header:
+  class: sdk-desktop

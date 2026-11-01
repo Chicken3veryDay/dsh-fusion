@@ -67,6 +67,7 @@ import {
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { deriveReplayScript, parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
 
+import { replayExecution } from './fusion-execution/runner.ts'
 import { replayDelivery } from './fusion-delivery/runner.ts'
 import { replayRetained } from './fusion-retained/runner.ts'
 
@@ -1171,6 +1172,7 @@ async function verifyHeaders(
 }
 
 describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
+  it('replays fusion-execution through dsh --profile sdk', replayExecution, 120_000)
   it('replays fusion-delivery through dsh --profile sdk', replayDelivery, 120_000)
   it('replays fusion-retained through dsh --profile sdk', replayRetained, 120_000)
   it('restores the retained V3 max-tokens recording after an interrupted next-turn restart', async () => {
@@ -1192,7 +1194,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
   })
 
   // Retained replay owns two restart processes and has no model-turn action script.
-  for (const scenario of sdkScenarios.filter(scenario => scenario.name !== 'fusion-retained' && scenario.name !== 'fusion-delivery')) {
+  for (const scenario of sdkScenarios.filter(scenario => scenario.name !== 'fusion-retained' && scenario.name !== 'fusion-delivery' && scenario.name !== 'fusion-execution')) {
     const scenarioTest = recording
       && (scenario.manifest.recording === 'authored' || scenario.manifest.sessionFormat !== undefined)
       ? it.skip

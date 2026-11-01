@@ -1,0 +1,17 @@
+{
+  "closed": true,
+  "frozen": true,
+  "callbacks": 0,
+  "attempts": 0,
+  "unknown": 0,
+  "blockers": [
+    "integration-missing"
+  ],
+  "claims": 0,
+  "requests": 0,
+  "queued": 1,
+  "starts": 2,
+  "producerSettlements": 1,
+  "reconciliations": 1,
+  "oldGeneration": 1
+}

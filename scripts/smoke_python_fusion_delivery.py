@@ -80,4 +80,19 @@ def smoke_sdk_fusion_delivery(executable: Path) -> None:
             for row in rows[1:]:
                 row.pop("seq", None)
                 row.pop("time", None)
+            if session_id == "delivery-root":
+                # This runner owns two recoveries; the TypeScript oracle also owns shutdown recoveries.
+                opened = [index for index, row in enumerate(original) if row["type"] == "fusion/execution-opened"]
+                assert len(opened) == 6, opened
+                original = original[:opened[1] + 1]
+                for values in (rows, original):
+                    identities = {row["data"]["incarnation"]: f"incarnation-{index}"
+                                  for index, row in enumerate(row for row in values if row["type"] == "fusion/execution-opened")}
+                    for row in values:
+                        if row["type"] == "fusion/execution-opened":
+                            data = row["data"]
+                            data["incarnation"] = identities[data["incarnation"]]
+                            if data["previous"] is not None:
+                                data["previous"] = identities[data["previous"]]
+                            data["bootId"] = "boot-" + data["incarnation"]
             assert rows == original, (session_id, rows, original)

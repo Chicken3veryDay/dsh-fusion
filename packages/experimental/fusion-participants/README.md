@@ -31,6 +31,10 @@ Mount this opt-in host service alongside `agentLoop`, `agents`, `sessionPersiste
 
 Root intent durability precedes receiver acceptance and inbox insertion. The receipt follows verified receiver and root completion barriers; it promises one logical instruction, never inference or effect settlement. `reconcile()` repairs acceptance-only prefixes from retained text and source metadata, without reinserting consumed or canceled messages. Recovery reconciles before publication; adoption shares the same task order. `DeliveryBlockedError` retains the original identity for reconciliation. A pre-aborted caller signal admits nothing. After synchronous reservation, aborting rejects only that caller’s wait with its abort reason; the task continues delivery, including queued sends, and other callers remain independent. Retry the same DeliveryId to obtain the receipt; cancellation does not retract the reserved input. Task disposal cancels publication and drains transport before closing writers.
 
+`PreparedParticipants.execution` returns deeply immutable authority facts only. Preparation and recovery durably open a fresh, closed incarnation; historical grants never authorize work. Production installs no execution issuers or effect adapters, so execution remains blocked by `integration-missing`. The snapshot exposes no run, grant, controller or model-executable callback.
+
+The private execution owner reserves exact provider writers synchronously, persists originating start records before dispatch, and checks live run, generation, policy and writer admission at the final synchronous invocation. Revocation cuts admission immediately, then durably records the cut and joins admitted work, cleanup and result durability before a successor grant. Unknown outcomes or failed durability retain writer ownership and refuse successful disposal. Recovery folds required log-only facts without replaying effects; independent reconciliation records evidence without inventing a producer settlement. Task disposal joins execution and existing delivery before releasing retained writers.
+
 Preparation failures expose `ParticipantPreparationError.rootSessionId` for recovery and report whether cleanup completed or remains unknown. Retry recovery using that root identity after resolving the cause; starting another preparation creates a different task. Missing or corrupt established histories block recovery rather than allocate replacement contexts. Missing, malformed or duplicate ownership and roster records also refuse recovery; required lifecycle records make older stock readers refuse managed histories before activation.
 
 -----
@@ -50,6 +54,8 @@ The root lease precedes participant acquisition in persisted identity order. Req
 | [src/state.ts](src/state.ts) | Validated root recovery projection |
 | [src/delivery.ts](src/delivery.ts) | Dormant text admission and reconciliation |
 | [src/delivery-state.ts](src/delivery-state.ts) | Required delivery records and permanent input identities |
+| [src/execution.ts](src/execution.ts) | Closed task authority, writer reservations and effect cleanup |
+| [src/execution-state.ts](src/execution-state.ts) | Required execution history and recovery validation |
 | [src/task-order.ts](src/task-order.ts) | Shared private task ordering |
 
 </details>
@@ -70,7 +76,7 @@ The root lease precedes participant acquisition in persisted identity order. Req
 
 #### What the model sees
 
-Preparation and adoption send no model input. `fusion/roster` and `agent/runtime-owner` events are log-only; continuations retain the participant's own history and selected preset composition.
+Preparation and adoption send no model input. `fusion/roster`, `agent/runtime-owner` and `fusion/execution-opened` are required log-only events; continuations retain the participant's own history and selected preset composition.
 
 #### Token effect
 
@@ -84,8 +90,9 @@ This package preserves context lineage across Agent detachment and never copies 
 
 - Product activation, input classification and disposition, execution grants, containment and final decisions belong to downstream owners. No activation control is exported to model or guest tools.
 - The opt-in owner closes admission synchronously on teardown, joins pending preparation and recovery, and drains all published task work before releasing retained writers. Root, owner, caller, loop and persistence teardown share this order. A nonsettling operation keeps graceful teardown pending; forced process termination remains crash-equivalent. Raw Cordis disposal logs cleanup failures; observed scope cleanup and task disposal reject with retained causes.
+- Detaching an originating Session before settlement can prevent its required result append. Cleanup remains blocked and retains writers; recovery never invents the missing producer record.
 - Recovery requires the matching preset declaration; edited compositions refuse preparation. This package retains no historical preset catalog or plugin database.
-- The host handles task disposal rejection after every retained Agent, child plugin, composition scope and writer has settled. Cleanup failures remain unknown, including earlier direct disposal; repeated disposal retains the causes and disposed tasks refuse adoption.
+- The host handles task disposal rejection; execution uncertainty retains task writers until independently established recovery or process exit. Cleanup failures remain unknown, including earlier direct disposal; repeated disposal retains the causes and disposed tasks refuse adoption.
 
 <a id="dev-note"></a>
 ### Dev Note

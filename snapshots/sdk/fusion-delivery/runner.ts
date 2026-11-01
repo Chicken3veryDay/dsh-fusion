@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
 import { normalizeSessionSnapshots } from '@deepseek-ai/dsh-session-snapshot'
+import { normalizeExecutionIdentities } from '../fusion-execution/runner.ts'
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 
 /** Replay both retained roles through two independent SDK runtime processes. */
@@ -109,6 +110,6 @@ export async function replayDelivery(): Promise<void> {
       }
     }
     const context = { sessionIds: ['delivery-root', 'delivery-child'], cwd: root }
-    expect(normalizeSessionSnapshots(actual, context)).toEqual(normalizeSessionSnapshots(expectedLogs, context))
+    expect(normalizeSessionSnapshots(normalizeExecutionIdentities(actual), context)).toEqual(normalizeSessionSnapshots(normalizeExecutionIdentities(expectedLogs), context))
   } finally { await rm(root, { recursive: true, force: true }) }
 }

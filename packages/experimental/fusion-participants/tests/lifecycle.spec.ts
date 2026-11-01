@@ -382,12 +382,18 @@ it('reads stock upstream records and safely refuses each managed record with the
   expect(current.events.filter(event => ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established'].includes(event.type))).toHaveLength(3)
   const deliveryRows = [...rows, ...receiverBytes.toString('utf8').trim().split('\n')]
   for (const type of ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established',
-    'fusion/delivery-intent', 'fusion/delivery-accepted', 'fusion/delivery-completed']) {
+    'fusion/delivery-intent', 'fusion/delivery-accepted', 'fusion/delivery-completed', 'fusion/execution-opened']) {
     const row = deliveryRows.find(line => (JSON.parse(line) as { type: string }).type === type)
     expect(row).toBeDefined()
     if (row === undefined) throw new Error(`missing managed record ${type}`)
     const event = JSON.parse(row) as object
     const isolated = Buffer.from(`${rows[0]}\n${JSON.stringify({ ...event, seq: 0 })}\n`)
+    const parsed = old.scanLog(isolated)
+    expect(() => oldValidation.validateStoredEvents(parsed.meta, parsed.events)).toThrow(`event type "${type}"`)
+  }
+  for (const type of ['fusion/execution-granted', 'fusion/execution-revoked',
+    'fusion/effect-started', 'fusion/effect-settled', 'fusion/effect-reconciled']) {
+    const isolated = Buffer.from(`${rows[0]}\n${JSON.stringify({ type, seq: 0, time: 1, data: {} })}\n`)
     const parsed = old.scanLog(isolated)
     expect(() => oldValidation.validateStoredEvents(parsed.meta, parsed.events)).toThrow(`event type "${type}"`)
   }
