@@ -5,6 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionWriterReservation } from '@deepseek-ai/dsh-session-persistence'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
+import type { ExecutionHostProvider, TaskExecutionHost, ExecutionIssuer, ExecutionController, ExecutionRun, HeldAttempt, HeldProducer, ExecutionSettlement } from './execution-host.ts'
 import { openedSchema, grantedSchema, startedSchema, reconciledSchema } from './execution-state.ts'
 import type { ExecutionState, EffectStarted, EffectSettled, ExecutionAttemptId } from './execution-state.ts'
 
@@ -47,6 +48,23 @@ interface Run {
   readonly epoch: number
   readonly runId: string
 }
+interface HeldRequest extends Attempt {
+  readonly token: HeldAttempt
+  readonly run: Run
+  readonly operation: string
+  readonly writer: SessionWriterReservation
+  readonly signal: AbortSignal
+  readonly completion: PromiseWithResolvers<void>
+  producer?: HeldProducer
+  registration?: Promise<void>
+  registered: boolean
+  release?: Promise<ExecutionSettlement>
+  finishing?: Promise<ExecutionSettlement>
+  cancellation?: 'handoff' | 'stop' | 'cancel'
+  failure?: { readonly reason: 'cleanup-unknown' | 'outcome-unknown' | 'durability'; readonly cause: unknown }
+  cancelSent?: boolean
+  stop?: () => void
+}
 interface Attempt {
   readonly attemptId: ExecutionAttemptId
   readonly abort: AbortController
@@ -70,6 +88,8 @@ export interface ExecutionOwnerOptions {
 export class TaskExecutionOwner {
   private readonly incarnation = openedSchema.shape.incarnation.parse(randomUUID())
   private readonly controller = Object.freeze({})
+  private enrollment: { provider: ExecutionHostProvider; current: () => void; done: Promise<TaskExecutionHost> } | undefined
+  private readonly held = new WeakMap<HeldAttempt, HeldRequest>()
   private readonly runs = new WeakMap<object, Run>()
   private readonly issuers = new Map<object, ExecutionAdapter>()
   private readonly reconciliations = new Map<ExecutionAttemptId, { done: Promise<void>; writer?: SessionWriterReservation }>()
@@ -121,17 +141,7 @@ export class TaskExecutionOwner {
   private async initialize(): Promise<void> {
     this.abort.signal.throwIfAborted()
     this.options.signal.throwIfAborted()
-    for (const session of [this.options.root, ...this.options.participants.values()]) {
-      const reserved = this.options.ctx.sessionPersistence.reserveSessionWriter(session)
-      if (reserved.kind !== 'reserved') throw new ExecutionBlockedError(reserved.reason)
-      this.lifetimeWriters.push(reserved.reservation)
-      this.abort.signal.throwIfAborted()
-      this.options.signal.throwIfAborted()
-      if (session === this.options.root) this.rootWriter = reserved.reservation
-      const stop = this.stop
-      reserved.reservation.signal.addEventListener('abort', stop, { once: true })
-      this.lifetimeStops.push(() => { reserved.reservation.signal.removeEventListener('abort', stop) })
-    }
+    this.pinLifetime()
     const rootState = this.options.state.get(this.options.root)?.()
     if (rootState === undefined) throw new ExecutionBlockedError('missing-root-state')
     this.generation = rootState.lastGeneration ?? 0
@@ -186,6 +196,251 @@ export class TaskExecutionOwner {
   }
 
   /**
+   * Enroll one exact host provider and re-pin released empty-open reservations before minting credentials.
+   * @param provider - trusted inert held producer provider, fixed for this incarnation.
+   * @param current - declaring fiber lifetime check, including withdrawal before effect cleanup runs.
+   * @returns memoized exact-provider enrollment; failed enrollment cannot be replaced.
+   */
+  enroll(provider: ExecutionHostProvider, current: () => void): Promise<TaskExecutionHost> {
+    if (this.disposal !== undefined || this.abort.signal.aborted || this.options.signal.aborted) return Promise.reject(new ExecutionBlockedError('not-live'))
+    if (this.enrollment !== undefined) return this.enrollment.provider === provider
+      ? this.enrollment.done : Promise.reject(new ExecutionBlockedError('host-replacement'))
+    const completion = Promise.withResolvers<TaskExecutionHost>()
+    this.enrollment = { provider, current, done: completion.promise }
+    void (async () => {
+      if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.disposal !== undefined
+        || this.phase === 'revoking' || this.phase === 'stopped') throw new ExecutionBlockedError('not-live')
+      current()
+      startedSchema.shape.adapter.parse(provider.name)
+      startedSchema.shape.revision.parse(provider.revision)
+      const acquiring = this.lifetimeWriters.length === 0
+      try {
+        if (acquiring) this.pinLifetime()
+        this.checkWriters()
+        this.abort.signal.throwIfAborted()
+        this.options.signal.throwIfAborted()
+      } catch (error: unknown) {
+        try { if (acquiring) await this.releaseLifetime() } catch (cleanup: unknown) {
+          this.block(cleanup)
+          throw new ExecutionBlockedError('enrollment-cleanup', new AggregateError([error, cleanup]))
+        }
+        throw error
+      }
+      current()
+      const issuer = Object.freeze({}) as ExecutionIssuer
+      // Legacy adapters remain internal. The public path never calls their callback-fence protocol.
+      const adapter: ExecutionAdapter = { issuer, name: provider.name, revision: provider.revision,
+        classify: operation => provider.classify(operation),
+        prepare: () => Promise.reject(new ExecutionBlockedError('held-only')) }
+      this.issuers.set(issuer, adapter)
+      const controller = this.controller as ExecutionController
+      const host: TaskExecutionHost = Object.freeze({
+        issuer, controller,
+        bindRun: (key: ExecutionIssuer, agent: Agent, signal: AbortSignal) => this.bindRun(key, agent, signal) as ExecutionRun,
+        reserve: (run: ExecutionRun, operation: string) => this.reserveHeld(run, operation),
+        register: (attempt: HeldAttempt) => this.registerHeld(attempt, provider),
+        release: (attempt: HeldAttempt) => this.releaseHeld(attempt),
+        grant: (key: ExecutionController, target: SessionId) => this.grant(key, target),
+        revoke: (key: ExecutionController, reason: 'handoff' | 'stop' | 'cancel') => key === controller
+          ? this.revoke(reason) : Promise.reject(new ExecutionBlockedError('identity')),
+        dispose: () => this.dispose(),
+      })
+      completion.resolve(host)
+    })().catch(completion.reject)
+    return completion.promise
+  }
+
+  private pinLifetime(): void {
+    for (const session of [this.options.root, ...this.options.participants.values()]) {
+      const reserved = this.options.ctx.sessionPersistence.reserveSessionWriter(session)
+      if (reserved.kind !== 'reserved') throw new ExecutionBlockedError(reserved.reason, reserved)
+      this.lifetimeWriters.push(reserved.reservation)
+      if (session === this.options.root) this.rootWriter = reserved.reservation
+      reserved.reservation.signal.addEventListener('abort', this.stop, { once: true })
+      this.lifetimeStops.push(() => { reserved.reservation.signal.removeEventListener('abort', this.stop) })
+      this.abort.signal.throwIfAborted()
+      this.options.signal.throwIfAborted()
+    }
+  }
+
+  private checkWriters(): void {
+    if (this.lifetimeWriters.length !== this.options.participants.size + 1) throw new ExecutionBlockedError('writer')
+    for (const writer of this.lifetimeWriters) {
+      const refusal = writer.checkDispatch()
+      if (refusal !== undefined) throw new ExecutionBlockedError('writer', refusal)
+    }
+  }
+
+  private checkHeldRun(run: Run): void {
+    this.checkLive(run.agent)
+    run.signal.throwIfAborted()
+    if (this.issuers.get(run.adapter.issuer) !== run.adapter || run.generation !== this.generation || run.epoch !== this.epoch) {
+      throw new ExecutionBlockedError('stale-run')
+    }
+    this.checkWriters()
+  }
+
+  private reserveHeld(capability: ExecutionRun, operation: string): HeldAttempt {
+    const run = this.runs.get(capability)
+    if (run === undefined) throw new ExecutionBlockedError('identity')
+    this.checkHeldRun(run)
+    const reserved = this.options.ctx.sessionPersistence.reserveSessionWriter(run.agent.session)
+    if (reserved.kind !== 'reserved') throw new ExecutionBlockedError('writer', reserved)
+    const completion = Promise.withResolvers<void>()
+    // The drain owns this rejection even when a held request has no release caller.
+    void completion.promise.catch(() => {})
+    const abort = new AbortController()
+    const token = Object.freeze({}) as HeldAttempt
+    const signal = AbortSignal.any([abort.signal, run.signal, reserved.reservation.signal, this.abort.signal, this.options.signal])
+    const row: HeldRequest = { token, run, operation, writer: reserved.reservation, signal, completion,
+      attemptId: startedSchema.shape.attemptId.parse(randomUUID()), abort, done: completion.promise,
+      phase: 'reserved', dispatched: false, registered: false }
+    this.attempts.set(row.attemptId, row)
+    this.held.set(token, row)
+    const onAbort = (): void => {
+      this.cancelHeld(row, row.cancellation ?? 'cancel')
+      if (row.release === undefined) void this.finishHeld(row).catch(() => {})
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    row.stop = () => { signal.removeEventListener('abort', onAbort) }
+    if (signal.aborted) { this.cancelHeld(row, 'cancel'); void this.finishHeld(row).catch(() => {}) }
+    return token
+  }
+
+  private registerHeld(token: HeldAttempt, provider: ExecutionHostProvider): Promise<void> {
+    const row = this.held.get(token)
+    if (row === undefined) return Promise.reject(new ExecutionBlockedError('identity'))
+    if (row.registration !== undefined) return row.registration
+    const completion = Promise.withResolvers<void>()
+    row.registration = completion.promise
+    try {
+      this.checkHeldRun(row.run)
+      row.signal.throwIfAborted()
+      const classification = row.run.adapter.classify(row.operation)
+      this.checkHeldRun(row.run)
+      this.checkRun(row.run, classification)
+      row.phase = 'registering'
+      row.producer = provider.registerHeld(token, row.attemptId, row.run.agent, row.operation, row.signal)
+      if (row.signal.aborted) this.cancelHeld(row, row.cancellation ?? 'cancel')
+      this.checkHeldRun(row.run)
+      row.signal.throwIfAborted()
+      row.registered = true
+      row.phase = 'held'
+      completion.resolve()
+    } catch (error: unknown) {
+      // A throwing allocator cannot certify that no partial allocation escaped without an anchor.
+      if (row.phase === 'registering' && row.producer === undefined) { row.failure = { reason: 'cleanup-unknown', cause: error }; this.block(error) }
+      completion.reject(error)
+      void this.finishHeld(row).catch(() => {})
+    }
+    return completion.promise
+  }
+
+  private releaseHeld(token: HeldAttempt): Promise<ExecutionSettlement> {
+    const row = this.held.get(token)
+    if (row === undefined) return Promise.reject(new ExecutionBlockedError('identity'))
+    if (row.release !== undefined) return row.release
+    if (row.finishing !== undefined) return row.finishing
+    if (!row.registered) return Promise.reject(new ExecutionBlockedError('not-registered'))
+    const completion = Promise.withResolvers<ExecutionSettlement>()
+    row.release = completion.promise
+    // Publish the join before prepare, classification or invocation can reenter the facade.
+    void this.performHeld(row).then(completion.resolve, completion.reject)
+    return completion.promise
+  }
+
+  private cancelHeld(row: HeldRequest, reason: 'handoff' | 'stop' | 'cancel'): void {
+    row.cancellation ??= reason
+    if (row.cancelSent === true || row.producer === undefined) return
+    row.cancelSent = true
+    try { row.producer.cancel(row.cancellation) } catch (error: unknown) { row.failure = { reason: 'cleanup-unknown', cause: error }; this.block(error) }
+  }
+
+  private async performHeld(row: HeldRequest): Promise<ExecutionSettlement> {
+    let start: EffectStarted | undefined
+    let outcome: EffectSettled['outcome'] = 'not-dispatched'
+    try {
+      this.checkHeldRun(row.run)
+      row.signal.throwIfAborted()
+      const classification = row.run.adapter.classify(row.operation)
+      this.checkHeldRun(row.run)
+      this.checkRun(row.run, classification)
+      if (classification === undefined || row.producer === undefined) throw new ExecutionBlockedError('not-registered')
+      start = startedSchema.parse({ rootSessionId: this.options.root.id, participantId: row.run.agent.session.id,
+        incarnation: this.incarnation, runId: row.run.runId, attemptId: row.attemptId,
+        generation: classification === 'mutation' ? this.generation : null,
+        adapter: row.run.adapter.name, revision: row.run.adapter.revision, classification,
+        requestHash: createHash('sha256').update(JSON.stringify([row.operation, row.run.agent.session.id])).digest('hex') })
+      row.phase = 'preparing'
+      const invocation = await row.producer.prepare()
+      // Resolve any provider-owned accessor before the final authority check.
+      const invoke = invocation.invoke.bind(invocation)
+      this.checkHeldRun(row.run)
+      row.signal.throwIfAborted()
+      row.run.agent.session.append('fusion/effect-started', start)
+      row.phase = 'start-pending'
+      const flushed = await row.writer.flushDurably()
+      if (flushed.kind !== 'durable') throw new ExecutionBlockedError('start-durability', flushed)
+      row.phase = 'start-durable'
+      const current = row.run.adapter.classify(row.operation)
+      // Classification is external code; all authority checks follow its return.
+      this.checkHeldRun(row.run)
+      this.checkRun(row.run, current)
+      if (current !== classification || row.signal.aborted || row.dispatched || row.writer.checkDispatch() !== undefined) {
+        throw new ExecutionBlockedError('dispatch-fenced')
+      }
+      row.dispatched = true
+      row.phase = 'dispatching'
+      outcome = await invoke()
+    } catch (error: unknown) {
+      if (row.dispatched) { outcome = 'uncertain'; row.failure = { reason: 'outcome-unknown', cause: error }; this.block(error) }
+      else if (row.phase === 'start-pending') { row.failure = { reason: 'durability', cause: error }; this.block(error) }
+    }
+    return this.finishHeld(row, row.phase === 'preparing' ? undefined : start, outcome)
+  }
+
+  private finishHeld(row: HeldRequest, start?: EffectStarted, outcome: EffectSettled['outcome'] = 'not-dispatched'): Promise<ExecutionSettlement> {
+    if (row.finishing !== undefined) return row.finishing
+    const completion = Promise.withResolvers<ExecutionSettlement>()
+    row.finishing = completion.promise
+    // A held registration callback may revoke before returning its independent cleanup anchor.
+    void (async (): Promise<ExecutionSettlement> => {
+      await Promise.allSettled([row.registration])
+      row.phase = 'settling'
+      try { await row.producer?.cleanup() } catch (error: unknown) {
+        row.failure = { reason: 'cleanup-unknown', cause: error }
+        outcome = 'uncertain'
+        this.block(error)
+      }
+      try {
+        if (start !== undefined) {
+          const { rootSessionId, participantId, incarnation, runId, attemptId, generation } = start
+          row.run.agent.session.append('fusion/effect-settled', { rootSessionId, participantId, incarnation, runId, attemptId, generation, outcome })
+          const flushed = await row.writer.flushDurably()
+          if (flushed.kind !== 'durable') throw new ExecutionBlockedError('result-durability', flushed)
+        }
+        if (row.failure !== undefined) throw new ExecutionBlockedError(row.failure.reason, row.failure.cause)
+        if (outcome === 'uncertain') throw new ExecutionBlockedError('outcome-unknown')
+        const released = await row.writer.release()
+        if (released.kind !== 'durable') throw new ExecutionBlockedError('release-durability', released)
+        this.attempts.delete(row.attemptId)
+        row.phase = 'settled'
+        row.stop?.()
+        row.completion.resolve()
+        return { kind: 'settled', outcome }
+      } catch (error: unknown) {
+        row.phase = 'unknown'
+        this.unknown.add(row.attemptId)
+        this.block(error)
+        row.completion.reject(error)
+        return { kind: 'blocked', reason: row.failure?.reason ?? (outcome === 'uncertain' ? 'outcome-unknown' : 'durability'),
+          attemptId: row.attemptId, cause: error }
+      }
+    })().then(completion.resolve, completion.reject)
+    return completion.promise
+  }
+
+  /**
    * Return immutable facts only, with no callable model authority.
    * @returns frozen current facts without execution capabilities.
    */
@@ -229,6 +484,7 @@ export class TaskExecutionOwner {
     const work = async (): Promise<void> => {
       if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.phase !== 'closed' || this.owner !== null
         || this.attempts.size > 0 || this.reconciliations.size > 0 || this.unknown.size > 0 || !this.options.participants.has(target)) throw new ExecutionBlockedError('not-drained')
+      if (this.enrollment !== undefined) { this.enrollment.current(); this.checkWriters() }
       const grant = grantedSchema.parse({ rootSessionId: this.options.root.id, incarnation: this.incarnation,
         generation: ++this.generation, participantId: target,
         previousRevoke: this.options.state.get(this.options.root)?.().revoke?.generation ?? null })
@@ -406,7 +662,11 @@ export class TaskExecutionOwner {
     this.phase = 'revoking'
     this.owner = null
     const admitted = [...this.attempts.values()]
-    for (const row of admitted) row.abort.abort(new ExecutionBlockedError('revoked'))
+    for (const row of admitted) {
+      const held = 'token' in row ? this.held.get(row.token as HeldAttempt) : undefined
+      if (held !== undefined) this.cancelHeld(held, reason)
+      row.abort.abort(new ExecutionBlockedError('revoked'))
+    }
     const persist = this.transition.then(() => this.recordRoot(() => this.options.root.append('fusion/execution-revoked', {
       rootSessionId: this.options.root.id, incarnation: this.incarnation,
       generation: this.options.state.get(this.options.root)?.().grant?.generation ?? null, reason, stopped: reason === 'stop',
@@ -434,7 +694,7 @@ export class TaskExecutionOwner {
     this.owner = null
     this.phase = 'revoking'
     void (async () => {
-      await Promise.allSettled([this.opening])
+      await Promise.allSettled([this.opening, this.enrollment?.done])
       if (this.opened && this.issuers.size > 0) {
         await this.revoke('stop')
         if (this.phase !== 'stopped') await this.revoke('stop')
@@ -446,7 +706,7 @@ export class TaskExecutionOwner {
         if (this.lifetimeWriters.length > 0) { this.block(error); throw error }
       }
       await this.releaseLifetime()
-    })().then(completion.resolve, completion.reject)
+    })().then(completion.resolve, (error: unknown) => { this.block(error); completion.reject(error) })
     return completion.promise
   }
 
@@ -457,9 +717,11 @@ export class TaskExecutionOwner {
       if (released.kind !== 'durable') { this.block(released); throw new ExecutionBlockedError('writer-release', released) }
       this.lifetimeWriters.pop()
     }
+    this.rootWriter = undefined
   }
 
   private checkLive(agent: Agent): void {
+    this.enrollment?.current()
     if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.phase === 'revoking' || this.phase === 'blocked'
       || this.phase === 'stopped' || this.options.ctx.agents.get(agent.id) !== agent
       || this.options.participants.get(agent.session.id) !== agent.session

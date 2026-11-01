@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { createScope, scopeParentOf } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, Service, FiberState } from '@deepseek-ai/cordis'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { AgentHandle, RetainedAgentSession } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
@@ -17,7 +17,8 @@ import { DeliveryOwner } from './delivery.ts'
 import type { DormantDelivery } from './delivery.ts'
 import { admissionProjection, receiverProjection } from './delivery-state.ts'
 import type { AdmissionState, ReceiverState } from './delivery-state.ts'
-import { TaskExecutionOwner } from './execution.ts'
+import type { ExecutionHostProvider, TaskExecutionHost } from './execution-host.ts'
+import { TaskExecutionOwner, ExecutionBlockedError } from './execution.ts'
 import type { ExecutionSnapshot } from './execution.ts'
 import { executionProjection } from './execution-state.ts'
 import type { ExecutionState } from './execution-state.ts'
@@ -28,6 +29,8 @@ export { DeliveryId } from './delivery-state.ts'
 export type { TextDelivery } from './delivery-state.ts'
 export { DeliveryBlockedError } from './delivery.ts'
 export type { DormantDelivery, DeliveryReceipt, AdmissionSnapshot } from './delivery.ts'
+export type { ExecutionHostProvider, TaskExecutionHost, ExecutionIssuer, ExecutionController, ExecutionRun, HeldAttempt, HeldProducer, SynchronousInvocation, EffectClass, ExecutionBlockReason, ExecutionSettlement } from './execution-host.ts'
+export { ExecutionBlockedError } from './execution.ts'
 export type { ExecutionSnapshot } from './execution.ts'
 export type { Roster } from './roster.ts'
 
@@ -75,10 +78,12 @@ export class ParticipantPreparationError extends Error {
 
 /** Loader-mounted task owner; exposes no model tools or product activation operation. */
 export default class FusionParticipants extends Service {
-  static inject = ['agentLoop', 'agents', 'sessionPersistence', 'sessionProjections', 'fusionConfig', 'agentPresets']
+  static inject = ['agentLoop', 'agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'fusionConfig', 'agentPresets']
   private readonly abort = new AbortController()
   private readonly pending = new Map<Promise<PreparedParticipants>, Promise<void>>()
   private readonly owned = new Map<PreparedParticipants, () => Promise<void>>()
+  private readonly executionOwners = new WeakMap<PreparedParticipants, TaskExecutionOwner>()
+  private readonly hosts = new WeakMap<PreparedParticipants, { provider: ExecutionHostProvider; caller: Context['fiber']; done: Promise<TaskExecutionHost> }>()
   private readonly release = Promise.withResolvers<void>()
   private readonly lifetime: { ctx: Context; resources: Scope }
   private stopping: Promise<void> | undefined
@@ -148,6 +153,39 @@ export default class FusionParticipants extends Service {
    */
   recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants> {
     return this.track((ownedSignal, quiescent, releaseCaller) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent, releaseCaller), signal)
+  }
+
+  /**
+   * Enroll one trusted held host on this exact prepared task. The declaring fiber owns withdrawal;
+   * its teardown fences admission immediately and joins cleanup before releasing dependencies.
+   * No provider, capability or callback is transported through model tools or SDK requests.
+   * @param task - exact live object returned by this service, never a roster or snapshot copy.
+   * @param provider - one exact provider identity per task incarnation and declaring fiber.
+   * @returns memoized enrollment after exact retained writer reservations; replacement refuses.
+   */
+  registerExecutionHost(task: PreparedParticipants, provider: ExecutionHostProvider): Promise<TaskExecutionHost> {
+    const caller = this.ctx
+    try {
+      caller.fiber.assertActive()
+      this.abort.signal.throwIfAborted()
+      const owner = this.executionOwners.get(task)
+      if (owner === undefined || !this.owned.has(task)) throw new ExecutionBlockedError('identity')
+      const previous = this.hosts.get(task)
+      if (previous !== undefined) {
+        if (previous.provider !== provider || previous.caller !== caller.fiber) throw new ExecutionBlockedError('host-replacement')
+        const phase = owner.snapshot().phase
+        if (phase === 'stopped' || phase === 'revoking') throw new ExecutionBlockedError('not-live')
+        return previous.done
+      }
+      const completion = Promise.withResolvers<TaskExecutionHost>()
+      this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
+      caller.effect(() => () => owner.dispose(), 'fusion-participants.execution-host')
+      void owner.enroll(provider, () => {
+        caller.fiber.assertActive()
+        if (caller.fiber.state === FiberState.UNLOADING || caller.fiber.state === FiberState.DISPOSED) throw new ExecutionBlockedError('not-live')
+      }).then(completion.resolve, completion.reject)
+      return completion.promise
+    } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
   }
 
   private track(
@@ -333,6 +371,7 @@ export default class FusionParticipants extends Service {
         },
         dispose,
       })
+      this.executionOwners.set(prepared, executionOwner)
       this.owned.set(prepared, drain)
       quiescent()
       return prepared
