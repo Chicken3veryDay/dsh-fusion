@@ -114,8 +114,7 @@ it('blocks provisioning after an actual owner flush rejects with a causally iden
   if (!(result instanceof Error) || !(result.cause instanceof Error)) throw new Error('Missing durability cause')
   expect(result.cause.message).toBe('retained session durability refused: flush-failed')
   expect(refusals).toEqual([{ kind: 'refused', reason: 'flush-failed', cause: failure }])
-  // The existing retained Agent wrapper reports the refusal but omits its cause.
-  expect(result.cause.cause).toBeUndefined()
+  expect(result.cause.cause, 'public refusal retains the exact original handle-flush error').toBe(failure)
   expect(adapter.requests).toHaveLength(0)
   expect(ctx.agents.list()).toHaveLength(0)
 })

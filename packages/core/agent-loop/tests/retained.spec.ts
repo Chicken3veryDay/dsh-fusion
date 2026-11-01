@@ -8,7 +8,7 @@ import { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import AgentLoop from '../src/index.ts'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
-import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionDurabilityResult, SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import { sessionDir } from '../../../session/session-persistence-jsonl/src/format.ts'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { MockAdapter, textResponse } from './mock-adapter.ts'
@@ -398,3 +398,65 @@ it('re-adopts after clean setup rollback with fresh scope evidence for each resi
   expect(cleaned).toBe(3)
   expect(ctx.sessions.list()).toHaveLength(0)
 })
+
+const refusalCases = [
+  { name: 'Error cause', refusal: { kind: 'refused', reason: 'flush-failed', cause: new Error('original flush failure') } },
+  { name: 'non-Error cause', refusal: { kind: 'refused', reason: 'flush-failed', cause: { storage: 'unavailable' } } },
+  { name: 'undefined cause', refusal: { kind: 'refused', reason: 'flush-failed', cause: undefined } },
+  { name: 'no cause', refusal: { kind: 'refused', reason: 'missing-writer' } },
+] satisfies { name: string; refusal: SessionDurabilityResult }[]
+
+for (const phase of ['create', 'adopt'] as const) {
+  for (const cleanupFails of [false, true]) {
+    it.each(refusalCases)(`preserves $name during ${phase} refusal with cleanup failure ${cleanupFails}`, async ({ refusal }) => {
+      const { ctx, adapter } = await mount()
+      const cleanup = new Error('writer close failed')
+      const create = ctx.sessionPersistence.create.bind(ctx.sessionPersistence)
+      const closeCalls = vi.fn()
+      vi.spyOn(ctx.sessionPersistence, 'create').mockImplementation(async (...args) => {
+        const writer = await create(...args)
+        const close = writer.close.bind(writer)
+        vi.spyOn(writer, 'close').mockImplementation(async () => {
+          closeCalls()
+          await close()
+          if (cleanupFails) throw cleanup
+        })
+        return writer
+      })
+      const setup = vi.fn()
+      const retained = phase === 'adopt' ? await ctx.agents.retain({ ...options, setup }) : undefined
+      vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockResolvedValue(refusal)
+      const result: unknown = await (retained === undefined ? ctx.agents.retain({ ...options, setup }) : retained.adopt())
+        .then(() => undefined, (error: unknown) => error)
+      const primary: unknown = phase === 'create' && result instanceof AggregateError ? result.errors[0] : result
+      expect(primary).toBeInstanceOf(Error)
+      if (!(primary instanceof Error)) throw new Error('Missing retained refusal')
+      expect(primary.message).toBe(`retained ${phase === 'create' ? 'session' : 'adoption'} durability refused: ${refusal.reason}`)
+      expect(primary.cause, 'retained refusal preserves exact original cause identity').toBe('cause' in refusal ? refusal.cause : undefined)
+      expect(Object.hasOwn(primary, 'cause')).toBe('cause' in refusal)
+      expect(setup).not.toHaveBeenCalled()
+      expect(ctx.agents.list()).toHaveLength(0)
+      expect(adapter.requests).toHaveLength(0)
+      if (retained !== undefined) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (cleanupFails) {
+            const disposed: unknown = await retained.dispose().catch((error: unknown) => error)
+            expect(disposed).toBeInstanceOf(AggregateError)
+            if (!(disposed instanceof AggregateError)) throw new Error('Missing cleanup aggregate')
+            const failure: unknown = disposed.errors[0]
+            if (!(failure instanceof AggregateError)) throw new Error('Missing writer cleanup aggregate')
+            expect(failure.errors).toContain(cleanup)
+          } else await retained.dispose()
+        }
+      } else if (cleanupFails) {
+        expect(result).toBeInstanceOf(AggregateError)
+        if (!(result instanceof AggregateError)) throw new Error('Missing acquisition aggregate')
+        const failure: unknown = result.errors[1]
+        if (!(failure instanceof AggregateError)) throw new Error('Missing writer cleanup aggregate')
+        expect(failure.errors).toContain(cleanup)
+      }
+      expect(closeCalls).toHaveBeenCalledTimes(1)
+      expect(ctx.sessions.list()).toHaveLength(0)
+    })
+  }
+}

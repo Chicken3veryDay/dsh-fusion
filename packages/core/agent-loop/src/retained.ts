@@ -41,6 +41,7 @@ export interface RetainedAuthority {
  * @param authorities - factory-private registry of exact retained capabilities.
  * @param storeSuffix - persist Session restoration events through its acquired writer.
  * @returns a capability after routing and the same-writer durability barrier succeed.
+ * @throws durability refusals with their original cause, aggregated with any acquisition cleanup failure.
  */
 export async function retainSession(
   runtime: Context,
@@ -121,7 +122,8 @@ export async function retainSession(
     runtime.sessions.announce(session)
     if (options.mode === 'create') session.append('agent/runtime-owner', { rootSessionId: SessionId(rootSessionId) })
     const durability = await persistence.flushSessionDurably(session)
-    if (durability.kind !== 'durable') throw new Error(`retained session durability refused: ${durability.reason}`)
+    if (durability.kind !== 'durable') throw new Error(`retained session durability refused: ${durability.reason}`,
+      'cause' in durability ? { cause: durability.cause } : undefined)
     signal.throwIfAborted()
     acquired.resolve()
     const release = async (): Promise<void> => {
@@ -137,7 +139,8 @@ export async function retainSession(
         if (disposed || resident !== undefined || adoption !== undefined) throw new Error('retained session cannot be adopted twice')
         adoption = (async () => {
           const durability = await persistence.flushSessionDurably(session)
-          if (durability.kind !== 'durable') throw new Error(`retained adoption durability refused: ${durability.reason}`)
+          if (durability.kind !== 'durable') throw new Error(`retained adoption durability refused: ${durability.reason}`,
+            'cause' in durability ? { cause: durability.cause } : undefined)
           signal.throwIfAborted()
           const handle = await initialize(session, signal, (cleanup) => { failedCleanup = cleanup })
           resident = handle
