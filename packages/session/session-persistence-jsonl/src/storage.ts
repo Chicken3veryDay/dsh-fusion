@@ -648,9 +648,10 @@ export class JsonlBackendTracker {
     if (writer == null || !writer.lifetimeOpen || this.bindings.get(writer) !== session || !this.active) {
       return { kind: 'refused', reason: 'missing-writer' }
     }
-    const ancestors = new Set<Context['fiber']>()
-    for (let fiber = ctx.fiber; !ancestors.has(fiber); fiber = fiber.parent.fiber) ancestors.add(fiber)
-    const providerLive = (): boolean => [...ancestors].every(fiber => fiber.uid !== null && fiber.state === FiberState.ACTIVE)
+    const ancestors = new Map<Context['fiber'], Context['fiber']['uid']>()
+    for (let fiber = ctx.fiber; !ancestors.has(fiber); fiber = fiber.parent.fiber) ancestors.set(fiber, fiber.uid)
+    const providerLive = (): boolean => [...ancestors].every(([fiber, uid]) =>
+      uid !== null && fiber.uid === uid && fiber.state === FiberState.ACTIVE)
       && ctx.get('sessionPersistence')?.identity === provider
     if (!providerLive()) return { kind: 'refused', reason: 'fenced' }
     const abort = new AbortController()
@@ -671,7 +672,6 @@ export class JsonlBackendTracker {
       return undefined
     }
     const flushExact = async (boundary: SessionLogOffset): Promise<WriterLifetimeFlush> => {
-      if (phase === 'released') return { kind: 'refused', reason: 'released' }
       if (phase === 'uncertain' || writer.lifetimeUncertain) return { kind: 'refused', reason: 'uncertain' }
       if (this.writers.get(session.id) !== writer || this.bindings.get(writer) !== session
         || !this.retainedRoutes.has(writer)) {

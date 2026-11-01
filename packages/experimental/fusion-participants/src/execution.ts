@@ -72,7 +72,7 @@ export class TaskExecutionOwner {
   private readonly controller = Object.freeze({})
   private readonly runs = new WeakMap<object, Run>()
   private readonly issuers = new Map<object, ExecutionAdapter>()
-  private readonly reconciliations = new Map<ExecutionAttemptId, Promise<void>>()
+  private readonly reconciliations = new Map<ExecutionAttemptId, { done: Promise<void>; writer?: SessionWriterReservation }>()
   private readonly attempts = new Map<ExecutionAttemptId, Attempt>()
   private readonly abort = new AbortController()
   private readonly unknown = new Set<ExecutionAttemptId>()
@@ -90,13 +90,14 @@ export class TaskExecutionOwner {
   private opened = false
   private ready = false
   private opening: Promise<void> | undefined
+  private readonly stop = (): void => { void this.dispose().catch(() => {}) }
 
   constructor(private readonly options: ExecutionOwnerOptions) {
     for (const adapter of options.adapters) {
       if (this.issuers.has(adapter.issuer)) throw new ExecutionBlockedError('duplicate-issuer')
       this.issuers.set(adapter.issuer, adapter)
     }
-    options.signal.addEventListener('abort', () => { void this.dispose().catch(() => {}) }, { once: true })
+    options.signal.addEventListener('abort', this.stop, { once: true })
   }
 
   /** Persist a fresh closed incarnation after all retained Sessions have recovered. */
@@ -104,17 +105,30 @@ export class TaskExecutionOwner {
     if (this.opening !== undefined) return this.opening
     const completion = Promise.withResolvers<void>()
     this.opening = completion.promise
-    void this.initialize().then(completion.resolve, completion.reject)
+    void this.initialize().then(completion.resolve, async (error: unknown) => {
+      try {
+        if (!this.opened && this.failures.length === 0 && this.unknown.size === 0) await this.releaseLifetime()
+      } catch (cleanup: unknown) {
+        this.block(cleanup)
+        completion.reject(new ExecutionBlockedError('initialization-cleanup', new AggregateError([error, cleanup])))
+        return
+      }
+      completion.reject(error)
+    })
     return completion.promise
   }
 
   private async initialize(): Promise<void> {
+    this.abort.signal.throwIfAborted()
+    this.options.signal.throwIfAborted()
     for (const session of [this.options.root, ...this.options.participants.values()]) {
       const reserved = this.options.ctx.sessionPersistence.reserveSessionWriter(session)
       if (reserved.kind !== 'reserved') throw new ExecutionBlockedError(reserved.reason)
       this.lifetimeWriters.push(reserved.reservation)
+      this.abort.signal.throwIfAborted()
+      this.options.signal.throwIfAborted()
       if (session === this.options.root) this.rootWriter = reserved.reservation
-      const stop = (): void => { void this.dispose().catch(() => {}) }
+      const stop = this.stop
       reserved.reservation.signal.addEventListener('abort', stop, { once: true })
       this.lifetimeStops.push(() => { reserved.reservation.signal.removeEventListener('abort', stop) })
     }
@@ -124,28 +138,48 @@ export class TaskExecutionOwner {
     for (const session of this.options.participants.values()) {
       if (!this.options.state.has(session)) throw new ExecutionBlockedError('missing-participant-state')
     }
+    const attemptIds = new Set<ExecutionAttemptId>()
+    const runs = new Map<string, EffectStarted>()
     for (const [session, read] of this.options.state) {
       const state = read()
+      if (state.sessionId !== session.id || session !== this.options.root && this.options.participants.get(session.id) !== session
+        || session !== this.options.root && state.history.length > 0) {
+        const error = new ExecutionBlockedError('conflicting-task-history')
+        this.block(error)
+        throw error
+      }
       for (const entry of state.entries) {
+        const priorRun = runs.get(entry.start.runId)
         if (entry.start.rootSessionId !== this.options.root.id || entry.start.participantId !== session.id
-          || !this.options.participants.has(session.id)
+          || this.options.participants.get(session.id) !== session || attemptIds.has(entry.start.attemptId)
+          || priorRun !== undefined && (priorRun.participantId !== session.id || priorRun.incarnation !== entry.start.incarnation
+            || priorRun.adapter !== entry.start.adapter || priorRun.revision !== entry.start.revision
+            || priorRun.generation !== null && entry.start.generation !== null && priorRun.generation !== entry.start.generation)
           || !rootState.history.some(row => row.type === 'opened' && row.data.incarnation === entry.start.incarnation)
           || entry.start.classification === 'mutation' && !rootState.history.some(row => row.type === 'granted'
-            && row.data.incarnation === entry.start.incarnation && row.data.generation === entry.start.generation && row.data.participantId === session.id)) throw new ExecutionBlockedError('conflicting-task-history')
+            && row.data.incarnation === entry.start.incarnation && row.data.generation === entry.start.generation
+            && row.data.participantId === session.id)) {
+          const error = new ExecutionBlockedError('conflicting-task-history')
+          this.block(error)
+          throw error
+        }
+        attemptIds.add(entry.start.attemptId)
+        if (priorRun === undefined || entry.start.generation !== null) runs.set(entry.start.runId, entry.start)
         if (entry.reconciliation === null && (entry.settlement === null || entry.settlement.outcome === 'uncertain')) this.unknown.add(entry.start.attemptId)
       }
     }
+    if (rootState.history.some(row => row.type === 'granted' && !this.options.participants.has(row.data.participantId))) {
+      const error = new ExecutionBlockedError('conflicting-task-history')
+      this.block(error)
+      throw error
+    }
     await this.recordRoot(() => { this.options.root.append('fusion/execution-opened', {
       version: 1, rootSessionId: this.options.root.id, incarnation: this.incarnation,
-      bootId: randomUUID(), previous: rootState.opened?.incarnation ?? null,
+      openingId: randomUUID(), previous: rootState.opened?.incarnation ?? null,
     }); this.opened = true })
     if (this.unknown.size > 0) this.phase = 'blocked'
     if (this.issuers.size === 0 && this.unknown.size === 0) {
-      for (const stop of this.lifetimeStops.splice(0)) stop()
-      for (const writer of [...this.lifetimeWriters].reverse()) {
-        const released = await writer.release()
-        if (released.kind !== 'durable') { this.block(released); throw new ExecutionBlockedError('initialization-release', released) }
-      }
+      await this.releaseLifetime()
     }
     this.abort.signal.throwIfAborted()
     this.ready = true
@@ -193,7 +227,7 @@ export class TaskExecutionOwner {
   grant(controller: object, target: SessionId): Promise<void> {
     if (controller !== this.controller || this.issuers.size === 0) return Promise.reject(new ExecutionBlockedError('integration-missing'))
     const work = async (): Promise<void> => {
-      if (this.abort.signal.aborted || this.options.signal.aborted || this.phase !== 'closed' || this.owner !== null
+      if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.phase !== 'closed' || this.owner !== null
         || this.attempts.size > 0 || this.reconciliations.size > 0 || this.unknown.size > 0 || !this.options.participants.has(target)) throw new ExecutionBlockedError('not-drained')
       const grant = grantedSchema.parse({ rootSessionId: this.options.root.id, incarnation: this.incarnation,
         generation: ++this.generation, participantId: target,
@@ -244,8 +278,15 @@ export class TaskExecutionOwner {
       const reserved = writer
       void (async () => {
         if (reserved !== undefined) {
-          const released = await reserved.release()
-          if (released.kind !== 'durable') { this.block(released); throw new ExecutionBlockedError('setup-release', released) }
+          try {
+            const released = await reserved.release()
+            if (released.kind !== 'durable') throw new ExecutionBlockedError('setup-release', released)
+          } catch (cleanup: unknown) {
+            row.phase = 'unknown'
+            this.unknown.add(attemptId)
+            this.block(cleanup)
+            throw new ExecutionBlockedError('setup-cleanup', new AggregateError([error, cleanup]))
+          }
         }
         this.attempts.delete(attemptId)
         throw error
@@ -320,10 +361,11 @@ export class TaskExecutionOwner {
     if (controller !== this.controller || adapter?.reconcile === undefined) return Promise.reject(new ExecutionBlockedError('integration-missing'))
     const observe = adapter.reconcile.bind(adapter)
     const previous = this.reconciliations.get(attemptId)
-    if (previous !== undefined) return previous
-    if (!this.unknown.has(attemptId) || this.abort.signal.aborted) return Promise.reject(new ExecutionBlockedError('not-recoverable'))
+    if (previous !== undefined) return previous.done
+    if (!this.ready || !this.unknown.has(attemptId) || this.abort.signal.aborted) return Promise.reject(new ExecutionBlockedError('not-recoverable'))
     const completion = Promise.withResolvers<void>()
-    this.reconciliations.set(attemptId, completion.promise)
+    const reconciliation: { done: Promise<void>; writer?: SessionWriterReservation } = { done: completion.promise }
+    this.reconciliations.set(attemptId, reconciliation)
     let source: { session: Session; start: EffectStarted } | undefined
     for (const [session, read] of this.options.state) {
       const entry = read().entries.find(row => row.start.attemptId === attemptId)
@@ -333,6 +375,7 @@ export class TaskExecutionOwner {
       if (source === undefined || source.start.adapter !== adapter.name || source.start.revision !== adapter.revision) throw new ExecutionBlockedError('evidence-source-mismatch')
       const reserved = this.options.ctx.sessionPersistence.reserveSessionWriter(source.session)
       if (reserved.kind !== 'reserved') throw new ExecutionBlockedError(reserved.reason)
+      reconciliation.writer = reserved.reservation
       const disposition = await observe(source.start)
       const { rootSessionId, participantId, incarnation, runId, generation } = source.start
       const record = reconciledSchema.parse({ rootSessionId, participantId, incarnation, runId, attemptId, generation,
@@ -372,7 +415,7 @@ export class TaskExecutionOwner {
     void (async () => {
       const results = await Promise.allSettled([persist, ...admitted.map(row => row.done.catch((error: unknown) => {
         if (this.attempts.has(row.attemptId)) throw error
-      })), ...this.reconciliations.values()])
+      })), ...[...this.reconciliations.values()].map(row => row.done)])
       const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length > 0 || this.failures.length > 0 || this.unknown.size > 0) throw new ExecutionBlockedError('drain-unknown', new AggregateError([...errors, ...this.failures]))
       this.phase = reason === 'stop' ? 'stopped' : 'closed'
@@ -386,6 +429,7 @@ export class TaskExecutionOwner {
     if (this.disposal !== undefined) return this.disposal
     const completion = Promise.withResolvers<void>()
     this.disposal = completion.promise
+    this.options.signal.removeEventListener('abort', this.stop)
     this.abort.abort(new ExecutionBlockedError('disposed'))
     this.owner = null
     this.phase = 'revoking'
@@ -397,13 +441,22 @@ export class TaskExecutionOwner {
       }
       if (this.failures.length > 0 || this.unknown.size > 0) throw new ExecutionBlockedError('cleanup-unknown')
       this.phase = 'stopped'
-      await Promise.allSettled([this.options.drain()])
-      for (const writer of [...this.lifetimeWriters].reverse()) {
-        const released = await writer.release()
-        if (released.kind === 'refused') throw new ExecutionBlockedError('writer-release', released)
+      try { await this.options.drain() } catch (error: unknown) {
+        // The task owner reports transport failures; retained execution writers cannot be released after one.
+        if (this.lifetimeWriters.length > 0) { this.block(error); throw error }
       }
+      await this.releaseLifetime()
     })().then(completion.resolve, completion.reject)
     return completion.promise
+  }
+
+  private async releaseLifetime(): Promise<void> {
+    for (const stop of this.lifetimeStops.splice(0)) stop()
+    for (const writer of [...this.lifetimeWriters].reverse()) {
+      const released = await writer.release()
+      if (released.kind !== 'durable') { this.block(released); throw new ExecutionBlockedError('writer-release', released) }
+      this.lifetimeWriters.pop()
+    }
   }
 
   private checkLive(agent: Agent): void {

@@ -1,5 +1,6 @@
 /** Process-owned sticky pins: the OS is the only release after an uncertain outcome. */
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 import Loop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -15,7 +16,7 @@ await mountAgentLoopTestDependencies(ctx)
 await ctx.plugin(Loop, { agents: [] })
 await ctx.plugin(Jsonl, { root: rootDirectory, compression: 'none' })
 const projection = await ctx.sessionProjections.register(executionProjection)
-const recovering = mode === 'recover' || mode === 'reconcile'
+const recovering = ['recover', 'reconcile', 'reconcile-failure', 'reconcile-mismatch', 'reconcile-durability'].includes(mode)
 const detaches = new Map()
 const enter = ctx.sessions.enter.bind(ctx.sessions)
 ctx.sessions.enter = (...args) => {
@@ -28,8 +29,8 @@ const issuer = Object.freeze({})
 let bodies = 0, observations = 0
 let owner
 const adapter = {
-  issuer, name: 'fake-process', revision: '1', classify: () => 'mutation',
-  async reconcile() { observations++; return 'completed' },
+  issuer, name: 'fake-process', revision: mode === 'reconcile-mismatch' ? 'wrong-revision' : '1', classify: () => mode === 'setup-release' ? undefined : 'mutation',
+  async reconcile() { observations++; if (mode === 'reconcile-failure') throw new Error('independent observation failed'); return 'completed' },
   async prepare() {
     return {
       async run(fence) {
@@ -46,10 +47,45 @@ const adapter = {
     }
   },
 }
-owner = new TaskExecutionOwner({ ctx, root: root.session, participants: new Map([[child.session.id, child.session]]),
-  state: new Map([root.session, child.session].map(session => [session, projection.readerFor(session)])),
-  signal: new AbortController().signal, adapters: [adapter], drain: async () => {},
+const participants = new Map([[child.session.id, child.session]])
+if (mode.startsWith('history-')) {
+  const incarnation = randomUUID(), runId = randomUUID(), attemptId = randomUUID()
+  root.session.append('fusion/execution-opened', { version: 1, rootSessionId: root.session.id, incarnation,
+    openingId: randomUUID(), previous: null })
+  if (mode === 'history-grant') root.session.append('fusion/execution-granted', {
+    rootSessionId: root.session.id, incarnation, generation: 1, participantId: 'absent-participant', previousRevoke: null,
+  })
+  else if (mode === 'history-participant') child.session.append('fusion/execution-opened', {
+    version: 1, rootSessionId: child.session.id, incarnation, openingId: randomUUID(), previous: null,
+  })
+  else {
+    const start = { rootSessionId: mode === 'history-root' ? 'foreign-root' : root.session.id,
+      incarnation, runId, attemptId, participantId: child.session.id, generation: mode === 'history-missing-grant' ? 1 : null,
+      classification: mode === 'history-missing-grant' ? 'mutation' : 'read', adapter: 'fake-process', revision: '1', requestHash: 'a'.repeat(64) }
+    child.session.append('fusion/effect-started', start)
+    if (mode === 'history-run' || mode === 'history-attempt') {
+      const sibling = await ctx.agents.retain({ sessionId: SessionId('failure-sibling'), mode: 'create', root, agentOptions: {} })
+      participants.set(sibling.session.id, sibling.session)
+      sibling.session.append('fusion/effect-started', { ...start, participantId: sibling.session.id,
+        runId: mode === 'history-run' ? runId : randomUUID(), attemptId: mode === 'history-attempt' ? attemptId : randomUUID() })
+    }
+  }
+}
+owner = new TaskExecutionOwner({ ctx, root: root.session, participants,
+  state: new Map([root.session, ...participants.values()].map(session => [session, projection.readerFor(session)])),
+  signal: new AbortController().signal, adapters: [adapter], drain: async () => { if (mode === 'drain') throw new Error('transport drain failed') },
 })
+if (mode.startsWith('history-')) {
+  await assert.rejects(owner.open(), /conflicting-task-history/)
+  await assert.rejects(owner.dispose())
+  const other = new Context()
+  await mountAgentLoopTestDependencies(other)
+  await other.plugin(Jsonl, { root: rootDirectory, compression: 'none' })
+  await assert.rejects(other.sessionPersistence.open(child.session.id, 'write'))
+  assert.equal(bodies, 0)
+  process.stdout.write(JSON.stringify({ bodies, blocked: true, independentWriter: 'denied' }) + '\n')
+  process.exit(0)
+}
 await owner.open()
 if (recovering) {
   assert.equal(bodies, 0)
@@ -58,6 +94,21 @@ if (recovering) {
   const entry = projection.stateOf(child.session).entries[0]
   assert.equal(entry.settlement, null)
   await assert.rejects(owner.grant(owner.controllerCapability(), child.session.id))
+  if (mode.startsWith('reconcile-')) {
+    if (mode === 'reconcile-durability') child.session.matchesDurabilityPrefix = async () => false
+    const failed = owner.reconcile(owner.controllerCapability(), issuer, entry.start.attemptId)
+    await assert.rejects(failed)
+    assert.equal(owner.reconcile(owner.controllerCapability(), issuer, entry.start.attemptId), failed)
+    assert.equal(owner.snapshot().unknown.length, 1)
+    assert.equal(projection.stateOf(child.session).entries[0].settlement, null)
+    await assert.rejects(owner.dispose())
+    const other = new Context()
+    await mountAgentLoopTestDependencies(other)
+    await other.plugin(Jsonl, { root: rootDirectory, compression: 'none' })
+    await assert.rejects(other.sessionPersistence.open(child.session.id, 'write'))
+    process.stdout.write(JSON.stringify({ bodies, observations, unknown: 1, producer: null, independentWriter: 'denied' }) + '\n')
+    process.exit(0)
+  }
   if (mode === 'reconcile') {
     await owner.reconcile(owner.controllerCapability(), issuer, entry.start.attemptId)
     assert.equal(observations, 1)
@@ -79,10 +130,29 @@ if (mode === 'start' || mode === 'result') {
     return matches(...args)
   }
 }
+if (mode === 'setup-release') {
+  const reserve = ctx.sessionPersistence.reserveSessionWriter.bind(ctx.sessionPersistence)
+  ctx.sessionPersistence.reserveSessionWriter = session => {
+    const result = reserve(session)
+    if (result.kind === 'reserved') result.reservation.release = async () => { throw new Error('setup release failed') }
+    return result
+  }
+}
+if (mode === 'drain') {
+  await owner.attempt(owner.bindRun(issuer, resident.agent, new AbortController().signal), 'fake-edit')
+  await assert.rejects(owner.dispose())
+  assert.equal(owner.snapshot().phase, 'blocked')
+  const other = new Context()
+  await mountAgentLoopTestDependencies(other)
+  await other.plugin(Jsonl, { root: rootDirectory, compression: 'none' })
+  await assert.rejects(other.sessionPersistence.open(child.session.id, 'write'))
+  process.stdout.write(JSON.stringify({ bodies, unknown: 0, blocked: true, independentWriter: 'denied' }) + '\n')
+  process.exit(0)
+}
 await assert.rejects(owner.attempt(owner.bindRun(issuer, resident.agent, new AbortController().signal), 'fake-edit'))
 assert.equal(owner.snapshot().phase, 'blocked')
 assert.equal(owner.snapshot().unknown.length, 1)
-assert.equal(bodies, mode === 'start' || mode === 'detach' ? 0 : 1)
+assert.equal(bodies, ['start', 'detach', 'setup-release'].includes(mode) ? 0 : 1)
 await assert.rejects(owner.dispose())
 await assert.rejects(owner.grant(owner.controllerCapability(), child.session.id))
 const other = new Context()

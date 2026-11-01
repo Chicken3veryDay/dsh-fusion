@@ -48,7 +48,7 @@ The [format references](persistence-changes/historical-formats/README.md) cover 
 | `event:fusion/effect-settled` | event | `2ef5bf51ec3e9de6ff96b6fa97a39f0811663cd60b265a3da9a1fabd12935344` | [`{ type: "fusion/effect-settled" }`](#persistence-type-sha256-2ef5bf51ec3e9de6ff96b6fa97a39f0811663cd60b265a3da9a1fabd12935344) |
 | `event:fusion/effect-started` | event | `8dc5ab71c48f8234fdfba2162b2d45780e9abc12b73f2dea357a626cf4a515db` | [`{ type: "fusion/effect-started" }`](#persistence-type-sha256-8dc5ab71c48f8234fdfba2162b2d45780e9abc12b73f2dea357a626cf4a515db) |
 | `event:fusion/execution-granted` | event | `c3285588abb3a912538797c61a7a0750f42c7850dd6e370d3d675eb582037be0` | [`{ type: "fusion/execution-granted" }`](#persistence-type-sha256-c3285588abb3a912538797c61a7a0750f42c7850dd6e370d3d675eb582037be0) |
-| `event:fusion/execution-opened` | event | `21e1b893af790eb27c197f10706f9dc1035978b96f7e4a36f81092f9b98f2541` | [`{ type: "fusion/execution-opened" }`](#persistence-type-sha256-21e1b893af790eb27c197f10706f9dc1035978b96f7e4a36f81092f9b98f2541) |
+| `event:fusion/execution-opened` | event | `42a44ca1bb21c3c9fc730e5a29d973596f83a735bfd67aa70e4af1f46fe4b81e` | [`{ type: "fusion/execution-opened" }`](#persistence-type-sha256-42a44ca1bb21c3c9fc730e5a29d973596f83a735bfd67aa70e4af1f46fe4b81e) |
 | `event:fusion/execution-revoked` | event | `6873557fc1f0c7e02c51e17b5654374f92522a96a1af298fd8f7938ffa92ab2c` | [`{ type: "fusion/execution-revoked" }`](#persistence-type-sha256-6873557fc1f0c7e02c51e17b5654374f92522a96a1af298fd8f7938ffa92ab2c) |
 | `event:fusion/participant-established` | event | `33ec8821f825146667b0f5b98d8e28fc93dfbc5049cfada6c930b9634cfe053d` | [`{ type: "fusion/participant-established" }`](#persistence-type-sha256-33ec8821f825146667b0f5b98d8e28fc93dfbc5049cfada6c930b9634cfe053d) |
 | `event:fusion/roster` | event | `4bcabd32e675d9dce15ec5bba10ed87ae579a70376109c8071c7ab8987aee8ee` | [`{ type: "fusion/roster" }`](#persistence-type-sha256-4bcabd32e675d9dce15ec5bba10ed87ae579a70376109c8071c7ab8987aee8ee) |
@@ -6644,20 +6644,6 @@ SHA-256: `ae9360cb86b3f93f89524344751ed8c6efb8bc71717715f370e71a3b31d08477`
 
 Array of [`{ binding, id, role }`](#persistence-type-sha256-29748a36c1218b1ee161c9cb1b73a05e18a7e2b16db1958e57383fd9d3b13722).
 
-<a id="persistence-type-sha256-97a42e078a26d2acf3b7d356ed9ecbb257a0b9b16e04e7b9f9862748dc12f19a"></a>
-
-### `{ bootId, incarnation, previous, rootSessionId, … }`
-
-SHA-256: `97a42e078a26d2acf3b7d356ed9ecbb257a0b9b16e04e7b9f9862748dc12f19a`
-
-| Property | Presence | Type |
-|---|---|---|
-| `bootId` | required | `string` |
-| `incarnation` | required | `string` |
-| `previous` | required | [`union (2 variants)`](#persistence-type-sha256-799231ac91869a6695666505343003905638e1b4d11349bff953d4dbfe3191ba) |
-| `rootSessionId` | required | `string` |
-| `version` | required | `1` |
-
 <a id="persistence-type-sha256-1528539c63db8b23506f0209a99ce77d8ad138adfbfcee3d4769b7382d93756c"></a>
 
 ### `{ callId, files, turn }`
@@ -7255,6 +7241,20 @@ SHA-256: `e3e77b26f0148755a505f5b8ea843a3be117827d4703bb5754d9dc8ddbef521f`
 | `seq` | required | `number` |
 | `time` | required | `number` |
 | `type` | required | `string` |
+
+<a id="persistence-type-sha256-af5ad3ff4dde806af72692a0415c9819b9eeb535a03fb17106f564af116ec89d"></a>
+
+### `{ incarnation, openingId, previous, rootSessionId, … }`
+
+SHA-256: `af5ad3ff4dde806af72692a0415c9819b9eeb535a03fb17106f564af116ec89d`
+
+| Property | Presence | Type |
+|---|---|---|
+| `incarnation` | required | `string` |
+| `openingId` | required | `string` |
+| `previous` | required | [`union (2 variants)`](#persistence-type-sha256-799231ac91869a6695666505343003905638e1b4d11349bff953d4dbfe3191ba) |
+| `rootSessionId` | required | `string` |
+| `version` | required | `1` |
 
 <a id="persistence-type-sha256-17d1afb770d9941936130996da00dc86782cfef731d8d6526162c301256a4ac3"></a>
 
@@ -9430,17 +9430,17 @@ SHA-256: `c3285588abb3a912538797c61a7a0750f42c7850dd6e370d3d675eb582037be0`
 | `time` | required | `number` |
 | `type` | required | `"fusion/execution-granted"` |
 
-<a id="persistence-type-sha256-21e1b893af790eb27c197f10706f9dc1035978b96f7e4a36f81092f9b98f2541"></a>
+<a id="persistence-type-sha256-42a44ca1bb21c3c9fc730e5a29d973596f83a735bfd67aa70e4af1f46fe4b81e"></a>
 
 <a id="persistence-type-eventfusionexecution-opened"></a>
 
 ### `{ type: "fusion/execution-opened" }`
 
-SHA-256: `21e1b893af790eb27c197f10706f9dc1035978b96f7e4a36f81092f9b98f2541`
+SHA-256: `42a44ca1bb21c3c9fc730e5a29d973596f83a735bfd67aa70e4af1f46fe4b81e`
 
 | Property | Presence | Type |
 |---|---|---|
-| `data` | required | [`{ bootId, incarnation, previous, rootSessionId, … }`](#persistence-type-sha256-97a42e078a26d2acf3b7d356ed9ecbb257a0b9b16e04e7b9f9862748dc12f19a) |
+| `data` | required | [`{ incarnation, openingId, previous, rootSessionId, … }`](#persistence-type-sha256-af5ad3ff4dde806af72692a0415c9819b9eeb535a03fb17106f564af116ec89d) |
 | `ignorable` | optional | `true` |
 | `seq` | required | `number` |
 | `time` | required | `number` |

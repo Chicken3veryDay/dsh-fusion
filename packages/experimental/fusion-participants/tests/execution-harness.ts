@@ -7,11 +7,12 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
 import { TaskExecutionOwner } from '../src/execution.ts'
+import type { ExecutionOwnerOptions } from '../src/execution.ts'
 import { executionProjection } from '../src/execution-state.ts'
 import { mount } from './harness.ts'
 
 export function gate() { return { entered: Promise.withResolvers<undefined>(), resume: Promise.withResolvers<undefined>() } }
-export async function fixture() {
+export async function fixture(options: { open?: boolean; configure?: (options: ExecutionOwnerOptions) => ExecutionOwnerOptions } = {}) {
   const { ctx, adapter: model, root: directory } = await mount()
   const projection = await ctx.sessionProjections.register({ ...executionProjection, key: 'fusionExecutionTest' })
   const handles: SessionHandle[] = []
@@ -25,6 +26,7 @@ export async function fixture() {
   const agent = adopted.agent
   const issuer = Object.freeze({})
   const control = {
+    bodyEntered: Promise.withResolvers<undefined>(),
     bodies: 0, cleanups: 0, classification: 'mutation' as 'read' | 'mutation' | 'infrastructure' | undefined,
     wrapper: undefined as ReturnType<typeof gate> | undefined,
     body: undefined as ReturnType<typeof gate> | undefined,
@@ -37,13 +39,14 @@ export async function fixture() {
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute() {
       control.bodies++
+      control.bodyEntered.resolve(undefined)
       control.body?.entered.resolve(undefined)
       await control.body?.resume.promise
       return 'counted'
     },
   }))
   const abort = new AbortController()
-  const owner = new TaskExecutionOwner({ ctx, root: root.session, participants: new Map([[child.session.id, child.session]]),
+  const ownerOptions: ExecutionOwnerOptions = { ctx, root: root.session, participants: new Map([[child.session.id, child.session]]),
     signal: abort.signal, drain: () => Promise.resolve(undefined),
     state: new Map([root.session, child.session].map(session => [session, projection.readerFor(session)])),
     adapters: [{ issuer, name: 'fake-host', revision: 'fake-1', classify: () => { control.onClassify?.(); return control.classification },
@@ -73,17 +76,21 @@ export async function fixture() {
         }
       },
     }],
-  })
-  await owner.open()
+  }
+  const owner = new TaskExecutionOwner(options.configure?.(ownerOptions) ?? ownerOptions)
+  if (options.open !== false) await owner.open()
   const controller = owner.controllerCapability()
   const grant = () => owner.grant(controller, child.session.id)
   const bind = () => owner.bindRun(issuer, agent, new AbortController().signal)
-  const dispose = async () => {
-    control.wrapper?.resume.resolve(undefined); control.body?.resume.resolve(undefined); control.cleanup?.resume.resolve(undefined)
-    await owner.dispose()
+  const disposeResources = async () => {
     await adopted.dispose(); await child.dispose(); await root.dispose(); remove()
     expect(model.requests).toHaveLength(0)
   }
+  const dispose = async () => {
+    control.wrapper?.resume.resolve(undefined); control.body?.resume.resolve(undefined); control.cleanup?.resume.resolve(undefined)
+    await owner.dispose()
+    await disposeResources()
+  }
   return { ctx, root, child, agent, model, control, owner, issuer, controller, projection,
-    grant, bind, dispose, handles, directory }
+    grant, bind, dispose, handles, directory, remove, disposeResources }
 }

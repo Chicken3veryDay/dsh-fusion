@@ -11,8 +11,8 @@ const attempt = z.uuid().brand<'FusionAttempt'>()
 const generation = z.number().int().positive().max(Number.MAX_SAFE_INTEGER).brand<'FusionGeneration'>()
 const identity = { rootSessionId: sessionId, incarnation }
 const attemptIdentity = { ...identity, participantId: sessionId, runId: run, attemptId: attempt, generation: generation.nullable() }
-/** Incarnation record; recovery never revives its predecessor's grants. */
-export const openedSchema = z.strictObject({ version: z.literal(1), ...identity, bootId: z.uuid(), previous: incarnation.nullable() })
+/** Task incarnation and opening nonce, not OS boot identity; recovery never revives old grants. */
+export const openedSchema = z.strictObject({ version: z.literal(1), ...identity, openingId: z.uuid(), previous: incarnation.nullable() })
 /** Durable grant facts carry no executable authority. */
 export const grantedSchema = z.strictObject({ ...identity, generation, participantId: sessionId, previousRevoke: generation.nullable() })
 /** A synchronous memory cut precedes this record's durable acknowledgement. */

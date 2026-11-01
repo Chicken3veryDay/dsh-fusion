@@ -1,7 +1,7 @@
 /** Required execution facts fold deterministically and never invoke adapters. */
 import { randomUUID } from 'node:crypto'
 import { expect, it } from 'vitest'
-import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { executionProjection, openedSchema, grantedSchema, revokedSchema, startedSchema, settledSchema, reconciledSchema } from '../src/execution-state.ts'
 import { fixture } from './execution-harness.ts'
@@ -39,7 +39,8 @@ it('rejects duplicate, orphan, mismatched and reconciled producer facts', async 
     const result = events.find((event): event is SessionEvent<'fusion/effect-settled'> => event.type === 'fusion/effect-settled')
     if (start === undefined || result === undefined) throw new Error('missing durable effect facts')
     const empty = executionProjection.init(f.child.session.header)
-    const pending = executionProjection.apply(empty, start)
+    const unrelatedStart = { ...start, data: { ...start.data, attemptId: startedSchema.shape.attemptId.parse(randomUUID()) } }
+    const pending = executionProjection.apply(executionProjection.apply(empty, unrelatedStart), start)
     const settled = executionProjection.apply(pending, result)
     expect(() => executionProjection.apply(pending, start)).toThrow('invalid effect start')
     expect(() => executionProjection.apply(empty, result)).toThrow('invalid effect settlement')
@@ -70,6 +71,9 @@ it('rejects duplicate, orphan, mismatched and reconciled producer facts', async 
     expect(executionProjection.stateSchema.safeParse(duplicate).success).toBe(false)
     const conflict = { ...settled, entries: reconciled.entries.map(row => ({ ...row, settlement: result.data })) }
     expect(executionProjection.stateSchema.safeParse(conflict).success).toBe(false)
+    const uncertain = { ...reconciled, entries: reconciled.entries.map(row => row.start.attemptId === result.data.attemptId
+      ? { ...row, settlement: { ...result.data, outcome: 'uncertain' as const } } : row) }
+    expect(executionProjection.stateSchema.safeParse(uncertain).success).toBe(true)
   } finally { await f.dispose() }
 })
 
@@ -110,4 +114,44 @@ it('requires exact record fields and rejects unsafe generation and version value
     expect(schema.safeParse({}).success).toBe(false)
     expect(schema.safeParse({ version: 999, generation: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(false)
   }
+})
+
+it('keeps dormant facts out of model request prefixes and preserves them through compaction and replay', async () => {
+  const { mount, message } = await import('./harness.ts')
+  const { ctx, adapter } = await mount()
+  const handle = await ctx.agents.create({ sessionId: SessionId(randomUUID()), agentOptions: { provider: 'omniroute-openai', model: 'fake' } })
+  const session = handle.agent.session
+  const projection = await ctx.sessionProjections.register({ ...executionProjection, key: 'executionCompaction' })
+  try {
+    handle.agent.followup(message('before dormant facts'))
+    await handle.agent.whenIdle()
+    const incarnation = randomUUID()
+    session.append('fusion/execution-opened', openedSchema.parse({ version: 1, rootSessionId: session.id,
+      incarnation, openingId: randomUUID(), previous: null }))
+    const start = startedSchema.parse({ rootSessionId: session.id, participantId: session.id, incarnation,
+      runId: randomUUID(), attemptId: randomUUID(), generation: null, adapter: 'recorded-only', revision: '1',
+      classification: 'read', requestHash: 'b'.repeat(64) })
+    session.append('fusion/effect-started', start)
+    const { rootSessionId, participantId, runId, attemptId, generation } = start
+    session.append('fusion/effect-settled', { rootSessionId, participantId, incarnation: start.incarnation,
+      runId, attemptId, generation, outcome: 'not-dispatched' })
+    const authority = projection.stateOf(session)
+    handle.agent.followup(message('after dormant facts'))
+    await handle.agent.whenIdle()
+    const previous = adapter.requests[0]!, current = adapter.requests[1]!
+    expect(adapter.requests).toHaveLength(2)
+    expect(current.messages.slice(0, previous.messages.length)).toEqual([...previous.messages])
+    expect(current.tools).toEqual(previous.tools)
+    const nodes = session.surface.nodes
+    session.append('user/message', message('compacted ordinary conversation'), {
+      surfaceOp: { op: 'replace', startSeq: nodes[1]!, endSeq: nodes[2]! },
+      sourceEventSeqs: [nodes[1]!, nodes[2]!],
+    })
+    expect(projection.stateOf(session)).toEqual(authority)
+    await ctx.sessions.flush(session)
+    const events = await read(ctx, session.id)
+    const restored = ctx.sessionProjections.restore({}, events, SessionLogOffset(0), session.header, session.inheritedEventCount)
+    expect(restored.checkpoint.executionCompaction).toEqual(ctx.sessionProjections.checkpoint(session).executionCompaction)
+    expect(events.filter(event => event.type.startsWith('fusion/'))).toHaveLength(3)
+  } finally { await handle.dispose() }
 })

@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 
 /**
- * Normalize only fresh dormant incarnation/boot identities, preserving record order and predecessor links.
+ * Normalize only fresh dormant incarnation/opening identities, preserving record order and predecessor links.
  * @param contents - root and participant physical or normalized JSONL.
  * @returns JSONL with stable execution identities; no delivery or stock fields change.
  */
@@ -29,7 +29,7 @@ export function normalizeExecutionIdentities(contents: readonly string[]): strin
       const value = data[field]
       if (typeof value === 'string') data[field] = incarnations.get(value) ?? value
     }
-    if (row.type === 'fusion/execution-opened') data.bootId = `execution-boot-${data.incarnation}`
+    if (row.type === 'fusion/execution-opened') data.openingId = `execution-opening-${data.incarnation}`
     return JSON.stringify({ ...row, data })
   }).join('\n') + '\n')
 }

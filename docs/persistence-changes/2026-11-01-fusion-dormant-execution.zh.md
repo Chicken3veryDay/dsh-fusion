@@ -44,7 +44,7 @@ changes:
     decision: same-version
   - root: "event:fusion/execution-opened"
     previous: null
-    after: "21e1b893af790eb27c197f10706f9dc1035978b96f7e4a36f81092f9b98f2541"
+    after: "42a44ca1bb21c3c9fc730e5a29d973596f83a735bfd67aa70e4af1f46fe4b81e"
     decision: same-version
   - root: "event:fusion/execution-revoked"
     previous: null

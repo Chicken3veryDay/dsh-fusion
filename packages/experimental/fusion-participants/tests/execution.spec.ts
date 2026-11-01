@@ -5,6 +5,7 @@ import { fixture, gate } from './execution-harness.ts'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import { mount } from './harness.ts'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 
 it('publishes immutable closed authority with no executable callbacks, requests or input claims', async () => {
   const { ctx, adapter } = await mount()
@@ -125,7 +126,8 @@ for (const boundary of ['start', 'result'] as const) {
     try {
       await f.grant()
       work = f.owner.attempt(f.bind(), 'edit')
-      await hold.entered.promise
+      await (boundary === 'start' ? Promise.race([hold.entered.promise, f.control.bodyEntered.promise]) : hold.entered.promise)
+      expect(held).toBe(true)
       expect(f.control.bodies).toBe(boundary === 'start' ? 0 : 1)
       revoke = f.owner.revoke('handoff')
       let granted = false
@@ -170,15 +172,17 @@ it('orders revoke after an in-flight grant and can grant again after its drain',
 
 it('registers before host classification and rolls back a synchronously revoked setup', async () => {
   const f = await fixture()
+  let observed: number | undefined
   let revoked: Promise<void> | undefined
   try {
     await f.grant()
     f.control.onClassify = () => {
       f.control.onClassify = undefined
-      expect(f.owner.snapshot().attempts).toHaveLength(1)
+      observed = f.owner.snapshot().attempts.length
       revoked = f.owner.revoke('handoff')
     }
     await expect(f.owner.attempt(f.bind(), 'edit')).rejects.toThrow()
+    expect(observed).toBe(1)
     await revoked
     expect(f.owner.snapshot().attempts).toHaveLength(0)
     expect(f.control.bodies).toBe(0)
@@ -273,4 +277,68 @@ it('excludes an independent provider while an admitted effect and cleanup retain
     const next = await observer.ctx.sessionPersistence.open(f.child.session.id, 'write')
     await next.close()
   } finally { hold.resume.resolve(undefined); await work; await f.dispose() }
+})
+
+for (const change of ['registration', 'schema', 'visibility'] as const) {
+  it(`refuses a stale admitted ${change} at final pipeline dispatch`, async () => {
+    const f = await fixture()
+    const hold = gate()
+    f.control.wrapper = hold
+    let replacement: (() => void) | undefined
+    let work: Promise<void> | undefined
+    try {
+      await f.grant()
+      work = f.owner.attempt(f.bind(), 'edit')
+      await hold.entered.promise
+      f.remove()
+      if (change !== 'visibility') replacement = f.ctx.tools.register(defineTool({
+        name: 'authority_effect', description: 'Replacement registration.',
+        parameters: change === 'schema' ? { required: { type: 'string', description: 'New required argument.' } } : {},
+        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+        async execute() { f.control.bodies++; return 'replacement' },
+      }))
+      hold.resume.resolve(undefined)
+      await work
+      expect(f.control.bodies).toBe(0)
+      expect(f.projection.stateOf(f.child.session).entries[0]?.settlement?.outcome).toBe('not-dispatched')
+    } finally { hold.resume.resolve(undefined); await work; replacement?.(); await f.dispose() }
+  })
+}
+
+it('keeps the revoke join pending until held cleanup has actually finished', async () => {
+  const f = await fixture()
+  const hold = gate()
+  f.control.cleanup = hold
+  let work: Promise<void> | undefined
+  let revoke: Promise<void> | undefined
+  try {
+    await f.grant()
+    work = f.owner.attempt(f.bind(), 'edit')
+    await hold.entered.promise
+    let drained = false
+    revoke = f.owner.revoke('handoff').then(() => { drained = true })
+    await setImmediate()
+    expect(drained).toBe(false)
+    expect(f.control.cleanups).toBe(0)
+    expect(f.owner.snapshot().owner).toBeNull()
+    hold.resume.resolve(undefined)
+    await work; await revoke
+    expect(f.control.cleanups).toBe(1)
+  } finally { hold.resume.resolve(undefined); await Promise.allSettled([work, revoke]); await f.dispose() }
+})
+
+it('rejects copied Agents, another task run and an already aborted run lifetime', async () => {
+  const f = await fixture(), other = await fixture()
+  try {
+    expect(() => f.owner.bindRun(f.issuer, new Proxy(f.agent, {}), new AbortController().signal)).toThrow('not-live')
+    expect(() => f.owner.bindRun(f.issuer, other.agent, new AbortController().signal)).toThrow('not-live')
+    await expect(f.owner.attempt(other.bind(), 'read')).rejects.toThrow('integration-missing')
+    const aborted = new AbortController()
+    aborted.abort(new Error('run ended'))
+    expect(() => f.owner.bindRun(f.issuer, f.agent, aborted.signal)).toThrow('run ended')
+    f.control.classification = 'infrastructure'
+    await f.owner.attempt(f.bind(), 'initialize-bookkeeping')
+    expect(f.control.bodies).toBe(1)
+    expect(f.projection.stateOf(f.child.session).entries[0]?.start.generation).toBeNull()
+  } finally { await other.dispose(); await f.dispose() }
 })

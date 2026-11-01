@@ -94,5 +94,5 @@ def smoke_sdk_fusion_delivery(executable: Path) -> None:
                             data["incarnation"] = identities[data["incarnation"]]
                             if data["previous"] is not None:
                                 data["previous"] = identities[data["previous"]]
-                            data["bootId"] = "boot-" + data["incarnation"]
+                            data["openingId"] = "opening-" + data["incarnation"]
             assert rows == original, (session_id, rows, original)
