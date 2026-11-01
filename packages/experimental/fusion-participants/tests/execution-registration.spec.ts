@@ -349,3 +349,71 @@ it('keeps exact host capabilities out of Remote markers, tool schemas and real S
     await server.shutdown(); wire.close(); client.close(); input.destroy(); output.destroy(); await f.dispose()
   }
 })
+
+it('enters the final leaf in the classification stack before a queued run revocation', async () => {
+  const f = await publicFixture(), abort = new AbortController()
+  const trace: string[] = []
+  let classifications = 0, abortedAtLeaf: boolean | undefined
+  try {
+    await f.grant()
+    const attempt = f.host.reserve(f.bind(abort.signal), 'edit')
+    f.control.onClassify = () => {
+      if (++classifications !== 3) return
+      trace.push('final-classification')
+      queueMicrotask(() => { trace.push('run-abort'); abort.abort() })
+    }
+    f.control.onInvoke = () => {
+      trace.push('leaf')
+      abortedAtLeaf = abort.signal.aborted
+    }
+    await f.host.register(attempt)
+    expect(await f.host.release(attempt)).toEqual({ kind: 'settled', outcome: 'completed' })
+    expect(abortedAtLeaf).toBe(false)
+    expect(trace).toEqual(['final-classification', 'leaf', 'run-abort'])
+    expect([f.control.bodies, f.control.cleanups]).toEqual([1, 1])
+  } finally { await f.dispose() }
+})
+
+it('refuses exchanged task controllers and runs on both live hosts without affecting their own work', async () => {
+  const f = await publicFixture(), other = await publicFixture()
+  try {
+    for (const [target, foreign] of [[f, other], [other, f]] as const) {
+      await expect(target.host.grant(foreign.host.controller, target.adopted.agent.session.id)).rejects.toThrow()
+      await expect(target.host.revoke(foreign.host.controller, 'stop')).rejects.toThrow('identity')
+      expect(() => target.host.bindRun(foreign.host.issuer, target.adopted.agent, new AbortController().signal)).toThrow()
+      expect(() => target.host.bindRun(target.host.issuer, foreign.adopted.agent, new AbortController().signal)).toThrow('not-live')
+      expect(() => target.host.reserve(foreign.bind(), 'inspect')).toThrow('identity')
+      await target.grant()
+      const attempt = target.host.reserve(target.bind(), 'edit')
+      await expect(foreign.host.register(attempt)).rejects.toThrow('identity')
+      await expect(foreign.host.release(attempt)).rejects.toThrow('identity')
+      await target.host.register(attempt)
+      expect([target.control.registrations, target.control.preparations, target.control.bodies]).toEqual([1, 0, 0])
+      expect(await target.host.release(attempt)).toEqual({ kind: 'settled', outcome: 'completed' })
+    }
+  } finally { await other.dispose(); await f.dispose() }
+})
+
+it('rechecks the original attempt writer after host classification refuses its dispatch', async () => {
+  const f = await publicFixture()
+  const reserve = f.ctx.sessionPersistence.reserveSessionWriter.bind(f.ctx.sessionPersistence)
+  let refuse = false, classifications = 0, checkedRefusal = 0
+  vi.spyOn(f.ctx.sessionPersistence, 'reserveSessionWriter').mockImplementation((session) => {
+    const result = reserve(session)
+    if (result.kind !== 'reserved') return result
+    return { kind: 'reserved', reservation: { ...result.reservation, checkDispatch() {
+      if (refuse) { checkedRefusal++; return { kind: 'refused', reason: 'fenced' } }
+      return result.reservation.checkDispatch()
+    } } }
+  })
+  try {
+    await f.grant()
+    const attempt = f.host.reserve(f.bind(), 'edit')
+    f.control.onClassify = () => { if (++classifications === 3) refuse = true }
+    await f.host.register(attempt)
+    expect(await f.host.release(attempt)).toEqual({ kind: 'settled', outcome: 'not-dispatched' })
+    expect(checkedRefusal).toBe(1)
+    expect([f.control.preparations, f.control.bodies, f.control.cleanups]).toEqual([1, 0, 1])
+    expect(f.task.execution.unknown).toEqual([])
+  } finally { refuse = false; await f.dispose() }
+})
