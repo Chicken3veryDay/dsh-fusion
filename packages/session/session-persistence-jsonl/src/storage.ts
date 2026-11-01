@@ -91,7 +91,7 @@ export class JsonlSessionHandle implements SessionHandle {
   /** Transient identity of this exact handle, never a persisted Session field. */
   readonly durabilityIdentity = Symbol('jsonl-writer')
   private readonly pins = new Set<{ fence(): void; done: Promise<void> }>()
-  private retainedEver = false
+  private retainedClose = false
   private lifetimeFailure: { readonly cause: unknown } | undefined
   /**
    * Register an operation before any lifecycle callback may run.
@@ -99,7 +99,6 @@ export class JsonlSessionHandle implements SessionHandle {
    * @returns removal of this operation only; other pins remain owned.
    */
   retain(pin: { fence(): void; done: Promise<void> }): () => void {
-    this.retainedEver = true
     this.pins.add(pin)
     return () => { this.pins.delete(pin) }
   }
@@ -322,7 +321,8 @@ export class JsonlSessionHandle implements SessionHandle {
    */
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing
-    if (!this.retainedEver) return this.closeStock()
+    if (!this.hasReservations && !this.lifetimeUncertain) return this.closeStock()
+    this.retainedClose = true
     // Publish the join before abort callbacks: they may reenter close/release.
     const result = Promise.withResolvers<void>()
     this.closing = result.promise
@@ -365,7 +365,7 @@ export class JsonlSessionHandle implements SessionHandle {
       failures.push(drainFailure instanceof Error ? drainFailure : new Error(errorChain(drainFailure)))
     }
     const drainError = failures[0]
-    if (this.retainedEver && drainError !== undefined) {
+    if (this.retainedClose && drainError !== undefined) {
       this.retainFailure(drainError)
       throw drainError
     }
@@ -376,7 +376,7 @@ export class JsonlSessionHandle implements SessionHandle {
       failures.push(releaseFailure instanceof Error ? releaseFailure : new Error(errorChain(releaseFailure)))
     }
     const releaseError = failures[0]
-    if (this.retainedEver && releaseError !== undefined) {
+    if (this.retainedClose && releaseError !== undefined) {
       this.retainFailure(releaseError)
       throw releaseError
     }
@@ -758,7 +758,11 @@ export class JsonlBackendTracker {
           releasePin()
           done.resolve()
           return flushed
-        })().then(result.resolve, result.reject)
+        })().then(result.resolve, (error: unknown) => {
+          phase = 'uncertain'
+          writer.retainFailure(error)
+          result.reject(error)
+        })
         return result.promise
       },
     }
