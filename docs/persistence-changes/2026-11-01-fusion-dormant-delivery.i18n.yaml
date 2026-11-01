@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-01-fusion-dormant-delivery.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-11-01-fusion-dormant-delivery.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-11-01-fusion-dormant-delivery:
+  en: dcb120bfcc69ecdd
+  zh: 931670c934991c9f
+/2026-11-01-fusion-dormant-delivery/summary:
+  en: 860b5dcb78503a08
+  zh: d1f37ca2a162a69a
+/2026-11-01-fusion-dormant-delivery/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-11-01-fusion-dormant-delivery/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-11-01-fusion-dormant-delivery/compatibility:
+  en: a9d44b12a0a2b13e
+  zh: f2d34471310b3caf
+/2026-11-01-fusion-dormant-delivery/verification:
+  en: a90f0e01a2e999c7
+  zh: c2377895daf5171c
+/2026-11-01-fusion-dormant-delivery/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

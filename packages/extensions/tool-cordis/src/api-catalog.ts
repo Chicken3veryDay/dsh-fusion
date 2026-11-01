@@ -5532,6 +5532,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
   {
+    name: 'AdmissionSnapshot',
+    declaration: 'export interface AdmissionSnapshot {\n    readonly decisionInputRevision: number;\n    readonly dirtyGeneration: number;\n    readonly reservations: readonly DeliveryId[];\n    readonly transportPending: readonly DeliveryId[];\n    readonly classificationPending: readonly DeliveryId[];\n}',
+  },
+  {
     name: 'AdmittedPromptContentPart',
     declaration: 'export type AdmittedPromptContentPart = {\n    readonly type: \'text\';\n    readonly text: string;\n} | {\n    readonly type: \'image\';\n    readonly attachment: ImageAttachmentRef;\n} | {\n    readonly type: \'file\';\n    readonly attachment: FileAttachmentRef;\n};',
   },
@@ -6260,6 +6264,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type DeepSeekLlmApiJson = null | boolean | number | string | DeepSeekLlmApiJson[] | {\n    [key: string]: DeepSeekLlmApiJson;\n};',
   },
   {
+    name: 'DeliveryCompletion',
+    declaration: 'export type DeliveryCompletion = z.infer<typeof completionSchema>;',
+  },
+  {
+    name: 'DeliveryId',
+    declaration: 'export type DeliveryId = z.infer<typeof deliveryIdSchema>;',
+  },
+  {
+    name: 'DeliveryIntent',
+    declaration: 'export type DeliveryIntent = z.infer<typeof intentSchema>;',
+  },
+  {
+    name: 'DeliveryReceipt',
+    declaration: 'export interface DeliveryReceipt extends DeliveryCompletion {\n    readonly messageId: DeliveryIntent[\'instruction\'][\'id\'];\n}',
+  },
+  {
     name: 'DeliveryRetentionBounds',
     declaration: 'export interface DeliveryRetentionBounds {\n    readonly days: number;\n    readonly records: number;\n}',
   },
@@ -6346,6 +6366,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DomainTableSpec',
     declaration: 'export interface DomainTableSpec<K extends string = string, V = unknown> {\n    readonly valueSchema: ZodType<V>;\n    readonly __key?: K;\n}',
+  },
+  {
+    name: 'DormantDelivery',
+    declaration: 'export interface DormantDelivery {\n    admitUser(input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>;\n    admitPeer(sender: Agent, input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>;\n    reconcile(): Promise<void>;\n    snapshot(): AdmissionSnapshot;\n}',
   },
   {
     name: 'DshEnvironment',
@@ -7645,7 +7669,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedParticipants',
-    declaration: 'export interface PreparedParticipants {\n    readonly roster: Roster;\n    adopt(role: string): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
+    declaration: 'export interface PreparedParticipants {\n    readonly roster: Roster;\n    readonly delivery: DormantDelivery;\n    adopt(role: string): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
   },
   {
     name: 'PreparedReferencedMessage',
@@ -9582,6 +9606,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TestPublishRequest',
     declaration: 'export interface TestPublishRequest {\n    readonly sessionId: string;\n}',
+  },
+  {
+    name: 'TextDelivery',
+    declaration: 'export interface TextDelivery {\n    readonly deliveryId: DeliveryId;\n    readonly targetParticipantId: SessionId;\n    readonly inboxTarget: \'next-turn\' | \'next-step\';\n    readonly correlationId: string | null;\n    readonly text: string;\n}',
   },
   {
     name: 'TextProps',

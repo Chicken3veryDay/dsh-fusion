@@ -1,0 +1,24 @@
+{
+  "revision": 1,
+  "unclassified": 1,
+  "queued": 0,
+  "claims": 0,
+  "requests": 0,
+  "logicalInstructions": 1,
+  "source": {
+    "kind": "fusion-delivery",
+    "form": "relay",
+    "rootSessionId": "delivery-root",
+    "deliveryId": "recorded-delivery-id",
+    "origin": {
+      "kind": "user"
+    },
+    "targetParticipantId": "delivery-child",
+    "inboxTarget": "next-turn",
+    "correlationId": null,
+    "contentHash": "a6d544640b0c32f9ddbe3b667fb8d91bc6a2deb87d9c6582ec2c338c0e0e6280",
+    "order": 1,
+    "decisionInputRevision": 1
+  },
+  "messageId": "recorded-delivery-message"
+}

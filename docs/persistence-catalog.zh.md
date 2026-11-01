@@ -578,7 +578,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-accepted': DeliveryIntent
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:71`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:87`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-completed--log-only"></a>
 
@@ -589,7 +589,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-completed': DeliveryCompletion
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:73`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:89`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-intent--log-only"></a>
 
@@ -600,7 +600,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-intent': DeliveryIntent
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:69`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:85`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusionparticipant-established--log-only"></a>
 
@@ -3637,7 +3637,7 @@ SHA-256: `abd6ca62a5ab166553848324a23fef90eed7f59c8021bd63e7ea5bc6fd666b0c`
 
 SHA-256: `7ef6453abc2c4299c8d9a11146a5e9ff4b5eb3d6716ccf0ce04455caab6647d6`
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:53`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:54`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3660,7 +3660,7 @@ SHA-256: `7ef6453abc2c4299c8d9a11146a5e9ff4b5eb3d6716ccf0ce04455caab6647d6`
 
 SHA-256: `34be9c40a0eff7ec61c1f811e2e6b5e86d848b7b64a7d58aa962fbd740ef449b`
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:45`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:46`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3687,7 +3687,7 @@ SHA-256: `34be9c40a0eff7ec61c1f811e2e6b5e86d848b7b64a7d58aa962fbd740ef449b`
 
 SHA-256: `954901b842da3a41009b20b71a603b7a92fe7c629df489712d1cacd60b6ec80c`
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:30`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:31`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

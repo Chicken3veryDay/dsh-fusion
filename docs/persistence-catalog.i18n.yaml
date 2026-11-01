@@ -105,14 +105,14 @@
   en: c693c2d8b86cc804
   zh: c693c2d8b86cc804
 /session-persistence-event-catalog/events/fusion/fusion-delivery-accepted-log-only:
-  en: 6feeeb2f5fb54e81
-  zh: ebe7c653531a61b1
+  en: b7c86307fe24fc4d
+  zh: bf157b8cb1c7b298
 /session-persistence-event-catalog/events/fusion/fusion-delivery-completed-log-only:
-  en: ba487f7bbf0848ba
-  zh: f29f19dbc1c1f60f
+  en: 833759005d708a31
+  zh: 6e086c3e27e848dd
 /session-persistence-event-catalog/events/fusion/fusion-delivery-intent-log-only:
-  en: 5fefd0c55100d598
-  zh: 2a73f5ee0485e9e3
+  en: eb568677f23ce9b1
+  zh: 2f7ba1fe1b1d74b0
 /session-persistence-event-catalog/events/fusion/fusion-participant-established-log-only:
   en: abc952200de55787
   zh: c48f88f132ea8d07
@@ -1098,14 +1098,14 @@
   en: e378686248f8268d
   zh: 1064f583f0986b64
 /session-persistence-event-catalog/resolved-persistence-types/deliverycompletion:
-  en: bad996e8ff223b88
-  zh: a2b6f6cb58349b89
+  en: 53d3cedc0f4eb0cc
+  zh: 041a118d122f0dbf
 /session-persistence-event-catalog/resolved-persistence-types/deliveryintent:
-  en: 8d27ab2128185128
-  zh: c3df3a37b09103a1
+  en: 2a86f120f4dc4a8c
+  zh: d5a536bbb201e2d2
 /session-persistence-event-catalog/resolved-persistence-types/deliverysource:
-  en: 69f6784bfc0572d1
-  zh: 6ac96deb56ed7dba
+  en: 7fe43dba9b085f8e
+  zh: 1c3bc0c8eefc8016
 /session-persistence-event-catalog/resolved-persistence-types/developermessage:
   en: de6ecbe6ebc6d7fc
   zh: 514a311eae32b834

@@ -3,6 +3,7 @@ import { createZstdCompress, constants } from 'node:zlib'
 import { finished } from 'node:stream/promises'
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import { readFile, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -174,8 +175,9 @@ it.each(['orphan', 'missing-text', 'conflicting-hash', 'missing-pair', 'missing-
     const targetPath = join(sessionDir(root, undefined, target), 'session.v4.jsonl')
     const paths = [rootPath, targetPath]
     for (const path of paths) {
-      const rows: { type: string; seq?: number; data?: Record<string, unknown> }[] = (await readFile(path, 'utf8'))
-        .trim().split('\n').map(line => JSON.parse(line))
+      const rowSchema = z.looseObject({ type: z.string(), seq: z.number().optional(),
+        data: z.record(z.string(), z.unknown()).optional() })
+      const rows = (await readFile(path, 'utf8')).trim().split('\n').map(line => rowSchema.parse(JSON.parse(line)))
       const output = rows.filter(row => !(fault === 'orphan' && path === rootPath && row.type.startsWith('fusion/delivery-'))
         && !(fault === 'missing-pair' && path === targetPath
           && (row.type === 'fusion/delivery-accepted' || row.type === 'agent/inbox/spliced'))
