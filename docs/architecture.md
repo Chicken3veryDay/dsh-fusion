@@ -74,9 +74,7 @@ Events are the extension points, and picking the right domain is the first decis
 
 AgentLoop initializes Agents with rollback and awaits serial `agent/created` before queued work. Unload retains resources through Agent teardown; [agent-loop](../packages/core/agent-loop/README.md#understand-the-implementation) defines ordering.
 
-Retained adoption reuses registered Sessions and writers, parks before inbox claim and rejects ordinary resume before writes. The [host](../packages/core/agent-loop/README.md) drains cleanup; failures block reuse.
-
-Optional [Fusion participants](../packages/experimental/fusion-participants/README.md) retain an ordered resource lifetime: owner work drains before retained writers close. Stock teardown is unchanged.
+Retained adoption parks before claim, reuses Sessions/writers, and rejects resume writes. [Cleanup](../packages/core/agent-loop/README.md) blocks reuse on failure; optional [Fusion](../packages/experimental/fusion-participants/README.md) drains owner work before writer release.
 
 The [event map](event-producer-consumer.md) lists every event's producers and consumers.
 

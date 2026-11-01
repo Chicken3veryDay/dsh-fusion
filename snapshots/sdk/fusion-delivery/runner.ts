@@ -30,7 +30,7 @@ export async function replayDelivery(): Promise<void> {
     await writeFile(patch, JSON.stringify([
       { id: 'session-persistence-jsonl', config: { root: sessions, compression: 'none' } },
       { id: 'session-telemetry-otel', disabled: true },
-      { id: 'sdk-jsonrpc-server', inject: ['sdkAppStartup', 'loader', 'fusionParticipants'], config: { queryCommandDefinitions: ['snapshot/delivery-fixture'] } },
+      { id: 'sdk-jsonrpc-server', inject: ['sdkAppStartup', 'loader', 'fusionParticipants'], config: { queryCommandDefinitions: ['snapshot/delivery-fixture', ...['root', 'receiver', 'completion'].map(phase => `snapshot/delivery-shutdown-${phase}`)] } },
       { insert: [
         { id: 'delivery-guard', name: join(fixture, 'guard.mjs') },
         { id: 'delivery-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'delivery-empty' } },
@@ -56,6 +56,42 @@ export async function replayDelivery(): Promise<void> {
         expect(result.events.filter(event => event.type === 'command/done')).toMatchObject([{ data: { kind: 'success' } }])
       } finally { await harness.close() }
     }
+    const shutdownExpected: unknown = JSON.parse(await readFile(join(fixture, 'shutdown.expected.json'), 'utf8'))
+    const shutdown: unknown[] = []
+    for (const phase of ['root', 'receiver', 'completion']) {
+      const control = join(root, `shutdown-${phase}`)
+      await mkdir(control)
+      const harness = new DeepSeekHarness({ dshHome: home, processCwd: root, cwd: root, patches: [patch],
+        provider: 'deepseek-official', model: 'deepseek-v4-flash',
+        env: { DSH_TELEMETRY_DISABLED: '1', DSH_AGENTS_HOME: join(root, 'agents'), DSH_FUSION_SHUTDOWN_CONTROL: control } })
+      try {
+        await harness.start()
+        const ready = await harness.session(`shutdown-${phase}`).run(`/delivery_shutdown_${phase}`)
+        expect(ready.finishReason, JSON.stringify(ready)).toBe('completed')
+        expect(JSON.parse(ready.finalResponse)).toEqual({ phase, ready: true })
+        await writeFile(join(control, 'start'), '')
+        await expect.poll(async () => {
+          const error = await readFile(join(control, 'error.json'), 'utf8').catch(() => '')
+          if (error) throw new Error(error)
+          return readFile(join(control, 'result.json'), 'utf8')
+        }, { timeout: 15000 }).toBeTruthy()
+        const before: object = JSON.parse(await readFile(join(control, 'before.json'), 'utf8'))
+        const result: unknown = JSON.parse(await readFile(join(control, 'result.json'), 'utf8'))
+        expect(result).toMatchObject(before)
+        shutdown.push(result)
+      } finally { await harness.close() }
+    }
+    expect(shutdown).toEqual(shutdownExpected)
+    // A fresh runtime after raw teardown must recover the same identities and revision without requests.
+    const final = new DeepSeekHarness({ dshHome: home, processCwd: root, cwd: root, patches: [patch],
+      provider: 'deepseek-official', model: 'deepseek-v4-flash',
+      env: { DSH_TELEMETRY_DISABLED: '1', DSH_AGENTS_HOME: join(root, 'agents') } })
+    try {
+      await final.start()
+      const result = await final.session('shutdown-recovery').run('/delivery_fixture')
+      expect(result.finishReason).toBe('completed')
+      expect(JSON.parse(result.finalResponse)).toEqual(expected)
+    } finally { await final.close() }
     const actual: string[] = []
     const expectedLogs: string[] = []
     for (const [index, id] of ['delivery-root', 'delivery-child'].entries()) {

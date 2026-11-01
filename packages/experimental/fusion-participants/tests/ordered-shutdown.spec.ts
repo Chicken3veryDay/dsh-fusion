@@ -18,7 +18,7 @@ const cases = [false, true].flatMap(loopFirst => ['writer', 'service'].flatMap(l
 it.each(cases)('retains exact writers through $route at $layer $phase (loop first=$loopFirst)', async ({ loopFirst, layer, phase, route }) => {
   const { ctx, root: directory, adapter } = await mount(undefined, 'none', loopFirst)
   const caller = createScope(ctx, {})
-  const task = await (route === 'caller' ? caller.ctx : ctx).get('fusionParticipants').prepare('single-test')
+  const task = await (route === 'caller' ? caller.ctx : ctx).get('fusionParticipants')!.prepare('single-test')
   const sessions = ctx.sessions
   const root = sessions.get(task.roster.rootSessionId)!
   const target = sessions.get(task.roster.roles.participant!)!

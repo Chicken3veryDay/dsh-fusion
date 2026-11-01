@@ -939,6 +939,7 @@ def main() -> None:
             assert args.exe is not None
             from smoke_python_fusion_delivery import smoke_sdk_fusion_delivery
             smoke_sdk_fusion_delivery(args.exe)
+            smoke_sdk_fusion_ordered_shutdown(args.exe.resolve())
         if args.scenario in {"all", "sdk-snapshot", "sdk-retained"}:
             assert args.exe is not None
             from smoke_python_retained import smoke_sdk_retained
@@ -957,6 +958,84 @@ def main() -> None:
         elif not MockModelHandler.requests:
             raise AssertionError("mock model endpoint received no requests")
     print(f"smoke-python-runtime: {args.scenario} passed")
+
+
+def smoke_sdk_fusion_ordered_shutdown(executable: Path) -> None:
+    """Hold real delivery writers through raw SDK application-root shutdown, then recover."""
+    from deepseek_harness import DeepSeekHarness
+    import time
+
+    repository = Path(__file__).resolve().parent.parent
+    fixture = repository / "snapshots/sdk/fusion-delivery"
+    expected = json.loads((fixture / "shutdown.expected.json").read_text())
+    evidence = os.environ.get("DSH_FUSION_DELIVERY_EVIDENCE")
+    with tempfile.TemporaryDirectory(prefix="python-fusion-shutdown-") as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        sessions = home / "sessions"
+        for suffix, session_id in (("", "delivery-root"), (".1", "delivery-child")):
+            text = (fixture / f"session{suffix}.v4.jsonl").read_text()
+            for token, value in (("{{session:1}}", "delivery-root"), ("{{session:2}}", "delivery-child"),
+                                 ("{{message:1}}", "recorded-delivery-message")):
+                text = text.replace(token, value)
+            rows = [json.loads(line) for line in text.splitlines()]
+            physical = [rows[0], *({**row, "seq": index, "time": 1785097381465 + index}
+                                   for index, row in enumerate(rows[1:]))]
+            directory = sessions / "_no-cwd" / session_id
+            directory.mkdir(parents=True)
+            (directory / "session.v4.jsonl").write_text("".join(json.dumps(row) + "\n" for row in physical))
+        patch = root / "shutdown.patch.json"
+        phases = ("root", "receiver", "completion")
+        patch.write_text(json.dumps([
+            {"id": "session-persistence-jsonl", "config": {"root": str(sessions), "compression": "none"}},
+            {"id": "session-telemetry-otel", "disabled": True},
+            {"id": "sdk-jsonrpc-server", "inject": ["sdkAppStartup", "loader", "fusionParticipants"],
+             "config": {"queryCommandDefinitions": ["snapshot/delivery-fixture", *(
+                 f"snapshot/delivery-shutdown-{phase}" for phase in phases)]}},
+            {"insert": [
+                {"id": "delivery-guard", "name": str(fixture / "guard.mjs")},
+                {"id": "delivery-registry", "name": "@deepseek-ai/dsh-agent-preset-registry", "config": {"default": "delivery-empty"}},
+                {"id": "delivery-preset", "name": "@deepseek-ai/dsh-agent-preset", "config": {"id": "delivery-empty", "plugins": []}},
+                {"id": "delivery-config", "name": "@deepseek-ai/dsh-fusion-config", "config": {"document": {
+                    "credentialRef": "DELIVERY_TEST", "agentPreset": "delivery-empty", "providers": {}, "declarations": [], "bindings": [], "selections": [],
+                    "metadataLimits": {"responseBytes": 32768, "totalBytes": 262144, "pages": 32, "timeoutMs": 5000}}}},
+                {"id": "delivery-participants", "name": "@deepseek-ai/dsh-experimental-fusion-participants"},
+                {"id": "delivery-fixture", "name": str(fixture / "runtime.mjs")},
+            ]},
+        ]))
+        observed = []
+        for phase in phases:
+            control = root / f"shutdown-{phase}"
+            control.mkdir()
+            with DeepSeekHarness(provider="deepseek-official", model="deepseek-v4-flash", cwd=str(root),
+                                 dsh_bin=str(executable), dsh_home=str(home), patches=(str(patch),),
+                                 env={"DSH_TELEMETRY_DISABLED": "1", "DSH_AGENTS_HOME": str(root / "agents"),
+                                      "DSH_FUSION_SHUTDOWN_CONTROL": str(control)}, request_timeout_seconds=60) as harness:
+                ready = harness.run(f"/delivery_shutdown_{phase}", session_id=f"shutdown-{phase}")
+                assert ready.finish_reason == "completed", ready
+                assert json.loads(ready.final_response) == {"phase": phase, "ready": True}, ready.final_response
+                (control / "start").touch()
+                deadline = time.monotonic() + 15
+                while not (control / "result.json").exists():
+                    assert not (control / "error.json").exists(), (control / "error.json").read_text()
+                    assert time.monotonic() < deadline, f"raw root shutdown did not settle at {phase}"
+                    time.sleep(0.01)
+                before = json.loads((control / "before.json").read_text())
+                result = json.loads((control / "result.json").read_text())
+                assert all(result[key] == value for key, value in before.items()), result
+                observed.append(result)
+                if evidence:
+                    for filename in ("before.json", "result.json"):
+                        (Path(evidence) / f"shutdown-{phase}-{filename}").write_text((control / filename).read_text())
+        assert observed == expected, observed
+        with DeepSeekHarness(provider="deepseek-official", model="deepseek-v4-flash", cwd=str(root),
+                             dsh_bin=str(executable), dsh_home=str(home), patches=(str(patch),),
+                             env={"DSH_TELEMETRY_DISABLED": "1", "DSH_AGENTS_HOME": str(root / "agents")},
+                             request_timeout_seconds=60) as harness:
+            recovered = harness.run("/delivery_fixture", session_id="shutdown-recovery")
+            assert recovered.finish_reason == "completed", recovered
+            expected_recovery = json.loads((fixture / "result.expected.json").read_text())
+            assert json.loads(recovered.final_response) == expected_recovery, recovered.final_response
 
 
 def smoke_sdk_authoring(base_url: str, executable: Path, update_snapshots: bool) -> None:

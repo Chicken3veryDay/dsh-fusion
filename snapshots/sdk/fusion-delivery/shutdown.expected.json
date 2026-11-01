@@ -1,0 +1,41 @@
+[
+  {
+    "phase": "root",
+    "closed": 0,
+    "admissionPending": true,
+    "drainPending": true,
+    "rootPending": true,
+    "routesRetained": true,
+    "exactWriters": true,
+    "rootSettled": true,
+    "receipt": false,
+    "rosterUnchanged": true,
+    "writersClosed": 2
+  },
+  {
+    "phase": "receiver",
+    "closed": 0,
+    "admissionPending": true,
+    "drainPending": true,
+    "rootPending": true,
+    "routesRetained": true,
+    "exactWriters": true,
+    "rootSettled": true,
+    "receipt": false,
+    "rosterUnchanged": true,
+    "writersClosed": 2
+  },
+  {
+    "phase": "completion",
+    "closed": 0,
+    "admissionPending": true,
+    "drainPending": true,
+    "rootPending": true,
+    "routesRetained": true,
+    "exactWriters": true,
+    "rootSettled": true,
+    "receipt": false,
+    "rosterUnchanged": true,
+    "writersClosed": 2
+  }
+]
