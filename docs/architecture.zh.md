@@ -76,6 +76,8 @@ Electron 使用 Electron Node 模式启动私有 Desktop Host。Host 调用共�
 
 AgentLoop 初始化 Agent，失败则回滚，并在启动已排队工作前等待串行 `agent/created`。卸载在 Agent teardown 期间保留所需资源；[agent-loop](../packages/core/agent-loop/README.zh.md#understand-the-implementation)定义顺序。
 
+保留的 Session 独立于停驻 Agent 维持写入句柄。必读的所有权记录拒绝普通恢复；采用会借用已注册的 Session，并在领取收件箱输入之前阻止驱动器。
+
 [事件映射](event-producer-consumer.zh.md)列出每个事件的生产方与消费方。
 
 <a id="turn-flow"></a>

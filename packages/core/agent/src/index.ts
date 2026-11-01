@@ -166,6 +166,32 @@ export interface AgentHandle {
   dispose(): Promise<void>
 }
 
+/** Host-owned Session lease whose lifetime is independent of Agent residency. */
+export interface RetainedAgentSession {
+  /** Exact registered live Session; never reconstructed during adoption. */
+  readonly session: Session
+  /** Publish a parked Agent using the retained writer and fixed composition. */
+  adopt(): Promise<AgentHandle>
+  /** Cancel pending adoption, drain the Agent, remove routing and close the writer. */
+  dispose(): Promise<void>
+}
+
+/** Explicit creation or recovery of a managed Session; neither operation drives work. */
+export interface RetainAgentSessionOptions {
+  /** Existing identity on recovery; preallocated identity on first provisioning. */
+  readonly sessionId: SessionId
+  /** Recovery refuses missing or corrupt storage instead of creating a replacement. */
+  readonly mode: 'create' | 'resume'
+  /** Exact live root capability for a participant; omission provisions a root. IDs confer no authority. */
+  readonly root?: RetainedAgentSession
+  /** Fixed route and composition reused at every adoption. */
+  readonly agentOptions: AgentOptions
+  /** Fixed scoped persona/tools composition; omitted means no scoped additions. */
+  readonly setup?: AgentSetup
+  /** Acquisition/adoption cancellation; omitted means owner disposal only. */
+  readonly signal?: AbortSignal
+}
+
 /**
  * The agent-creation factory the loop implementation provides to the registry
  * via {@link AgentRegistry.setFactory}. Kept on the `dsh-agent` interface so
@@ -173,6 +199,14 @@ export interface AgentHandle {
  * depending on the concrete `dsh-agent-loop` package.
  */
 export interface AgentFactory {
+  /**
+   * Retain a managed Session without constructing an Agent. Optional for stock factories.
+   * @param ownerCtx - resource-owning caller context.
+   * @param options - exact identity, recovery mode and immutable composition.
+   * @returns the host-only capability after routing and verified durability succeed.
+   */
+  retain?(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession>
+
   /**
    * Create a new agent on a caller-supplied session id. Async because creation
    * enters and announces the Session, awaits setup and its optional synchronous commit,
@@ -438,6 +472,20 @@ export class AgentRegistry extends Service {
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
     return Reflect.apply(target.resume, receiver, [ownerCtx, options])
+  }
+
+  /**
+   * Retain a managed Session through the configured factory without activation.
+   * @param options - explicit provisioning/recovery and composition.
+   * @returns a capability that owns the Session and parked Agent adoptions.
+   */
+  async retain(options: RetainAgentSessionOptions): Promise<RetainedAgentSession> {
+    const ownerCtx = this.ctx
+    const { target } = this.requireFactory()
+    if (target.retain === undefined) throw new Error('agent factory does not support retained sessions')
+    const receiver = getTraceable(ownerCtx, target)
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply binds the caller-traced receiver.
+    return Reflect.apply(target.retain, receiver, [ownerCtx, options])
   }
 
   /**

@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/fusion-participants/README.md
+/:
+  en: 43cbf8fb253990f3
+  zh: 92505dee49233126
+/deepseek-ai-dsh-experimental-fusion-participants:
+  en: 328559d78e232f91
+  zh: 5df84066134a386c
+/deepseek-ai-dsh-experimental-fusion-participants/summary:
+  en: 8aee41ba52b6b994
+  zh: 7635d469230b6dbd
+/deepseek-ai-dsh-experimental-fusion-participants/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: dbb94479b1334720
+/deepseek-ai-dsh-experimental-fusion-participants/use-this-package:
+  en: d885d93fe53f85f1
+  zh: 6aaee27150dcc553
+/deepseek-ai-dsh-experimental-fusion-participants/understand-the-implementation:
+  en: 8f50fadae0a7f179
+  zh: 660bf4d64caf2c7c
+/deepseek-ai-dsh-experimental-fusion-participants/further-exploration:
+  en: cb33d961f83b0724
+  zh: 18381d2e05bc51ac
+/deepseek-ai-dsh-experimental-fusion-participants/model-experience:
+  en: 215e7ba838619b7b
+  zh: 215e7ba838619b7b
+/deepseek-ai-dsh-experimental-fusion-participants/model-experience/parked-participant-contexts:
+  en: 50b89f46c7fa5f13
+  zh: 50b89f46c7fa5f13
+/deepseek-ai-dsh-experimental-fusion-participants/model-experience/parked-participant-contexts/what-the-model-sees:
+  en: 0ebef00805bee98a
+  zh: bb1ce21fe9968f44
+/deepseek-ai-dsh-experimental-fusion-participants/model-experience/parked-participant-contexts/token-effect:
+  en: 65e4da8356d20570
+  zh: 92edfdce699e37eb
+/deepseek-ai-dsh-experimental-fusion-participants/model-experience/parked-participant-contexts/kv-cache-effect:
+  en: b39dd9c60ec0d2bb
+  zh: ae99eedc25c2b141
+/deepseek-ai-dsh-experimental-fusion-participants/known-limitations-and-deferred-work:
+  en: e09c785457eb420d
+  zh: f68ee42922a9b62a
+/deepseek-ai-dsh-experimental-fusion-participants/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 8ec3e73528ddb1a6

@@ -19,6 +19,8 @@ import type {
   CreateAgentOptions,
   ResumeAgentOptions,
   SessionStartSource,
+  RetainedAgentSession,
+  RetainAgentSessionOptions,
   ModelSelection,
   ModelSelectionProjectionState,
   InboxState,
@@ -32,6 +34,8 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { retainSession, runtimeOwnerProjection } from './retained.ts'
+import type { RetainedAuthority } from './retained.ts'
 import { ReactLoopAgent } from './agent.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
@@ -164,6 +168,8 @@ interface StoredSession {
 
 /** Acquired Session resources and composition inputs for one Agent initialization. */
 interface AgentInitializationOptions {
+  readonly retained?: true
+
   readonly session: Session
   readonly agentOptions: AgentOptions
   readonly source: SessionStartSource
@@ -326,11 +332,15 @@ export class AgentLoop extends Service implements AgentFactory {
     this.runtime = { ctx }
   }
 
+  private readonly retainedAuthorities = new WeakMap<RetainedAgentSession, RetainedAuthority>()
+  private runtimeOwnerHandle!: ProjectionHandle<{ rootSessionId: string | null }>
+
   protected async [Service.init](): Promise<void> {
     const ctx = this.runtime.ctx
     const ownership = this.ownership
     // Agent projections remain readable until teardown finishes.
     ctx.effect(() => () => ownership.dispose(), 'agentLoop.transactions()')
+    this.runtimeOwnerHandle = await ctx.sessionProjections.register(runtimeOwnerProjection)
     this.modelProjectionHandle = await ctx.sessionProjections.register(modelSelectionProjectionDefinition)
     this.inboxProjectionHandle = await ctx.sessionProjections.register(inboxProjectionDefinition)
     ctx.effect(() => ctx.agents.setFactory(this), 'agentLoop.setFactory()')
@@ -467,6 +477,10 @@ export class AgentLoop extends Service implements AgentFactory {
     options: AgentInitializationOptions,
   ): Promise<AgentHandle> {
     const { session, agentOptions, source, stored, setup, signal: callerSignal, parentAgent } = options
+    if (!options.retained && this.runtimeOwnerHandle.stateOf(session).rootSessionId !== null) {
+      await stored?.handle.close()
+      throw new Error('managed session requires its retained runtime owner')
+    }
     const id = session.id
     const loopCtx = this.runtime.ctx
 
@@ -515,7 +529,7 @@ export class AgentLoop extends Service implements AgentFactory {
         if (machine === undefined) await machineReady.promise
         /* v8 ignore next -- setup failure untracks this disposer before resolving without a machine. */
         if (machine !== undefined) {
-          machine.cancel({ kind: 'disposed' }, { keepInbox: !ready })
+          machine.cancel({ kind: 'disposed' }, { keepInbox: options.retained === true || !ready })
           await machine.whenIdle()
         }
       } catch (error: unknown) {
@@ -531,7 +545,7 @@ export class AgentLoop extends Service implements AgentFactory {
       // receive all closing events. A failed final drain is retained here
       // rather than logged away.
       try {
-        await stored?.handle.close()
+        if (!options.retained) await stored?.handle.close()
       } catch (error: unknown) {
         failures.push(error)
       }
@@ -573,7 +587,7 @@ export class AgentLoop extends Service implements AgentFactory {
         const created = machine = new ReactLoopAgent(
           loopCtx, id, agentOptions, session,
           projections,
-          lastTurn,
+          lastTurn, options.retained === true,
         )
         machineReady.resolve()
         // Adopt the scope on its original fiber so it cannot unload before teardown.
@@ -598,7 +612,7 @@ export class AgentLoop extends Service implements AgentFactory {
       untrack()
       callerSignal?.removeEventListener('abort', onCallerAbort)
       this.ownership.signal.removeEventListener('abort', onFactoryTeardown)
-      await stored?.handle.close().catch((_closeError: unknown) => {
+      if (!options.retained) await stored?.handle.close().catch((_closeError: unknown) => {
         // Initialization failure remains primary when releasing the acquired handle fails.
       })
       throw error
@@ -624,8 +638,10 @@ export class AgentLoop extends Service implements AgentFactory {
           assertLive()
           await this.appendUnstoredSuffix(stored, session)
           assertLive()
-          detachSession = agent.ctx.sessions.enter(session)
-          agent.ctx.sessions.announce(session)
+          if (!options.retained) {
+            detachSession = agent.ctx.sessions.enter(session)
+            agent.ctx.sessions.announce(session)
+          }
           assertLive()
           const setupCommit = await raceAbort(setup?.(agent.ctx, agent), abort.signal, id)
           assertLive()
@@ -648,11 +664,30 @@ export class AgentLoop extends Service implements AgentFactory {
         }
       })
     } catch (error: unknown) {
-      await dispose().catch((_disposeError: unknown) => {
-        // Initialization failure remains primary after cleanup reaches quiescence.
-      })
+      try { await dispose() } catch (cleanup: unknown) {
+        if (options.retained) throw new AggregateError([error, cleanup], 'retained Agent initialization and cleanup failed')
+        // Stock initialization preserves its original error after cleanup reaches quiescence.
+      }
       throw error
     }
+  }
+
+  /**
+   * Retain one Session and writer independently of parked Agent residency.
+   * @param ownerCtx - caller that owns acquisition, adoption and teardown.
+   * @param options - explicit identity and fixed composition.
+   * @returns the capability after verified writer durability, with no work admitted.
+   */
+  retain(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession> {
+    const captured = { ...options, agentOptions: Object.freeze({ ...options.agentOptions }) }
+    const operation = retainSession(this.runtime.ctx, ownerCtx, captured, this.ownership.signal,
+      (session, signal) => this.initializeAgent(ownerCtx, {
+        session, retained: true, agentOptions: captured.agentOptions, setup: captured.setup,
+        signal, source: options.mode === 'create' ? 'startup' : 'resume',
+      }), dispose => this.ownership.track(dispose), this.retainedAuthorities,
+      (session, handle, storedCount) => this.appendUnstoredSuffix({ handle, storedCount }, session))
+    this.ownership.trackWrapper(operation)
+    return operation
   }
 
   /**

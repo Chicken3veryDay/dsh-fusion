@@ -143,6 +143,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'retain(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession>',
+        description: 'Retain one Session and writer independently of parked Agent residency.',
+        parameters: [{ name: 'ownerCtx', description: 'caller that owns acquisition, adoption and teardown.' }, { name: 'options', description: 'explicit identity and fixed composition.' }],
+        returns: 'the capability after verified writer durability, with no work admitted.',
+      },
+      {
         signature: 'async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, \'cwd\'> = {}): Promise<Agent>',
         description: 'Create an agent and session under one caller-supplied identity, owned by the accessing fiber. Constructor-driven config calls mint a fresh combined id before entering this boundary. When a persistence backend is mounted, the session\'s durable identity and any seed are stored before publication.',
         parameters: [{ name: 'id', description: 'shared agent/session identity.' }, { name: 'options', description: 'concrete loop options.' }, { name: 'meta', description: 'optional fresh-session workspace metadata.' }],
@@ -315,6 +321,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Load a persisted session and resume an agent on it through the registered factory. Rejects if no factory is registered; the factory rejects if session persistence is not configured or persistence/setup fails.',
         parameters: [{ name: 'options', description: 'persisted identity, optional live parent, configuration, and setup.' }],
         returns: 'the handle after setup, rollback-covered publication, and loop start complete.',
+      },
+      {
+        signature: 'async retain(options: RetainAgentSessionOptions): Promise<RetainedAgentSession>',
+        description: 'Retain a managed Session through the configured factory without activation.',
+        parameters: [{ name: 'options', description: 'explicit provisioning/recovery and composition.' }],
+        returns: 'a capability that owns the Session and parked Agent adoptions.',
       },
       {
         signature: 'register(agent: Agent): ReturnType<Context[\'effect\']>',
@@ -1630,6 +1642,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Inspect current credentials, adapter declarations and complete metadata without inference.',
         parameters: [{ name: 'id', description: 'named captured configuration.' }, { name: 'signal', description: 'caller cancellation; omission retains plugin disposal and per-listing deadlines.' }],
         returns: 'frozen report; failures block readiness, disposal aborts and awaits owned traversal.',
+      },
+    ],
+  },
+  {
+    key: 'fusionParticipants',
+    summary: 'Loader-mounted task owner; exposes no model tools or product activation operation.',
+    description: 'Loader-mounted task owner; exposes no model tools or product activation operation.',
+    methods: [
+      {
+        signature: 'prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants>',
+        description: 'Capture one exact selection and prepare inert durable participant contexts.',
+        parameters: [{ name: 'selectionId', description: 'named immutable fusion-config selection.' }, { name: 'signal', description: 'optional cancellation; owner disposal always cancels preparation.' }],
+        returns: 'prepared capability only after every writer passes its own durability barrier.',
+      },
+      {
+        signature: 'recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants>',
+        description: 'Recover the root and persisted participants under root-first leases.',
+        parameters: [{ name: 'rootSessionId', description: 'persisted root identity; absence/corruption is a blocking failure.' }, { name: 'signal', description: 'optional cancellation; omission keeps owner disposal cancellation.' }],
+        returns: 'a prepared capability using the original roster and context lineages.',
       },
     ],
   },
@@ -5518,7 +5549,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AgentFactory',
-    declaration: 'export interface AgentFactory {\n    createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>;\n    resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>;\n}',
+    declaration: 'export interface AgentFactory {\n    retain?(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession>;\n    createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>;\n    resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>;\n}',
   },
   {
     name: 'AgentHandle',
@@ -7613,6 +7644,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly toolUpdate?: ToolUpdate;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
+    name: 'PreparedParticipants',
+    declaration: 'export interface PreparedParticipants {\n    readonly roster: Roster;\n    adopt(role: string): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
+  },
+  {
     name: 'PreparedReferencedMessage',
     declaration: 'export interface PreparedReferencedMessage {\n    content: ContentBlock[];\n    additionalContext?: UserMessage;\n}',
   },
@@ -8017,8 +8052,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
+    name: 'RetainAgentSessionOptions',
+    declaration: 'export interface RetainAgentSessionOptions {\n    readonly sessionId: SessionId;\n    readonly mode: \'create\' | \'resume\';\n    readonly root?: RetainedAgentSession;\n    readonly agentOptions: AgentOptions;\n    readonly setup?: AgentSetup;\n    readonly signal?: AbortSignal;\n}',
+  },
+  {
+    name: 'RetainedAgentSession',
+    declaration: 'export interface RetainedAgentSession {\n    readonly session: Session;\n    adopt(): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
+  },
+  {
     name: 'ReviewDecision',
     declaration: 'export type ReviewDecision = \'approved\' | \'changes-requested\' | \'review-required\' | \'none\';',
+  },
+  {
+    name: 'Roster',
+    declaration: 'export type Roster = z.infer<typeof rosterSchema>;',
   },
   {
     name: 'RpcId',

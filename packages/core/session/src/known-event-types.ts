@@ -22,6 +22,7 @@
 export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent-preset/selected',
   'agent/inbox/spliced',
+  'agent/runtime-owner',
   'approval/asked',
   'approval/decided',
   'approval/policy',
@@ -38,6 +39,8 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'feedback/message-delete',
   'feedback/message-put',
   'feedback/record',
+  'fusion/participant-established',
+  'fusion/roster',
   'goal/change',
   'hook/invoked',
   'hook/result',

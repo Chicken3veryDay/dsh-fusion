@@ -54,6 +54,8 @@ interface AgentHandle {
 
 <a id="the-agent-handle"></a>
 
+`RetainAgentSessionOptions` 显式请求创建或恢复，并可绑定精确的根能力。`RetainedAgentSession` 独立于 Agent 驻留状态拥有已注册的 Session 与写入句柄；`adopt()` 返回停驻的 `AgentHandle`，任务释放则结束保留寿命。可选的 Fusion 消费方返回 `PreparedParticipants`，仅在不可变名册中解析角色；参见[参与者所有权](../../packages/experimental/fusion-participants/README.zh.md)。
+
 ## Agent 句柄
 
 `Agent` 是每个插件（UI、钩子、orchestrator）面向编程的 surface；`ctx.agents.get(id)` 返回它，[发起者作用域](#initiating-agent)携带它。具体实现为 dsh-agent-loop 包内部细节；循环外没有任何组件依赖它。统一的 `send` 方法直接暴露 target 与 wakeup 路由；`followup`、`steer` 与 `inject` 是固定预设的别名方法。
@@ -551,6 +553,14 @@ Concrete agent factory and driver service.
 
 ```ts cordis-catalog
 /**
+ * Retain one Session and writer independently of parked Agent residency.
+ * @param ownerCtx - caller that owns acquisition, adoption and teardown.
+ * @param options - explicit identity and fixed composition.
+ * @returns the capability after verified writer durability, with no work admitted.
+ */
+retain(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession>
+
+/**
  * Create an agent and session under one caller-supplied identity, owned by
  * the accessing fiber. Constructor-driven config calls mint a fresh combined
  * id before entering this boundary. When a persistence backend is mounted,
@@ -791,6 +801,13 @@ async create(options: CreateAgentOptions): Promise<AgentHandle>
 async resume(options: ResumeAgentOptions): Promise<AgentHandle>
 
 /**
+ * Retain a managed Session through the configured factory without activation.
+ * @param options - explicit provisioning/recovery and composition.
+ * @returns a capability that owns the Session and parked Agent adoptions.
+ */
+async retain(options: RetainAgentSessionOptions): Promise<RetainedAgentSession>
+
+/**
  * Register a live agent with source `startup`. Rejects if the id is already registered or a
  * serial `agent/created` listener fails. Emits `agent/disposed`
  * when the calling fiber is disposed — both with the agent's scope carrier
@@ -900,6 +917,34 @@ preflight(id: string, signal?: AbortSignal): Promise<PreflightReport>
 ```
 
 Source: [`packages/preset/fusion-config/src/index.ts`](../../packages/preset/fusion-config/src/index.ts)
+
+<a id="ctxfusionparticipants--fusionparticipants"></a>
+
+### `ctx.fusionParticipants` — `FusionParticipants`
+
+Loader-mounted task owner; exposes no model tools or product activation operation.
+
+```ts cordis-catalog
+/**
+ * Capture one exact selection and prepare inert durable participant contexts.
+ * @param selectionId - named immutable fusion-config selection.
+ * @param signal - optional cancellation; owner disposal always cancels preparation.
+ * @returns prepared capability only after every writer passes its own durability barrier.
+ */
+prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants>
+
+/**
+ * Recover the root and persisted participants under root-first leases.
+ * @param rootSessionId - persisted root identity; absence/corruption is a blocking failure.
+ * @param signal - optional cancellation; omission keeps owner disposal cancellation.
+ * @returns a prepared capability using the original roster and context lineages.
+ */
+recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants>
+```
+
+Types: [PreparedParticipants](../../packages/experimental/fusion-participants/README.zh.md)
+
+Source: [`packages/experimental/fusion-participants/src/index.ts`](../../packages/experimental/fusion-participants/src/index.ts)
 
 <a id="agent-events"></a>
 

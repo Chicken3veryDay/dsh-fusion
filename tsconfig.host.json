@@ -564,6 +564,7 @@
     { "path": "./packages/preset/agent-preset-registry" },
     { "path": "./packages/preset/agent-preset" },
     { "path": "./packages/preset/persona" },
+    { "path": "./packages/experimental/fusion-participants" },
     { "path": "./packages/preset/fusion-config" },
     { "path": "./packages/guard/repeat-tool-reminder" },
     { "path": "./packages/extensions/cordis-host-runner" },

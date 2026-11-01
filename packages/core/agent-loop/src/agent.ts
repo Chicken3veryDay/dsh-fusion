@@ -113,6 +113,7 @@ export class ReactLoopAgent implements Agent {
   readonly model: AgentModel
   readonly inbox: ReactLoopInbox
   private phase: Phase
+  private testAdmission = false
   private activityDone: Promise<void> = Promise.resolve()
 
   /** The agent-scoped registration boundary; the lifecycle owner unwinds it after the driver exits. */
@@ -141,6 +142,7 @@ export class ReactLoopAgent implements Agent {
     public readonly session: Session,
     projections: LoopProjections,
     lastTurn: number,
+    private readonly parked = false,
   ) {
     this.requestSurfaceGeneration = session.surface.contentGeneration
     this.dispatch = agentEvents(loopCtx, this)
@@ -228,6 +230,7 @@ export class ReactLoopAgent implements Agent {
    *   the inbox insertion so a reentrant cancel cannot reclassify it.
    */
   private wakeDriver(wakeAfterAbort = false): void {
+    if (this.parked && !this.testAdmission) return
     if (this.phase.kind !== 'idle') {
       // Maintenance and aborted drivers cannot deliver the wake: latch it for
       // replay at convergence. Live drivers claim queued work themselves;
@@ -248,6 +251,23 @@ export class ReactLoopAgent implements Agent {
       wakeRequested: false,
     })
     this.loopCtx.agents.withInitiator(this, () => this.kick()).then(driver.resolve, driver.reject)
+  }
+
+  /**
+   * Drive a tool-less fake turn in tests; unavailable outside the test runtime.
+   * @param input - test-owned follow-up; existing queued input remains ordered.
+   */
+  async testOnlyTurn(input: UserMessage): Promise<void> {
+    if (process.env.NODE_ENV !== 'test' || !this.parked || this.testAdmission) throw new Error('test activation is unavailable')
+    const release = this.ctx.tools.restrict({ allow: [] })
+    this.testAdmission = true
+    try {
+      this.followup(input)
+      await this.whenIdle()
+    } finally {
+      this.testAdmission = false
+      release()
+    }
   }
 
   async whenIdle(): Promise<void> {

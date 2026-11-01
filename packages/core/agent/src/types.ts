@@ -18,6 +18,13 @@ export interface Agent {
   readonly id: SessionId
 }
 
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    /** Required log-only ownership marker: this history can activate only through its retained runtime owner. */
+    'agent/runtime-owner': { rootSessionId: SessionId }
+  }
+}
+
 declare module '@deepseek-ai/dsh-workspace/types' {
   interface SessionActivityKindMap {
     /** The session's own Agent is inside a turn, including one waiting for an approval or an answer. */

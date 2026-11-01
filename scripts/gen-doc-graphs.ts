@@ -650,6 +650,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Captures immutable role selections and exposes non-inference readiness through an explicitly composed human command.',
   },
   {
+    key: 'fusionParticipants',
+    pkg: 'experimental-fusion-participants',
+    title: 'Retained Fusion participant contexts',
+    mode: 'service',
+    note: 'Retains root and participant Sessions for parked Agent adoption without task activation.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',
