@@ -2,6 +2,8 @@
 
 English | [中文](session.zh.md)
 
+Host persistence verification uses `session.matchesDurabilityPrefix(events, end)` to compare an independently read contiguous stored prefix through a captured exclusive boundary. This asynchronous bounded read grants no durability or authority; the [same-session durability operation](persistence.md#same-session-durability) additionally verifies the current routed writer, ownership and fresh flush coverage.
+
 The in-memory, event-sourced model of [dsh-session](../../packages/core/session). A `Session` is an **append-only log** of typed `SessionEvent`s — the single source of truth for an agent's whole interaction history. The LLM message history is *derived* from the log, never stored separately; replay is re-derivation from the same events. How the log is made **durable** (the persistence seam, backends, crash recovery) is the sibling concern on [persistence.md](persistence.md).
 
 Source: [`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
@@ -565,6 +567,15 @@ declare class Session {
    * @returns a fresh array containing child-owned events in log order.
    */
   ownEvents(): readonly SessionEvent[];
+  /**
+   * Compare a storage acknowledgement with this Session's captured prefix.
+   * This host read establishes content equality only; it grants no durability.
+   * @param events - independently read, contiguous stored events from seq zero.
+   * @param end - exclusive event boundary captured from `seq` before awaiting storage.
+   * @returns whether every event through that boundary matches this Session.
+   */
+  matchesDurabilityPrefix(events: readonly SessionEvent[], end: SessionLogOffset): Promise<boolean>;
+
   /**
    * Whether one existing event position is outside the fork-inherited prefix.
    * @param seq - event position in this Session.

@@ -39,6 +39,8 @@ ctx.sessions.get(sessionId)      // the live session
 ctx.sessions.list()              // every live session, in creation order
 ```
 
+`session.matchesDurabilityPrefix(events, end)` 是主机端的有界异步比较操作，用于将独立读取的存储前缀与当前 Session 比较。它只确认内容相等。协议需要写入所有权和本次刷写覆盖证明时，应使用持久化提供方的[显式启用耐久性操作](../../session/session-persistence/README.zh.md)。
+
 ### 追加与派生
 
 `session.append(type, data, opts?)` 提交一个类型化事件。它在读取载荷字段前拒绝只读实例，为有效 JSON 创建快照并冻结，再次检查写入权限后提交并通知观察者。`session.deriveMessages()` 把日志投影为模型看到的 `Message[]`，采用增量且有缓存的方式：

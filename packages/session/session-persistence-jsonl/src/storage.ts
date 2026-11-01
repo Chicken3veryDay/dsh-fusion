@@ -9,6 +9,7 @@
  * @module
  */
 
+import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
@@ -23,6 +24,7 @@ import {
   SessionReadOnlyError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type {
+  SessionDurabilityResult,
   SessionAccess,
   SessionHandle,
   SessionHandleAppendOptions,
@@ -83,6 +85,10 @@ export interface StorageHandleState {
  * window and drain through the same chain as explicit appends.
  */
 export class JsonlSessionHandle implements SessionHandle {
+  /** Transient identity of this exact handle, never a persisted Session field. */
+  readonly durabilityIdentity = Symbol('jsonl-writer')
+  private flushedCursor = -1
+  private flushGeneration = 0
   private chain: Promise<unknown> = Promise.resolve()
   private closing: Promise<void> | undefined
   private observedLength = 0
@@ -204,11 +210,39 @@ export class JsonlSessionHandle implements SessionHandle {
     return this.run('flush', async () => {
       options?.signal?.throwIfAborted()
       if (this.access !== 'write') throw new SessionReadOnlyError(this.id, 'flush')
-      if (this.state.materialized) return // appends are durable on resolution
-      await this.ensureLease()
-      await this.storage.persistHeader(this.header, this.state.inheritedEventCount)
-      this.state.materialized = true
+      if (!this.state.materialized) {
+        await this.ensureLease()
+        await this.storage.persistHeader(this.header, this.state.inheritedEventCount)
+        this.state.materialized = true
+      }
+      this.flushedCursor = this.state.cursor
+      this.flushGeneration += 1
     })
+  }
+
+  /** Current flush generation, captured before a store flush begins. */
+  get durabilityGeneration(): number { return this.flushGeneration }
+
+  /** Whether the exact writer can still participate in a new proof. */
+  get durabilityOpen(): boolean { return this.access === 'write' && this.closing === undefined }
+
+  /**
+   * Verify fresh flush coverage and content on this actual write handle.
+   * @param session - exact routed live Session.
+   * @param boundary - required exclusive event boundary.
+   * @param generation - generation before the awaited store flush.
+   * @returns matching, acknowledged and flushed coverage while ownership remains held.
+   */
+  async verifyDurability(session: Session, boundary: SessionLogOffset, generation: number): Promise<boolean> {
+    if (!isDeepStrictEqual(this.header, session.header) || this.inheritedEventCount !== session.inheritedEventCount) return false
+    if (!this.durabilityOpen || this.flushGeneration <= generation || this.flushedCursor < boundary
+      || this.state.cursor < boundary || this.state.recoveredTail?.length) return false
+    if (this.lease === undefined) return false
+    await this.lease.assertOwned(this.id)
+    const stored = await this.read(0, boundary)
+    const matches = await session.matchesDurabilityPrefix(stored.events, boundary)
+    await this.lease.assertOwned(this.id)
+    return matches && this.durabilityOpen
   }
 
   /**
@@ -395,6 +429,9 @@ export class JsonlBackendTracker {
   private readonly writers = new Map<SessionId, JsonlSessionHandle | null>()
   private readonly pending = new Map<SessionId, PendingSession>()
   private counter = 0
+  private active = false
+  private readonly bindings = new Map<JsonlSessionHandle, Session>()
+  private readonly flushReceipts = new Map<JsonlSessionHandle, number>()
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
   constructor(private readonly name: string) {}
@@ -494,9 +531,46 @@ export class JsonlBackendTracker {
    */
   release(handle: JsonlSessionHandle, materialized: boolean): void {
     this.openHandles.delete(handle)
+    this.bindings.delete(handle)
+    this.flushReceipts.delete(handle)
     if (handle.access !== 'write') return
     this.writers.delete(handle.id)
     if (!materialized) this.pending.delete(handle.id)
+  }
+
+  /**
+   * Capture and verify one host-requested live Session durability operation.
+   * @param ctx - owning backend context.
+   * @param session - exact live Session, never an id or caller receipt.
+   * @param provider - current persistence service identity.
+   * @returns verified transient coverage or a refusal that blocks dependent work.
+   */
+  async flushSessionDurably(ctx: Context, session: Session, provider: symbol): Promise<SessionDurabilityResult> {
+    const boundary = session.seq
+    const operation = Symbol('session-durability')
+    const sessions = ctx.get('sessions')
+    if (sessions?.get(session.id) !== session) return { kind: 'refused', reason: 'not-live' }
+    const writer = this.writers.get(session.id)
+    if (writer == null || !writer.durabilityOpen || this.bindings.get(writer) !== session || !this.active) {
+      return { kind: 'refused', reason: 'missing-writer' }
+    }
+    const generation = writer.durabilityGeneration
+    const receipt = this.flushReceipts.get(writer) ?? 0
+    const current = (): boolean => this.active && writer.durabilityOpen
+      && this.writers.get(session.id) === writer && this.bindings.get(writer) === session
+      && sessions.get(session.id) === session && ctx.get('sessionPersistence')?.identity === provider
+    try {
+      const participated = await sessions.flush(session)
+      if (!current()) return { kind: 'refused', reason: 'stale-writer' }
+      if (!participated || (this.flushReceipts.get(writer) ?? 0) <= receipt
+        || !await writer.verifyDurability(session, boundary, generation)) {
+        return { kind: 'refused', reason: 'coverage' }
+      }
+      if (!current()) return { kind: 'refused', reason: 'stale-writer' }
+      return { kind: 'durable', session, boundary, operation, writer: writer.durabilityIdentity }
+    } catch (cause: unknown) {
+      return { kind: 'refused', reason: 'flush-failed', cause }
+    }
   }
 
   /**
@@ -533,8 +607,9 @@ export class JsonlBackendTracker {
    * @returns the disposer to run after persistence consumers finish unloading.
    */
   install(ctx: Context): () => Promise<void> {
-    const { writers, openHandles, name } = this
-    return ctx.effect(function* () {
+    const { writers, openHandles, name, bindings, flushReceipts } = this
+    return ctx.effect(function* (this: JsonlBackendTracker) {
+      this.active = true
       yield async () => {
         const errors: unknown[] = []
         for (const handle of [...openHandles]) {
@@ -546,8 +621,19 @@ export class JsonlBackendTracker {
         }
         if (errors.length > 0) throw new AggregateError(errors, `${name} dispose failed`)
       }
+      yield () => {
+        this.active = false
+        bindings.clear()
+        flushReceipts.clear()
+      }
+      yield ctx.on('session/created', (session: Session) => {
+        const writer = writers.get(session.id)
+        if (writer != null && !bindings.has(writer)) bindings.set(writer, session)
+      })
       yield ctx.on('session/event', (session: Session, event) => {
-        writers.get(session.id)?.enqueueLive(event, (error) => {
+        const writer = writers.get(session.id)
+        if (writer != null && !bindings.has(writer)) bindings.set(writer, session)
+        writer?.enqueueLive(event, (error) => {
           ctx.logger.warn(`session-persistence: background write for session "${session.id}" failed (buffered events retained): ${String(error)}`)
         })
       })
@@ -557,6 +643,9 @@ export class JsonlBackendTracker {
         return (async () => {
           await writer.drainLive()
           await writer.flush()
+          if (this.active && writer.durabilityOpen && writers.get(session.id) === writer) {
+            flushReceipts.set(writer, (flushReceipts.get(writer) ?? 0) + 1)
+          }
         })()
       })
       yield ctx.on('session/disposed', (session: Session) => {
@@ -566,6 +655,6 @@ export class JsonlBackendTracker {
           ctx.logger.warn(`session-persistence: final drain for session "${session.id}" failed: ${String(error)}`)
         })
       })
-    }, `${this.name} live routing and open handles`)
+    }.bind(this), `${this.name} live routing and open handles`)
   }
 }

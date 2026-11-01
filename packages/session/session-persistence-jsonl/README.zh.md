@@ -122,6 +122,8 @@ kind: "package-reference"
 | [`src/zstd.ts`](src/zstd.ts) | Zstandard 帧压缩、解码与帧扫描 |
 | [`src/win32.ts`](src/win32.ts) | Windows write-through 发布与目录创建 |
 
+仅供主机使用的 `sessionPersistence.flushSessionDurably(session)` 操作，将证明绑定到实际接收路由事件的活动 Session 对象和当前写入句柄。写入器在观察到创建通知或首个活动事件时绑定；尚未绑定的空写入器会拒绝验证，直到生命周期建立路由。验证要求存储内容匹配、实际句柄完成本次刷写、路由仍然活动，并且仍持有写入所有权。关闭或替换写入器会使进行中的操作失效。这不会改变普通缓冲、记录格式、fsync 策略或模型调用。参见[同会话耐久性](../../../docs/subsystems/persistence.zh.md#same-session-durability)。 显式启用的验证会读取当前日志并比较捕获的前缀，因此 I/O 和比较成本随会话增长。破损帧恢复出的前缀，在成功追加将其重写之前仍不能获得证明。
+
 </details>
 
 -----

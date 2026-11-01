@@ -122,6 +122,8 @@ The default artifact is a standard concatenation of independent Zstandard frames
 | [`src/zstd.ts`](src/zstd.ts) | Zstandard frame compression, decoding, and frame scanning |
 | [`src/win32.ts`](src/win32.ts) | Windows write-through publish and directory creation |
 
+The host-only `sessionPersistence.flushSessionDurably(session)` operation binds proof to the exact routed live Session and current write handle. A writer binds when it observes creation or its first live event; an unbound empty writer refuses until the lifecycle establishes routing. Matching stored content, a fresh actual handle flush, an active route, and retained ownership are all required. Closing or replacing the writer invalidates an in-flight operation. This does not change ordinary buffering, record formats, fsync policy, or model calls. See [same-session durability](../../../docs/subsystems/persistence.md#same-session-durability). Opt-in verification reads the current log and compares the captured prefix, so I/O and comparison costs grow with the session. A recovered torn-frame prefix remains unproven until a successful append rewrites it.
+
 </details>
 
 -----

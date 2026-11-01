@@ -105,6 +105,18 @@ A created session is observable in this process from the moment `create` resolve
 
 `session/event` is a *synchronous* notification; the mounted backend routes it by session id into the active write handle's bounded write-behind window without blocking the producer (the backend installs these listeners once, because persistence already enforces one active write handle per id). The first pending event starts a fixed internal batching window, and later events join without resetting its deadline. Expiry starts one durable `append` through the session's write handle; events admitted during that write receive their own deadline and form a follow-up batch. `session/flush` cancels the wait and drains through quiescence, so the loop still uses it as the ordering and error-observation checkpoint before claiming the next ordinary turn. A rejected background write retains its events in order, pauses the automatic path, and is reported through the logger; the next explicit flush retries and rejects loudly to its caller. `session/disposed` performs the same final drain and closes the handle, and `close()` itself drains the routed buffer through the still-open storage, so backend teardown's close sweep loses nothing. The window bounds only intentional batching wait, not event-loop scheduling or backend durability latency.
 
+<a id="same-session-durability"></a>
+
+## Same-session durability
+
+Host protocols opt in through `ctx.sessionPersistence.flushSessionDurably(session)`. The operation captures the exact live Session’s exclusive `seq` boundary before awaiting `sessions.flush(session)`. Success requires that store call to return true, the same currently owned JSONL write handle to remain bound to that Session object, and a fresh actual handle flush to cover the acknowledged contiguous matching prefix. Stored header, inherited cut and event contents must match; equal counts alone cannot certify seeded or resumed history. The bounded asynchronous `Session.matchesDurabilityPrefix(events, end)` comparison establishes content equality only.
+
+<a id="sessiondurabilityresult"></a>
+
+`SessionDurabilityResult` is a discriminated union: `durable` carries `session`, exclusive `boundary`, and transient `operation` and `writer` symbols; `refused` carries a `reason` and the original `cause` when a flush rejects. Missing, closed, unbound, read-only, stale, replaced or ownership-lost writers refuse. A rejected append or listener remains a refusal even if another listener succeeds. A later append cannot extend the operation’s captured boundary. Closing, session removal, provider unload or writer replacement during verification prevents success. Creation or the first routed live event establishes the object binding; an empty writer created after announcement needs lifecycle routing before it can certify anything.
+
+These results are host observations, never accepted as input or reusable dispatch authority. The default provider implementation returns `unsupported`. Legacy `SessionStore.flush` still reports listener participation; ordinary tasks add no records, model calls, profile changes, schema changes or fsync policy. JSONL verifies its held lease, including the POSIX lock inode; it does not protect against hostile same-user filesystem mutation after verification. A recovered torn-frame prefix that has not been rewritten by a successful append cannot be certified. Refusal may follow a committed prefix and does not imply rollback; the caller must keep dependent work blocked and own recovery. Cold delivery, participant adoption, protocol journals, multi-session recovery and effect admission require their own downstream protocols.
+
 ## Crash recovery preserves an interrupted turn
 
 A log crashed mid-turn ends with an open `turn/start` and no `turn/end`. Persistence does **not** truncate or repair it — a single turn can be huge in a long-horizon task (many steps, large tool output), and those events were durably appended before the crash. It returns the physically valid contiguous log; only the incomplete fragment of a torn physical tail, belonging to an append that never resolved, is discarded — complete records recovered from it (the JSONL backend partially decodes a torn Zstandard frame) are durably rewritten by the write path before the handle's first new append. Repair is the reader's job: resume (agent-loop) reads the stored log through its write handle, computes `interruptedTurnClosers` — missing tool errors, any open `step/end`, and a synthetic `turn/end { reason: { kind: 'interrupted' } }` — and appends them through the same handle as an ordinary batch before publishing the Session. `interrupted` is the one `TurnEndReason` no loop emits (see [session.md](session.md#why-a-turn-ended-turnendreasonmap)).
@@ -362,6 +374,19 @@ Freshness: once an `append` or `flush` resolves, reads started afterwards on thi
 
 ```ts cordis-catalog
 /**
+ * Opt in to host-verified same-session writer durability. Ordinary callers keep
+ * using `sessions.flush(session)`. No model receipt or prior result is input.
+ * Providers must capture the live Session's exclusive boundary before awaiting
+ * that store entry point, require true, and verify fresh flush coverage from
+ * the same currently owned, routed write handle after every await.
+ * Refusal leaves dependent protocol work blocked; storage may have committed
+ * a prefix, so the caller owns recovery and must not infer rollback or dispatch permission.
+ * @param session - exact live Session requiring persistence.
+ * @returns a transient success or a typed refusal; unsupported providers refuse explicitly.
+ */
+flushSessionDurably(session: Session): Promise<SessionDurabilityResult>
+
+/**
  * Create a new stored session and take its write ownership.
  * @param header - the immutable header (id, version, cwd, lineage) to store.
  * @param options - optional cancellation.
@@ -422,7 +447,7 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
 ```
 
-Types: [SessionId](core.md)
+Types: [Session](session.md) · [SessionId](core.md)
 
 Source: [`packages/session/session-persistence/src/index.ts`](../../packages/session/session-persistence/src/index.ts)
 <!-- END GENERATED cordis-surface -->

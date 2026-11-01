@@ -8,6 +8,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { isAbsolute } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { assertNever, deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import { scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
@@ -745,6 +746,18 @@ export class Session {
   ownEvents(): readonly SessionEvent[] {
     // oxlint-disable-next-line typescript/no-deprecated -- Deprecated reader delegates to the deprecated range read.
     return this.snapshotEvents(this.inheritedEventCount)
+  }
+
+  /**
+   * Compare a storage acknowledgement with this Session's captured prefix.
+   * This host read establishes content equality only; it grants no durability.
+   * @param events - independently read, contiguous stored events from seq zero.
+   * @param end - exclusive event boundary captured from `seq` before awaiting storage.
+   * @returns whether every event through that boundary matches this Session.
+   */
+  matchesDurabilityPrefix(events: readonly SessionEvent[], end: SessionLogOffset): Promise<boolean> {
+    if (!Number.isSafeInteger(end) || end < 0 || end > this.log.length || events.length < end) return Promise.resolve(false)
+    return Promise.resolve(isDeepStrictEqual(this.log.slice(0, end), events.slice(0, end)))
   }
 
   /**

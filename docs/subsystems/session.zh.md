@@ -2,6 +2,8 @@
 
 [English](session.md) | 中文
 
+主机持久化验证通过 `session.matchesDurabilityPrefix(events, end)`，在捕获的排他结束位置以内比较独立读取的连续存储前缀。该有界异步读取不赋予耐久性证明或授权；[同会话耐久性操作](persistence.zh.md#same-session-durability) 还验证当前路由写入器、所有权和本次刷写的覆盖范围。
+
 [dsh-session](../../packages/core/session) 的内存事件溯源模型。`Session` 是一份由类型化 `SessionEvent` 组成的**仅追加日志**，是 agent（智能体）完整交互历史的唯一真源。LLM（大语言模型）消息历史从日志*派生*而来，从不单独存储；回放即从同一组事件重新派生。日志如何实现**持久化**（持久化 seam、后端、崩溃恢复）是兄弟文档 [persistence.md](persistence.zh.md) 的关注点。
 
 源码：[`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
@@ -567,6 +569,15 @@ declare class Session {
    * @returns a fresh array containing child-owned events in log order.
    */
   ownEvents(): readonly SessionEvent[];
+  /**
+   * Compare a storage acknowledgement with this Session's captured prefix.
+   * This host read establishes content equality only; it grants no durability.
+   * @param events - independently read, contiguous stored events from seq zero.
+   * @param end - exclusive event boundary captured from `seq` before awaiting storage.
+   * @returns whether every event through that boundary matches this Session.
+   */
+  matchesDurabilityPrefix(events: readonly SessionEvent[], end: SessionLogOffset): Promise<boolean>;
+
   /**
    * Whether one existing event position is outside the fork-inherited prefix.
    * @param seq - event position in this Session.

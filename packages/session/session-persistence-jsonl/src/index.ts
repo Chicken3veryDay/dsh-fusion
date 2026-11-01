@@ -25,7 +25,7 @@ import {
   SessionPersistenceCorruptionError,
   SessionAlreadyExistsError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
-  type SessionAccess, type SessionHandle,
+  type SessionAccess, type SessionHandle, type SessionDurabilityResult,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
@@ -35,7 +35,7 @@ import {
 import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
 import { SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath, logPath, logSuffix,
   parseGenerationLogFilename, projectDir, scanLog, sessionDir, SessionLogScanner, toHeaderLine,
@@ -462,6 +462,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       }
       throw failure
     }
+  }
+
+  override flushSessionDurably(session: Session): Promise<SessionDurabilityResult> {
+    return this.tracker.flushSessionDurably(this.ctx, session, this.identity)
   }
 
   /**

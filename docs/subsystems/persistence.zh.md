@@ -105,6 +105,18 @@ interface SessionHandle extends AsyncDisposable {
 
 `session/event` 是一个*同步*通知；挂载的后端按会话 id 把它路由进活跃写句柄的有界 write-behind 窗口，而不阻塞生产方（后端一次性安装这些监听器，因为持久化已保证每个 id 只有一个活跃写句柄）。第一个待处理事件会开启固定的内部批处理窗口，后续事件会加入但不会重置其截止时间。窗口到期后会通过该会话的写句柄启动一次持久化 `append`；该次写入期间接纳的事件会获得自己的截止时间，并形成后续批次。`session/flush` 会取消等待并排空至完全停稳，因此循环仍将其用作在领取下一个普通轮次之前的顺序与错误观察检查点。后台写入被拒绝时会按序保留对应事件、暂停自动路径，并通过 logger 报告；下一次显式 flush 会重试，并向其调用方响亮地拒绝。`session/disposed` 会执行同样的最终排空并关闭句柄，而 `close()` 本身会经由仍然打开的存储排空已路由的缓冲，因此后端 teardown 的关闭清扫不丢任何数据。该窗口只限制有意的批处理等待，不限制事件循环调度或后端完成持久化的延迟。
 
+<a id="same-session-durability"></a>
+
+## 同会话耐久性
+
+主机协议通过 `ctx.sessionPersistence.flushSessionDurably(session)` 显式启用验证。操作在等待 `sessions.flush(session)` 之前，捕获确切活动 Session 的排他事件结束位置 `seq`。成功要求存储调用返回 true、同一个当前持有所有权的 JSONL 写入句柄仍绑定到该 Session 对象，以及实际句柄完成本次刷写，覆盖已经确认且连续匹配的前缀。存储头部、继承位置和事件内容都必须匹配；仅凭数量相等不能证明种子或恢复历史已持久化。有界异步方法 `Session.matchesDurabilityPrefix(events, end)` 仅确认内容相等。
+
+<a id="sessiondurabilityresult"></a>
+
+`SessionDurabilityResult` 是带判别字段的联合类型：`durable` 包含 `session`、排他结束位置 `boundary`，以及仅在当前进程有效的 `operation` 和 `writer` 符号；`refused` 包含 `reason`，刷写被拒绝时还携带原始 `cause`。缺失、已关闭、未绑定、只读、过期、被替换或已丧失所有权的写入器均会拒绝验证。即使其他监听器成功，追加或监听器拒绝仍使操作失败。后续追加不会扩大操作已捕获的位置。验证期间关闭、移除会话、卸载提供方或替换写入器都会阻止成功。创建通知或首个路由活动事件建立对象绑定；在通知之后才创建的空写入器必须先通过生命周期建立路由，才能证明任何内容。
+
+这些结果是主机观测事实，绝不作为输入接受，也不是可复用的派发授权。提供方默认实现返回 `unsupported`。原有 `SessionStore.flush` 仍只报告监听器是否参与；普通任务不新增记录、模型调用、配置预设变更、模式变更或 fsync 策略。JSONL 验证持有的租约，包括 POSIX 锁文件 inode；它不能防止验证完成后恶意同用户代码修改文件系统。尚未由成功追加重写的破损帧恢复前缀不能获得证明。拒绝可能发生在部分前缀已提交之后，并不代表回滚；调用方必须阻止依赖操作并负责恢复。冷接收方投递、参与方接管、协议日志、多会话恢复和副作用准入仍需要下游各自的协议。
+
 ## 崩溃恢复保留被中断的轮次
 
 一个在轮次中途崩溃的日志以打开的 `turn/start` 而无 `turn/end` 结束。持久化**不会**截断或修复它：在长周期任务中，单个轮次可能非常庞大（许多步骤、大量工具输出），而这些事件在崩溃前已被持久追加。它返回物理上有效的连续日志；只有撕裂物理尾部——属于一次从未完成的 append——中不完整的碎片会被丢弃：从中恢复的完整记录（JSONL 后端会部分解码撕裂的 Zstandard 帧）由写路径在句柄的第一次新 append 之前持久重写。修复是读方的职责：resume（agent-loop）通过其写句柄读取已存储的日志，计算 `interruptedTurnClosers`——缺失的工具错误、任何未闭合的 `step/end`，以及一个合成的 `turn/end { reason: { kind: 'interrupted' } }`——并在发布 Session 之前把它们作为普通批次通过同一句柄追加。`interrupted` 是唯一一个不由循环发出的 `TurnEndReason`（见 [session.md](session.zh.md#why-a-turn-ended-turnendreasonmap)）。
@@ -362,6 +374,19 @@ Freshness: once an `append` or `flush` resolves, reads started afterwards on thi
 
 ```ts cordis-catalog
 /**
+ * Opt in to host-verified same-session writer durability. Ordinary callers keep
+ * using `sessions.flush(session)`. No model receipt or prior result is input.
+ * Providers must capture the live Session's exclusive boundary before awaiting
+ * that store entry point, require true, and verify fresh flush coverage from
+ * the same currently owned, routed write handle after every await.
+ * Refusal leaves dependent protocol work blocked; storage may have committed
+ * a prefix, so the caller owns recovery and must not infer rollback or dispatch permission.
+ * @param session - exact live Session requiring persistence.
+ * @returns a transient success or a typed refusal; unsupported providers refuse explicitly.
+ */
+flushSessionDurably(session: Session): Promise<SessionDurabilityResult>
+
+/**
  * Create a new stored session and take its write ownership.
  * @param header - the immutable header (id, version, cwd, lineage) to store.
  * @param options - optional cancellation.
@@ -422,7 +447,7 @@ abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<S
 abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
 ```
 
-Types: [SessionId](core.zh.md)
+Types: [Session](session.zh.md) · [SessionId](core.zh.md)
 
 Source: [`packages/session/session-persistence/src/index.ts`](../../packages/session/session-persistence/src/index.ts)
 <!-- END GENERATED cordis-surface -->

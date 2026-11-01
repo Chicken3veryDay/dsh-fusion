@@ -32,7 +32,7 @@ import { mkdir, open, stat } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock'
-import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
+import { SessionAlreadyOwnedError, SessionOwnershipLostError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { acquireLockHandleWin32, releaseLockHandleWin32 } from './win32.ts'
 
@@ -58,7 +58,7 @@ function isLockContention(error: unknown): boolean {
 export class SessionWriteLease {
   private released = false
 
-  private constructor(private readonly held: HeldLock) {}
+  private constructor(private readonly held: HeldLock, private readonly path: string) {}
 
   /**
    * Acquire the session directory's kernel write lock.
@@ -82,7 +82,7 @@ export class SessionWriteLease {
         if ((error as NodeJS.ErrnoException | null)?.code === 'EBUSY') throw new SessionAlreadyOwnedError(id)
         throw error
       }
-      return new SessionWriteLease({ kind: 'win32', handle })
+      return new SessionWriteLease({ kind: 'win32', handle }, path)
     }
     /* v8 ignore stop */
     // Bounded retry: locking an inode a releasing creator just unlinked (or a
@@ -102,7 +102,7 @@ export class SessionWriteLease {
           throw error
         })
         if (current !== undefined && current.ino === held.ino && current.dev === held.dev) {
-          return new SessionWriteLease({ kind: 'posix', handle })
+          return new SessionWriteLease({ kind: 'posix', handle }, path)
         }
       } catch (error: unknown) {
         await handle.close()
@@ -113,6 +113,24 @@ export class SessionWriteLease {
       await handle.close()
     }
     throw new SessionAlreadyOwnedError(id)
+  }
+
+  /**
+   * Verify that this lease still owns its original kernel lock and path.
+   * @param id - session identity used for ownership refusal.
+   * @throws {SessionOwnershipLostError} when released or the POSIX lock inode changed.
+   */
+  async assertOwned(id: SessionId): Promise<void> {
+    this.assertHeld(id)
+    if (this.held.kind === 'win32') return
+    const held = await this.held.handle.stat({ bigint: true })
+    const current = await stat(this.path, { bigint: true })
+    this.assertHeld(id)
+    if (held.ino !== current.ino || held.dev !== current.dev) throw new SessionOwnershipLostError(id)
+  }
+
+  private assertHeld(id: SessionId): void {
+    if (this.released) throw new SessionOwnershipLostError(id)
   }
 
   /**

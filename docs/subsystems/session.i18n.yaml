@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/session.md
 /sessions:
-  en: 28fb7eb8f758fdf0
-  zh: a36d6f03e331ad86
+  en: 5d554c9ca883a74f
+  zh: 10452fe420586a5e
 /sessions/sessioneventmap-the-event-vocabulary:
   en: 541354f6468e117d
   zh: 2d7a665bad828a02

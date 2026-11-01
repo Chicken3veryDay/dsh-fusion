@@ -7,7 +7,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionAccess } from './handle.ts'
 import type { SessionLocation } from './errors.ts'
 import type { SessionPersistenceRevision } from './revision.ts'
@@ -115,6 +115,27 @@ export interface SessionPersistenceListOptions {
   readonly signal?: AbortSignal
 }
 
+/** A host-only durability result; identities are transient and never stored or accepted as input. */
+export type SessionDurabilityResult =
+  | {
+    readonly kind: 'durable'
+    readonly session: Session
+    /** Exclusive required event boundary, captured before the first await. */
+    readonly boundary: SessionLogOffset
+    readonly operation: symbol
+    readonly writer: symbol
+  }
+  | {
+    readonly kind: 'refused'
+    readonly reason: 'unsupported' | 'not-live' | 'missing-writer' | 'stale-writer' | 'coverage'
+  }
+  | {
+    readonly kind: 'refused'
+    readonly reason: 'flush-failed'
+    /** Original storage/listener failure; refusal does not imply rollback. */
+    readonly cause: unknown
+  }
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     sessionPersistence: SessionPersistence
@@ -147,6 +168,22 @@ export abstract class SessionPersistence extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'sessionPersistence')
+  }
+
+  /**
+   * Opt in to host-verified same-session writer durability. Ordinary callers keep
+   * using `sessions.flush(session)`. No model receipt or prior result is input.
+   * Providers must capture the live Session's exclusive boundary before awaiting
+   * that store entry point, require true, and verify fresh flush coverage from
+   * the same currently owned, routed write handle after every await.
+   * Refusal leaves dependent protocol work blocked; storage may have committed
+   * a prefix, so the caller owns recovery and must not infer rollback or dispatch permission.
+   * @param session - exact live Session requiring persistence.
+   * @returns a transient success or a typed refusal; unsupported providers refuse explicitly.
+   */
+  flushSessionDurably(session: Session): Promise<SessionDurabilityResult> {
+    void session
+    return Promise.resolve({ kind: 'refused', reason: 'unsupported' })
   }
 
   /**
