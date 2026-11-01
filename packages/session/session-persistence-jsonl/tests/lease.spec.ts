@@ -22,6 +22,7 @@ import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import {
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionOwnershipLostError,
   SessionPersistenceNotFoundError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -155,6 +156,25 @@ const EVENTS = [
 ] as const
 
 describe('cross-process write lock', () => {
+  it('refuses ownership after release even when a successor holds the same lock path', async () => {
+    const root = await freshRoot()
+    const id = SessionId('released')
+    const lease = await SessionWriteLease.acquire(root, id)
+    try {
+      await expect(lease.assertOwned(id)).resolves.toBeUndefined()
+    } finally {
+      await lease.release()
+    }
+    await expect(lease.assertOwned(id)).rejects.toBeInstanceOf(SessionOwnershipLostError)
+    const successor = await SessionWriteLease.acquire(root, id)
+    try {
+      await expect(successor.assertOwned(id)).resolves.toBeUndefined()
+      await expect(lease.assertOwned(id)).rejects.toBeInstanceOf(SessionOwnershipLostError)
+    } finally {
+      await successor.release()
+    }
+  })
+
   it('excludes a second instance while the holder is live, and admits it after close', async () => {
     const root = await freshRoot()
     const first = await mount(root)

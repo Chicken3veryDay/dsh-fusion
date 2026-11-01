@@ -237,6 +237,7 @@ export class JsonlSessionHandle implements SessionHandle {
     if (!isDeepStrictEqual(this.header, session.header) || this.inheritedEventCount !== session.inheritedEventCount) return false
     if (!this.durabilityOpen || this.flushGeneration <= generation || this.flushedCursor < boundary
       || this.state.cursor < boundary || this.state.recoveredTail?.length) return false
+    /* v8 ignore next -- a successful flush retains its lease through close; durabilityOpen already rejects closing handles */
     if (this.lease === undefined) return false
     await this.lease.assertOwned(this.id)
     const stored = await this.read(0, boundary)

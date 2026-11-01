@@ -89,6 +89,25 @@ it('materializes an empty session and verifies fresh coverage on each operation'
   expect(await ctx.sessionPersistence.flushSessionDurably(session)).toMatchObject({ kind: 'refused', reason: 'coverage' })
 })
 
+it('refuses a bound writer with matching events but a different session header', async () => {
+  const { ctx, root } = await mount()
+  const session = ctx.sessions.create(SessionId('different-header'), { meta: { delegationDepth: 0 } })
+  const header = { ...session.header, createdAt: session.header.createdAt + 1 }
+  const writer = await ctx.sessionPersistence.create(header)
+  handles.push(writer)
+  const event = session.append('turn/start', { turn: 1 })
+
+  expect(await ctx.sessionPersistence.flushSessionDurably(session)).toMatchObject({ kind: 'refused', reason: 'coverage' })
+  const remounted = await mount(root)
+  const reader = await remounted.ctx.sessionPersistence.open(session.id, 'read')
+  try {
+    expect(reader.header).toEqual(header)
+    expect((await reader.read()).events).toEqual([event])
+  } finally {
+    await reader.close()
+  }
+})
+
 it.each(['none', 'zstd'] as const)('waits for append acknowledgement and certifies the captured boundary (%s)', async (compression) => {
   const { ctx, root } = await mount(undefined, compression)
   const { session, writer } = await owned(ctx)

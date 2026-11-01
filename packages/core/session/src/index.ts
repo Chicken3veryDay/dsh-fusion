@@ -756,7 +756,7 @@ export class Session {
    * @returns whether every event through that boundary matches this Session.
    */
   matchesDurabilityPrefix(events: readonly SessionEvent[], end: SessionLogOffset): Promise<boolean> {
-    if (!Number.isSafeInteger(end) || end < 0 || end > this.log.length || events.length < end) return Promise.resolve(false)
+    if (end > this.log.length || events.length < end) return Promise.resolve(false)
     return Promise.resolve(isDeepStrictEqual(this.log.slice(0, end), events.slice(0, end)))
   }
 

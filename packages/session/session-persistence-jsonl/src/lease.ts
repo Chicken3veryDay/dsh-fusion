@@ -122,6 +122,7 @@ export class SessionWriteLease {
    */
   async assertOwned(id: SessionId): Promise<void> {
     this.assertHeld(id)
+    /* v8 ignore next -- native Windows coverage exercises this platform branch; Linux covers the POSIX peer */
     if (this.held.kind === 'win32') return
     const held = await this.held.handle.stat({ bigint: true })
     const current = await stat(this.path, { bigint: true })

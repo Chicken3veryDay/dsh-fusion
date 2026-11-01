@@ -23,6 +23,24 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 
 describe('Session', () => {
+  it('compares only the captured durability prefix after later appends', async () => {
+    const session = Session.create(SessionId('durability-prefix'))
+    const event = session.append('turn/start', { turn: 1 })
+    const boundary = session.seq
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+    await expect(session.matchesDurabilityPrefix([], SessionLogOffset(0))).resolves.toBe(true)
+    await expect(session.matchesDurabilityPrefix([event], boundary)).resolves.toBe(true)
+    await expect(session.matchesDurabilityPrefix([{ ...event, time: event.time + 1 }], boundary)).resolves.toBe(false)
+    await expect(session.matchesDurabilityPrefix([], boundary)).resolves.toBe(false)
+  })
+
+  it('refuses a durability prefix boundary beyond the session log', async () => {
+    const session = Session.create(SessionId('durability-bounds'))
+    const event = session.append('turn/start', { turn: 1 })
+    await expect(session.matchesDurabilityPrefix([event], SessionLogOffset(2))).resolves.toBe(false)
+  })
+
   it('exposes one stable readonly surface view', () => {
     const session = Session.create(SessionId('surface-view'))
     const surface = session.surface
