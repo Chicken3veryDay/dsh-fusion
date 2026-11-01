@@ -1,0 +1,3 @@
+{"type":"session","version":4,"id":"{{session:1}}","createdAt":1785097381464,"isSeeded":false,"delegationDepth":0}
+{"type":"agent/runtime-owner","data":{"rootSessionId":"{{session:1}}"}}
+{"type":"session/end-seed","data":{}}

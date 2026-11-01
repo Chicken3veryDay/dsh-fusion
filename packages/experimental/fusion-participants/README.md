@@ -27,7 +27,7 @@ Prepare durable participant contexts before publishing parked Agents. A task ret
 
 Mount this opt-in host service alongside `agents`, `sessionPersistence`, `sessionProjections`, `fusionConfig` and `agentPresets`. It has no configurable fields. The owning host calls `ctx.fusionParticipants.prepare(selectionId)` or `recover(rootSessionId)`, then retains the returned `PreparedParticipants` capability until task disposal. `adopt(role)` returns a parked Agent; disposing that Agent preserves its Session and writer for another adoption. Dispose the task to drain Agents, remove routing and close writers.
 
-Preparation failures expose `ParticipantPreparationError.rootSessionId` for recovery and report whether cleanup completed or remains unknown. Retry recovery using that root identity after resolving the cause; starting another preparation creates a different task. Missing or corrupt established histories block recovery rather than allocate replacement contexts.
+Preparation failures expose `ParticipantPreparationError.rootSessionId` for recovery and report whether cleanup completed or remains unknown. Retry recovery using that root identity after resolving the cause; starting another preparation creates a different task. Missing or corrupt established histories block recovery rather than allocate replacement contexts. Missing, malformed or duplicate ownership and roster records also refuse recovery; required lifecycle records make older stock readers refuse managed histories before activation.
 
 -----
 

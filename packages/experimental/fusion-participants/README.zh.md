@@ -27,7 +27,7 @@ kind: "package-reference"
 
 显式挂载此主机服务，并同时提供 `agents`、`sessionPersistence`、`sessionProjections`、`fusionConfig` 和 `agentPresets`。本服务没有配置字段。主机调用 `ctx.fusionParticipants.prepare(selectionId)` 或 `recover(rootSessionId)`，并持有返回的 `PreparedParticipants` 能力直到任务释放。`adopt(role)` 返回停驻的 Agent；释放该 Agent 后，其 Session 与写入句柄仍可再次采用。释放任务会等待 Agent 停止、移除路由并关闭写入句柄。
 
-准备失败时，`ParticipantPreparationError.rootSessionId` 保留恢复身份，`cleanup` 标明清理已完成或结果未知。解决失败原因后使用该根身份恢复；再次调用准备会创建另一个任务。已建立的参与者历史缺失或损坏时，恢复被阻止，不会分配替代上下文。
+准备失败时，`ParticipantPreparationError.rootSessionId` 保留恢复身份，`cleanup` 标明清理已完成或结果未知。解决失败原因后使用该根身份恢复；再次调用准备会创建另一个任务。已建立的参与者历史缺失或损坏时，恢复被阻止，不会分配替代上下文。所有权与成员记录缺失、格式无效或重复时也会拒绝恢复；必读的生命周期记录使旧版标准读取器在激活前拒绝受管理历史。
 
 -----
 

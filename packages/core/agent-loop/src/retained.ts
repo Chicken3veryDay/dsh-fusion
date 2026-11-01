@@ -165,9 +165,7 @@ export async function retainSession(
       try { await unfollow() } catch (_sameFailure: unknown) { /* The memoized disposer already supplied this failure. */ }
       throw new AggregateError([error, cleanup], 'retained session acquisition and cleanup failed')
     }
-    try { await unfollow() } catch (cleanup: unknown) {
-      throw new AggregateError([error, cleanup], 'retained session acquisition and cleanup failed')
-    }
+    await unfollow()
     throw error
   }
 }

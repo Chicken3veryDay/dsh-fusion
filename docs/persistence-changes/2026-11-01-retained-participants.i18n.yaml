@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-01-retained-participants.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-11-01-retained-participants.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-11-01-retained-participants:
+  en: ed460e7c05120e70
+  zh: d169b5e313f3deac
+/2026-11-01-retained-participants/summary:
+  en: 87f75354ba23043f
+  zh: d42fbdc1abeb6956
+/2026-11-01-retained-participants/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-11-01-retained-participants/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-11-01-retained-participants/compatibility:
+  en: 2f47b5453820f5bd
+  zh: a5385904b4dc2629
+/2026-11-01-retained-participants/verification:
+  en: 849d8c66dfc597de
+  zh: 05daf9f1beba0405
+/2026-11-01-retained-participants/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

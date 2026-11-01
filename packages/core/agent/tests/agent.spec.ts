@@ -3,7 +3,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { describe, expect, expectTypeOf, it, onTestFinished } from 'vitest'
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { agentEvents, emitAgentEvent } from '@deepseek-ai/dsh-agent'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 
 import type {
@@ -273,7 +273,7 @@ describe('agentEvents()', () => {
     ctx.on('agent/status', () => Promise.reject(new Error('async listener')) as never)
     ctx.on('agent/status', ({ status }) => void heard.push(status))
 
-    agentEvents(ctx, agent).emit('agent/status', { status: 'running' })
+    emitAgentEvent(ctx, agent, 'agent/status', { status: 'running' })
     await Promise.resolve()
     expect(heard).toEqual(['running'])
     expect(warnings).toEqual([

@@ -17,9 +17,12 @@ import Preset from '@deepseek-ai/dsh-agent-preset'
 import Commands from '@deepseek-ai/dsh-commands'
 import FusionConfig from '@deepseek-ai/dsh-fusion-config'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+import { scanLog, sessionDir } from '../../../session/session-persistence-jsonl/src/format.ts'
 import { FakeCredentials } from '../../../preset/fusion-config/tests/harness.ts'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { ReactLoopAgent } from '../../../core/agent-loop/src/agent.ts'
@@ -377,3 +380,114 @@ it('reports unknown witness cleanup even when composition mounting succeeds', as
   expect(ctx.sessions.list()).toHaveLength(0)
   expect(adapter.requests).toHaveLength(0)
 })
+
+it('refuses a roster barrier after the retained root barrier succeeded', async () => {
+  const { ctx, adapter } = await mount()
+  const flush = ctx.sessionPersistence.flushSessionDurably.bind(ctx.sessionPersistence)
+  let calls = 0
+  vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockImplementation(async (session) => {
+    if (++calls === 2) return { kind: 'refused', reason: 'flush-failed', cause: new Error('roster flush failed') }
+    return flush(session)
+  })
+  await expect(ctx.fusionParticipants.prepare('single-test')).rejects.toMatchObject({
+    cleanup: 'complete', cause: { message: 'participant durability refused: flush-failed' },
+  })
+  expect(calls).toBe(2)
+  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.agents.list()).toHaveLength(0)
+  expect(adapter.requests).toHaveLength(0)
+})
+
+it('reads stock upstream records and safely refuses each managed record with the preserved upstream JSONL parser', async () => {
+  const upstreamTree = 'd3c6ee1d1f0ec8b71c92e1b62d0cf9a8d6553bf8'
+  const preserved = (path: string): string => execFileSync('git', ['show', `${upstreamTree}:${path}`], { encoding: 'utf8' })
+  const parserPath = 'packages/session/session-persistence-jsonl/src/format.ts'
+  const parser = preserved(parserPath)
+  expect(await readFile(parserPath, 'utf8')).toBe(parser)
+  const scratch = await mkdtemp(join(process.cwd(), 'packages/session/session-persistence-jsonl/tests', '.p03-upstream-parser-'))
+  roots.push(scratch)
+  await writeFile(join(scratch, 'known.ts'), preserved('packages/core/session/src/known-event-types.ts'))
+  await writeFile(join(scratch, 'parser.ts'), parser.replace('  KNOWN_SESSION_EVENT_TYPES,\n', '')
+    + '\nexport { KNOWN_SESSION_EVENT_TYPES } from \'./known.ts\'\n')
+  // Only the installed vocabulary changes: the preserved physical parser and released codecs are unchanged.
+  await writeFile(join(scratch, 'parser.ts'), (await readFile(join(scratch, 'parser.ts'), 'utf8'))
+    .replace('import { isAbsolute', "import { KNOWN_SESSION_EVENT_TYPES } from './known.ts'\nimport { isAbsolute"))
+  const validationPath = 'packages/session/session-persistence/src/storage-contract.ts'
+  const validation = preserved(validationPath)
+  expect(await readFile(validationPath, 'utf8')).toBe(validation)
+  await writeFile(join(scratch, 'storage-contract.ts'), validation
+    .replace('  KNOWN_SESSION_EVENT_TYPES,\n', '')
+    .replace("from './errors.ts'", "from '@deepseek-ai/dsh-session-persistence'")
+    + "\nimport { KNOWN_SESSION_EVENT_TYPES } from './known.ts'\n")
+  const oldValidation = await import(/* @vite-ignore */ pathToFileURL(join(scratch, 'storage-contract.ts')).href) as typeof import('../../../session/session-persistence/src/storage-contract.ts')
+  const old = await import(/* @vite-ignore */ pathToFileURL(join(scratch, 'parser.ts')).href) as typeof import('../../../session/session-persistence-jsonl/src/format.ts')
+  const { ctx, root } = await mount()
+  const stock = await ctx.agents.create({ sessionId: SessionId('upstream-stock'), agentOptions: { provider: 'omniroute-openai', model: 'gpt-6.1-sol' } })
+  await ctx.sessionPersistence.flushSessionDurably(stock.agent.session)
+  const stockCwd = stock.agent.session.header.cwd
+  await stock.dispose()
+  const stockBytes = await readFile(join(sessionDir(root, stockCwd, SessionId('upstream-stock')), 'session.v4.jsonl'))
+  const oldStock = old.scanLog(stockBytes)
+  const oldWritten = Buffer.from(`${JSON.stringify(old.toHeaderLine(oldStock.meta))}\n${old.eventLines(oldStock.events)}\n`)
+  expect(scanLog(oldWritten)).toMatchObject({ meta: oldStock.meta, events: oldStock.events })
+  expect(scanLog(stockBytes)).toEqual(oldStock)
+  expect(oldValidation.validateStoredEvents(oldStock.meta, oldStock.events)).toEqual(oldStock.events)
+  const resumed = await ctx.agents.resume({ resumeSessionId: SessionId('upstream-stock') })
+  await resumed.dispose()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const rootId = task.roster.rootSessionId
+  await task.dispose()
+  const bytes = await readFile(join(sessionDir(root, undefined, rootId), 'session.v4.jsonl'))
+  const rows = bytes.toString('utf8').trim().split('\n')
+  const current = scanLog(bytes)
+  expect(current.events.filter(event => ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established'].includes(event.type))).toHaveLength(3)
+  for (const type of ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established']) {
+    const row = rows.find(line => (JSON.parse(line) as { type: string }).type === type)
+    expect(row).toBeDefined()
+    if (row === undefined) throw new Error(`missing managed record ${type}`)
+    const event = JSON.parse(row) as object
+    const isolated = Buffer.from(`${rows[0]}\n${JSON.stringify({ ...event, seq: 0 })}\n`)
+    const parsed = old.scanLog(isolated)
+    expect(() => oldValidation.validateStoredEvents(parsed.meta, parsed.events)).toThrow(`event type "${type}"`)
+  }
+  const parsed = old.scanLog(bytes)
+  expect(() => oldValidation.validateStoredEvents(parsed.meta, parsed.events)).toThrow('agent/runtime-owner')
+})
+
+it.each(['missing-owner', 'malformed-owner', 'duplicate-owner', 'missing-roster', 'malformed-roster',
+  'duplicate-roster', 'malformed-established', 'duplicate-established'])(
+  'refuses managed activation after durable %s corruption', async (corruption) => {
+    const { ctx, root, adapter } = await mount()
+    const task = await ctx.fusionParticipants.prepare('single-test')
+    const id = task.roster.rootSessionId
+    await task.dispose()
+    const path = join(sessionDir(root, undefined, id), 'session.v4.jsonl')
+    const rows = (await readFile(path, 'utf8')).trim().split('\n')
+    const type = corruption.endsWith('owner') ? 'agent/runtime-owner'
+      : corruption.endsWith('roster') ? 'fusion/roster' : 'fusion/participant-established'
+    const index = rows.findIndex(line => (JSON.parse(line) as { type: string }).type === type)
+    expect(index).toBeGreaterThan(0)
+    const selected = rows[index]
+    if (selected === undefined) throw new Error(`missing corruption target ${type}`)
+    if (corruption.startsWith('missing')) rows.splice(index, 1)
+    else if (corruption.startsWith('duplicate')) rows.splice(index, 0, selected)
+    else {
+      const row = JSON.parse(selected) as object
+      rows[index] = JSON.stringify({ ...row, data: {} })
+    }
+    const resequenced = rows.map((line, index) => {
+      const row = JSON.parse(line) as object
+      return JSON.stringify(index === 0 ? row : { ...row, seq: index - 1 })
+    })
+    await writeFile(path, resequenced.join('\n') + '\n')
+    const restarted = await mount(root)
+    const claims = vi.fn()
+    restarted.ctx.on('agent/inbox/claimed', claims)
+    await expect(restarted.ctx.fusionParticipants.recover(id)).rejects.toMatchObject({ cleanup: 'complete' })
+    expect(adapter.requests).toHaveLength(0)
+    expect(restarted.adapter.requests).toHaveLength(0)
+    expect(claims).not.toHaveBeenCalled()
+    expect(restarted.ctx.agents.list()).toHaveLength(0)
+    expect(restarted.ctx.sessions.list()).toHaveLength(0)
+  },
+)
