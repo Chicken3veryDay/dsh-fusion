@@ -31,7 +31,7 @@ afterEach(async () => {
   for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
-export async function mount(root?: string) {
+export async function mount(root?: string, compression: 'none' | 'zstd' = 'none') {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
   if (!roots.includes(root)) roots.push(root)
   const ctx = new Context()
@@ -44,7 +44,7 @@ export async function mount(root?: string) {
   })
   const entries = [
     ...['llm', 'sessions', 'projections', 'prompt', 'tools', 'native', 'agents'].map(name => ({ name: `cordis:${name}` })),
-    { name: 'cordis:jsonl', config: { root, compression: 'none' } },
+    { name: 'cordis:jsonl', config: { root, compression } },
     { name: 'cordis:loop', config: { agents: [] } },
     { name: 'cordis:presets', config: { default: 'standard' } },
     { name: 'cordis:preset', config: { id: 'standard', plugins: [] } },

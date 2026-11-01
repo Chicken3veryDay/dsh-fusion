@@ -9,6 +9,8 @@ it('delivers ordinary text once, keeps blocking input and retains original metad
   const claims = vi.fn()
   ctx.on('agent/inbox/claimed', claims)
   const task = await ctx.fusionParticipants.prepare('single-test')
+  expect(task.delivery.snapshot()).toEqual({ decisionInputRevision: 0, dirtyGeneration: 0,
+    reservations: [], transportPending: [], classificationPending: [] })
   const targetParticipantId = task.roster.roles.participant!
   const input = { deliveryId: DeliveryId('ordinary-ok'), targetParticipantId, inboxTarget: 'next-turn' as const, correlationId: null, text: 'ok\r\n𝄞' }
   const opening = vi.spyOn(ctx.sessionPersistence, 'open')
@@ -35,7 +37,7 @@ it('delivers ordinary text once, keeps blocking input and retains original metad
   expect(insertion.data.inserted[0]).toMatchObject({ id: receipt.messageId, content: [{ type: 'text', text: 'ok\r\n𝄞' }], source: { kind: 'fusion-delivery', origin: { kind: 'user' }, deliveryId: input.deliveryId } })
   const parked = await task.adopt('participant')
   expect(parked.agent.inbox.nextTurn).toHaveLength(1)
-  parked.agent.cancel()
+  parked.agent.cancel({ kind: 'user' })
   expect(claims).not.toHaveBeenCalled()
   expect(adapter.requests).toHaveLength(0)
   await task.dispose()
@@ -114,6 +116,7 @@ it('authenticates exact live task peers, rejects foreign targets and preserves p
   const input = { deliveryId: DeliveryId('peer'), targetParticipantId: task.roster.roles.executor!, inboxTarget: 'next-turn' as const, correlationId: null, text: 'peer evidence' }
   const receipt = await task.delivery.admitPeer(peer.agent, input)
   expect(receipt.order).toBe(1)
+  await task.delivery.reconcile()
   await expect(task.delivery.admitPeer(peer.agent, { ...input, targetParticipantId: peer.agent.id })).rejects.toThrow()
   await expect(task.delivery.admitUser({ ...input, targetParticipantId: SessionId('foreign') })).rejects.toThrow()
   await expect(task.delivery.admitUser(input)).rejects.toThrow()

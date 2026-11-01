@@ -61,8 +61,16 @@ export class DeliveryOwner implements DormantDelivery {
     this.signal = AbortSignal.any([owner.signal, this.abort.signal])
   }
 
-  private rootState(): AdmissionState { return this.owner.projections.admissions.stateOf(this.owner.root) }
-  private receiver(session: Session): ReceiverState { return this.owner.projections.receivers.stateOf(session) }
+  private rootState(): AdmissionState {
+    const state = this.owner.projections.admissions.stateOf(this.owner.root)
+    if (state.sessionId !== this.owner.root.id) throw new Error('root checkpoint belongs to another Session')
+    return state
+  }
+  private receiver(session: Session): ReceiverState {
+    const state = this.owner.projections.receivers.stateOf(session)
+    if (state.sessionId !== session.id) throw new Error('receiver checkpoint belongs to another Session')
+    return state
+  }
 
   admitUser(input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt> {
     return this.admit(input, { kind: 'user' }, signal)
@@ -88,7 +96,12 @@ export class DeliveryOwner implements DormantDelivery {
       const prior = existing?.intent ?? durable
       const digest = contentHash({ ...input, rootSessionId: this.owner.root.id, origin })
       if (prior !== undefined && prior.contentHash !== digest) throw new Error('delivery identity reused with changed input')
-      if (existing?.promise != null) return existing.promise
+      if (existing?.promise != null) {
+        return caller === undefined ? existing.promise : existing.promise.then((receipt) => {
+          caller.throwIfAborted()
+          return receipt
+        })
+      }
       const next = Math.max(state.entries.at(-1)?.intent.order ?? 0,
         ...[...this.reservations.values()].map(row => row.intent.order)) + 1
       const intent = prior ?? deepFreeze(createIntent(input, this.owner.root.id, origin, next))
@@ -166,7 +179,12 @@ export class DeliveryOwner implements DormantDelivery {
    */
   async adopt<T>(adopt: () => Promise<T>): Promise<T> {
     await this.reconcile()
-    return this.order.reserve(async () => { this.signal.throwIfAborted(); return adopt() })
+    return this.order.reserve(async () => {
+      this.signal.throwIfAborted()
+      const handle = await adopt()
+      this.signal.throwIfAborted()
+      return handle
+    })
   }
 
   /** Abort caller publication, then drain owned operations before writers can close. */

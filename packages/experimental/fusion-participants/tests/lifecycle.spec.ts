@@ -1,3 +1,4 @@
+import { DeliveryId } from '../src/index.ts'
 /** Loader composition, real JSONL restart and parked Agent context lineage. */
 import { expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -371,13 +372,18 @@ it('reads stock upstream records and safely refuses each managed record with the
   await resumed.dispose()
   const task = await ctx.fusionParticipants.prepare('single-test')
   const rootId = task.roster.rootSessionId
+  await task.delivery.admitUser({ deliveryId: DeliveryId('old-reader'), targetParticipantId: task.roster.roles.participant!,
+    inboxTarget: 'next-turn', correlationId: null, text: 'required delivery' })
+  const receiverBytes = await readFile(join(sessionDir(root, undefined, task.roster.roles.participant!), 'session.v4.jsonl'))
   await task.dispose()
   const bytes = await readFile(join(sessionDir(root, undefined, rootId), 'session.v4.jsonl'))
   const rows = bytes.toString('utf8').trim().split('\n')
   const current = scanLog(bytes)
   expect(current.events.filter(event => ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established'].includes(event.type))).toHaveLength(3)
-  for (const type of ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established']) {
-    const row = rows.find(line => (JSON.parse(line) as { type: string }).type === type)
+  const deliveryRows = [...rows, ...receiverBytes.toString('utf8').trim().split('\n')]
+  for (const type of ['agent/runtime-owner', 'fusion/roster', 'fusion/participant-established',
+    'fusion/delivery-intent', 'fusion/delivery-accepted', 'fusion/delivery-completed']) {
+    const row = deliveryRows.find(line => (JSON.parse(line) as { type: string }).type === type)
     expect(row).toBeDefined()
     if (row === undefined) throw new Error(`missing managed record ${type}`)
     const event = JSON.parse(row) as object

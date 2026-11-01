@@ -1,4 +1,5 @@
 /** Required delivery records and deterministic log-only recovery state. */
+import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
@@ -51,12 +52,27 @@ export const completionSchema = z.strictObject({
 }).refine(value => value.instructionSeq > value.acceptanceSeq && value.receiverBoundary > value.instructionSeq)
 /** Durable sender receipt data. */
 export type DeliveryCompletion = z.infer<typeof completionSchema>
-const rootEntry = z.strictObject({ intent: intentSchema, intentSeq: seq, completion: completionSchema.nullable() })
-const rootStateSchema = z.strictObject({ sessionId, entries: z.array(rootEntry) })
+const rootEntry = z.strictObject({ intent: intentSchema, intentSeq: seq, completion: completionSchema.nullable() }).refine(row =>
+  row.completion === null || row.completion.deliveryId === row.intent.deliveryId
+    && row.completion.contentHash === row.intent.contentHash && row.completion.order === row.intent.order
+    && row.completion.decisionInputRevision === row.intent.decisionInputRevision
+    && row.completion.targetParticipantId === row.intent.targetParticipantId)
+
+const rootStateSchema = z.strictObject({ sessionId, entries: z.array(rootEntry) }).refine(state =>
+  new Set(state.entries.map(row => row.intent.deliveryId)).size === state.entries.length
+  && state.entries.every((row, index) => row.intent.rootSessionId === state.sessionId
+    && row.intent.order === index + 1 && row.intent.decisionInputRevision === index + 1
+    && (row.intentSeq > (state.entries[index - 1]?.intentSeq ?? -1))))
 /** All ordinary text stays classification-pending independently of transport completion. */
 export type AdmissionState = z.infer<typeof rootStateSchema>
 const receiverEntry = z.strictObject({ intent: intentSchema, acceptanceSeq: seq, instructionSeq: seq.nullable() })
-const receiverStateSchema = z.strictObject({ sessionId, entries: z.array(receiverEntry) })
+const callSchema = z.strictObject({ id: z.string(), turn: z.number(), step: z.number(), started: seq.nullable() })
+const receiverStateSchema = z.strictObject({
+  sessionId, entries: z.array(receiverEntry), turn: z.number().nullable(), step: z.number().nullable(), calls: z.array(callSchema),
+}).refine(state => new Set(state.entries.map(row => row.intent.deliveryId)).size === state.entries.length
+  && state.entries.every((row, index) => row.intent.targetParticipantId === state.sessionId
+    && (row.instructionSeq === null ? index === state.entries.length - 1 : row.instructionSeq > row.acceptanceSeq)
+    && (row.acceptanceSeq > (state.entries[index - 1]?.acceptanceSeq ?? -1))))
 /** Permanent delivery identities survive inbox consumption, cancellation and model compaction. */
 export type ReceiverState = z.infer<typeof receiverStateSchema>
 
@@ -81,15 +97,7 @@ declare module '@deepseek-ai/dsh-session/types' {
  * @returns whether both values carry identical fields and scalar values.
  */
 export function same(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true
-  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
-      && left.every((value: unknown, index) => same(value, right[index]))
-  }
-  const l = Object.entries(left)
-  const r = Object.entries(right)
-  return l.length === r.length && l.every(([key, value]) => r.some(([other, v]) => key === other && same(value, v)))
+  return isDeepStrictEqual(left, right)
 }
 
 /**
@@ -139,7 +147,7 @@ export const admissionProjection = {
 /** Receiver projection tracks the original insertion, never just the current pending inbox. */
 export const receiverProjection = {
   key: 'fusionDeliveries', stateVersion: 1, stateSchema: receiverStateSchema,
-  init: header => ({ sessionId: header.id, entries: [] }),
+  init: header => ({ sessionId: header.id, entries: [], turn: null, step: null, calls: [] }),
   apply(state, event) {
     const pending = state.entries.find(row => row.instructionSeq === null)
     if (event.type === 'fusion/delivery-accepted') {
@@ -157,8 +165,32 @@ export const receiverProjection = {
         return { ...state, entries: state.entries.map(row => row === pending ? { ...row, instructionSeq: event.seq } : row) }
       }
     }
-    if (pending !== undefined && event.type !== 'session/end-seed') throw new Error('interleaving pending delivery')
-    return state
+    if (pending !== undefined) {
+      const stepEnd = event.type === 'step/end' && state.turn === event.data.turn && state.step === event.data.step
+        && state.calls.length === 0
+      const turnEnd = event.type === 'turn/end' && state.turn === event.data.turn && state.step === null
+        && state.calls.length === 0 && event.data.reason.kind === 'interrupted'
+      const toolResult = event.type === 'tool/result' && state.calls.some(call => call.id === event.data.message.toolCallId
+        && event.data.turn === call.turn && event.data.step === call.step && event.surfaceOp === 'append'
+        && event.data.message.isError === true && same(event.data.message.source, { kind: 'tool', callId: call.id })
+        && String(event.data.message.id) === `interrupted-tool-result-${call.id}-${event.seq}`
+        && event.data.error?.code === (call.started === null ? 'TOOL_NOT_STARTED' : 'TOOL_OUTCOME_UNKNOWN')
+        && same(event.sourceEventSeqs, call.started === null ? undefined : [call.started]))
+      if (event.type !== 'session/end-seed' && !stepEnd && !turnEnd && !toolResult) throw new Error('interleaving pending delivery')
+    }
+    switch (event.type) {
+      case 'turn/start': return { ...state, turn: event.data.turn, step: null, calls: [] }
+      case 'step/start': return { ...state, step: event.data.step }
+      case 'step/end': return { ...state, step: null, calls: [] }
+      case 'turn/end': return { ...state, turn: null, step: null, calls: [] }
+      case 'assistant/message': return { ...state, calls: [...state.calls,
+        ...event.data.message.content.filter(block => block.type === 'tool-call').map(block => ({
+          id: String(block.id), turn: event.data.turn, step: event.data.step, started: null,
+        }))] }
+      case 'tool/call': return { ...state, calls: state.calls.map(call => call.id === event.data.callId ? { ...call, started: event.seq } : call) }
+      case 'tool/result': return { ...state, calls: state.calls.filter(call => call.id !== event.data.message.toolCallId) }
+      default: return state
+    }
   },
 } satisfies ProjectionDefinition<'fusionDeliveries', ReceiverState>
 
