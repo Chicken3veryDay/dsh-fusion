@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 import { resolveLinuxNodePtyAddon, resolveWindowsNodePtyAddons } from './executable-native-pty.ts'
 import { officeSidecarArchives, runtimeNpmArchive, OFFICE_ASSET_IGNORES } from './build-exe-for-python-sdk-office.ts'
 import { syncPythonRuntimeProduct } from './build-exe-for-python-sdk-resources.ts'
-import { deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
+import { prepareDeployedBuildPolicy, deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
 import { prepareOfficeSkillAssets } from './primary-runtime/prepare.ts'
 import primaryLock from './primary-runtime/lock.json' with { type: 'json' }
 
@@ -308,19 +308,21 @@ class SingleExeBuild {
       '--filter',
       DEPLOY_ROOT_PACKAGE,
       'deploy',
-      '--legacy',
       '--prod',
+      '--frozen-lockfile',
+      '--ignore-scripts',
       // Production deployment omits workspace tooling such as Electron's patched signer.
       '--config.allow-unused-patches=true',
       '--config.node-linker=hoisted',
-      '--config.auto-install-peers=false',
       '--config.link-workspace-packages=true',
       '--config.hoist-workspace-packages=false',
       this.staging,
     ]) } finally {
-      // Legacy deploy records production-only workspace state; restore the development installation before exec.
+      // Restore the development installation before invoking workspace build tools.
       await this.runPnpm('restore development dependencies', ['install', '--offline', '--frozen-lockfile', '--prod=false', '--ignore-scripts'])
     }
+    if (!this.cli.dryRun) await prepareDeployedBuildPolicy(root, this.staging)
+    await this.runPnpm('build deployed dependencies', ['--dir', this.staging, 'rebuild'])
     await this.restoreLegacyHoists()
     await this.materializeStagedLinks()
     if (this.cli.dryRun) {
@@ -355,7 +357,7 @@ class SingleExeBuild {
       return
     }
     await materializeStagedLinks(this.staging)
-    await deduplicateStagedWorkspacePackages(this.staging, root)
+    await deduplicateStagedWorkspacePackages(this.staging, this.staging)
   }
 
   /** Add the executable entry and pkg assets to the staged manifest. */

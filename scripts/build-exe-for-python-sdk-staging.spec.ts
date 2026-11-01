@@ -2,9 +2,10 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { afterEach, expect, it } from 'vitest'
-import { deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
+import { deployedBuildPolicy, prepareDeployedBuildPolicy, deduplicateStagedWorkspacePackages, materializeStagedLinks } from './build-exe-for-python-sdk-staging.ts'
 
 const temporaryDirectories: string[] = []
 const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir'
@@ -118,4 +119,31 @@ it('rejects invalid deployment metadata before removing any package', async () =
     expect(existsSync(duplicate)).toBe(true)
     expect(existsSync(outside)).toBe(true)
   }
+})
+
+it('preserves script approvals and denials for the exact deployed workspace identities', async () => {
+  const workspace = await fixture('dsh-python-policy-')
+  const file = join(workspace, 'pnpm-workspace.yaml')
+  await writeFile(file, JSON.stringify({ allowBuilds: {
+    'fixture@file:packages/fixture': true,
+    'denied@file:packages/denied': false,
+    'registry@1.2.3': true,
+  } }))
+  expect(await deployedBuildPolicy(workspace)).toEqual({
+    [`fixture@${pathToFileURL(join(workspace, 'packages/fixture')).href}`]: true,
+    [`denied@${pathToFileURL(join(workspace, 'packages/denied')).href}`]: false,
+    'registry@1.2.3': true,
+  })
+  const staging = join(workspace, 'staging')
+  await mkdir(staging)
+  await writeFile(join(staging, 'pnpm-workspace.yaml'), 'packages: ["."]\nautoInstallPeers: true\n')
+  await prepareDeployedBuildPolicy(workspace, staging)
+  const generated = await readFile(join(staging, 'pnpm-workspace.yaml'), 'utf8')
+  expect(generated).toContain('autoInstallPeers: true')
+  expect(generated).toContain('registry@1.2.3: true')
+  expect(generated).toContain('denied@file:')
+  await writeFile(file, '{}')
+  await expect(deployedBuildPolicy(workspace)).rejects.toThrow('reviewed workspace allowBuilds')
+  await writeFile(file, JSON.stringify({ allowBuilds: { fixture: 'true' } }))
+  await expect(deployedBuildPolicy(workspace)).rejects.toThrow('Invalid build decision')
 })

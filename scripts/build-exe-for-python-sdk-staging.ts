@@ -1,7 +1,8 @@
 /** Prepare a symlink-free executable runtime payload with shared workspace module instances. */
-import { cp, lstat, readFile, readdir, realpath, rm, unlink } from 'node:fs/promises'
+import { cp, lstat, readFile, readdir, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { load } from 'js-yaml'
+import { pathToFileURL } from 'node:url'
+import { dump, load } from 'js-yaml'
 
 function isHoistedLocations(value: unknown): value is Record<string, string[]> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -100,4 +101,41 @@ export async function materializeStagedLinks(staging: string): Promise<void> {
     })
     remaining = await findSymlink(nodeModules)
   }
+}
+
+/**
+ * Preserve reviewed script decisions when shared-lock deploy makes workspace identities absolute.
+ * @param workspace - Workspace root containing the reviewed pnpm policy.
+ * @returns The same policy with local file identities expressed as absolute URLs.
+ */
+export async function deployedBuildPolicy(workspace: string): Promise<Record<string, boolean>> {
+  const manifest: unknown = load(await readFile(join(workspace, 'pnpm-workspace.yaml'), 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null || !('allowBuilds' in manifest)
+    || typeof manifest.allowBuilds !== 'object' || manifest.allowBuilds === null || Array.isArray(manifest.allowBuilds)) {
+    throw new Error('Python deploy requires the reviewed workspace allowBuilds policy')
+  }
+  const result: Record<string, boolean> = {}
+  for (const [identity, allowed] of Object.entries(manifest.allowBuilds)) {
+    if (typeof allowed !== 'boolean') throw new Error(`Invalid build decision for ${identity}`)
+    const marker = identity.indexOf('@file:')
+    const deployed = marker < 0 ? identity
+      : identity.slice(0, marker + 1) + pathToFileURL(resolve(workspace, identity.slice(marker + 6))).href
+    if (deployed in result) throw new Error(`Duplicate deployed build identity ${deployed}`)
+    result[deployed] = allowed
+  }
+  return result
+}
+
+/**
+ * Apply only the reviewed script decisions to pnpm's generated deployment workspace.
+ * @param workspace - Source workspace owning the policy.
+ * @param staging - Frozen deployment whose scripts have not run yet.
+ */
+export async function prepareDeployedBuildPolicy(workspace: string, staging: string): Promise<void> {
+  const file = join(staging, 'pnpm-workspace.yaml')
+  const manifest: unknown = load(await readFile(file, 'utf8'))
+  if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+    throw new Error('Invalid deployed workspace manifest')
+  }
+  await writeFile(file, dump({ ...manifest, allowBuilds: await deployedBuildPolicy(workspace) }))
 }

@@ -15,6 +15,8 @@ pnpm exec tsx scripts/build-exe-for-python-sdk.ts
 
 所需 `lib/` 产物已存在时使用 `--skip-build`；如需选择平台，请使用 `--targets=node24-linux-x64,node24-linux-arm64,node24-macos-arm64,node24-macos-x64,node24-win-x64`。每个目标都应在其原生架构上构建。产物写入 `dist-exe/`，脚本会将所选载体同步到 `python/sdk-runtime/`。Windows 会生成 `.exe` 与 `-rg.exe`；macOS 构建还会同步 `node-pty` 所需的配套 spawn 辅助程序。
 
+构建器按冻结版本部署已审查的工作区锁文件，然后使用相同的已审查允许/拒绝策略运行依赖构建脚本，并将工作区文件标识解析为绝对 URL。Office sidecar 归档仍必须具备工作区锁文件中的 SHA-512 完整性信息；仅完成注入的可执行文件不代表完整构建。
+
 ## 验证 SDK
 
 请将虚拟环境放在 `python/` 之外，安装测试组，然后运行 Python 测试套件：

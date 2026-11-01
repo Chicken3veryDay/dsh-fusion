@@ -15,6 +15,8 @@ pnpm exec tsx scripts/build-exe-for-python-sdk.ts
 
 Use `--skip-build` when the required `lib/` artifacts already exist, or `--targets=node24-linux-x64,node24-linux-arm64,node24-macos-arm64,node24-macos-x64,node24-win-x64` to select platforms. Build each target on its native architecture. Products land in `dist-exe/` and the script syncs the selected carriers into `python/sdk-runtime/`. Windows emits `.exe` and `-rg.exe`; macOS also syncs the matching spawn helper required by `node-pty`.
 
+The builder deploys the reviewed workspace lock with frozen versions, then runs dependency build scripts under the same reviewed allow/deny policy with workspace file identities resolved to absolute URLs. Office sidecar archives still require the workspace lock’s SHA-512 integrity; an injected executable alone is not a complete build.
+
 ## Validate the SDK
 
 Keep the virtual environment outside `python/`, install the test group, and run the Python suite:
