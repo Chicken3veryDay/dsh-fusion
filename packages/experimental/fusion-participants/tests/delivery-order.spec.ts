@@ -99,3 +99,35 @@ it('honors an aborted duplicate caller without canceling the original durable op
   expect(task.delivery.snapshot().decisionInputRevision).toBe(1)
   await task.dispose()
 })
+
+it.each(['queued', 'recorded'] as const)('retains a %s canceled admission until explicit reconciliation', async (phase) => {
+  const { ctx, adapter } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const root = ctx.sessions.get(task.roster.rootSessionId)!
+  const flush = ctx.sessionPersistence.flushSessionDurably.bind(ctx.sessionPersistence)
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  let held = false
+  vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockImplementation(async (session) => {
+    if (session === root && !held) { held = true; entered.resolve(undefined); await release.promise }
+    return flush(session)
+  })
+  const input = { deliveryId: DeliveryId('canceled-call'), targetParticipantId: task.roster.roles.participant!,
+    inboxTarget: 'next-turn' as const, correlationId: null, text: 'ok' }
+  const cancellation = new AbortController()
+  const admission = task.delivery.admitUser(input, cancellation.signal)
+  const rejected = expect(admission).rejects.toMatchObject({ code: 'fusion-participants/delivery-blocked' })
+  if (phase === 'recorded') await entered.promise
+  cancellation.abort(new Error('caller stopped'))
+  release.resolve(undefined)
+  await rejected
+  expect(task.delivery.snapshot().classificationPending).toEqual([input.deliveryId])
+  await expect(task.delivery.admitUser(input)).rejects.toThrow()
+  await task.delivery.reconcile()
+  const receipt = await task.delivery.admitUser(input)
+  expect(receipt.decisionInputRevision).toBe(1)
+  expect((await read(ctx, input.targetParticipantId)).filter(row => row.type === 'agent/inbox/spliced'
+    && row.data.inserted.length > 0)).toHaveLength(1)
+  expect(adapter.requests).toHaveLength(0)
+  await task.dispose()
+})

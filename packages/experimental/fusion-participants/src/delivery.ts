@@ -32,6 +32,7 @@ export interface DormantDelivery {
 }
 /** Delivery is pending or uncertain; the retained owner must reconcile the original ID. */
 export class DeliveryBlockedError extends Error {
+  /** Stable host handling identity for pending or uncertain transport. */
   readonly code = 'fusion-participants/delivery-blocked'
   constructor(readonly deliveryId: DeliveryId | null, cause: unknown) {
     super(`Fusion delivery ${deliveryId ?? 'reconciliation'} blocked; retain identity and reconcile`, { cause })
@@ -147,9 +148,16 @@ export class DeliveryOwner implements DormantDelivery {
         if (this.receiver(this.owner.root).entries.length > 0) throw new Error('receiver acceptance in root')
         for (const row of state.entries) {
           const intent = row.intent
-          if (!this.owner.participants.has(intent.targetParticipantId)
+          const target = this.owner.participants.get(intent.targetParticipantId)
+          if (target === undefined
             || intent.origin.kind === 'peer' && (!this.owner.participants.has(intent.origin.sessionId)
               || intent.origin.sessionId === intent.targetParticipantId)) throw new Error('invalid durable task attribution')
+          if (row.completion !== null) {
+            const accepted = this.receiver(target).entries.find(entry => entry.intent.deliveryId === intent.deliveryId)
+            if (accepted === undefined || accepted.instructionSeq === null
+              || row.completion.acceptanceSeq !== accepted.acceptanceSeq
+              || row.completion.instructionSeq !== accepted.instructionSeq) throw new Error('root completion has no identical receiver pair')
+          }
         }
         for (const [id, session] of this.owner.participants) {
           if (this.owner.projections.admissions.stateOf(session).entries.length > 0) throw new Error('root intent in receiver')

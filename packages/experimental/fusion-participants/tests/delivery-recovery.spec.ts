@@ -161,3 +161,42 @@ it.each([0, 1, 2])('independently decodes a torn zstd batch with %i surviving re
   expect(await again.delivery.admitUser(input)).toEqual(repaired)
   await again.dispose()
 })
+
+it.each(['orphan', 'missing-text', 'conflicting-hash', 'missing-pair', 'missing-insertion', 'acceptance-link', 'instruction-link'] as const)(
+  'refuses recovered %s delivery history before publishing or reconstructing input', async (fault) => {
+    const { ctx, root } = await mount()
+    const task = await ctx.fusionParticipants.prepare('single-test')
+    const target = task.roster.roles.participant!
+    await task.delivery.admitUser({ deliveryId: DeliveryId('invalid-restart'), targetParticipantId: target,
+      inboxTarget: 'next-turn', correlationId: null, text: 'retained original' })
+    await task.dispose()
+    const rootPath = join(sessionDir(root, undefined, task.roster.rootSessionId), 'session.v4.jsonl')
+    const targetPath = join(sessionDir(root, undefined, target), 'session.v4.jsonl')
+    const paths = [rootPath, targetPath]
+    for (const path of paths) {
+      const rows: { type: string; seq?: number; data?: Record<string, unknown> }[] = (await readFile(path, 'utf8'))
+        .trim().split('\n').map(line => JSON.parse(line))
+      const output = rows.filter(row => !(fault === 'orphan' && path === rootPath && row.type.startsWith('fusion/delivery-'))
+        && !(fault === 'missing-pair' && path === targetPath
+          && (row.type === 'fusion/delivery-accepted' || row.type === 'agent/inbox/spliced'))
+        && !(fault === 'missing-insertion' && path === targetPath && row.type === 'agent/inbox/spliced'))
+      for (const row of output) {
+        if (fault === 'missing-text' && row.type === 'fusion/delivery-intent') delete row.data?.text
+        if (fault === 'conflicting-hash' && row.type === 'fusion/delivery-accepted' && row.data) row.data.contentHash = '0'.repeat(64)
+        if (row.type === 'fusion/delivery-completed' && row.data) {
+          if (fault === 'acceptance-link') row.data.acceptanceSeq = 0
+          if (fault === 'instruction-link') { row.data.instructionSeq = 100; row.data.receiverBoundary = 101 }
+        }
+      }
+      await writeFile(path, output.map((row, index) => JSON.stringify(index === 0 ? row : { ...row, seq: index - 1 })).join('\n') + '\n')
+    }
+    const next = await mount(root)
+    await expect(next.ctx.fusionParticipants.recover(task.roster.rootSessionId)).rejects.toMatchObject({ cleanup: 'complete' })
+    expect(next.ctx.agents.list()).toHaveLength(0)
+    expect(next.ctx.sessions.list()).toHaveLength(0)
+    expect(next.adapter.requests).toHaveLength(0)
+    const rows = scanLog(await readFile(targetPath)).events
+    const expected = fault === 'missing-pair' || fault === 'missing-insertion' ? 0 : 1
+    expect(rows.filter(row => row.type === 'agent/inbox/spliced' && row.data.inserted.length > 0)).toHaveLength(expected)
+  },
+)
