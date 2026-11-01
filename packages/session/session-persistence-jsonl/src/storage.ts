@@ -61,8 +61,8 @@ export interface JsonlHandleStorage {
   hasPendingSession(id: SessionId): boolean
   /** Acquire the session's cross-process write lock in its artifact directory. */
   acquireWriteLease(header: SessionHeader): Promise<SessionWriteLease>
-  /** Drop the handle's bookkeeping on close. */
-  releaseHandle(handle: JsonlSessionHandle, materialized: boolean): void
+  /** Join any retained event-listener removal before dropping the handle's bookkeeping. */
+  releaseHandle(handle: JsonlSessionHandle, materialized: boolean): void | Promise<void>
 }
 
 /** Mutable per-handle log state; a write handle is its session's single mutator. */
@@ -313,10 +313,10 @@ export class JsonlSessionHandle implements SessionHandle {
   /**
    * Release the handle; see the seam contract. Idempotent and uncancellable.
    * A write handle first drains its routed live buffer through the still-open
-   * storage, so backend teardown loses nothing regardless of which fiber
-   * unwinds first; a drain or lock-release failure still frees the in-process
-   * claim, then rejects — both failures together reject as one
-   * `AggregateError`.
+   * storage. Retained close joins its exact event-listener removal after lease
+   * release; a drain, lease or remover failure rejects and retains uncertain
+   * ownership. Ordinary close frees its claim even after drain or lease failure,
+   * combining both failures in an `AggregateError`.
    * @returns settlement of the release.
    */
   close(): Promise<void> {
@@ -380,7 +380,8 @@ export class JsonlSessionHandle implements SessionHandle {
       this.retainFailure(releaseError)
       throw releaseError
     }
-    this.storage.releaseHandle(this, this.state.materialized)
+    const released = this.storage.releaseHandle(this, this.state.materialized)
+    if (released !== undefined) await released
     if (failures.length > 1) throw new AggregateError(failures, `session "${this.id}": close failed to drain and to release its write lock`)
     if (failures[0] !== undefined) throw failures[0]
   }
@@ -524,7 +525,10 @@ export class JsonlBackendTracker {
   private active = false
   private readonly bindings = new Map<JsonlSessionHandle, Session>()
   private readonly flushReceipts = new Map<JsonlSessionHandle, number>()
-  private readonly retainedRoutes = new Map<JsonlSessionHandle, () => void | Promise<void>>()
+  private readonly retainedRoutes = new Map<JsonlSessionHandle, {
+    dispose: () => void | Promise<void>
+    remove: () => Promise<void>
+  }>()
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
   constructor(private readonly name: string) {}
@@ -621,11 +625,24 @@ export class JsonlBackendTracker {
    * the session never existed.
    * @param handle - the closing handle.
    * @param materialized - whether the session reached durable storage.
+   * @returns synchronous completion without a retained route; otherwise the exact
+   *   listener removal join. Removal failure retains ownership and rejects.
    */
-  release(handle: JsonlSessionHandle, materialized: boolean): void {
-    // This may reenter the grouped close join. Never await it from finishClose.
-    void this.retainedRoutes.get(handle)?.()
-    this.retainedRoutes.delete(handle)
+  release(handle: JsonlSessionHandle, materialized: boolean): void | Promise<void> {
+    const route = this.retainedRoutes.get(handle)
+    if (route === undefined) return this.releaseBookkeeping(handle, materialized)
+    return route.remove().then(() => {
+      // The group joins this same close. Its rejection is observed, never awaited here.
+      void Promise.resolve(route.dispose()).catch((error: unknown) => { handle.retainFailure(error) })
+      this.retainedRoutes.delete(handle)
+      this.releaseBookkeeping(handle, materialized)
+    }, (error: unknown) => {
+      handle.retainFailure(error)
+      throw error
+    })
+  }
+
+  private releaseBookkeeping(handle: JsonlSessionHandle, materialized: boolean): void {
     this.openHandles.delete(handle)
     this.bindings.delete(handle)
     this.flushReceipts.delete(handle)
@@ -725,18 +742,22 @@ export class JsonlBackendTracker {
       // Transfer the actual listener into the writer's ordered root effect. Its close
       // fences admission before waiting for pins; terminal facts still use this route.
       if (!this.retainedRoutes.has(writer)) {
+        let removeListener!: () => void
+        let removal: Promise<void> | undefined
+        const remove = (): Promise<void> => removal ??= Promise.resolve().then(() => removeListener())
         newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
-          yield ctx.root.on('session/event', (exact: Session, event) => {
+          removeListener = ctx.root.on('session/event', (exact: Session, event) => {
             if (exact !== session || this.writers.get(session.id) !== writer) return
             writer.enqueueLive(event, (error) => {
               writer.retainFailure(error)
               ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
             })
           })
+          yield removeListener
           // Setup rollback must never close a writer belonging to an earlier pin.
           yield () => routeArmed ? writer.close() : undefined
         }.bind(this), 'retained JSONL writer and event route')
-        this.retainedRoutes.set(writer, newRoute)
+        this.retainedRoutes.set(writer, { dispose: newRoute, remove })
       }
       removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
       removers.push(ctx.root.on('internal/status', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))

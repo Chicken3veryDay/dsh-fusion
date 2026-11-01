@@ -36,7 +36,7 @@ async function fixture() {
     resolveCurrentLog: vi.fn(async () => 'memory'),
     readStoredLog: vi.fn(async () => ({ eventState: 'detached' as const, events })),
     hasPendingSession: () => true, acquireWriteLease: async () => lease,
-    releaseHandle: (handle, materialized) => { tracker.release(handle, materialized) },
+    releaseHandle: (handle, materialized) => tracker.release(handle, materialized),
   }
   const state = { cursor: 0, materialized: false, inheritedEventCount: SessionLogOffset(0) }
   tracker.registerCreated(session.header, SessionLogOffset(0))
@@ -184,4 +184,97 @@ it('fences only the exact detached session and refuses dispatch through a withdr
   f.tracker['bindings'].delete(f.writer)
   expect(pin.checkDispatch()).toMatchObject({ reason: 'fenced' })
   expect(pin.signal.aborted).toBe(true)
+})
+
+for (const timing of ['before', 'after'] as const) {
+  it(`rejects exact direct close when the actual event remover throws ${timing} removal`, async () => {
+    const f = await fixture(), pin = f.reserve()
+    const events = f.ctx.events
+    const unregister = events['unregister']
+    const hooks = events['_hooks']['session/event'] ?? []
+    const callback = hooks[hooks.length - 1]!.callback
+    const failure = new Error(`actual remover ${timing}`)
+    let calls = 0
+    Object.defineProperty(events, 'unregister', { configurable: true,
+      value: (...args: Parameters<typeof unregister>) => {
+        if (args[0] !== 'session/event' || args[1] !== callback) return unregister.apply(events, args)
+        calls++
+        if (timing === 'after') unregister.apply(events, args)
+        throw failure
+      },
+    })
+    try {
+      const closed = f.writer.close()
+      const rejection = expect(closed).rejects.toBe(failure)
+      expect(await pin.release()).toMatchObject({ kind: 'durable' })
+      await rejection
+      expect(f.writer.close()).toBe(closed)
+      await expect(f.writer.close()).rejects.toBe(failure)
+      expect(calls).toBe(1)
+      expect(f.writer.lifetimeUncertain).toBe(true)
+      expect(f.writer.hasReservations).toBe(false)
+      expect(f.tracker.openHandles.has(f.writer)).toBe(true)
+      expect(f.tracker['writers'].get(f.writer.id)).toBe(f.writer)
+      expect(f.tracker['bindings'].get(f.writer)).toBe(f.session)
+      expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(true)
+      expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(timing === 'before')
+      expect(() => f.tracker.claimWrite(f.writer.id)).toThrow()
+      expect(f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity)).toMatchObject({ reason: 'uncertain' })
+      await expect(f.ctx.fiber.dispose()).resolves.toBeUndefined()
+      expect(calls).toBe(1)
+    } finally {
+      Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
+    }
+  })
+}
+
+it('joins an already-started actual remover without awaiting the enclosing close group', async () => {
+  const f = await fixture(), pin = f.reserve()
+  const events = f.ctx.events
+  const unregister = events['unregister']
+  const hooks = events['_hooks']['session/event'] ?? []
+  const callback = hooks[hooks.length - 1]!.callback
+  const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  let calls = 0, settled = false
+  Object.defineProperty(events, 'unregister', { configurable: true,
+    value: (...args: Parameters<typeof unregister>) => {
+      if (args[0] !== 'session/event' || args[1] !== callback) return unregister.apply(events, args)
+      calls++
+      entered.resolve()
+      return resume.promise.then(() => unregister.apply(events, args))
+    },
+  })
+  try {
+    const route = f.tracker['retainedRoutes'].get(f.writer)!
+    const closed = f.writer.close()
+    void closed.then(() => { settled = true })
+    expect(await pin.release()).toMatchObject({ kind: 'durable' })
+    await entered.promise
+    const other = route.remove()
+    expect(route.remove()).toBe(other)
+    expect(f.writer.close()).toBe(closed)
+    expect(settled).toBe(false)
+    expect(f.tracker.openHandles.has(f.writer)).toBe(true)
+    expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(true)
+    resume.resolve()
+    await other
+    await closed
+    expect(calls).toBe(1)
+    expect(f.tracker.openHandles.size).toBe(0)
+    expect(f.tracker['retainedRoutes'].size).toBe(0)
+    expect((events['_hooks']['session/event'] ?? []).some(hook => hook.callback === callback)).toBe(false)
+    await f.ctx.fiber.dispose()
+  } finally {
+    resume.resolve()
+    Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
+  }
+})
+
+it('releases ordinary handle bookkeeping synchronously', async () => {
+  const f = await fixture()
+  expect(f.tracker.release(f.writer, false)).toBeUndefined()
+  expect(f.tracker.openHandles.size).toBe(0)
+  expect(f.tracker.hasPending(f.writer.id)).toBe(false)
+  expect(f.tracker['writers'].has(f.writer.id)).toBe(false)
+  await f.writer.close()
 })

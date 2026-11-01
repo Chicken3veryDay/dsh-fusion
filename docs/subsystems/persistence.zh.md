@@ -122,6 +122,8 @@ interface SessionHandle extends AsyncDisposable {
 
 `flushDurably()` 在调用时捕获 Session 的排他事件边界，并排队验证同一写入器的前缀。`release()` 同步关闭接纳，返回同一个记忆化等待结果，等待此前的刷新并验证最终捕获的前缀，然后仅移除自己的预留。`WriterLifetimeFlush` 携带持久化边界，或带可选原因的 `WriterLifetimeReason` 拒绝结果。不确定性不可撤销且会保留所有权；普通无预留关闭及错误行为不变。消费者必须先完成自身清理再释放，并将即时写入器检查与自身最终同步派发检查结合。
 
+JSONL 关闭在释放进程内所有权之前，会等待实际保留监听器的移除结果。即使钩子已经移除，移除失败仍会使关闭和保留清理以原始原因拒绝。不确定的跟踪记录与物理租约所有权是不同的结果。原始 Cordis 释放可能记录并容纳该失败；消费方必须等待关闭或保留清理。
+
 <a id="same-session-durability"></a>
 
 ## 同会话耐久性

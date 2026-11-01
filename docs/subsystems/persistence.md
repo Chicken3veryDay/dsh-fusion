@@ -122,6 +122,8 @@ A created session is observable in this process from the moment `create` resolve
 
 `flushDurably()` captures the exclusive Session boundary at invocation and queues same-writer prefix verification. `release()` synchronously closes admission, returns one memoized join, waits for earlier flushes and verifies the final captured prefix before removing only its own reservation. `WriterLifetimeFlush` carries either the durable boundary or a `WriterLifetimeReason` refusal with an optional cause. Uncertainty is sticky and retains ownership; ordinary unpinned close and error behavior is unchanged. Consumers must finish their own cleanup before releasing and must combine the immediate writer check with their own final synchronous dispatch checks.
 
+JSONL close joins the actual retained listener removal before releasing its in-process ownership. Removal failure rejects close and retained cleanup with the original cause, even when the hook was already removed. Uncertain bookkeeping and physical lease ownership are separate outcomes. Raw Cordis disposal may log and contain that failure; consumers must join close or retained cleanup.
+
 <a id="same-session-durability"></a>
 
 ## Same-session durability

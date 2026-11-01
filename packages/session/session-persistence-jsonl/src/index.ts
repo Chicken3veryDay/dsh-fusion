@@ -968,12 +968,13 @@ class JsonlSessionPersistence extends SessionPersistence {
   }
 
   /**
-   * Release one handle's backend bookkeeping on close.
+   * Release one handle's backend bookkeeping after exact retained listener removal.
    * @param handle - the closing handle.
    * @param materialized - whether the session reached durable storage.
+   * @returns synchronous completion without a retained route, otherwise its removal join.
    */
-  releaseHandle(handle: JsonlSessionHandle, materialized: boolean): void {
-    this.tracker.release(handle, materialized)
+  releaseHandle(handle: JsonlSessionHandle, materialized: boolean): void | Promise<void> {
+    return this.tracker.release(handle, materialized)
   }
 
   /**
