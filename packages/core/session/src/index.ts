@@ -429,6 +429,7 @@ interface SessionEntry {
   detachRequested: boolean
   readonly withdrawal?: {
     readonly producers: Set<() => Promise<void>>
+    readonly release?: () => Promise<void>
     completion?: Promise<void>
   }
   detach(): void
@@ -1253,11 +1254,14 @@ export class SessionStore extends Service {
    * @param session - exact unentered Session.
    * @param options - initial producer stop, installed before entry becomes observable; it must
    *   fence admission before returning its terminal join and never await this disposer.
+   *   Optional release runs after successful producer joins, before removal; omission releases no resources.
    * @returns awaitable withdrawal; successful terminal joins precede the paired disposal event.
    * @throws if the id or exact Session is already entered.
    */
-  enter(session: Session, options: { withdraw: () => Promise<void> }): () => Promise<void>
-  enter(session: Session, options?: { withdraw: () => Promise<void> }): (() => void) | (() => Promise<void>) {
+  enter(session: Session, options: { withdraw: () => Promise<void>; release?: () => Promise<void> }): () => Promise<void>
+  enter(
+    session: Session, options?: { withdraw: () => Promise<void>; release?: () => Promise<void> },
+  ): (() => void) | (() => Promise<void>) {
     const id = session.id
     const carrier = scopeTarget(session, scopeOf(this.ctx))
     // This is the authoritative collision boundary after arbitrary unpublished
@@ -1272,7 +1276,7 @@ export class SessionStore extends Service {
       announcement: 'pending',
       appending: false,
       detachRequested: false,
-      ...options === undefined ? {} : { withdrawal: { producers: new Set([options.withdraw]) } },
+      ...options === undefined ? {} : { withdrawal: { producers: new Set([options.withdraw]), release: options.release } },
       detach: () => { this.detachEntered(entry) },
     }
     this.store.set(id, entry)
@@ -1327,9 +1331,10 @@ export class SessionStore extends Service {
         return Promise.reject(error)
       }
     })
-    void Promise.allSettled(joins).then((results) => {
+    void Promise.allSettled(joins).then(async (results) => {
       const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length > 0) throw new AggregateError(errors, 'Session withdrawal failed')
+      await withdrawal.release?.()
       this.detachEntered(entry)
     }).then(completion.resolve, completion.reject)
     return completion.promise

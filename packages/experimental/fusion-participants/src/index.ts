@@ -252,15 +252,27 @@ export default class FusionParticipants extends Service {
     let prepared: PreparedParticipants | undefined
     let delivery: DeliveryOwner | undefined
     let execution: TaskExecutionOwner | undefined
-    let executionFailed = false
+    const acquired = Promise.withResolvers<void>()
+    const withdrawals: (() => void)[] = []
+    let draining: Promise<void> | undefined
     const drain = (): Promise<void> => {
+      if (draining !== undefined) return draining
+      const completion = Promise.withResolvers<void>()
+      draining = completion.promise
       taskAbort.abort(new Error('participant task disposed'))
-      return Promise.allSettled([
-        delivery?.dispose(), execution?.dispose().catch((error: unknown) => { executionFailed = true; throw error }),
-      ]).then((results) => {
+      const joins: Promise<void>[] = [acquired.promise]
+      for (const stop of [() => delivery?.dispose(), () => execution?.dispose()]) {
+        try { joins.push(Promise.resolve(stop())) } catch (error: unknown) {
+          const failed = Promise.withResolvers<void>()
+          failed.reject(error)
+          joins.push(failed.promise)
+        }
+      }
+      void Promise.allSettled(joins).then((results) => {
         const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
         if (errors.length > 0) throw new AggregateError(errors, 'participant task drain failed')
-      })
+      }).then(completion.resolve, completion.reject)
+      return completion.promise
     }
     const dispose = (): Promise<void> => {
       if (disposal !== undefined) return disposal
@@ -269,17 +281,14 @@ export default class FusionParticipants extends Service {
       void (async () => {
         try {
           const errors: unknown[] = []
-          try { await drain() } catch (error: unknown) {
-            // Execution uncertainty retains all task leases, independently of provider teardown.
-            if (executionFailed) throw error
-            errors.push(error)
-          }
+          await drain()
           if (this.stopping !== undefined) await this.release.promise
           for (const lease of [...leases].reverse()) {
             try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
           }
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
           if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
+          for (const remove of withdrawals.splice(0)) remove()
           if (prepared !== undefined) this.owned.delete(prepared)
         } finally { await releaseCaller() }
       })().then(completion.resolve, completion.reject)
@@ -289,6 +298,7 @@ export default class FusionParticipants extends Service {
       signal.throwIfAborted()
       const root = await this.lifetime.ctx.agents.retain({ sessionId: rootSessionId, mode: request.kind, agentOptions: {}, signal })
       leases.push(root)
+      withdrawals.push(this.lifetime.ctx.sessions.registerWithdrawal(root.session, drain))
       signal.throwIfAborted()
       if (request.kind === 'create') {
         root.session.append('fusion/roster', request.roster)
@@ -334,6 +344,7 @@ export default class FusionParticipants extends Service {
           setup: (ctx) => { this.lifetime.ctx.agentPresets.composeFrom(ctx, pinned.ctx) },
         })
         leases.push(lease)
+        withdrawals.push(this.lifetime.ctx.sessions.registerWithdrawal(lease.session, drain))
         participants.set(participant.id, lease)
         signal.throwIfAborted()
         if (!state.established.includes(participant.id)) {
@@ -349,6 +360,7 @@ export default class FusionParticipants extends Service {
         projections: { admissions: this.admissions, receivers: this.receivers },
       })
       await delivery.reconcile()
+      signal.throwIfAborted()
       const deliveryOwner = delivery
       const sessions = new Map([...participants].map(([id, lease]) => [id, lease.session]))
       execution = new TaskExecutionOwner({
@@ -373,9 +385,11 @@ export default class FusionParticipants extends Service {
       })
       this.executionOwners.set(prepared, executionOwner)
       this.owned.set(prepared, drain)
+      acquired.resolve()
       quiescent()
       return prepared
     } catch (error: unknown) {
+      acquired.resolve()
       quiescent()
       try { await dispose() } catch (cleanup: unknown) { this.cleanupErrors.push(cleanup); throw new ParticipantPreparationError(rootSessionId, 'unknown', new AggregateError([error, cleanup], 'participant preparation and cleanup failed')) }
       throw new ParticipantPreparationError(rootSessionId, 'complete', error)

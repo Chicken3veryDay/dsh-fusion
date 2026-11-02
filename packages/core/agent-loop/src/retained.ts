@@ -108,17 +108,23 @@ export async function retainSession(
     const producers = stop()
     void (async () => {
       await producers
-      const errors: unknown[] = []
-      for (const child of [...children]) {
-        try { await child.dispose() } catch (error: unknown) { errors.push(error) }
-      }
-      try { await writer?.close() } catch (error: unknown) { errors.push(error) }
-      await detach?.()
-      if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
+      if (detach === undefined) await releaseResources()
+      else await detach()
       untrack()
       parent?.children.delete(lifetime)
     })().then(completion.resolve, completion.reject)
     return completion.promise
+  }
+  const releaseResources = async (): Promise<void> => {
+    const errors: unknown[] = []
+    for (const child of [...children]) {
+      try { await child.dispose() } catch (error: unknown) { errors.push(error) }
+    }
+    // A child with unknown cleanup still owns its parent's writer and routing.
+    if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
+    try { await writer?.close() } catch (error: unknown) {
+      throw new AggregateError([error], 'retained session cleanup failed')
+    }
   }
   const lifetime = { stop, dispose }
   signal.throwIfAborted()
@@ -148,7 +154,7 @@ export async function retainSession(
       await storeSuffix(session, writer, read.events.length + closers.length)
     }
     signal.throwIfAborted()
-    detach = runtime.sessions.enter(session, { withdraw: stop })
+    detach = runtime.sessions.enter(session, { withdraw: stop, release: releaseResources })
     runtime.sessions.announce(session)
     signal.throwIfAborted()
     if (options.mode === 'create') session.append('agent/runtime-owner', { rootSessionId: SessionId(rootSessionId) })

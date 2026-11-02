@@ -48,7 +48,12 @@ it('invokes every stop despite synchronous throws and retains all original failu
   let stops = 0
   const detach = ctx.sessions.enter(session, { withdraw: () => { stops++; throw first } })
   ctx.sessions.announce(session)
-  ctx.sessions.registerWithdrawal(session, () => { stops++; return Promise.reject(second) })
+  ctx.sessions.registerWithdrawal(session, () => {
+    stops++
+    const failure = Promise.withResolvers<undefined>()
+    failure.reject(second)
+    return failure.promise
+  })
   const last = Promise.withResolvers<undefined>()
   ctx.sessions.registerWithdrawal(session, () => { stops++; return last.promise })
   const join = detach()
@@ -110,8 +115,70 @@ it('requires an opted-in exact entry for producer registration and keeps stock d
   const detach = ctx.sessions.enter(session)
   ctx.sessions.announce(session)
   expect(() => ctx.sessions.registerWithdrawal(session, () => Promise.resolve())).toThrow('cannot register')
-  expect(detach()).toBeUndefined()
+  const observe: () => unknown = detach
+  expect(observe()).toBeUndefined()
   expect(ctx.sessions.get(session.id)).toBeUndefined()
-  expect(detach()).toBeUndefined()
+  expect(observe()).toBeUndefined()
   expect(() => ctx.sessions.registerWithdrawal(session, () => Promise.resolve())).toThrow('not live')
+})
+
+it('joins producers before final release and retains publication until that release succeeds', async () => {
+  const session = ctx.sessions.prepare(SessionId('release'))
+  const terminal = Promise.withResolvers<undefined>()
+  const released = Promise.withResolvers<undefined>()
+  const releasing = Promise.withResolvers<undefined>()
+  let reentrant: Promise<void> | undefined
+  const detach = ctx.sessions.enter(session, {
+    withdraw: () => terminal.promise,
+    release: () => {
+      reentrant = detach()
+      expect(ctx.sessions.get(session.id)).toBe(session)
+      releasing.resolve(undefined)
+      return released.promise
+    },
+  })
+  ctx.sessions.announce(session)
+  const join = detach()
+  expect(reentrant).toBeUndefined()
+  terminal.resolve(undefined)
+  await releasing.promise
+  expect(reentrant).toBe(join)
+  expect(ctx.sessions.get(session.id)).toBe(session)
+  released.resolve(undefined)
+  await join
+  expect(ctx.sessions.get(session.id)).toBeUndefined()
+})
+
+it.each([new Error('release failed'), { failed: 'release' }, undefined])(
+  'retains exact membership and the stable original final-release rejection %j', async (cause) => {
+    const session = ctx.sessions.prepare(SessionId('failed-release'))
+    let releases = 0
+    const detach = ctx.sessions.enter(session, {
+      withdraw: () => Promise.resolve(),
+      release: () => {
+        releases++
+        throw cause
+      },
+    })
+    ctx.sessions.announce(session)
+    const join = detach()
+    await expect(join).rejects.toBe(cause)
+    expect(detach()).toBe(join)
+    await expect(detach()).rejects.toBe(cause)
+    expect(releases).toBe(1)
+    expect(ctx.sessions.get(session.id)).toBe(session)
+  },
+)
+
+it('retains a failed producer without entering final resource release', async () => {
+  const session = ctx.sessions.prepare(SessionId('failed-producer'))
+  let releases = 0
+  const cause = new Error('producer unknown')
+  const detach = ctx.sessions.enter(session, {
+    withdraw: () => { throw cause },
+    release: () => { releases++; return Promise.resolve() },
+  })
+  await expect(detach()).rejects.toMatchObject({ errors: [cause] })
+  expect(releases).toBe(0)
+  expect(ctx.sessions.get(session.id)).toBe(session)
 })

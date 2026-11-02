@@ -18,6 +18,11 @@ import { DeliveryId } from '../src/delivery-state.ts'
 import { mount, retainUntilProcessExit } from './harness.ts'
 import { sessionDir, generationLogFilename } from '../../../session/session-persistence-jsonl/src/format.ts'
 
+/** Capture before instrumentation; callers invoke the method with its original receiver. */
+function originalMethod<T, K extends keyof T>(prototype: T, name: K): T[K] {
+  return prototype[name]
+}
+
 const run = promisify(execFile)
 const child = process.env.DSH_RETAINED_LIFETIME_CHILD === '1'
 const fault = process.env.DSH_RETAINED_LIFETIME_FAULT
@@ -27,14 +32,14 @@ if (process.env.DSH_RETAINED_PREOPEN === '1') {
   it('fences the real delivery producer before execution-owner construction', async () => {
     const ready = Promise.withResolvers<DeliveryOwner>()
     const resume = Promise.withResolvers<undefined>()
-    const reconcile = DeliveryOwner.prototype.reconcile
+    const reconcile = originalMethod(DeliveryOwner.prototype, 'reconcile')
     vi.spyOn(DeliveryOwner.prototype, 'reconcile').mockImplementation(async function (this: DeliveryOwner) {
       ready.resolve(this)
       await resume.promise
       return reconcile.call(this)
     })
     const detachers = new Map<Session, () => Promise<void>>()
-    const enter = SessionStore.prototype.enter
+    const enter = originalMethod(SessionStore.prototype, 'enter')
     function observeEnter(this: SessionStore, session: Session): () => void
     function observeEnter(this: SessionStore, session: Session, options: { withdraw: () => Promise<void> }): () => Promise<void>
     function observeEnter(this: SessionStore, session: Session, options?: { withdraw: () => Promise<void> }) {
@@ -66,6 +71,7 @@ if (process.env.DSH_RETAINED_PREOPEN === '1') {
       opened: root.ownEvents().filter((event: SessionEvent) => event.type === 'fusion/execution-opened').length }
     await writeFile(joinPath(process.env.DSH_RETAINED_LIFETIME_OUTPUT!, 'preopen.json'), JSON.stringify(observation, null, 2) + '\n')
     expect(after.reservations, 'delivery admission must fence synchronously before execution owner exists').toEqual(before.reservations)
+    expect(after.decisionInputRevision).toBe(before.decisionInputRevision)
     expect(adapter.requests).toHaveLength(0)
   })
 } else if (!child) {
@@ -149,19 +155,19 @@ if (process.env.DSH_RETAINED_PREOPEN === '1') {
       if (!errors.has(error)) errors.set(error, errors.size + 1)
       return error instanceof Error ? { id: errors.get(error), name: error.name, message: error.message, ...'code' in error ? { code: error.code } : {}, ...'syscall' in error ? { syscall: error.syscall } : {}, ...'path' in error ? { path: error.path } : {},
         ...error.cause === undefined ? {} : { cause: errorTree(error.cause) },
-        ...error instanceof AggregateError ? { errors: [...error.errors].map(errorTree) } : {},
+        ...error instanceof AggregateError ? { errors: Array.from<unknown>(error.errors).map(errorTree) } : {},
         ...'reason' in error ? { reason: error.reason } : {} } : error !== null && typeof error === 'object' ? { id: errors.get(error), ...Object.fromEntries(Object.entries(error).map(([k,v]) => [k, v !== null && typeof v === 'object' ? errorTree(v) : v])) } : { id: errors.get(error), value: String(error) }
     }
     const permissions: unknown[] = [], publications: unknown[] = []
     const stores = new Map<Session, SessionStore>()
-    const append = Session.prototype.append
+    const append = originalMethod(Session.prototype, 'append')
     vi.spyOn(Session.prototype, 'append').mockImplementation(function(this: Session, ...args: Parameters<typeof append>) {
       const permitted = stores.get(this)?.get(this.id) === this
       try { const event = append.apply(this, args); publications.push({ session: this.id, type: args[0], permitted, result: 'admitted', seq: event.seq }); return event }
       catch(error: unknown) { publications.push({ session: this.id, type: args[0], permitted, result: 'refused', error: errorTree(error) }); throw error }
     })
     const detachers = new Map<string, (() => void) | (() => Promise<void>)>()
-    const enter = SessionStore.prototype.enter
+    const enter = originalMethod(SessionStore.prototype, 'enter')
     function observeEnter(this: SessionStore, session: Session): () => void
     function observeEnter(this: SessionStore, session: Session, options: { withdraw: () => Promise<void> }): () => Promise<void>
     function observeEnter(this: SessionStore, session: Session, options?: { withdraw: () => Promise<void> }) {

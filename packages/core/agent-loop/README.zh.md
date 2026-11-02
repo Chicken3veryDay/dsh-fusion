@@ -115,7 +115,7 @@ loop 在发布工厂前等待必需的注册完成。它对模型选择和 inbox
 
 循环是会话写句柄在生产环境中的获取点。挂载 `ctx.sessionPersistence` 后，`create`/`createAgent` 调用 `persistence.create(header)`——在发布之前存储持久身份并取得写所有权——并通过句柄追加构造 seed；`resume` 先调用 `persistence.open(id, 'write')`（排除同 id 的并发恢复），通过句柄读取物理上有效的日志，并为在轮次中途崩溃的日志把 `interruptedTurnClosers` 作为普通批次追加——语义崩溃修复是 agent 层的职责，而非存储入口。入库前，`appendUnstoredSuffix` 存储包含 seed 标记的构造历史。随后 setup 通过实时事件流追加。从入库起，挂载的后端按会话 id 把该会话的 `session/event` 批次、`session/flush` 屏障与 `session/disposed` 退役路由进活跃写句柄；循环只通过它拥有的句柄触碰存储。在后端仍保持挂载时，teardown 会在驱动器提交收尾事件后关闭句柄；close 排空已路由的缓冲并释放写所有权。没有后端时，会话只存在于内存中，其余一切不变。 保留的 Session 创建与接管报告持久化拒绝时，会保留所提供的原始原因；获取期间的清理失败仍与拒绝错误聚合。
 
-保留的 Session 选择 Session 撤出流程。现有的根／子所有者同步停止接管和驻留 Agent，等待生产者清理，并将最终子资源及写入器清理分开。生产者清理结果未知时，会保留 Session 成员资格和写入器所有权；稳定的 disposer 拒绝且不重试。普通 Agent 创建保留现有的拆卸流程。
+保留的 Session 选择 Session 撤出流程。现有的根／子所有者同步停止接管和驻留 Agent，等待生产者清理，并将最终子资源及写入器清理分开。生产者清理结果未知时，会保留 Session 成员资格和写入器所有权；稳定的 disposer 拒绝且不重试。普通 Agent 创建保留现有的拆卸流程。 Session 撤回先等待所有已注册生产者终结，再完成子资源清理并关闭写入器；只有释放成功才移除成员条目。
 
 ### 轮次与步骤流程
 
