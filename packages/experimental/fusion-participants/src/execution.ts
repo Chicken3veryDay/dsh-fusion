@@ -80,7 +80,7 @@ export interface ExecutionOwnerOptions {
   readonly state: ReadonlyMap<Session, () => ExecutionState>
   readonly signal: AbortSignal
   readonly adapters: readonly ExecutionAdapter[]
-  /** Existing transport drain; its caller retains reporting ownership on rejection. */
+  /** Synchronously stop transport admission and return its actual cleanup join. */
   readonly drain: () => Promise<void>
 }
 
@@ -107,6 +107,7 @@ export class TaskExecutionOwner {
   private rootWriter: SessionWriterReservation | undefined
   private readonly lifetimeWriters: SessionWriterReservation[] = []
   private readonly lifetimeStops: (() => void)[] = []
+  private readonly withdrawalStops: (() => void)[] = []
   private opened = false
   private ready = false
   private opening: Promise<void> | undefined
@@ -116,6 +117,14 @@ export class TaskExecutionOwner {
     for (const adapter of options.adapters) {
       if (this.issuers.has(adapter.issuer)) throw new ExecutionBlockedError('duplicate-issuer')
       this.issuers.set(adapter.issuer, adapter)
+    }
+    try {
+      for (const session of [options.root, ...options.participants.values()]) {
+        this.withdrawalStops.push(options.ctx.sessions.registerWithdrawal(session, () => this.dispose()))
+      }
+    } catch (error: unknown) {
+      for (const stop of this.withdrawalStops.splice(0)) stop()
+      throw error
     }
     options.signal.addEventListener('abort', this.stop, { once: true })
   }
@@ -693,20 +702,27 @@ export class TaskExecutionOwner {
     this.abort.abort(new ExecutionBlockedError('disposed'))
     this.owner = null
     this.phase = 'revoking'
-    void (async () => {
+    let delivery: Promise<void>
+    try { delivery = this.options.drain() } catch (error: unknown) {
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+      delivery = Promise.reject(error)
+    }
+    const execution = (async () => {
       await Promise.allSettled([this.opening, this.enrollment?.done])
       if (this.opened && this.issuers.size > 0) {
         await this.revoke('stop')
         if (this.phase !== 'stopped') await this.revoke('stop')
       }
       if (this.failures.length > 0 || this.unknown.size > 0) throw new ExecutionBlockedError('cleanup-unknown')
+    })()
+    void Promise.allSettled([execution, delivery]).then(async (results) => {
+      const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
+      if (errors.length === 1) throw errors[0]
+      if (errors.length > 1) throw new AggregateError(errors, 'execution and delivery cleanup failed')
       this.phase = 'stopped'
-      try { await this.options.drain() } catch (error: unknown) {
-        // The task owner reports transport failures; retained execution writers cannot be released after one.
-        if (this.lifetimeWriters.length > 0) { this.block(error); throw error }
-      }
       await this.releaseLifetime()
-    })().then(completion.resolve, (error: unknown) => { this.block(error); completion.reject(error) })
+      for (const stop of this.withdrawalStops.splice(0)) stop()
+    }).then(completion.resolve, (error: unknown) => { this.block(error); completion.reject(error) })
     return completion.promise
   }
 

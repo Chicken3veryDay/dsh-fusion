@@ -427,6 +427,10 @@ interface SessionEntry {
   announcement: 'pending' | 'dispatching' | 'complete' | 'failed'
   appending: boolean
   detachRequested: boolean
+  readonly withdrawal?: {
+    readonly producers: Set<() => Promise<void>>
+    completion?: Promise<void>
+  }
   detach(): void
 }
 
@@ -1241,7 +1245,19 @@ export class SessionStore extends Service {
    *   that creation dispatch unwinds.
    * @throws if a session with this id is already in the store.
    */
-  enter(session: Session): () => void {
+  enter(session: Session): () => void
+  /**
+   * Enter with producer withdrawal before publication removal. The disposer publishes a stable
+   * join before synchronously invoking every producer stop. Failure retains the exact entry,
+   * attachment and captured obligations; repeated calls join the same rejection without retry.
+   * @param session - exact unentered Session.
+   * @param options - initial producer stop, installed before entry becomes observable; it must
+   *   fence admission before returning its terminal join and never await this disposer.
+   * @returns awaitable withdrawal; successful terminal joins precede the paired disposal event.
+   * @throws if the id or exact Session is already entered.
+   */
+  enter(session: Session, options: { withdraw: () => Promise<void> }): () => Promise<void>
+  enter(session: Session, options?: { withdraw: () => Promise<void> }): (() => void) | (() => Promise<void>) {
     const id = session.id
     const carrier = scopeTarget(session, scopeOf(this.ctx))
     // This is the authoritative collision boundary after arbitrary unpublished
@@ -1256,10 +1272,13 @@ export class SessionStore extends Service {
       announcement: 'pending',
       appending: false,
       detachRequested: false,
+      ...options === undefined ? {} : { withdrawal: { producers: new Set([options.withdraw]) } },
       detach: () => { this.detachEntered(entry) },
     }
     this.store.set(id, entry)
     attachments.set(session, entry)
+    const withdrawal = entry.withdrawal
+    if (withdrawal !== undefined) return () => this.withdrawEntered(entry, withdrawal)
     let entered = true
     const detach = (): void => {
       if (!entered) return
@@ -1274,6 +1293,46 @@ export class SessionStore extends Service {
       entry.detach()
     }
     return detach
+  }
+
+  /**
+   * Register a producer on an opted-in entry. The callback must synchronously fence admission
+   * and return its producer-only terminal join, never the entry's withdrawal or full disposer.
+   * The owner retains this registration until its terminal work succeeds. Captured callbacks
+   * survive unregistration during withdrawal; a failure retains membership and cannot be retried.
+   * @param session - exact opted-in live Session.
+   * @param stop - synchronous admission stop returning the genuine terminal join.
+   * @returns unregistration after successful producer cleanup.
+   * @throws if the entry is ordinary, absent, or withdrawal has begun.
+   */
+  registerWithdrawal(session: Session, stop: () => Promise<void>): () => void {
+    const entry = this.liveEntryFor(session)
+    const withdrawal = entry.withdrawal
+    if (withdrawal === undefined || withdrawal.completion !== undefined) {
+      throw new Error(`session "${entry.id}" cannot register a withdrawal producer`)
+    }
+    withdrawal.producers.add(stop)
+    return () => { withdrawal.producers.delete(stop) }
+  }
+
+  /** Fence every producer before yielding; only successful terminal joins permit removal. */
+  private withdrawEntered(entry: SessionEntry, withdrawal: NonNullable<SessionEntry['withdrawal']>): Promise<void> {
+    if (withdrawal.completion !== undefined) return withdrawal.completion
+    const completion = Promise.withResolvers<void>()
+    withdrawal.completion = completion.promise
+    const joins = [...withdrawal.producers].map((stop) => {
+      try { return stop() } catch (error: unknown) {
+        // A throwing stop must not prevent the remaining producers from fencing admission.
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+        return Promise.reject(error)
+      }
+    })
+    void Promise.allSettled(joins).then((results) => {
+      const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
+      if (errors.length > 0) throw new AggregateError(errors, 'Session withdrawal failed')
+      this.detachEntered(entry)
+    }).then(completion.resolve, completion.reject)
+    return completion.promise
   }
 
   /** Remove one exact entered session and emit its paired disposal when announced. */

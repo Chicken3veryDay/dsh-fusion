@@ -41,6 +41,8 @@ The private execution owner reserves exact provider writers synchronously, persi
 
 The persisted `openingId` is a fresh task-opening nonce, not an OS boot identity. Boot-qualified containment identities and real effect adapters remain downstream requirements. Known partial initialization rolls back writer reservations before rejection. Disposal memoizes its join before callbacks and removes lifetime listeners; transport failure with retained execution writers blocks release. Failed reconciliation retains its reservation and unknown producer outcome.
 
+The execution owner registers withdrawal obligations on its exact root and participant entries at construction. Withdrawal stops execution and delivery admission synchronously and joins their terminal work before releasing reservations. Delivery reconciliation starts before execution-owner construction; withdrawal during that earlier interval remains unqualified and can still admit a delivery reservation.
+
 Preparation failures expose `ParticipantPreparationError.rootSessionId` for recovery and report whether cleanup completed or remains unknown. Retry recovery using that root identity after resolving the cause; starting another preparation creates a different task. Missing or corrupt established histories block recovery rather than allocate replacement contexts. Missing, malformed or duplicate ownership and roster records also refuse recovery; required lifecycle records make older stock readers refuse managed histories before activation.
 
 -----

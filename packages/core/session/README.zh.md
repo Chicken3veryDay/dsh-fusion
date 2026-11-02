@@ -33,6 +33,8 @@ kind: "package-reference"
 
 独立的 `Session.create()` 和 `Session.fromRestore()` 实例接受事件和插件记录，但不发送 `session/event`。`SessionStore` 通过 `prepare()` 或 `enter()` 接管实例；此后只有实例仍在 Store 中且同步 `session/created` 宣告已完成时才能写入。创建监听器只能读取，并能看到全部已有历史；独立实例进入 Store 时不会把已有历史重放为 `session/event`。宣告失败或移除后仍禁止写入。只有开始过 `session/created` 宣告的实例在移除时发出 `session/disposed`，宣告失败也不例外；进入 Store 但从未宣告的实例不发出这两个通知。
 
+`enter(session, { withdraw })` 为该精确条目选择可等待的撤出流程。其 disposer 同步调用所有已注册生产者的停止回调，并在它们的终止等待成功前保留普通发布权限。`registerWithdrawal()` 在撤出开始前添加仅等待生产者的回调；注销不会移除撤出已捕获的等待。停止或等待失败会保留成员资格，使每次重复撤出都以同一个原因聚合拒绝，并阻止同 ID 替换。普通的 `enter(session)` 仍同步移除并返回 undefined。
+
 ```text
 const session = ctx.sessions.create(sessionId, { meta: { cwd: '/workspace' } })
 ctx.sessions.get(sessionId)      // the live session

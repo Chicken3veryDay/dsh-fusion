@@ -27,7 +27,7 @@ export interface RetainedAuthority {
   readonly rootSessionId: ReturnType<typeof SessionId>
   readonly signal: AbortSignal
   readonly root: boolean
-  readonly children: Set<() => Promise<void>>
+  readonly children: Set<{ stop(): Promise<void>; dispose(): Promise<void> }>
 }
 
 /**
@@ -60,39 +60,69 @@ export async function retainSession(
   if (options.root !== undefined && (parent === undefined || !parent.root || parent.signal.aborted
     || runtime.sessions.get(parent.rootSessionId) !== options.root.session)) throw new Error('invalid retained root capability')
   const rootSessionId = parent?.rootSessionId ?? options.sessionId
-  const children = new Set<() => Promise<void>>()
+  const children: RetainedAuthority['children'] = new Set()
   const abort = new AbortController()
   const signal = AbortSignal.any([abort.signal, factorySignal,
     ...parent === undefined ? [] : [parent.signal], ...options.signal === undefined ? [] : [options.signal]])
   let writer: SessionHandle | undefined
-  let detach: (() => void) | undefined
+  let detach: (() => Promise<void>) | undefined
   let resident: AgentHandle | undefined
   let adoption: Promise<AgentHandle> | undefined
   let failedCleanup: (() => Promise<void>) | undefined
   let disposal: Promise<void> | undefined
+  let stopping: Promise<void> | undefined
   let disposed = false
   const acquired = Promise.withResolvers<void>()
-  const dispose = (): Promise<void> => disposal ??= (async () => {
+  const stop = (): Promise<void> => {
+    if (stopping !== undefined) return stopping
+    const completion = Promise.withResolvers<void>()
+    stopping = completion.promise
     disposed = true
     abort.abort(new Error('retained session disposed'))
-    await acquired.promise
-    const errors: unknown[] = []
+    const joins: Promise<void>[] = []
     for (const child of [...children]) {
-      try { await child() } catch (error: unknown) { errors.push(error) }
+      try { joins.push(child.stop()) } catch (error: unknown) {
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+        joins.push(Promise.reject(error))
+      }
     }
-    if (adoption !== undefined) {
-      try { await adoption } catch (error: unknown) { errors.push(error) }
-    }
-    try { await failedCleanup?.() } catch (error: unknown) { errors.push(error) }
-    try { await resident?.dispose() } catch (error: unknown) { errors.push(error) }
-    try { await writer?.close() } catch (error: unknown) { errors.push(error) }
-    detach?.()
-    if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
-    untrack()
-    parent?.children.delete(dispose)
-  })()
+    const settled = Promise.allSettled(joins)
+    void (async () => {
+      await acquired.promise
+      const errors: unknown[] = []
+      const results = await settled
+      for (const result of results) if (result.status === 'rejected') errors.push(result.reason)
+      if (adoption !== undefined) {
+        try { await adoption } catch (error: unknown) { errors.push(error) }
+      }
+      try { await failedCleanup?.() } catch (error: unknown) { errors.push(error) }
+      try { await resident?.dispose() } catch (error: unknown) { errors.push(error) }
+      if (errors.length > 0) throw new AggregateError(errors, 'retained session producer cleanup failed')
+    })().then(completion.resolve, completion.reject)
+    return completion.promise
+  }
+  const dispose = (): Promise<void> => {
+    if (disposal !== undefined) return disposal
+    const completion = Promise.withResolvers<void>()
+    disposal = completion.promise
+    const producers = stop()
+    void (async () => {
+      await producers
+      const errors: unknown[] = []
+      for (const child of [...children]) {
+        try { await child.dispose() } catch (error: unknown) { errors.push(error) }
+      }
+      try { await writer?.close() } catch (error: unknown) { errors.push(error) }
+      await detach?.()
+      if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
+      untrack()
+      parent?.children.delete(lifetime)
+    })().then(completion.resolve, completion.reject)
+    return completion.promise
+  }
+  const lifetime = { stop, dispose }
   signal.throwIfAborted()
-  parent?.children.add(dispose)
+  parent?.children.add(lifetime)
   const untrack = track(dispose)
   const unfollow = owner.effect(() => dispose, `agentLoop.retain(${options.sessionId})`)
   try {
@@ -118,8 +148,9 @@ export async function retainSession(
       await storeSuffix(session, writer, read.events.length + closers.length)
     }
     signal.throwIfAborted()
-    detach = runtime.sessions.enter(session)
+    detach = runtime.sessions.enter(session, { withdraw: stop })
     runtime.sessions.announce(session)
+    signal.throwIfAborted()
     if (options.mode === 'create') session.append('agent/runtime-owner', { rootSessionId: SessionId(rootSessionId) })
     const durability = await persistence.flushSessionDurably(session)
     if (durability.kind !== 'durable') throw new Error(`retained session durability refused: ${durability.reason}`,
