@@ -429,7 +429,7 @@ interface SessionEntry {
   detachRequested: boolean
   readonly withdrawal?: {
     readonly producers: Set<() => Promise<void>>
-    readonly release?: () => Promise<void>
+    readonly release: (() => Promise<void>) | undefined
     completion?: Promise<void>
   }
   detach(): void
