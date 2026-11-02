@@ -30,13 +30,18 @@ export interface RetainedAuthority {
   readonly children: Set<{ stop(): Promise<void>; dispose(): Promise<void> }>
 }
 
+/** Original initializer's accounting after a rejected adoption; pending cleanup never implies success. */
+export type RetainedInitializationCleanup =
+  | { readonly kind: 'complete' }
+  | { readonly kind: 'failed'; readonly dispose: () => Promise<void> }
+
 /**
  * Acquire and publish a Session before any Agent exists. All continuations share one owner.
  * @param runtime - factory context supplying Session storage and routing.
  * @param owner - caller context owning the retained lifetime.
  * @param options - explicit provisioning mode, identity and composition.
  * @param factorySignal - factory shutdown cancellation.
- * @param initialize - existing Agent factory initialization with borrowed Session ownership.
+ * @param initialize - Agent initializer reporting positive rollback or unknown cleanup on rejection.
  * @param track - register factory-owned cleanup and return its unregistration.
  * @param authorities - factory-private registry of exact retained capabilities.
  * @param storeSuffix - persist Session restoration events through its acquired writer.
@@ -48,7 +53,7 @@ export async function retainSession(
   owner: Context,
   options: RetainAgentSessionOptions,
   factorySignal: AbortSignal,
-  initialize: (session: Session, signal: AbortSignal, onCleanupFailure: (dispose: () => Promise<void>) => void) => Promise<AgentHandle>,
+  initialize: (session: Session, signal: AbortSignal, onCleanup: (result: RetainedInitializationCleanup) => void) => Promise<AgentHandle>,
   track: (dispose: () => Promise<void>) => () => void,
   authorities: WeakMap<RetainedAgentSession, RetainedAuthority>,
   storeSuffix: (session: Session, writer: SessionHandle, storedCount: number) => Promise<void>,
@@ -68,7 +73,8 @@ export async function retainSession(
   let detach: (() => Promise<void>) | undefined
   let resident: AgentHandle | undefined
   let adoption: Promise<AgentHandle> | undefined
-  let failedCleanup: (() => Promise<void>) | undefined
+  let initialization: RetainedInitializationCleanup | { readonly kind: 'not-started' | 'pending' | 'resident' } = { kind: 'not-started' }
+  const operationFailures: unknown[] = []
   let disposal: Promise<void> | undefined
   let stopping: Promise<void> | undefined
   let disposed = false
@@ -77,11 +83,16 @@ export async function retainSession(
     if (stopping !== undefined) return stopping
     const completion = Promise.withResolvers<void>()
     stopping = completion.promise
+    const pendingAdoption = adoption
     disposed = true
     abort.abort(new Error('retained session disposed'))
     const joins: Promise<void>[] = []
     for (const child of [...children]) {
-      try { joins.push(child.stop()) } catch (error: unknown) {
+      try {
+        // Start child withdrawal now; only its producer join belongs in this phase.
+        void child.dispose().catch((_childFailure: unknown) => { /* Child release retains and reports its own failure. */ })
+        joins.push(child.stop())
+      } catch (error: unknown) {
         // oxlint-disable-next-line typescript/prefer-promise-reject-errors
         joins.push(Promise.reject(error))
       }
@@ -92,10 +103,15 @@ export async function retainSession(
       const errors: unknown[] = []
       const results = await settled
       for (const result of results) if (result.status === 'rejected') errors.push(result.reason)
-      if (adoption !== undefined) {
-        try { await adoption } catch (error: unknown) { errors.push(error) }
+      if (pendingAdoption !== undefined) {
+        try { await pendingAdoption } catch (error: unknown) {
+          operationFailures.push(error)
+          if (initialization.kind === 'pending') errors.push(error)
+        }
       }
-      try { await failedCleanup?.() } catch (error: unknown) { errors.push(error) }
+      if (initialization.kind === 'failed') {
+        try { await initialization.dispose() } catch (error: unknown) { errors.push(error) }
+      }
       try { await resident?.dispose() } catch (error: unknown) { errors.push(error) }
       if (errors.length > 0) throw new AggregateError(errors, 'retained session producer cleanup failed')
     })().then(completion.resolve, completion.reject)
@@ -105,11 +121,14 @@ export async function retainSession(
     if (disposal !== undefined) return disposal
     const completion = Promise.withResolvers<void>()
     disposal = completion.promise
-    const producers = stop()
+    // Session withdrawal captures and fences every registered producer synchronously.
+    const withdrawn = detach === undefined ? undefined : detach()
+    const producers = withdrawn === undefined ? stop() : undefined
     void (async () => {
-      await producers
-      if (detach === undefined) await releaseResources()
-      else await detach()
+      if (withdrawn === undefined) {
+        await producers
+        await releaseResources()
+      } else await withdrawn
       untrack()
       parent?.children.delete(lifetime)
     })().then(completion.resolve, completion.reject)
@@ -163,23 +182,43 @@ export async function retainSession(
       'cause' in durability ? { cause: durability.cause } : undefined)
     signal.throwIfAborted()
     acquired.resolve()
-    const release = async (): Promise<void> => {
-      const results = await Promise.allSettled([dispose(), unfollow()])
-      const failures = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
-      if (failures.length > 0) throw new AggregateError([...new Set(failures)], 'retained session cleanup failed')
+    let released: Promise<void> | undefined
+    const release = (): Promise<void> => {
+      if (released !== undefined) return released
+      const completion = Promise.withResolvers<void>()
+      released = completion.promise
+      void (async () => {
+        const results = await Promise.allSettled([dispose(), unfollow()])
+        const failures = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
+        if (operationFailures.length + failures.length > 0) {
+          throw new AggregateError([...operationFailures, ...new Set(failures)], 'retained session cleanup failed')
+        }
+      })().then(completion.resolve, completion.reject)
+      return completion.promise
     }
     const capability: RetainedAgentSession = Object.freeze({
       session,
       async adopt(): Promise<AgentHandle> {
         signal.throwIfAborted()
-        if (failedCleanup !== undefined) throw new Error('retained session cleanup remains unknown')
+        if (initialization.kind === 'failed' || initialization.kind === 'pending') throw new Error('retained session cleanup remains unknown')
         if (disposed || resident !== undefined || adoption !== undefined) throw new Error('retained session cannot be adopted twice')
+        initialization = { kind: 'not-started' }
         adoption = (async () => {
           const durability = await persistence.flushSessionDurably(session)
           if (durability.kind !== 'durable') throw new Error(`retained adoption durability refused: ${durability.reason}`,
             'cause' in durability ? { cause: durability.cause } : undefined)
           signal.throwIfAborted()
-          const handle = await initialize(session, signal, (cleanup) => { failedCleanup = cleanup })
+          initialization = { kind: 'pending' }
+          const handle = await initialize(session, signal, (cleanup) => { initialization = cleanup }).catch((error: unknown) => {
+            if (initialization.kind === 'pending') {
+              const unknownCleanup = Promise.withResolvers<void>()
+              unknownCleanup.reject(error)
+              void unknownCleanup.promise.catch(() => undefined)
+              initialization = { kind: 'failed', dispose: () => unknownCleanup.promise }
+            }
+            throw error
+          })
+          initialization = { kind: 'resident' }
           resident = handle
           signal.throwIfAborted()
           let detached: Promise<void> | undefined

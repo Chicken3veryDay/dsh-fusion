@@ -35,7 +35,7 @@ import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { retainSession, runtimeOwnerProjection } from './retained.ts'
-import type { RetainedAuthority } from './retained.ts'
+import type { RetainedAuthority, RetainedInitializationCleanup } from './retained.ts'
 import { ReactLoopAgent } from './agent.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
@@ -169,7 +169,7 @@ interface StoredSession {
 /** Acquired Session resources and composition inputs for one Agent initialization. */
 interface AgentInitializationOptions {
   readonly retained?: true
-  readonly onCleanupFailure?: (dispose: () => Promise<void>) => void
+  readonly onInitializationCleanup?: (result: RetainedInitializationCleanup) => void
 
   readonly session: Session
   readonly agentOptions: AgentOptions
@@ -468,7 +468,8 @@ export class AgentLoop extends Service implements AgentFactory {
   /**
    * Own initialization and teardown from an acquired Session to a published Agent.
    * Registers factory teardown and caller cancellation before constructing the scope.
-   * Failed initialization drains cleanup while retaining stored events and inbox input.
+   * Failed initialization joins entered setup and reports rollback completion separately from unknown cleanup.
+   * Stored events and inbox input survive failed initialization.
    * @param ownerCtx - caller context that owns the Agent lifecycle.
    * @param options - acquired Session/write handle, loop options, start source, parent Agent, setup, and cancellation.
    * @returns the initialized Agent and its shared disposer.
@@ -496,11 +497,13 @@ export class AgentLoop extends Service implements AgentFactory {
     callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
     this.ownership.signal.addEventListener('abort', onFactoryTeardown, { once: true })
 
+    const construction = { started: false }
     let machine: ReactLoopAgent | undefined
     let detachSession: (() => void) | undefined
     let detachAgent: (() => void) | undefined
     let disposing: Promise<void> | undefined
     let publication: ReturnType<typeof Promise.withResolvers<void>> | undefined
+    let setupCompletion: Promise<Awaited<ReturnType<AgentSetup>>> | undefined
     let ready = false
     const machineReady = Promise.withResolvers<void>()
     // Reverse teardown, memoized so every racing owner awaits one quiescence:
@@ -519,6 +522,10 @@ export class AgentLoop extends Service implements AgentFactory {
       try {
         // Creation listeners retain the session and scope through their awaits.
         if (publication !== undefined) await publication.promise
+        if (options.retained && setupCompletion !== undefined) {
+          // Cancellation does not settle an already-entered setup callback.
+          await setupCompletion.catch((_setupError: unknown) => { /* Initialization reports the operation failure. */ })
+        }
         // Disposal IS a disposed-cause cancel followed by quiescence. New work
         // sent after this point is the sender's bug — the registries are about
         // to drop the agent, so nothing should still hold it.
@@ -584,6 +591,7 @@ export class AgentLoop extends Service implements AgentFactory {
         inbox: this.inboxProjectionHandle.readerFor(session),
       }
       unfollowOwner = ownerCtx.effect(function* () {
+        construction.started = true
         const created = machine = new ReactLoopAgent(
           loopCtx, id, agentOptions, session,
           projections,
@@ -609,9 +617,26 @@ export class AgentLoop extends Service implements AgentFactory {
       }, `agentLoop.lifecycle(${id})`)
     } catch (error: unknown) {
       machineReady.resolve()
-      untrack()
-      callerSignal?.removeEventListener('abort', onCallerAbort)
-      this.ownership.signal.removeEventListener('abort', onFactoryTeardown)
+      if (options.retained && machine !== undefined) {
+        try { await teardown() } catch (cleanup: unknown) {
+          options.onInitializationCleanup?.({ kind: 'failed', dispose: teardown })
+          throw new AggregateError([error, cleanup], 'retained Agent initialization and cleanup failed')
+        }
+        options.onInitializationCleanup?.({ kind: 'complete' })
+      } else {
+        untrack()
+        callerSignal?.removeEventListener('abort', onCallerAbort)
+        this.ownership.signal.removeEventListener('abort', onFactoryTeardown)
+        if (options.retained) {
+          if (construction.started) {
+            // A constructor that threw may have allocated an unreturned scope.
+            const unknownCleanup = Promise.withResolvers<void>()
+            unknownCleanup.reject(error)
+            void unknownCleanup.promise.catch(() => undefined)
+            options.onInitializationCleanup?.({ kind: 'failed', dispose: () => unknownCleanup.promise })
+          } else options.onInitializationCleanup?.({ kind: 'complete' })
+        }
+      }
       if (!options.retained) await stored?.handle.close().catch((_closeError: unknown) => {
         // Initialization failure remains primary when releasing the acquired handle fails.
       })
@@ -643,7 +668,9 @@ export class AgentLoop extends Service implements AgentFactory {
             agent.ctx.sessions.announce(session)
           }
           assertLive()
-          const setupCommit = await raceAbort(setup?.(agent.ctx, agent), abort.signal, id)
+          const setupResult = setup?.(agent.ctx, agent)
+          if (options.retained) setupCompletion = Promise.resolve(setupResult)
+          const setupCommit = await raceAbort(setupResult, abort.signal, id)
           assertLive()
           setupCommit?.commit()
           assertLive()
@@ -666,11 +693,12 @@ export class AgentLoop extends Service implements AgentFactory {
     } catch (error: unknown) {
       try { await dispose() } catch (cleanup: unknown) {
         if (options.retained) {
-          options.onCleanupFailure?.(dispose)
+          options.onInitializationCleanup?.({ kind: 'failed', dispose })
           throw new AggregateError([error, cleanup], 'retained Agent initialization and cleanup failed')
         }
         // Stock initialization preserves its original error after cleanup reaches quiescence.
       }
+      options.onInitializationCleanup?.({ kind: 'complete' })
       throw error
     }
   }
@@ -684,8 +712,8 @@ export class AgentLoop extends Service implements AgentFactory {
   retain(ownerCtx: Context, options: RetainAgentSessionOptions): Promise<RetainedAgentSession> {
     const captured = { ...options, agentOptions: Object.freeze({ ...options.agentOptions }) }
     const operation = retainSession(this.runtime.ctx, ownerCtx, captured, this.ownership.signal,
-      (session, signal, onCleanupFailure) => this.initializeAgent(ownerCtx, {
-        session, retained: true, onCleanupFailure, agentOptions: captured.agentOptions, setup: captured.setup,
+      (session, signal, onInitializationCleanup) => this.initializeAgent(ownerCtx, {
+        session, retained: true, onInitializationCleanup, agentOptions: captured.agentOptions, setup: captured.setup,
         signal, source: options.mode === 'create' ? 'startup' : 'resume',
       }), dispose => this.ownership.track(dispose), this.retainedAuthorities,
       (session, handle, storedCount) => this.appendUnstoredSuffix({ handle, storedCount }, session))

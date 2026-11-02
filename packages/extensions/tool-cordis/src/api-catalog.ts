@@ -3250,6 +3250,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['if a session with this id is already in the store.'],
       },
       {
+        signature: 'enter(session: Session, options: { withdraw: () => Promise<void>; release?: () => Promise<void> }): () => Promise<void>',
+        description: 'Enter with producer withdrawal before publication removal. The disposer publishes a stable join before synchronously invoking every producer stop. Failure retains the exact entry, attachment and captured obligations; repeated calls join the same rejection without retry.',
+        parameters: [{ name: 'session', description: 'exact unentered Session.' }, { name: 'options', description: 'initial producer stop, installed before entry becomes observable; it must fence admission before returning its terminal join and never await this disposer. Optional release runs after successful producer joins, before removal; omission releases no resources.' }],
+        returns: 'awaitable withdrawal; successful terminal joins precede the paired disposal event.',
+        throws: ['if the id or exact Session is already entered.'],
+      },
+      {
+        signature: 'registerWithdrawal(session: Session, stop: () => Promise<void>): () => void',
+        description: 'Register a producer on an opted-in entry. The callback must synchronously fence admission and return its producer-only terminal join, never the entry\'s withdrawal or full disposer. The owner retains this registration until its terminal work succeeds. Captured callbacks survive unregistration during withdrawal; a failure retains membership and cannot be retried.',
+        parameters: [{ name: 'session', description: 'exact opted-in live Session.' }, { name: 'stop', description: 'synchronous admission stop returning the genuine terminal join.' }],
+        returns: 'unregistration after successful producer cleanup.',
+        throws: ['if the entry is ordinary, absent, or withdrawal has begun.'],
+      },
+      {
         signature: 'announce(session: Session): void',
         description: 'Emit `session/created` exactly once for an entered session (with the carrier enter captured). Separate from enter so the caller can yield the detach disposer first (rollback safety — see enter). The Session remains read-only throughout synchronous dispatch; successful completion enables appends. A failed announcement leaves it read-only and cannot be retried.',
         parameters: [{ name: 'session', description: 'the entered session to announce to listeners.' }],
