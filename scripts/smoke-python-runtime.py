@@ -996,11 +996,11 @@ def smoke_sdk_fusion_execution(executable: Path) -> None:
             {"insert": [
                 {"id": "execution-registry", "name": "@deepseek-ai/dsh-agent-preset-registry", "config": {"default": "delivery-empty"}},
                 {"id": "execution-preset", "name": "@deepseek-ai/dsh-agent-preset", "config": {"id": "delivery-empty", "plugins": []}},
-                {"id": "execution-config", "name": "@deepseek-ai/dsh-fusion-config",
+                {"id": "execution-config", "name": str(repository / "packages/preset/fusion-config/lib/index.js"),
                  "config": {"document": {"credentialRef": "DELIVERY_TEST", "agentPreset": "delivery-empty", "providers": {},
                   "declarations": [], "bindings": [], "selections": [],
                   "metadataLimits": {"responseBytes": 32768, "totalBytes": 262144, "pages": 32, "timeoutMs": 5000}}}},
-                {"id": "execution-participants", "name": "@deepseek-ai/dsh-experimental-fusion-participants"},
+                {"id": "execution-participants", "name": str(repository / "packages/experimental/fusion-participants/lib/index.js")},
                 {"id": "execution-fixture", "name": str(fixture / "runtime.mjs")},
             ]},
         ]))
@@ -1063,10 +1063,10 @@ def smoke_sdk_fusion_ordered_shutdown(executable: Path) -> None:
                 {"id": "delivery-guard", "name": str(fixture / "guard.mjs")},
                 {"id": "delivery-registry", "name": "@deepseek-ai/dsh-agent-preset-registry", "config": {"default": "delivery-empty"}},
                 {"id": "delivery-preset", "name": "@deepseek-ai/dsh-agent-preset", "config": {"id": "delivery-empty", "plugins": []}},
-                {"id": "delivery-config", "name": "@deepseek-ai/dsh-fusion-config", "config": {"document": {
+                {"id": "delivery-config", "name": str(repository / "packages/preset/fusion-config/lib/index.js"), "config": {"document": {
                     "credentialRef": "DELIVERY_TEST", "agentPreset": "delivery-empty", "providers": {}, "declarations": [], "bindings": [], "selections": [],
                     "metadataLimits": {"responseBytes": 32768, "totalBytes": 262144, "pages": 32, "timeoutMs": 5000}}}},
-                {"id": "delivery-participants", "name": "@deepseek-ai/dsh-experimental-fusion-participants"},
+                {"id": "delivery-participants", "name": str(repository / "packages/experimental/fusion-participants/lib/index.js")},
                 {"id": "delivery-fixture", "name": str(fixture / "runtime.mjs")},
             ]},
         ]))
