@@ -1,8 +1,10 @@
 /** Session-owned MCP browser processes and provider catalog activation. @module */
 
+import { Buffer } from 'node:buffer'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
+import type { ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { BrowserUseProviderName } from '@deepseek-ai/dsh-browser-use/brand'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -14,6 +16,7 @@ import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
 import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-working-directory'
@@ -122,7 +125,45 @@ async function executeScopedTool(
   const result: unknown = await definition.execute(args, execution)
   if (!isJsonValue(result)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
   const detached = JSON.parse(JSON.stringify(result)) as JsonValue
-  return detached
+  return projectProviderImages(scope, detached, name)
+}
+
+/** Replace MCP image bytes with durable attachment references before a normalized result is logged. */
+async function projectProviderImages(scope: Scope, result: JsonValue, toolName: string): Promise<JsonValue> {
+  if (typeof result !== 'object' || result === null || Array.isArray(result) || !Array.isArray(result.content)) return result
+  const images: SaveImageAttachment[] = []
+  const indexes: number[] = []
+  for (const [index, block] of result.content.entries()) {
+    if (typeof block !== 'object' || block === null || Array.isArray(block) || block.type !== 'image') continue
+    if (typeof block.data !== 'string' || typeof block.mimeType !== 'string') throw new Error(`browser provider tool "${toolName}" returned an invalid image block`)
+    const bytes = Buffer.from(block.data, 'base64')
+    if (bytes.length === 0 || bytes.toString('base64') !== block.data) throw new Error(`browser provider tool "${toolName}" returned non-canonical image data`)
+    images.push({ data: new Uint8Array(bytes), mediaType: block.mimeType as ImageMediaType })
+    indexes.push(index)
+  }
+  if (images.length === 0) return result
+  const attachments = scope.ctx.get('attachments')
+  if (attachments === undefined) throw new Error(`browser provider tool "${toolName}" returned images but no attachment store is configured`)
+  const refs = await attachments.saveImages(images)
+  const content = result.content.map((block, index) => {
+    const offset = indexes.indexOf(index)
+    if (offset === -1) return block
+    const attachment = refs[offset]
+    if (attachment === undefined) throw new Error(`browser provider tool "${toolName}" image admission returned too few references`)
+    return {
+      type: 'image',
+      attachment: {
+        attachmentId: attachment.attachmentId,
+        mediaType: attachment.mediaType,
+        bytes: attachment.bytes,
+        width: attachment.width,
+        height: attachment.height,
+        ...attachment.name === undefined ? {} : { name: attachment.name },
+        ...attachment.originalDimensions === undefined ? {} : { originalDimensions: attachment.originalDimensions },
+      },
+    }
+  })
+  return { ...result, content }
 }
 
 function providerTool(scope: Scope, agent: Agent, suffixes: readonly string[]): string {

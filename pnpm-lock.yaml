@@ -8641,6 +8641,9 @@ importers:
       '@deepseek-ai/dsh-agent-loop-testkit':
         specifier: workspace:*
         version: link:../../test-support/agent-loop-testkit
+      '@deepseek-ai/dsh-attachment':
+        specifier: workspace:*
+        version: link:../../attachment/attachment
       '@deepseek-ai/dsh-attachment-local':
         specifier: workspace:*
         version: link:../../attachment/attachment-local
@@ -12934,6 +12937,12 @@ importers:
       '@deepseek-ai/dsh-agent':
         specifier: workspace:*
         version: link:../../core/agent
+      '@deepseek-ai/dsh-attachment':
+        specifier: workspace:*
+        version: link:../../attachment/attachment
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools

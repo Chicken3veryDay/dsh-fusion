@@ -9,6 +9,8 @@
     { "path": "../../../vendor/cosmokit" },
     { "path": "../../../vendor/cordis" },
     { "path": "../../core/agent" },
+    { "path": "../../attachment/attachment" },
+    { "path": "../../llm/llm" },
     { "path": "../../core/tools" },
     { "path": "../interaction" }
   ]

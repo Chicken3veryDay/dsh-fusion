@@ -12,6 +12,9 @@
       "path": "../../../vendor/cordis"
     },
     {
+      "path": "../../attachment/attachment"
+    },
+    {
       "path": "../../../vendor/schemastery"
     },
     {

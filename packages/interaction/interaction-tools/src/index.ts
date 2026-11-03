@@ -2,6 +2,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { AttachmentIdType, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
@@ -37,13 +39,41 @@ function textFromResult(value: JsonValue): string | undefined {
   return text.length === 0 ? undefined : text
 }
 
+function contentFromResult(value: JsonValue): ContentBlock[] | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || !Array.isArray(value.content)) return undefined
+  const content: ContentBlock[] = []
+  for (const block of value.content) {
+    if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
+    if (block.type === 'text' && typeof block.text === 'string') content.push({ type: 'text', text: block.text })
+    else if (block.type === 'image') {
+      const attachment = imageAttachment(block.attachment)
+      if (attachment !== undefined) content.push({ type: 'image', attachment })
+    }
+  }
+  return content.length === 0 ? undefined : content
+}
+
+function imageAttachment(value: JsonValue | undefined): ImageAttachmentRef | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  if (typeof value.attachmentId !== 'string' || typeof value.mediaType !== 'string'
+    || typeof value.bytes !== 'number' || typeof value.width !== 'number' || typeof value.height !== 'number') return undefined
+  return {
+    attachmentId: value.attachmentId as AttachmentIdType,
+    mediaType: value.mediaType as ImageMediaType,
+    bytes: value.bytes,
+    width: value.width,
+    height: value.height,
+    ...typeof value.name === 'string' ? { name: value.name } : {},
+  }
+}
+
 function agentOf(exec: ToolRunContext): Agent {
   if (exec.agent === undefined) throw new Error('interaction tools require an Agent-owned execution')
   return exec.agent
 }
 
 function renderResult(_args: unknown, value: Result) {
-  return [{ type: 'text' as const, text: textFromResult(value.result) ?? JSON.stringify(value.result) }]
+  return contentFromResult(value.result) ?? [{ type: 'text' as const, text: textFromResult(value.result) ?? JSON.stringify(value.result) }]
 }
 
 function presentationMeta(_args: unknown, value: Result): JsonValue {
