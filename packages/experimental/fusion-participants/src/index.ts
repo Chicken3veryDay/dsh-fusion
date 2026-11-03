@@ -136,12 +136,12 @@ export default class FusionParticipants extends Service {
    * @returns prepared capability only after every writer passes its own durability barrier.
    */
   prepare(selectionId: string, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track(async (ownedSignal, quiescent, releaseCaller) => {
+    return this.track(async (ownedSignal, quiescent, releaseCaller, setFence) => {
       const selection = this.lifetime.ctx.fusionConfig.selection(selectionId)
       const document = await this.lifetime.ctx.agentPresets.readDocument(selection.agentPreset)
       ownedSignal.throwIfAborted()
       const compositionDigest = createHash('sha256').update(document.content).digest('hex')
-      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, ownedSignal, quiescent, releaseCaller)
+      return this.acquire({ kind: 'create', roster: captureRoster(selection, compositionDigest) }, ownedSignal, quiescent, releaseCaller, setFence)
     }, signal)
   }
 
@@ -152,7 +152,7 @@ export default class FusionParticipants extends Service {
    * @returns a prepared capability using the original roster and context lineages.
    */
   recover(rootSessionId: SessionId, signal?: AbortSignal): Promise<PreparedParticipants> {
-    return this.track((ownedSignal, quiescent, releaseCaller) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent, releaseCaller), signal)
+    return this.track((ownedSignal, quiescent, releaseCaller, setFence) => this.acquire({ kind: 'resume', rootSessionId }, ownedSignal, quiescent, releaseCaller, setFence), signal)
   }
 
   /**
@@ -189,13 +189,19 @@ export default class FusionParticipants extends Service {
   }
 
   private track(
-    work: (signal: AbortSignal, quiescent: () => void, releaseCaller: () => Promise<void>) => Promise<PreparedParticipants>,
+    work: (
+      signal: AbortSignal,
+      quiescent: () => void,
+      releaseCaller: () => Promise<void>,
+      setFence: (fence: () => void) => void,
+    ) => Promise<PreparedParticipants>,
     caller?: AbortSignal,
   ): Promise<PreparedParticipants> {
     const operation = Promise.withResolvers<PreparedParticipants>()
     const abort = new AbortController()
     const signal = AbortSignal.any([this.abort.signal, abort.signal, ...caller === undefined ? [] : [caller]])
     let settled = false
+    let callerFence: (() => void) | undefined
     let removeCaller: () => void | Promise<void>
     const releaseCaller = async (): Promise<void> => {
       // Removing an effect runs its cleanup; a settled task must not join itself.
@@ -209,18 +215,20 @@ export default class FusionParticipants extends Service {
       removeCaller = this.ctx.effect(() => async () => {
         if (settled) return
         abort.abort(new Error('participant caller disposed'))
+        callerFence?.()
         let task: PreparedParticipants
         try { task = await operation.promise } catch (_preparation: unknown) { return /* Rollback belongs to the pending operation. */ }
         await task.dispose()
       }, 'fusion-participants.caller')
     } catch (error: unknown) { operation.reject(error); return operation.promise }
     const quiescent = Promise.withResolvers<void>()
+    const setFence = (fence: () => void): void => { callerFence = fence }
     this.pending.set(operation.promise, quiescent.promise)
     void operation.promise.then(() => this.pending.delete(operation.promise), () => this.pending.delete(operation.promise))
     // Reserve before invoking provider code, including synchronous reentrant callbacks.
     void Promise.resolve().then(() => {
       signal.throwIfAborted()
-      return work(signal, quiescent.resolve, releaseCaller)
+      return work(signal, quiescent.resolve, releaseCaller, setFence)
     }).then(operation.resolve, async (error: unknown) => {
       await releaseCaller()
       operation.reject(error)
@@ -241,6 +249,7 @@ export default class FusionParticipants extends Service {
     caller: AbortSignal,
     quiescent: () => void,
     releaseCaller: () => Promise<void>,
+    setFence: (fence: () => void) => void,
   ): Promise<PreparedParticipants> {
     const rootSessionId = request.kind === 'create' ? request.roster.rootSessionId : request.rootSessionId
     const taskAbort = new AbortController()
@@ -249,6 +258,7 @@ export default class FusionParticipants extends Service {
     const participants = new Map<SessionId, RetainedAgentSession>()
     let composition: Scope | undefined
     let disposal: Promise<void> | undefined
+    let removeFence: (() => void | Promise<void>) | undefined
     let prepared: PreparedParticipants | undefined
     let delivery: DeliveryOwner | undefined
     let execution: TaskExecutionOwner | undefined
@@ -262,7 +272,10 @@ export default class FusionParticipants extends Service {
       taskAbort.abort(new Error('participant task disposed'))
       const joins: Promise<void>[] = [acquired.promise]
       try {
-        joins.push(Promise.resolve(execution === undefined ? delivery?.dispose() : execution.dispose()))
+        // Fence delivery admission before waiting for execution revocation;
+        // execution.dispose() joins this same memoized delivery close later.
+        if (delivery !== undefined) joins.push(delivery.dispose())
+        joins.push(Promise.resolve(execution === undefined ? undefined : execution.dispose()))
       } catch (error: unknown) {
         const failed = Promise.withResolvers<void>()
         failed.reject(error)
@@ -278,6 +291,9 @@ export default class FusionParticipants extends Service {
       if (disposal !== undefined) return disposal
       const completion = Promise.withResolvers<void>()
       disposal = completion.promise
+      // Fence delivery synchronously when a caller fiber unloads; the async
+      // drain below joins this same memoized close after execution revocation.
+      void delivery?.dispose()
       void (async () => {
         try {
           const errors: unknown[] = []
@@ -287,6 +303,7 @@ export default class FusionParticipants extends Service {
             try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
           }
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
+          try { await removeFence?.() } catch (error: unknown) { errors.push(error) }
           if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
           if (prepared !== undefined) this.owned.delete(prepared)
@@ -362,6 +379,9 @@ export default class FusionParticipants extends Service {
       await delivery.reconcile()
       signal.throwIfAborted()
       const deliveryOwner = delivery
+      // A raw caller-fiber unload must fence admission synchronously, before
+      // the async task disposer can join execution and writer cleanup.
+      removeFence = this.ctx.root.effect(() => () => { void deliveryOwner.dispose() }, 'fusion-participants.delivery-fence')
       const sessions = new Map([...participants].map(([id, lease]) => [id, lease.session]))
       execution = new TaskExecutionOwner({
         ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, adapters: [], drain: () => deliveryOwner.dispose(),
@@ -384,6 +404,7 @@ export default class FusionParticipants extends Service {
         dispose,
       })
       this.executionOwners.set(prepared, executionOwner)
+      setFence(() => { void deliveryOwner.dispose() })
       this.owned.set(prepared, drain)
       acquired.resolve()
       quiescent()

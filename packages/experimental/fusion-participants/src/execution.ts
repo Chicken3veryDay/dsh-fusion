@@ -701,7 +701,10 @@ export class TaskExecutionOwner {
     this.phase = 'revoking'
     const execution = (async () => {
       await Promise.allSettled([this.opening, this.enrollment?.done])
-      if (this.opened && this.issuers.size > 0) {
+      // A registration callback can dispose the owner before enrollment finishes.
+      // Once an attempt exists, revoke it even when the host has not published
+      // its opened state yet; otherwise the producer never receives cleanup.
+      if (this.attempts.size > 0 || this.opened && this.issuers.size > 0) {
         await this.revoke('stop')
         if (this.phase !== 'stopped') await this.revoke('stop')
       }
