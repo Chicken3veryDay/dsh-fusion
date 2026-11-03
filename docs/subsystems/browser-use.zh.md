@@ -2,7 +2,9 @@
 
 [English](browser-use.md) | 中文
 
-浏览器操作让模型通过配置的后端检查与操作网页。DSH 拥有任务循环；提供方提供浏览器操作，并在一个实时 Session 的多个轮次之间保留浏览器状态。
+浏览器操作让 Agent 通过 DSH 自有的交互能力检查与操作网页。DSH 负责任务循环、规范化的 `browser_*` 工具和精确 Agent 的生命周期；配置的提供方提供浏览器操作，并在一个实时 Session 的多个轮次之间保留浏览器状态。
+
+Web 和 Desktop 组合默认挂载交互能力。在 Linux 上，Playwright MCP 提供浏览器导航、观察、标签页和截图操作。没有就绪提供方的 Host 不会接纳浏览器工具模式，因此模型不会收到不可用的工具。
 
 ## 选择提供方
 
@@ -14,7 +16,7 @@
 | [Chrome DevTools MCP](../../packages/experimental/browser-use-chrome-devtools-mcp/README.zh.md) | 通过 MCP 进行 Chrome DevTools 检查与控制 |
 | [Stagehand](../../packages/experimental/browser-use-stagehand-native/README.zh.md) | 原生浏览器操作，支持 AI（人工智能）辅助的动作、观测与提取 |
 
-共享服务只注册名称，并拒绝任何第二次提供方注册，包括同名实例。它不包含通用浏览器操作方法、浏览器资源或模型控制的选择器。Profile 或 preset 中的提供方配置为此次激活选择启动或附加模式。
+兼容服务注册提供方名称，并拒绝第二个提供方。DSH 交互服务增加 Agent 面向的通用操作，并将其映射到选定提供方；提供方专用的 MCP 工具在兼容模式下仍可用。Profile 中的提供方配置为此次激活选择启动或附加模式。
 
 ## Session 所有权
 
@@ -32,7 +34,7 @@ MCP 提供方为其加载后创建的每个活动 Agent 初始化一个客户端
 
 ## 工具与记录结果
 
-提供方工具使用常规 DSH 执行管线与 Session 日志。提供方拥有自己的工具 schema、结果渲染、图像支持、配置和上游限制；共享服务不添加模型可见内容。Stagehand 的 AI 辅助操作使用其显式配置的原生模型，DSH 保留任务循环。DSH 模型路由、凭据复用、底层推理请求/响应捕获，以及与 Session 用量计量的集成均属暂缓工作；返回的 SDK 数据和元数据仍作为普通工具结果记录。
+规范化工具和兼容工具使用常规 DSH 执行管线与 Session 日志。规范化结果保留提供方元数据，而 DSH 负责稳定的操作名称和指引。Stagehand 的 AI 辅助操作使用其显式配置的原生模型，DSH 保留任务循环。截图和活动浏览器状态仍由提供方负责；重放不会重新打开浏览器。
 
 浏览器 MCP 连接还提供[资源和服务器指令](mcp.zh.md)。发往浏览器服务器的资源调用使用其 Session 队列，并拒绝其他 Session 的请求；服务器指令只会组装到所属 Session 的提示词中。
 
@@ -64,4 +66,49 @@ register(name: BrowserUseProviderName): () => Promise<void>
 ```
 
 Source: [`packages/browser-use/browser-use/src/index.ts`](../../packages/browser-use/browser-use/src/index.ts)
+
+<a id="ctxinteraction--interactionservice"></a>
+
+### `ctx.interaction` — `InteractionService`
+
+Owns one provider per interaction domain and exact-Agent live resources.
+
+```ts cordis-catalog
+/**
+ * Return the active provider description for one domain, if registered.
+ * @param domain - interaction domain to inspect.
+ * @returns provider metadata, or undefined when no provider is registered.
+ */
+describe(domain: InteractionDomain): InteractionProviderDescription | undefined
+
+/**
+ * Whether an exact live Agent can use a domain in the current step.
+ * @param agent - live Agent requesting the capability.
+ * @param domain - interaction domain to check.
+ * @param method - optional normalized operation method to check.
+ * @returns true when a ready provider supports the method for this Agent.
+ */
+available(agent: Agent, domain: InteractionDomain, method?: string): boolean
+
+/**
+ * Register one provider for a domain until its disposer completes.
+ * @param provider - provider adapter owned by the registering plugin.
+ * @returns disposer for this exact provider registration.
+ */
+register(provider: InteractionProvider): () => Promise<void>
+
+/**
+ * Run one operation through the exact Agent's serialized provider session.
+ * @param agent - live Agent that owns the operation.
+ * @param domain - operation domain.
+ * @param operation - normalized operation.
+ * @param signal - caller cancellation.
+ * @returns detached provider result.
+ */
+async run(agent: Agent, domain: InteractionDomain, operation: InteractionOperation, signal: AbortSignal): Promise<JsonValue>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/interaction/interaction/src/index.ts`](../../packages/interaction/interaction/src/index.ts)
 <!-- END GENERATED cordis-surface -->

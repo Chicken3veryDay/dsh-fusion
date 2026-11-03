@@ -46,6 +46,25 @@
         serviceVersion: !!js process.env.DSH_CLIENT_VERSION
         endpoint: !!js process.env.DSH_PRODUCT_ANALYTICS_OTLP_URL
 
+    # Stable agent-native interaction surface. Providers are lazy at the
+    # Session boundary; the Linux desktop adapter is admitted only on Linux.
+    - id: interaction
+      name: '@deepseek-ai/dsh-interaction'
+    - id: interaction-tools
+      name: '@deepseek-ai/dsh-interaction-tools'
+    - id: interaction-browser-registry
+      name: '@deepseek-ai/dsh-browser-use'
+    - id: interaction-browser-playwright
+      name: '@deepseek-ai/dsh-experimental-browser-use-playwright-mcp'
+      config:
+        mode: launch
+        headless: true
+    - id: interaction-computer-registry
+      name: '@deepseek-ai/dsh-computer-use'
+    - id: interaction-computer-linux
+      name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native'
+      disabled: !!js process.platform !== 'linux' || (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY)
+
     - id: product-analytics
       name: '@deepseek-ai/dsh-client-product-analytics'
       disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"

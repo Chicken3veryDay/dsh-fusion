@@ -423,6 +423,8 @@
     { "path": "./packages/core/agent" },
     { "path": "./packages/core/agent-default-model" },
     { "path": "./packages/interaction/commands" },
+    { "path": "./packages/interaction/interaction" },
+    { "path": "./packages/interaction/interaction-tools" },
     { "path": "./packages/goal/goal" },
     { "path": "./packages/goal/tool-goal" },
     { "path": "./packages/goal/goal-round-driver" },

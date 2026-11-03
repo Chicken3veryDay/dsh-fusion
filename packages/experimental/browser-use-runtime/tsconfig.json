@@ -30,6 +30,9 @@
       "path": "../../browser-use/browser-use"
     },
     {
+      "path": "../../interaction/interaction"
+    },
+    {
       "path": "../../core/system-prompt"
     },
     {

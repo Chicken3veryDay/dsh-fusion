@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The `interaction/` group covers the ways a person can guide a running agent. Use slash commands for immediate actions that do not require a model round trip, one-shot approvals for sensitive operations, permission presets to choose sandbox and approval behavior together, and questions when the agent needs information or a decision. Interactive applications expose these capabilities to people; automation handles its own approvals through ACP. The package map below distinguishes each capability and links to its full behavior and configuration.
+The `interaction/` group covers the ways a person can guide a running agent and the agent can operate an attached environment. Use slash commands for immediate actions that do not require a model round trip, one-shot approvals for sensitive operations, permission presets to choose sandbox and approval behavior together, questions when the agent needs information or a decision, and the stable browser/desktop capability when the Host supports it. Interactive applications expose these capabilities to people; automation handles its own approvals through ACP. The package map below distinguishes each capability and links to its full behavior and configuration.
 
 ## Table of Contents
 
@@ -31,6 +31,8 @@ Each package README and its subsystem reference own the exhaustive contracts.
 | [`permission-presets/`](permission-presets/README.md) | Bundles sandbox mode with an approval policy into one user-facing Permissions selector | `ctx.permissionPresets` |
 | [`user-questions/`](user-questions/README.md) | Defines the validated question schema and scoped answerer waterfall an agent pauses on | `ctx.userQuestions` |
 | [`tool-ask-user/`](tool-ask-user/README.md) | Exposes the `ask_user_question` tool so the model can ask the human for a decision | registers on `ctx.tools` |
+| [`interaction/`](interaction/README.md) | Owns the provider-neutral browser and desktop capability and exact-Agent resources | `ctx.interaction` |
+| [`interaction-tools/`](interaction-tools/README.md) | Exposes stable `browser_*` and `desktop_*` tools over the active capability | registers on `ctx.tools` |
 
 -----
 
@@ -43,6 +45,8 @@ Start with the subsystem references for the shared vocabularies, then the neighb
 - [Approval subsystem](../../docs/subsystems/approval.md) — request/outcome vocabulary, the answerer waterfall, and per-session policy.
 - [Permission presets subsystem](../../docs/subsystems/permission-presets.md) — the preset table and the knob write-through.
 - [User interaction subsystem](../../docs/subsystems/user-questions.md) — question vocabulary, answerer waterfall, and pending-question lifecycle.
+- [Browser use subsystem](../../docs/subsystems/browser-use.md) — normalized browser operations and provider ownership.
+- [Computer use subsystem](../../docs/subsystems/computer-use.md) — normalized Linux desktop operations and provider availability.
 - [ACP group](../acp/README.md) — the automation-only transport that answers approval requests for its own agents.
 
 <a id="dev-note"></a>

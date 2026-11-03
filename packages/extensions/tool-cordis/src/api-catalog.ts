@@ -1836,6 +1836,37 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'interaction',
+    summary: 'Owns one provider per interaction domain and exact-Agent live resources.',
+    description: 'Owns one provider per interaction domain and exact-Agent live resources.',
+    methods: [
+      {
+        signature: 'describe(domain: InteractionDomain): InteractionProviderDescription | undefined',
+        description: 'Return the active provider description for one domain, if registered.',
+        parameters: [{ name: 'domain', description: 'interaction domain to inspect.' }],
+        returns: 'provider metadata, or undefined when no provider is registered.',
+      },
+      {
+        signature: 'available(agent: Agent, domain: InteractionDomain, method?: string): boolean',
+        description: 'Whether an exact live Agent can use a domain in the current step.',
+        parameters: [{ name: 'agent', description: 'live Agent requesting the capability.' }, { name: 'domain', description: 'interaction domain to check.' }, { name: 'method', description: 'optional normalized operation method to check.' }],
+        returns: 'true when a ready provider supports the method for this Agent.',
+      },
+      {
+        signature: 'register(provider: InteractionProvider): () => Promise<void>',
+        description: 'Register one provider for a domain until its disposer completes.',
+        parameters: [{ name: 'provider', description: 'provider adapter owned by the registering plugin.' }],
+        returns: 'disposer for this exact provider registration.',
+      },
+      {
+        signature: 'async run(agent: Agent, domain: InteractionDomain, operation: InteractionOperation, signal: AbortSignal): Promise<JsonValue>',
+        description: 'Run one operation through the exact Agent\'s serialized provider session.',
+        parameters: [{ name: 'agent', description: 'live Agent that owns the operation.' }, { name: 'domain', description: 'operation domain.' }, { name: 'operation', description: 'normalized operation.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'detached provider result.',
+      },
+    ],
+  },
+  {
     key: 'jobController',
     summary: 'Host service backing the generated `ctx.remote.job` namespace.',
     description: 'Host service backing the generated `ctx.remote.job` namespace.',
@@ -5850,6 +5881,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type BrandedNumber<B extends string> = number & {\n    readonly [BRAND]: B;\n};',
   },
   {
+    name: 'BrowserOperation',
+    declaration: 'export type BrowserOperation = {\n    domain: \'browser\';\n    method: \'navigate\';\n    tabId?: string;\n    url: string;\n} | {\n    domain: \'browser\';\n    method: \'tabs\';\n    operation: \'list\' | \'new\' | \'select\' | \'close\';\n    tabId?: string;\n    url?: string;\n} | {\n    domain: \'browser\';\n    method: \'observe\';\n    tabId?: string;\n    instruction?: string;\n} | {\n    domain: \'browser\';\n    method: \'act\';\n    tabId?: string;\n    action: JsonValue;\n} | {\n    domain: \'browser\';\n    method: \'extract\';\n    tabId?: string;\n    instruction: string;\n    schema?: JsonValue;\n} | {\n    domain: \'browser\';\n    method: \'screenshot\';\n    tabId?: string;\n};',
+  },
+  {
     name: 'BrowserUseProviderName',
     declaration: 'export type BrowserUseProviderName = Branded<\'BrowserUseProviderName\'>;',
   },
@@ -6308,6 +6343,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DeliveryRetentionBounds',
     declaration: 'export interface DeliveryRetentionBounds {\n    readonly days: number;\n    readonly records: number;\n}',
+  },
+  {
+    name: 'DesktopOperation',
+    declaration: 'export type DesktopOperation = {\n    domain: \'desktop\';\n    method: \'observe\';\n    applicationId?: string;\n    windowId?: string;\n} | {\n    domain: \'desktop\';\n    method: \'act\';\n    applicationId?: string;\n    windowId?: string;\n    action: JsonValue;\n} | {\n    domain: \'desktop\';\n    method: \'screenshot\';\n    applicationId?: string;\n    windowId?: string;\n};',
   },
   {
     name: 'DeveloperMessage',
@@ -6884,6 +6923,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'InstallSpecKind',
     declaration: 'export type InstallSpecKind = \'registry\' | \'path\' | \'git\' | \'tarball\';',
+  },
+  {
+    name: 'InteractionAvailability',
+    declaration: 'export type InteractionAvailability = \'ready\' | \'needs_permission\' | \'needs_configuration\' | \'unavailable\';',
+  },
+  {
+    name: 'InteractionDomain',
+    declaration: 'export type InteractionDomain = \'browser\' | \'desktop\';',
+  },
+  {
+    name: 'InteractionOperation',
+    declaration: 'export type InteractionOperation = BrowserOperation | DesktopOperation;',
+  },
+  {
+    name: 'InteractionProvider',
+    declaration: 'export interface InteractionProvider {\n    describe(): InteractionProviderDescription;\n    readonly domain: InteractionDomain;\n    open(agent: Agent, signal: AbortSignal): Promise<InteractionSession>;\n}',
+  },
+  {
+    name: 'InteractionProviderDescription',
+    declaration: 'export interface InteractionProviderDescription {\n    readonly id: InteractionProviderId;\n    readonly domains: readonly InteractionDomain[];\n    readonly methods?: readonly string[];\n    readonly availability: InteractionAvailability;\n    readonly detail?: string;\n}',
+  },
+  {
+    name: 'InteractionProviderId',
+    declaration: 'export type InteractionProviderId = Branded<\'InteractionProviderId\'>;',
+  },
+  {
+    name: 'InteractionSession',
+    declaration: 'export interface InteractionSession {\n    execute(operation: InteractionOperation, signal: AbortSignal): Promise<JsonValue>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'InvocationDescriptor',

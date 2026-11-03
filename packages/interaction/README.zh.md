@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-`interaction/` 组覆盖用户引导运行中 agent 的各种方式。斜杠命令适合无需模型往返的即时操作；一次性审批用于敏感操作；权限预设可以同时选择沙箱与审批行为；当 agent 需要信息或决定时，它还可以向用户提问。交互式应用向用户提供这些能力；自动化则通过 ACP（Agent Client Protocol）处理自己的审批。下方包映射说明了每项能力的区别，并链接其完整行为与配置。
+`interaction/` 组覆盖用户引导运行中 agent 的各种方式，以及 agent 操作所连接环境的能力。斜杠命令适合无需模型往返的即时操作；一次性审批用于敏感操作；权限预设可以同时选择沙箱与审批行为；当 agent 需要信息或决定时，它还可以向用户提问；Host 支持时还可使用稳定的浏览器／桌面能力。交互式应用向用户提供这些能力；自动化则通过 ACP（Agent Client Protocol）处理自己的审批。下方包映射说明了每项能力的区别，并链接其完整行为与配置。
 
 ## 目录
 
@@ -31,6 +31,8 @@ kind: "package-group"
 | [`permission-presets/`](permission-presets/README.zh.md) | 把沙箱模式与审批策略捆绑为一个面向用户的权限选择器 | `ctx.permissionPresets` |
 | [`user-questions/`](user-questions/README.zh.md) | 定义经过校验的问题 schema 与作用域 answerer waterfall，agent 可暂停等待 | `ctx.userQuestions` |
 | [`tool-ask-user/`](tool-ask-user/README.zh.md) | 暴露 `ask_user_question` 工具，让模型可以向用户提问并请求其作出决定 | 注册到 `ctx.tools` |
+| [`interaction/`](interaction/README.zh.md) | 拥有与提供方无关的浏览器／桌面能力及精确 Agent 资源 | `ctx.interaction` |
+| [`interaction-tools/`](interaction-tools/README.zh.md) | 在活动能力之上暴露稳定的 `browser_*` 与 `desktop_*` 工具 | 注册到 `ctx.tools` |
 
 -----
 
@@ -43,6 +45,8 @@ kind: "package-group"
 - [审批子系统](../../docs/subsystems/approval.zh.md)——请求／结果词汇、应答者瀑布与按会话策略。
 - [权限预设子系统](../../docs/subsystems/permission-presets.zh.md)——预设表与旋钮写穿。
 - [用户交互子系统](../../docs/subsystems/user-questions.zh.md)——问题词汇、answerer waterfall 与待处理问题生命周期。
+- [浏览器使用子系统](../../docs/subsystems/browser-use.zh.md)——规范化浏览器操作与提供方所有权。
+- [计算机使用子系统](../../docs/subsystems/computer-use.zh.md)——规范化 Linux 桌面操作与提供方可用性。
 - [ACP 组](../acp/README.zh.md)——仅自动化的传输，为其自有 agent 回答审批请求。
 
 <a id="dev-note"></a>

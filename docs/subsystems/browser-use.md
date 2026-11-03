@@ -2,7 +2,9 @@
 
 English | [中文](browser-use.zh.md)
 
-Browser use lets a model inspect and operate web pages through a configured backend. DSH owns the task loop; the provider supplies browser operations and keeps browser state across turns of one live Session.
+Browser use lets an Agent inspect and operate web pages through a DSH-owned interaction capability. DSH owns the task loop, normalized `browser_*` tools, and exact-Agent lifecycle; a configured provider supplies the browser operations and keeps browser state across turns of one live Session.
+
+The Web and Desktop compositions mount the interaction capability by default. On Linux, Playwright MCP supplies browser navigation, observation, tab, and screenshot operations. A Host without a ready provider admits no browser tool schemas, so the model does not receive unusable tools.
 
 ## Choose a provider
 
@@ -14,7 +16,7 @@ Mount [`dsh-browser-use`](../../packages/browser-use/browser-use/README.md) and 
 | [Chrome DevTools MCP](../../packages/experimental/browser-use-chrome-devtools-mcp/README.md) | Chrome DevTools inspection and control through MCP |
 | [Stagehand](../../packages/experimental/browser-use-stagehand-native/README.md) | Native browser operations with AI-assisted actions, observation, and extraction |
 
-The shared service registers only a name and rejects any second provider, including another instance with the same name. It has no common browser-operation methods, browser resources, or model-controlled selector. Provider configuration in a profile or preset selects launch or attachment for that activation.
+The compatibility service registers provider names and rejects a second provider. The DSH interaction service adds the common Agent-facing operations and maps them to the selected provider; provider-specific MCP tools remain available for compatibility. Provider configuration selects launch or attachment for that activation.
 
 ## Session ownership
 
@@ -32,7 +34,7 @@ If an attachment is busy, that activation continues without the browser and does
 
 ## Tools and recorded results
 
-Provider tools use the normal DSH execution pipeline and Session log. The providers own their tool schemas, result rendering, image support, configuration, and upstream limitations; the shared service adds no model-visible content. Stagehand's AI-assisted operations use its explicitly configured native model while DSH retains the task loop. DSH model routing, credential reuse, underlying inference request/response capture, and integration into Session usage accounting are deferred; returned SDK data and metadata remain ordinary logged tool results.
+Normalized and compatibility tools use the normal DSH execution pipeline and Session log. Normalized results retain provider metadata while DSH owns the stable operation names and guidance. Stagehand's AI-assisted operations use its explicitly configured native model while DSH retains the task loop. Screenshots and live browser state remain provider-owned; replay does not reopen a browser.
 
 Browser MCP connections also expose [resources and server instructions](mcp.md). Resource calls addressed to a browser server use its Session queue and reject other Sessions; server instructions are assembled only for its owning Session.
 
@@ -64,4 +66,49 @@ register(name: BrowserUseProviderName): () => Promise<void>
 ```
 
 Source: [`packages/browser-use/browser-use/src/index.ts`](../../packages/browser-use/browser-use/src/index.ts)
+
+<a id="ctxinteraction--interactionservice"></a>
+
+### `ctx.interaction` — `InteractionService`
+
+Owns one provider per interaction domain and exact-Agent live resources.
+
+```ts cordis-catalog
+/**
+ * Return the active provider description for one domain, if registered.
+ * @param domain - interaction domain to inspect.
+ * @returns provider metadata, or undefined when no provider is registered.
+ */
+describe(domain: InteractionDomain): InteractionProviderDescription | undefined
+
+/**
+ * Whether an exact live Agent can use a domain in the current step.
+ * @param agent - live Agent requesting the capability.
+ * @param domain - interaction domain to check.
+ * @param method - optional normalized operation method to check.
+ * @returns true when a ready provider supports the method for this Agent.
+ */
+available(agent: Agent, domain: InteractionDomain, method?: string): boolean
+
+/**
+ * Register one provider for a domain until its disposer completes.
+ * @param provider - provider adapter owned by the registering plugin.
+ * @returns disposer for this exact provider registration.
+ */
+register(provider: InteractionProvider): () => Promise<void>
+
+/**
+ * Run one operation through the exact Agent's serialized provider session.
+ * @param agent - live Agent that owns the operation.
+ * @param domain - operation domain.
+ * @param operation - normalized operation.
+ * @param signal - caller cancellation.
+ * @returns detached provider result.
+ */
+async run(agent: Agent, domain: InteractionDomain, operation: InteractionOperation, signal: AbortSignal): Promise<JsonValue>
+```
+
+Types: [Agent](core.md)
+
+Source: [`packages/interaction/interaction/src/index.ts`](../../packages/interaction/interaction/src/index.ts)
 <!-- END GENERATED cordis-surface -->

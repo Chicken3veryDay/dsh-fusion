@@ -2,7 +2,9 @@
 
 English | [中文](computer-use.zh.md)
 
-Computer use lets a model observe and operate the local desktop through a configured provider. The shared DSH capability is called **computer use**; **Cua Driver** names the upstream implementation.
+Computer use lets an Agent observe and operate the local desktop through a DSH-owned interaction capability. The shared DSH capability is called **computer use**; **Cua Driver** names the upstream implementation.
+
+The Web and Desktop compositions enable the normalized desktop tools when a Linux graphical Host can initialize the native Cua Driver. A Host without a ready Linux provider leaves those tools out of the Agent's request and reports the provider diagnostic through Host setup state.
 
 [Computer Use](../../packages/experimental/cua-bundle/README.md) provides an optional experimental switch for macOS CUA permission setup.
 
@@ -19,14 +21,14 @@ The CUA provider owns `ctx.cuaAccess` for system-permission status, explicit sys
 
 ## Choose a provider
 
-Mount [`dsh-computer-use`](../../packages/computer-use/computer-use/README.md) and one provider in the same composition. Both Cua Driver providers are experimental public npm packages and require explicit activation.
+Mount [`dsh-computer-use`](../../packages/computer-use/computer-use/README.md) and one provider in the same composition. The first-party Web and Desktop compositions mount the native Linux Cua Driver by default; other providers remain explicit alternatives.
 
 | Provider | Runtime |
 |---|---|
 | [Cua Driver MCP](../../packages/experimental/computer-use-cua-driver-mcp/README.md) | An already installed `cua-driver` executable connected through MCP |
 | [Cua Driver native](../../packages/experimental/computer-use-cua-driver-native/README.md) | The platform-native runtime installed with the npm dependency |
 
-Each provider supplies its upstream tool catalog. The shared service registers only a name and rejects any second provider, including another instance with the same name. It has no common desktop-operation methods or model-controlled selector.
+Each provider supplies its upstream tool catalog. The compatibility service registers only a name and rejects any second provider. The DSH interaction service maps the Linux provider to normalized `desktop_observe`, `desktop_act`, and `desktop_screenshot` tools without exposing provider selection to the model.
 
 ## Lifetime and desktop sharing
 

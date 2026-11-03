@@ -7,6 +7,11 @@ import { BrowserUseProviderName } from '@deepseek-ai/dsh-browser-use/brand'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { ToolRunContext, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
+import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
+import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -91,6 +96,78 @@ interface ClientState {
   mask?: Scope
 }
 
+let interactionCallSequence = 0
+
+async function executeScopedTool(
+  scope: Scope,
+  agent: Agent,
+  name: string,
+  args: Record<string, JsonValue>,
+  signal: AbortSignal,
+): Promise<JsonValue> {
+  const definition = scope.ctx.tools.get(name, agent)
+  if (definition === undefined) throw new Error(`browser provider tool "${name}" is unavailable`)
+  const token = Symbol() as ToolExecutionToken
+  const execution: ToolRunContext = {
+    callId: ToolCallId(`interaction-${++interactionCallSequence}`),
+    rootCallId: ToolCallId(`interaction-${interactionCallSequence}`),
+    name,
+    arguments: args,
+    agent,
+    signal,
+    token,
+    deferContext: () => {},
+    concludeTurn: () => {},
+  }
+  const result: unknown = await definition.execute(args, execution)
+  if (!isJsonValue(result)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
+  const detached = JSON.parse(JSON.stringify(result)) as JsonValue
+  return detached
+}
+
+function providerTool(scope: Scope, agent: Agent, suffixes: readonly string[]): string {
+  const names = scope.ctx.tools.schemas(agent).map(tool => tool.name)
+  const name = names.find(candidate => suffixes.some(suffix => candidate.endsWith(`__${suffix}`)))
+  if (name === undefined) throw new Error(`browser provider does not expose ${suffixes.join(' or ')}`)
+  return name
+}
+
+function browserOperation(scope: Scope, agent: Agent, operation: InteractionOperation): { name: string; args: Record<string, JsonValue> } {
+  if (operation.domain !== 'browser') throw new Error('browser provider received a desktop operation')
+  if (operation.method === 'navigate') return { name: providerTool(scope, agent, ['browser_navigate']), args: { url: operation.url } }
+  if (operation.method === 'observe') {
+    return {
+      name: providerTool(scope, agent, ['browser_snapshot', 'browser_observe']),
+      args: operation.instruction === undefined ? {} : { target: operation.instruction },
+    }
+  }
+  if (operation.method === 'screenshot') return { name: providerTool(scope, agent, ['browser_take_screenshot', 'browser_screenshot']), args: {} }
+  if (operation.method === 'tabs') {
+    const index = operation.tabId === undefined ? undefined : Number(operation.tabId)
+    if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
+      throw new Error('browser_tabs tabId must be a non-negative integer for this provider')
+    }
+    return {
+      name: providerTool(scope, agent, ['browser_tabs', 'browser_tab_list']),
+      args: {
+        action: operation.operation,
+        ...index === undefined ? {} : { index },
+        ...operation.url === undefined ? {} : { url: operation.url },
+      },
+    }
+  }
+  if (operation.method === 'act') {
+    if (typeof operation.action !== 'object' || operation.action === null || Array.isArray(operation.action)) {
+      throw new Error('browser_act action must be an object with kind')
+    }
+    const kind = operation.action.kind
+    if (typeof kind !== 'string' || kind.length === 0) throw new Error('browser_act action.kind must be a non-empty string')
+    const { kind: _kind, ...args } = operation.action
+    return { name: providerTool(scope, agent, [`browser_${kind}`, kind]), args }
+  }
+  throw new Error(`browser provider does not support normalized ${operation.method} yet`)
+}
+
 /**
  * Await one MCP client during each future Agent's creation.
  * A busy attachment leaves that activation without browser tools; its other turns continue.
@@ -127,6 +204,23 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
 
   ctx.effect(function* () {
     yield ctx.browserUse.register(BrowserUseProviderName(options.name))
+    const interaction = ctx.get('interaction')
+    if (interaction !== undefined) {
+      yield interaction.register({
+        domain: 'browser',
+        describe: () => ({ id: interactionProviderId(options.name), domains: ['browser'], methods: ['navigate', 'tabs', 'observe', 'act', 'screenshot'], availability: 'ready' }),
+        async open(agent, signal) {
+          const scope = await resources.get(agent, signal)
+          return {
+            async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
+              const selected = browserOperation(scope, agent, operation)
+              return executeScopedTool(scope, agent, selected.name, selected.args, operationSignal)
+            },
+            close: async () => {},
+          }
+        },
+      })
+    }
     resources = new SessionResources(ctx, {
       label: options.name,
       exclusive: options.exclusive,

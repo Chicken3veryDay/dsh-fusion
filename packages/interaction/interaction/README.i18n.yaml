@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/interaction/interaction/README.md
+/:
+  en: 450218042920a611
+  zh: 54c5ab6eadb18fdb
+/deepseek-ai-dsh-interaction:
+  en: 55ae94bbca2c6860
+  zh: 407aee79ebfcb48c
+/deepseek-ai-dsh-interaction/summary:
+  en: 1cd5d4bbb2f25a84
+  zh: 68e0730002b3cad3
+/deepseek-ai-dsh-interaction/table-of-contents:
+  en: 65663b0d5dfa1600
+  zh: 83ca859e0104a850
+/deepseek-ai-dsh-interaction/use-this-package:
+  en: fd8b169c2b1e7c8a
+  zh: 917fa38e377da714
+/deepseek-ai-dsh-interaction/understand-the-implementation:
+  en: 218e8f3a57772a0f
+  zh: 725faf3c4fe8e16d
+/deepseek-ai-dsh-interaction/further-exploration:
+  en: c872429cc9cfb9ba
+  zh: 859ba944ee9af957
+/deepseek-ai-dsh-interaction/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-interaction/model-experience/capability-availability:
+  en: e449346732507480
+  zh: ff03d0cbb80f89b2
+/deepseek-ai-dsh-interaction/model-experience/capability-availability/what-the-model-sees:
+  en: 4208a6b2aa3bdbea
+  zh: 4866e4d4ace7b731
+/deepseek-ai-dsh-interaction/model-experience/capability-availability/token-effect:
+  en: 892073afb12665a2
+  zh: 7cfa639f8fc98b66
+/deepseek-ai-dsh-interaction/model-experience/capability-availability/kv-cache-effect:
+  en: 949cc30e034c33cc
+  zh: a520469c318a3a9a
+/deepseek-ai-dsh-interaction/known-limitations-and-deferred-work:
+  en: 863686a1ccf6493c
+  zh: b19204e67c265d38
+/deepseek-ai-dsh-interaction/known-limitations-and-deferred-work/dev-note:
+  en: f26bc5eebe6921d3
+  zh: 0c8c4039126b8d2d
