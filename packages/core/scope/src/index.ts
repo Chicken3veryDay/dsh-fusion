@@ -15,7 +15,9 @@ export type { ScopeLayer } from './store.ts'
 export type ScopeKey = object
 
 /** Context tag written by {@link createScope}. */
-const kScope = Symbol('dsh.scope')
+// Keep the context tag stable when a packaged runtime loads one copy from the
+// executable and another from an extension's staged node_modules tree.
+const kScope = Symbol.for('dsh.scope')
 
 declare const ScopedBrand: unique symbol
 
