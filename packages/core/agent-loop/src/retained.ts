@@ -96,7 +96,6 @@ export async function retainSession(
         void child.dispose().catch((_childFailure: unknown) => { /* Child release retains and reports its own failure. */ })
         joins.push(child.stop())
       } catch (error: unknown) {
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
         joins.push(Promise.reject(error))
       }
     }
