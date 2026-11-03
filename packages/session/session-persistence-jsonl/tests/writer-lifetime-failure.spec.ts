@@ -88,6 +88,26 @@ for (const fault of ['missing-artifact', 'prefix', 'header', 'inherited', 'lease
   })
 }
 
+it('separates reserved close request from actual close admission', async () => {
+  const f = await fixture(), pin = f.reserve()
+  try {
+    const closed = f.writer.close()
+    expect(f.writer.durabilityOpen).toBe(true)
+    expect(f.writer.operationsOpen).toBe(false)
+    expect(f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity)).toMatchObject({ kind: 'refused' })
+    expect(f.writer.close()).toBe(closed)
+    expect(f.tracker.openHandles.has(f.writer)).toBe(true)
+    await expect(pin.release()).resolves.toMatchObject({ kind: 'durable' })
+    await closed
+    expect(f.writer.durabilityOpen).toBe(false)
+    expect(f.tracker.openHandles.has(f.writer)).toBe(false)
+    expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(false)
+  } finally {
+    await pin.release()
+    await f.writer.close()
+  }
+})
+
 it('refuses stale provider identity before registering a route or pin', async () => {
   const f = await fixture()
   expect(f.tracker.reserveSessionWriter(f.ctx, f.session, Symbol('foreign'))).toMatchObject({ reason: 'fenced' })

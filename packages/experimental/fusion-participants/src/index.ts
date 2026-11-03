@@ -261,12 +261,12 @@ export default class FusionParticipants extends Service {
       draining = completion.promise
       taskAbort.abort(new Error('participant task disposed'))
       const joins: Promise<void>[] = [acquired.promise]
-      for (const stop of [() => delivery?.dispose(), () => execution?.dispose()]) {
-        try { joins.push(Promise.resolve(stop())) } catch (error: unknown) {
-          const failed = Promise.withResolvers<void>()
-          failed.reject(error)
-          joins.push(failed.promise)
-        }
+      try {
+        joins.push(Promise.resolve(execution === undefined ? delivery?.dispose() : execution.dispose()))
+      } catch (error: unknown) {
+        const failed = Promise.withResolvers<void>()
+        failed.reject(error)
+        joins.push(failed.promise)
       }
       void Promise.allSettled(joins).then((results) => {
         const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])

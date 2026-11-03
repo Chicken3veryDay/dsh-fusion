@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle, RetainedAgentSession, RetainAgentSessionOptions } from '@deepseek-ai/dsh-agent'
 import { interruptedTurnClosers, SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionHandle, SessionWriterReservation } from '@deepseek-ai/dsh-session-persistence'
 import { z } from 'zod'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
@@ -46,6 +46,8 @@ export type RetainedInitializationCleanup =
  * @param authorities - factory-private registry of exact retained capabilities.
  * @param storeSuffix - persist Session restoration events through its acquired writer.
  * @returns a capability after routing and the same-writer durability barrier succeed.
+ *   The exact writer reservation remains owned through producer and child cleanup,
+ *   final retained flush, and only then writer close admission.
  * @throws durability refusals with their original cause, aggregated with any acquisition cleanup failure.
  */
 export async function retainSession(
@@ -70,6 +72,7 @@ export async function retainSession(
   const signal = AbortSignal.any([abort.signal, factorySignal,
     ...parent === undefined ? [] : [parent.signal], ...options.signal === undefined ? [] : [options.signal]])
   let writer: SessionHandle | undefined
+  let writerLifetime: SessionWriterReservation | undefined
   let detach: (() => Promise<void>) | undefined
   let resident: AgentHandle | undefined
   let adoption: Promise<AgentHandle> | undefined
@@ -141,7 +144,14 @@ export async function retainSession(
     }
     // A child with unknown cleanup still owns its parent's writer and routing.
     if (errors.length > 0) throw new AggregateError(errors, 'retained session cleanup failed')
-    try { await writer?.close() } catch (error: unknown) {
+    try {
+      const released = await writerLifetime?.release()
+      if (released !== undefined && released.kind !== 'durable') {
+        throw new Error(`retained writer release refused: ${released.reason}`,
+          'cause' in released ? { cause: released.cause } : undefined)
+      }
+      await writer?.close()
+    } catch (error: unknown) {
       throw new AggregateError([error], 'retained session cleanup failed')
     }
   }
@@ -176,6 +186,9 @@ export async function retainSession(
     detach = runtime.sessions.enter(session, { withdraw: stop, release: releaseResources })
     runtime.sessions.announce(session)
     signal.throwIfAborted()
+    const reserved = persistence.reserveSessionWriter(session)
+    if (reserved.kind !== 'reserved') throw new Error(`retained writer reservation refused: ${reserved.reason}`)
+    writerLifetime = reserved.reservation
     if (options.mode === 'create') session.append('agent/runtime-owner', { rootSessionId: SessionId(rootSessionId) })
     const durability = await persistence.flushSessionDurably(session)
     if (durability.kind !== 'durable') throw new Error(`retained session durability refused: ${durability.reason}`,

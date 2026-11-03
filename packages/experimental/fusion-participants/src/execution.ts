@@ -197,9 +197,6 @@ export class TaskExecutionOwner {
       openingId: randomUUID(), previous: rootState.opened?.incarnation ?? null,
     }); this.opened = true })
     if (this.unknown.size > 0) this.phase = 'blocked'
-    if (this.issuers.size === 0 && this.unknown.size === 0) {
-      await this.releaseLifetime()
-    }
     this.abort.signal.throwIfAborted()
     this.ready = true
   }
@@ -702,11 +699,6 @@ export class TaskExecutionOwner {
     this.abort.abort(new ExecutionBlockedError('disposed'))
     this.owner = null
     this.phase = 'revoking'
-    let delivery: Promise<void>
-    try { delivery = this.options.drain() } catch (error: unknown) {
-      // oxlint-disable-next-line typescript/prefer-promise-reject-errors
-      delivery = Promise.reject(error)
-    }
     const execution = (async () => {
       await Promise.allSettled([this.opening, this.enrollment?.done])
       if (this.opened && this.issuers.size > 0) {
@@ -714,8 +706,9 @@ export class TaskExecutionOwner {
         if (this.phase !== 'stopped') await this.revoke('stop')
       }
       if (this.failures.length > 0 || this.unknown.size > 0) throw new ExecutionBlockedError('cleanup-unknown')
+      await this.options.drain()
     })()
-    void Promise.allSettled([execution, delivery]).then(async (results) => {
+    void Promise.allSettled([execution]).then(async (results) => {
       const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length === 1) throw errors[0]
       if (errors.length > 1) throw new AggregateError(errors, 'execution and delivery cleanup failed')

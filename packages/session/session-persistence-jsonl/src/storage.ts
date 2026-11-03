@@ -92,6 +92,7 @@ export class JsonlSessionHandle implements SessionHandle {
   readonly durabilityIdentity = Symbol('jsonl-writer')
   private readonly pins = new Set<{ fence(): void; done: Promise<void> }>()
   private retainedClose = false
+  private closeRequested = false
   private lifetimeFailure: { readonly cause: unknown } | undefined
   /**
    * Register an operation before any lifecycle callback may run.
@@ -105,7 +106,7 @@ export class JsonlSessionHandle implements SessionHandle {
   /** Whether another reservation still owns this writer during setup rollback. */
   get hasReservations(): boolean { return this.pins.size > 0 }
   /** Whether a new exact-writer reservation may be admitted. */
-  get lifetimeOpen(): boolean { return !this.lifetimeUncertain && this.durabilityOpen }
+  get lifetimeOpen(): boolean { return !this.lifetimeUncertain && this.operationsOpen }
   /** Sticky storage uncertainty; only process recovery may abandon this ownership. */
   get lifetimeUncertain(): boolean { return this.lifetimeFailure !== undefined }
   /**
@@ -155,6 +156,7 @@ export class JsonlSessionHandle implements SessionHandle {
   private flushGeneration = 0
   private chain: Promise<unknown> = Promise.resolve()
   private closing: Promise<void> | undefined
+  private closeJoin: Promise<void> | undefined
   private observedLength = 0
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
@@ -289,6 +291,12 @@ export class JsonlSessionHandle implements SessionHandle {
 
   /** Whether the exact writer can still participate in a new proof. */
   get durabilityOpen(): boolean { return this.access === 'write' && this.closing === undefined }
+  /** Whether public handle operations may still be admitted before actual close. */
+  get operationsOpen(): boolean {
+    return this.access === 'write' ? this.durabilityOpen && !this.closeRequested : this.closing === undefined && !this.closeRequested
+  }
+  /** Whether a close request has been published before actual admission. */
+  get closeRequestedState(): boolean { return this.closeRequested }
 
   /**
    * Verify fresh flush coverage and content on this actual write handle.
@@ -311,7 +319,9 @@ export class JsonlSessionHandle implements SessionHandle {
   }
 
   /**
-   * Release the handle; see the seam contract. Idempotent and uncancellable.
+   * Request handle close; reserved writers separate that request from actual
+   * close admission until every reservation has released its final prefix.
+   * Idempotent and uncancellable.
    * A write handle first drains its routed live buffer through the still-open
    * storage. Retained close joins its exact event-listener removal after lease
    * release; a drain, lease or remover failure rejects and retains uncertain
@@ -321,22 +331,30 @@ export class JsonlSessionHandle implements SessionHandle {
    */
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing
+    if (this.closeRequested) return this.closeJoin ?? Promise.reject(new Error(`session "${this.id}": close request is unresolved`))
     if (!this.hasReservations && !this.lifetimeUncertain) return this.closeStock()
     this.retainedClose = true
+    this.closeRequested = true
     // Publish the join before abort callbacks: they may reenter close/release.
     const result = Promise.withResolvers<void>()
-    this.closing = result.promise
+    this.closeJoin = result.promise
     for (const pin of [...this.pins]) pin.fence()
     void (async () => {
       await Promise.all([...this.pins].map(pin => pin.done))
       if (this.lifetimeFailure !== undefined) throw this.lifetimeFailure.cause
+      this.closing = result.promise
       await this.finishClose()
     })().then(result.resolve, result.reject)
     return result.promise
   }
 
   private closeStock(): Promise<void> {
-    return this.closing ??= this.finishClose()
+    this.closeRequested = true
+    const result = Promise.withResolvers<void>()
+    this.closeJoin = result.promise
+    this.closing = result.promise
+    void this.finishClose().then(result.resolve, result.reject)
+    return result.promise
   }
   private async finishClose(): Promise<void> {
     let drainFailure: unknown
@@ -497,7 +515,7 @@ export class JsonlSessionHandle implements SessionHandle {
   }
 
   private assertOpen(operation: string): void {
-    if (this.closing !== undefined) throw new SessionHandleClosedError(this.id, operation)
+    if (!this.operationsOpen) throw new SessionHandleClosedError(this.id, operation)
   }
 }
 
@@ -760,7 +778,7 @@ export class JsonlBackendTracker {
           })
           yield removeListener
           // Setup rollback must never close a writer belonging to an earlier pin.
-          yield () => routeArmed ? writer.close() : undefined
+          yield () => routeArmed && !writer.closeRequestedState ? writer.close() : undefined
         }.bind(this), 'retained JSONL writer and event route')
         this.retainedRoutes.set(writer, { dispose: newRoute, remove })
       }
@@ -824,12 +842,12 @@ export class JsonlBackendTracker {
     const sessions = ctx.get('sessions')
     if (sessions?.get(session.id) !== session) return { kind: 'refused', reason: 'not-live' }
     const writer = this.writers.get(session.id)
-    if (writer == null || !writer.durabilityOpen || this.bindings.get(writer) !== session || !this.active) {
+    if (writer == null || !writer.operationsOpen || this.bindings.get(writer) !== session || !this.active) {
       return { kind: 'refused', reason: 'missing-writer' }
     }
     const generation = writer.durabilityGeneration
     const receipt = this.flushReceipts.get(writer) ?? 0
-    const current = (): boolean => this.active && writer.durabilityOpen
+    const current = (): boolean => this.active && writer.operationsOpen
       && this.writers.get(session.id) === writer && this.bindings.get(writer) === session
       && sessions.get(session.id) === session && ctx.get('sessionPersistence')?.identity === provider
     try {
