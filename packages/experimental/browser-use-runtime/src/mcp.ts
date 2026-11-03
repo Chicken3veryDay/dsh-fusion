@@ -125,11 +125,11 @@ async function executeScopedTool(
   const result: unknown = await definition.execute(args, execution)
   if (!isJsonValue(result)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
   const detached = JSON.parse(JSON.stringify(result)) as JsonValue
-  return projectProviderImages(scope, detached, name)
+  return projectProviderImages(scope.ctx, detached, name)
 }
 
 /** Replace MCP image bytes with durable attachment references before a normalized result is logged. */
-async function projectProviderImages(scope: Scope, result: JsonValue, toolName: string): Promise<JsonValue> {
+export async function projectProviderImages(ctx: Context, result: JsonValue, toolName: string): Promise<JsonValue> {
   if (typeof result !== 'object' || result === null || Array.isArray(result) || !Array.isArray(result.content)) return result
   const images: SaveImageAttachment[] = []
   const indexes: number[] = []
@@ -142,7 +142,7 @@ async function projectProviderImages(scope: Scope, result: JsonValue, toolName: 
     indexes.push(index)
   }
   if (images.length === 0) return result
-  const attachments = scope.ctx.get('attachments')
+  const attachments = ctx.get('attachments')
   if (attachments === undefined) throw new Error(`browser provider tool "${toolName}" returned images but no attachment store is configured`)
   const refs = await attachments.saveImages(images)
   const content = result.content.map((block, index) => {

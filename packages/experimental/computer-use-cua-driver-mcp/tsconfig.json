@@ -9,6 +9,12 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../computer-use/computer-use" },
+    { "path": "../../interaction/interaction" },
+    { "path": "../../core/agent" },
+    { "path": "../../attachment/attachment" },
+    { "path": "../../llm/llm" },
+    { "path": "../../core/tools" },
+    { "path": "../../util/values" },
     { "path": "../../mcp/mcp-client" }
   ]
 }
