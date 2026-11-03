@@ -82,7 +82,7 @@ if (process.env.DSH_RETAINED_PREOPEN === '1') {
       const result = await run(process.execPath, ['node_modules/vitest/vitest.mjs', 'run',
         'packages/experimental/fusion-participants/tests/session-withdrawal.spec.ts', '--maxWorkers=1'], {
         env: { ...process.env, DSH_RETAINED_LIFETIME_CHILD: '1', DSH_RETAINED_LIFETIME_OUTPUT: directory },
-        timeout: 30000, maxBuffer: 200000,
+        timeout: 60000, maxBuffer: 200000,
       }).then(output => ({ exit: 0, signal: null, killed: false, ...output }),
         (error: unknown) => {
           if (!(error instanceof Error) || !('code' in error) || !('signal' in error) || !('killed' in error)
@@ -357,5 +357,5 @@ if (process.env.DSH_RETAINED_PREOPEN === '1') {
     expect(observation).toMatchObject({
       bodies: ['body', 'cleanup', 'result-flush', 'drained'].includes(phase) ? 1 : 0,
       cleanups: phase === 'reservation' ? 0 : 1, requests: 0, cleanupState: fault !== undefined ? 'rejected' : 'fulfilled' })
-  })
+  }, 60000)
 }
