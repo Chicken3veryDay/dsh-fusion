@@ -179,7 +179,14 @@ export default class FusionParticipants extends Service {
       }
       const completion = Promise.withResolvers<TaskExecutionHost>()
       this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
-      caller.effect(() => () => owner.dispose(), 'fusion-participants.execution-host')
+      // Cordis emits `internal/status` synchronously when an owning fiber starts
+      // unloading, while effect cleanup itself is asynchronous. Fence the
+      // execution owner from that status edge so reentrant admission cannot
+      // race the later cleanup join.
+      const removeStatus = caller.root.on('internal/status', (fiber) => {
+        if (fiber === caller.fiber && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
+      })
+      caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
       void owner.enroll(provider, () => {
         caller.fiber.assertActive()
         if (caller.fiber.state === FiberState.UNLOADING || caller.fiber.state === FiberState.DISPOSED) throw new ExecutionBlockedError('not-live')
@@ -259,6 +266,7 @@ export default class FusionParticipants extends Service {
     let composition: Scope | undefined
     let disposal: Promise<void> | undefined
     let removeFence: (() => void | Promise<void>) | undefined
+    let removeStatus: (() => void) | undefined
     let prepared: PreparedParticipants | undefined
     let delivery: DeliveryOwner | undefined
     let execution: TaskExecutionOwner | undefined
@@ -303,6 +311,7 @@ export default class FusionParticipants extends Service {
             try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
           }
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
+          try { removeStatus?.() } catch (error: unknown) { errors.push(error) }
           try { await removeFence?.() } catch (error: unknown) { errors.push(error) }
           if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
@@ -379,9 +388,21 @@ export default class FusionParticipants extends Service {
       await delivery.reconcile()
       signal.throwIfAborted()
       const deliveryOwner = delivery
-      // A raw caller-fiber unload must fence admission synchronously, before
-      // the async task disposer can join execution and writer cleanup.
-      removeFence = this.ctx.root.effect(() => () => { void deliveryOwner.dispose() }, 'fusion-participants.delivery-fence')
+      // A raw caller-fiber unload must fence both admission and execution
+      // synchronously, before asynchronous writer cleanup starts.
+      const fence = (): void => {
+        void deliveryOwner.dispose()
+        if (prepared !== undefined && this.hosts.has(prepared)) void execution?.dispose()
+      }
+      const ancestors = new Set<typeof this.ctx.fiber>()
+      for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
+        ancestors.add(fiber)
+        if (fiber.parent.fiber === fiber) break
+      }
+      removeStatus = this.ctx.root.on('internal/status', (fiber) => {
+        if (ancestors.has(fiber) && fiber.state === FiberState.UNLOADING) fence()
+      })
+      removeFence = this.ctx.root.effect(() => () => { fence() }, 'fusion-participants.delivery-fence')
       const sessions = new Map([...participants].map(([id, lease]) => [id, lease.session]))
       execution = new TaskExecutionOwner({
         ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, adapters: [], drain: () => deliveryOwner.dispose(),
@@ -404,7 +425,7 @@ export default class FusionParticipants extends Service {
         dispose,
       })
       this.executionOwners.set(prepared, executionOwner)
-      setFence(() => { void deliveryOwner.dispose() })
+      setFence(fence)
       this.owned.set(prepared, drain)
       acquired.resolve()
       quiescent()

@@ -199,6 +199,9 @@ export class TaskExecutionOwner {
     if (this.unknown.size > 0) this.phase = 'blocked'
     this.abort.signal.throwIfAborted()
     this.ready = true
+    // Opening a dormant task must not hold writer reservations before a host
+    // provider enrolls. Enrollment re-pins the exact same writers atomically.
+    if (this.issuers.size === 0) await this.releaseLifetime()
   }
 
   /**

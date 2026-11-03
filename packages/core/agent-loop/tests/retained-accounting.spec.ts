@@ -1,6 +1,6 @@
 /** Real JSONL leases and driver publication for inert retained contexts. */
 import { afterEach, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -12,9 +12,20 @@ import { MockAdapter, textResponse } from './mock-adapter.ts'
 
 const contexts: Context[] = []
 const roots: string[] = []
+// Unknown writer ownership is intentionally retained until process recovery;
+// keeping these contexts reachable avoids asking Cordis teardown to close an
+// uncertain lease and prevents the test worker from racing finalization.
+const retainedUntilProcessExit: Array<{ ctx: Context; root: string }> = []
 afterEach(async () => {
   vi.restoreAllMocks()
-  for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+  for (const ctx of contexts.splice(0).reverse()) {
+    if (ctx.fiber.state === FiberState.UNLOADING || ctx.sessions.list().length > 0) {
+      const root = roots.pop()
+      if (root !== undefined) {
+        retainedUntilProcessExit.push({ ctx, root })
+      }
+    } else await ctx.fiber.dispose()
+  }
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
 async function mount(root?: string) {

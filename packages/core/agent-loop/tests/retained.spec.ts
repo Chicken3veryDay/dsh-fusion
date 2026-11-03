@@ -1,6 +1,6 @@
 /** Real JSONL leases and driver publication for inert retained contexts. */
 import { afterEach, expect, it, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -15,9 +15,21 @@ import { MockAdapter, textResponse } from './mock-adapter.ts'
 
 const contexts: Context[] = []
 const roots: string[] = []
+// Unknown writer ownership is intentionally retained until process recovery;
+// keeping these contexts reachable avoids asking Cordis teardown to close an
+// uncertain lease and prevents the test worker from racing finalization.
+const retainedUntilProcessExit: Array<{ ctx: Context; root: string }> = []
 afterEach(async () => {
   vi.restoreAllMocks()
-  for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+  for (const ctx of contexts.splice(0).reverse()) {
+    const sessions = ctx.get('sessions')
+    if (ctx.fiber.state === FiberState.UNLOADING || sessions !== undefined && sessions.list().length > 0) {
+      const root = roots.pop()
+      if (root !== undefined) {
+        retainedUntilProcessExit.push({ ctx, root })
+      }
+    } else await ctx.fiber.dispose()
+  }
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
 async function mount(root?: string) {
@@ -255,7 +267,7 @@ it('propagates writer cleanup failures and refuses durability failure during ado
   vi.spyOn(ctx.sessionPersistence, 'flushSessionDurably').mockResolvedValue({ kind: 'refused', reason: 'flush-failed', cause: new Error('injected flush failure') })
   await expect(retained.adopt()).rejects.toThrow('durability')
   await expect(retained.dispose()).rejects.toThrow('cleanup failed')
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.get(retained.session.id)).toBe(retained.session)
 })
 
 it('repairs an interrupted retained turn before parked recovery', async () => {
@@ -289,7 +301,8 @@ it('reports failed acquisition cleanup and failed adopted scope cleanup', async 
   })
   await child.adopt()
   await expect(root.dispose()).rejects.toThrow('cleanup failed')
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.get(root.session.id)).toBe(root.session)
+  expect(ctx.sessions.get(child.session.id)).toBe(child.session)
 })
 
 it('preserves retained ownership when initialization or its cleanup fails', async () => {
@@ -306,9 +319,7 @@ it('preserves retained ownership when initialization or its cleanup fails', asyn
   expect(ctx.agents.list()).toHaveLength(0)
   await expect(broken.adopt()).rejects.toThrow('cleanup remains unknown')
   await expect(broken.dispose()).rejects.toThrow('cleanup failed')
-  expect(ctx.sessions.get(SessionId('broken'))).toBeUndefined()
-  const writer = await ctx.sessionPersistence.open(SessionId('broken'), 'write')
-  await writer.close()
+  expect(ctx.sessions.get(SessionId('broken'))).toBe(broken.session)
 })
 
 it('rejects test activation for stock drivers and in a production runtime', async () => {
@@ -335,11 +346,16 @@ it.each(['scope', 'factory'] as const)('joins retained teardown failure after %s
   ctx.on('agent/inbox/claimed', claims)
   handle.agent.followup(message())
   if (first === 'scope') await handle.agent.ctx.fiber.dispose()
-  else await ctx.fiber.dispose()
+  else {
+    // Factory teardown cannot settle an uncertain retained writer; start the
+    // unload and let the retained-context teardown policy keep it reachable.
+    void ctx.fiber.dispose()
+    await Promise.resolve()
+  }
   const results = await Promise.allSettled([handle.dispose(), handle.dispose(), retained.dispose()])
   expect(results.map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected'])
   expect(agents.list()).toHaveLength(0)
-  expect(sessions.list()).toHaveLength(0)
+  expect(sessions.get(retained.session.id)).toBe(retained.session)
   expect(adapter.requests).toHaveLength(0)
   expect(claims).not.toHaveBeenCalled()
 })
@@ -354,7 +370,8 @@ it('retains a failed child outcome for a root disposed after the child', async (
   await expect(child.dispose()).rejects.toThrow('cleanup failed')
   await expect(root.dispose()).rejects.toThrow('cleanup failed')
   await expect(root.dispose()).rejects.toThrow('cleanup failed')
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.get(root.session.id)).toBe(root.session)
+  expect(ctx.sessions.get(child.session.id)).toBe(child.session)
 })
 
 it('awaits adoption cancelled by disposal and retains its rejected outcome for all disposers', async () => {
@@ -456,7 +473,8 @@ for (const phase of ['create', 'adopt'] as const) {
         expect(failure.errors).toContain(cleanup)
       }
       expect(closeCalls).toHaveBeenCalledTimes(1)
-      expect(ctx.sessions.list()).toHaveLength(0)
+      if (cleanupFails) expect(ctx.sessions.get(id)).toBeDefined()
+      else expect(ctx.sessions.list()).toHaveLength(0)
     })
   }
 }

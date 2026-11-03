@@ -275,12 +275,14 @@ it('re-pins the exact retained root then sorted participant writers after empty-
   })
   const task = await ctx.fusionParticipants.prepare('top')
   const initial = observed.slice()
-  expect(initial.every(row => row.released)).toBe(true)
+  const retainedCount = task.roster.participants.length + 1
+  const emptyOpen = initial.slice(retainedCount)
+  expect(emptyOpen.every(row => row.released)).toBe(true)
   const host = await ctx.fusionParticipants.registerExecutionHost(task, {
     name: 'pins', revision: '1', classify: () => 'read', registerHeld() { throw new Error('must stay dormant') },
   })
   try {
-    expect(observed.slice(initial.length).map(row => row.session)).toEqual(initial.map(row => row.session))
+    expect(observed.slice(initial.length).map(row => row.session)).toEqual(emptyOpen.map(row => row.session))
     expect(observed.slice(initial.length).every(row => !row.released)).toBe(true)
     expect(observed[initial.length]?.session.id).toBe(task.roster.rootSessionId)
     await host.revoke(host.controller, 'handoff')

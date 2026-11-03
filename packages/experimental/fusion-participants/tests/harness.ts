@@ -1,6 +1,6 @@
 /** Loader composition, real JSONL restart and parked Agent context lineage. */
 import { afterEach, vi } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Group from '@deepseek-ai/cordis-plugin-group'
 import Llm from '@deepseek-ai/dsh-llm'
@@ -30,9 +30,18 @@ import Participants from '../src/index.ts'
 
 const contexts: Context[] = []
 export const roots: string[] = []
+// Unknown writer ownership is intentionally retained until process recovery;
+// keep those contexts reachable instead of forcing an unsafe teardown close.
+const retainedUntilProcessExit: Array<{ ctx: Context; root: string }> = []
 afterEach(async () => {
   vi.restoreAllMocks()
-  for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
+  for (const ctx of contexts.splice(0).reverse()) {
+    const sessions = ctx.get('sessions')
+    if (ctx.fiber.state === FiberState.UNLOADING || sessions !== undefined && sessions.list().length > 0) {
+      const root = roots.pop()
+      if (root !== undefined) retainedUntilProcessExit.push({ ctx, root })
+    } else await ctx.fiber.dispose()
+  }
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
 /** Keep a failed lifetime owned until its isolated test process exits. */
@@ -42,6 +51,7 @@ export function retainUntilProcessExit(ctx: Context, root: string): void {
   if (index !== -1) contexts.splice(index, 1)
   const rootIndex = roots.indexOf(root)
   if (rootIndex !== -1) roots.splice(rootIndex, 1)
+  retainedUntilProcessExit.push({ ctx, root })
 }
 export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false, projectionCache = false) {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
