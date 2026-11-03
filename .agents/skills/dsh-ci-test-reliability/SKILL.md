@@ -88,6 +88,10 @@ Register cleanup immediately after acquisition so assertion failures also releas
 
 Calling `abort()`, `close()`, or `kill()` without awaiting the owned completion signal is incomplete teardown. When late completion is possible, prove that disposal prevents it from mutating another test.
 
+For image-producing providers, make the attachment store test-owned, assert the admitted reference and bytes before disposal, and await image writes before releasing the provider. A returned image payload does not prove durable admission.
+
+Cancellation tests must place a barrier around provider calls and image admission, abort at a deterministic point, assert that no post-abort mutation occurs, and await transport and provider teardown before the test ends. Check both input already delivered before cancellation and late completion after cancellation.
+
 ## Prove the intended regression
 
 - Observe an ordinary regression fail before the fix when practical.
