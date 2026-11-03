@@ -8,9 +8,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
-import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
+import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createMcpToolDefinition } from '@deepseek-ai/dsh-mcp-client'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { z } from 'zod'
 import type { CuaDriver as NativeDriver } from '@trycua/cua-driver'
 import type {} from '@deepseek-ai/dsh-computer-use'
@@ -65,6 +66,7 @@ function interactionTool(
   }
   const kind = action.kind
   if (typeof kind !== 'string') throw new Error('desktop_act action.kind must be a string')
+  if (!isDesktopActionKind(kind)) throw new Error(`desktop_act action.kind "${kind}" is not supported by the normalized facade`)
   const name = findTool(catalog, [kind, `desktop_${kind}`])
   if (name === undefined) throw new Error(`Cua Driver does not expose desktop action "${kind}"`)
   const { kind: _kind, ...args } = action
@@ -129,6 +131,7 @@ export async function apply(ctx: Context): Promise<void> {
     const activeDriver = driver = CuaDriver.create(undefined) as NativeDriver
     const catalog = ToolCatalog.parse(JSON.parse(await activeDriver.listToolsJson({ signal: lifetime.signal })))
     lifetime.signal.throwIfAborted()
+    let interactionCallSequence = 0
     const interaction = inner.get('interaction')
     if (interaction !== undefined) {
       const release = interaction.register({
@@ -146,9 +149,22 @@ export async function apply(ctx: Context): Promise<void> {
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               operationSignal.throwIfAborted()
               const selected = interactionTool(catalog, operation)
-              const result = await activeDriver.callTool(selected.name, JSON.stringify(selected.args), { signal: operationSignal })
+              const encoded = JSON.stringify(selected.args)
+              const batch = await inner.tools.execute({
+                calls: [{
+                  type: 'tool-call',
+                  id: ToolCallId(`interaction-${++interactionCallSequence}`),
+                  name: `cua_driver_native__${selected.name}`,
+                  arguments: encoded,
+                }],
+                signal: operationSignal,
+                agent: _agent,
+              })
+              const settled = batch.results[0]?.result
+              if (settled === undefined) throw new Error(`Cua Driver tool "${selected.name}" returned no result`)
+              if (!isJsonValue(settled)) throw new Error(`Cua Driver tool "${selected.name}" returned a non-JSON result`)
               operationSignal.throwIfAborted()
-              return JSON.parse(result.rawJson) as JsonValue
+              return JSON.parse(JSON.stringify(settled)) as JsonValue
             },
             close: async () => {},
           })

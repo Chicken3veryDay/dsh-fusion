@@ -1,8 +1,20 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
-import { InteractionService, interactionProviderId } from '../src/index.ts'
+import {
+  InteractionService,
+  interactionProviderId,
+  isBrowserActionKind,
+  isDesktopActionKind,
+} from '../src/index.ts'
 
 describe('interaction provider registry', () => {
+  it('rejects unsafe provider actions at the normalized facade boundary', () => {
+    expect(isBrowserActionKind('click')).toBe(true)
+    expect(isBrowserActionKind('run_code_unsafe')).toBe(false)
+    expect(isDesktopActionKind('click')).toBe(true)
+    expect(isDesktopActionKind('execute_shell')).toBe(false)
+  })
+
   it('keeps one provider per domain and releases the exact contribution', async () => {
     const ctx = new Context()
     try {

@@ -5,6 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AttachmentIdType, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
+import z from '@deepseek-ai/schemastery'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   type BrowserOperation,
@@ -13,7 +14,9 @@ import {
 import type {} from '@deepseek-ai/dsh-interaction'
 
 /** Services required to register the stable interaction tools. */
+export const name = 'interaction-tools'
 export const inject = ['interaction', 'tools', 'systemPrompt']
+export const Config = z.object({})
 
 const JSON_RESULT = {
   type: 'object',
@@ -105,7 +108,7 @@ function browserTool(ctx: Context, method: BrowserOperation['method']) {
     },
     async execute(args, exec): Promise<Result> {
       const agent = agentOf(exec)
-      const operation = { domain: 'browser', method, ...args } as unknown as BrowserOperation
+      const operation = { domain: 'browser', method, ...args } as BrowserOperation
       const result = await ctx.interaction.run(agent, 'browser', operation, exec.signal)
       const provider = ctx.interaction.describe('browser')?.id ?? 'unknown'
       return { result, provider, domain: 'browser', method }
@@ -132,7 +135,7 @@ function desktopTool(ctx: Context, method: DesktopOperation['method']) {
     },
     async execute(args, exec): Promise<Result> {
       const agent = agentOf(exec)
-      const operation = { domain: 'desktop', method, ...args } as unknown as DesktopOperation
+      const operation = { domain: 'desktop', method, ...args } as DesktopOperation
       const result = await ctx.interaction.run(agent, 'desktop', operation, exec.signal)
       const provider = ctx.interaction.describe('desktop')?.id ?? 'unknown'
       return { result, provider, domain: 'desktop', method }
@@ -169,5 +172,3 @@ export function apply(ctx: Context): void {
     },
   })
 }
-
-export default apply

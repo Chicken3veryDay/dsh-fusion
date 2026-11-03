@@ -12,6 +12,8 @@ Status: implemented
 
 DSH 能力称为 **computer use（计算机操作）**。[`dsh-computer-use`](../../../../packages/computer-use/computer-use/README.zh.md) 拥有 `ctx.computerUse`，注册一个提供方自定的名称并返回其 effect 清理函数。第二次注册无论名称为何都会失败。服务不包含提供方对象、共享操作类型、分派方法、Session 锁或运行时选择器。
 
+独立的 [`dsh-interaction`](../../../../packages/interaction/interaction/README.zh.md) 服务拥有规范化的 Linux 桌面操作界面和精确 Agent 生命周期。Computer-use 仍是提供方注册服务；Cua Driver 适配器向 dsh-interaction 注册规范化桌面 Session，同时保留上游工具目录和主机权限细节。
+
 **Cua Driver** 是上游实现的名称。[MCP 提供方](../../../../packages/experimental/computer-use-cua-driver-mcp/README.zh.md)连接已安装的可执行文件。[原生提供方](../../../../packages/experimental/computer-use-cua-driver-native/README.zh.md)安装上游原生 npm 依赖。两者均保持实验性并加入显式公开发布允许列表；均不默认启用。
 
 各集成暴露上游工具目录。MCP 结果转换保留在 `dsh-mcp-client` 中，其基于回调的工具适配函数也转换原生 Cua Driver 结果。计算机操作服务不依赖该适配函数或任一提供方。
@@ -30,6 +32,6 @@ DSH 能力称为 **computer use（计算机操作）**。[`dsh-computer-use`](..
 
 ## Consequences
 
-服务保持独立于实验性包。公开发布允许列表接纳两个提供方包，但不提升其支持状态。配置选择提供方，切换需要先卸载当前提供方。
+Computer-use 服务保持独立于实验性包。dsh-interaction 服务向消费者提供规范化桌面界面。公开发布允许列表接纳两个提供方包，但不提升其支持状态。配置选择提供方，切换需要先卸载当前提供方。
 
 原生平台支持和宿主权限仍由上游和部署负责。macOS 光标叠加层托管和专用 Desktop 权限界面暂缓实现。取消会停止等待并传播到驱动；不承诺回滚已交付的桌面输入。

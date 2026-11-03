@@ -12,6 +12,8 @@ Browser-control backends expose different operations and observation formats. A 
 
 [`dsh-browser-use`](../../../../packages/browser-use/browser-use/README.md) owns `ctx.browserUse`, which registers one provider-owned name and returns its effect disposer. A second registration fails regardless of its name. The service contains no browser object, shared operation type, dispatch method, resource lifecycle, or runtime selector. The [computer-use registration decision](2026-09-12-computer-use-provider-registration.md) remains the independent owner of desktop-provider registration and shared-desktop coordination.
 
+The separate [`dsh-interaction`](../../../../packages/interaction/interaction/README.md) service owns the normalized browser and desktop operation surface. Browser-use remains the provider-registration service; browser adapters register normalized sessions with dsh-interaction while retaining their provider-specific tools and transport details.
+
 [Playwright MCP](../../../../packages/experimental/browser-use-playwright-mcp/README.md), [Chrome DevTools MCP](../../../../packages/experimental/browser-use-chrome-devtools-mcp/README.md), and [native Stagehand](../../../../packages/experimental/browser-use-stagehand-native/README.md) own their browser tools and integrate through the normal DSH tool pipeline. They are public experimental opt-ins. DSH owns task planning and the task loop; Stagehand contributes individual AI-assisted operations. Profile or preset configuration selects launch or attachment for each provider activation.
 
 Browser resources belong to the exact live Agent and Session, not merely a reusable Session id. Calls retain state across turns. Runtime disposal closes launched resources, and reload or fork does not inherit a launched profile. Attachment preserves existing browser state and reserves the external browser exclusively for one Session within that provider instance. Cleanup disconnects without closing the external browser.
@@ -48,6 +50,6 @@ Startup failure or cancellation rejects creation or resume and triggers rollback
 
 ## Consequences
 
-Providers evolve their tools independently while the shared service remains a name-only registry. The three providers and their runtime helper publish as experimental packages without enabling them in shipped defaults. The browser package group has no dependency on experimental runtime code.
+Providers evolve their tools independently while browser-use remains a name-only registration service. The dsh-interaction service supplies the portable normalized surface and exact-Agent lifecycle to its consumers. The three providers and their runtime helper publish as experimental packages without enabling them in shipped defaults. The browser package group has no dependency on experimental runtime code.
 
 Attachment reservations apply within one provider instance; they do not coordinate separate DSH processes or external browser clients. Browser state is absent from Session replay, and cancellation does not undo delivered browser actions. Provider READMEs own engine support, model requirements, and upstream restrictions.

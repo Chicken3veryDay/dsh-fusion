@@ -8,7 +8,10 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 /** A provider identifier that never crosses into model-visible input. */
 export type InteractionProviderId = Branded<'InteractionProviderId'>
 
-/** Create a provider identifier at the configuration/provider boundary. */
+/** Create a provider identifier at the configuration/provider boundary.
+ * @param value - provider name selected by configuration.
+ * @returns the branded provider identifier.
+ */
 export function interactionProviderId(value: string): InteractionProviderId {
   if (value.trim().length === 0) throw new Error('interaction provider id must be non-empty')
   return brandString<InteractionProviderId>(value)
@@ -16,6 +19,38 @@ export function interactionProviderId(value: string): InteractionProviderId {
 
 /** Interaction domains supported by the stable DSH surface. */
 export type InteractionDomain = 'browser' | 'desktop'
+
+/** Browser action kinds admitted by the normalized browser facade. */
+export const BROWSER_ACTION_KINDS = [
+  'click', 'type', 'press_key', 'hover', 'select_option', 'navigate_back', 'wait_for', 'scroll', 'drag',
+] as const
+
+/** A browser action kind accepted by the normalized browser facade. */
+export type BrowserActionKind = typeof BROWSER_ACTION_KINDS[number]
+
+/** Test whether an untrusted normalized action kind is supported.
+ * @param value - untrusted action kind.
+ * @returns whether the kind is in the normalized browser allowlist.
+ */
+export function isBrowserActionKind(value: string): value is BrowserActionKind {
+  return (BROWSER_ACTION_KINDS as readonly string[]).includes(value)
+}
+
+/** Linux desktop action kinds admitted by the normalized desktop facade. */
+export const DESKTOP_ACTION_KINDS = [
+  'click', 'type', 'press_key', 'scroll', 'drag', 'hotkey', 'select', 'set_value', 'perform_action',
+] as const
+
+/** A desktop action kind accepted by the normalized desktop facade. */
+export type DesktopActionKind = typeof DESKTOP_ACTION_KINDS[number]
+
+/** Test whether an untrusted normalized action kind is supported.
+ * @param value - untrusted action kind.
+ * @returns whether the kind is in the normalized desktop allowlist.
+ */
+export function isDesktopActionKind(value: string): value is DesktopActionKind {
+  return (DESKTOP_ACTION_KINDS as readonly string[]).includes(value)
+}
 
 /** Normalized browser actions shared by all browser adapters. */
 export type BrowserOperation =
@@ -155,7 +190,7 @@ export class InteractionService extends Service {
   async run(agent: Agent, domain: InteractionDomain, operation: InteractionOperation, signal: AbortSignal): Promise<JsonValue> {
     signal.throwIfAborted()
     const registration = this.registrations.get(domain)
-    if (registration === undefined || registration.provider.describe().availability !== 'ready') {
+    if (registration === undefined || registration.disposing !== undefined || registration.provider.describe().availability !== 'ready') {
       throw new Error(`interaction ${domain} is unavailable`)
     }
     if (this.ctx.get('agents')?.get(agent.id) !== agent) throw new Error(`interaction ${domain} requires a live Agent`)
@@ -174,6 +209,7 @@ export class InteractionService extends Service {
   }
 
   private entry(registration: Registration, agent: Agent): Entry {
+    if (registration.disposing !== undefined) throw new Error(`interaction ${registration.provider.domain} provider is closing`)
     const current = registration.entries.get(agent)
     if (current !== undefined) return current
     const controller = new AbortController()

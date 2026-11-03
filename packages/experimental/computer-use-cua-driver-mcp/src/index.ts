@@ -5,18 +5,15 @@
  */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
-import { Buffer } from 'node:buffer'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import z from '@deepseek-ai/schemastery'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
+import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-computer-use'
-import type { ToolRunContext, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
 
 /** Cordis plugin identity for the installed Cua Driver provider. */
@@ -50,8 +47,6 @@ export const Config: z<Partial<Config>, Config> = z.object({
   }),
 })
 
-let interactionCallSequence = 0
-
 function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation): { name: string; args: Record<string, JsonValue> } {
   if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
   const names = ctx.tools.schemas(agent).map(tool => tool.name)
@@ -73,6 +68,7 @@ function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation
   if (typeof operation.action !== 'object' || operation.action === null || Array.isArray(operation.action)) throw new Error('desktop_act action must be an object with kind')
   const kind = operation.action.kind
   if (typeof kind !== 'string' || kind.length === 0) throw new Error('desktop_act action.kind must be a non-empty string')
+  if (!isDesktopActionKind(kind)) throw new Error(`desktop_act action.kind "${kind}" is not supported by the normalized facade`)
   const { kind: _kind, ...args } = operation.action
   return { name: find([kind, `desktop_${kind}`]), args: { ...target, ...args } }
 }
@@ -83,49 +79,19 @@ async function executeInteractionTool(
   name: string,
   args: Record<string, JsonValue>,
   signal: AbortSignal,
+  callId: ToolCallId,
 ): Promise<JsonValue> {
-  const definition = ctx.tools.get(name, agent)
-  if (definition === undefined) throw new Error(`Cua Driver MCP tool "${name}" is unavailable`)
-  const execution: ToolRunContext = {
-    callId: ToolCallId(`interaction-${++interactionCallSequence}`),
-    rootCallId: ToolCallId(`interaction-${interactionCallSequence}`),
-    name,
-    arguments: args,
-    agent,
+  const encoded = JSON.stringify(args)
+  if (encoded === undefined) throw new Error(`Cua Driver MCP tool "${name}" arguments are not JSON-serializable`)
+  const batch = await ctx.tools.execute({
+    calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
-    token: Symbol() as ToolExecutionToken,
-    deferContext: () => {},
-    concludeTurn: () => {},
-  }
-  const result: unknown = await definition.execute(args, execution)
-  if (!isJsonValue(result)) throw new Error(`Cua Driver MCP tool "${name}" returned a non-JSON result`)
-  return projectImages(ctx, JSON.parse(JSON.stringify(result)) as JsonValue, name)
-}
-
-async function projectImages(ctx: Context, result: JsonValue, toolName: string): Promise<JsonValue> {
-  if (typeof result !== 'object' || result === null || Array.isArray(result) || !Array.isArray(result.content)) return result
-  const images: SaveImageAttachment[] = []
-  const indexes: number[] = []
-  for (const [index, block] of result.content.entries()) {
-    if (typeof block !== 'object' || block === null || Array.isArray(block) || block.type !== 'image') continue
-    if (typeof block.data !== 'string' || typeof block.mimeType !== 'string') throw new Error(`Cua Driver MCP tool "${toolName}" returned an invalid image block`)
-    const bytes = Buffer.from(block.data, 'base64')
-    if (bytes.length === 0 || bytes.toString('base64') !== block.data) throw new Error(`Cua Driver MCP tool "${toolName}" returned non-canonical image data`)
-    images.push({ data: new Uint8Array(bytes), mediaType: block.mimeType as ImageMediaType })
-    indexes.push(index)
-  }
-  if (images.length === 0) return result
-  const attachments = ctx.get('attachments')
-  if (attachments === undefined) throw new Error(`Cua Driver MCP tool "${toolName}" returned images but no attachment store is configured`)
-  const refs = await attachments.saveImages(images)
-  const content = result.content.map((block, index) => {
-    const offset = indexes.indexOf(index)
-    if (offset === -1) return block
-    const attachment = refs[offset]
-    if (attachment === undefined) throw new Error(`Cua Driver MCP tool "${toolName}" image admission returned too few references`)
-    return { type: 'image', attachment: { attachmentId: attachment.attachmentId, mediaType: attachment.mediaType, bytes: attachment.bytes, width: attachment.width, height: attachment.height } }
+    agent,
   })
-  return { ...result, content }
+  const settled = batch.results[0]?.result
+  if (settled === undefined) throw new Error(`Cua Driver MCP tool "${name}" returned no result`)
+  if (!isJsonValue(settled)) throw new Error(`Cua Driver MCP tool "${name}" returned a non-JSON result`)
+  return JSON.parse(JSON.stringify(settled)) as JsonValue
 }
 
 /**
@@ -137,6 +103,7 @@ async function projectImages(ctx: Context, result: JsonValue, toolName: string):
  * @returns initial MCP tool-discovery completion.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  let interactionCallSequence = 0
   const connection = McpClient.Config({
     command: config.command,
     args: config.args,
@@ -152,24 +119,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(function* () {
     yield ctx.computerUse.register(ComputerUseProviderName('cua-driver-mcp'))
     child = ctx.plugin(McpClient, connection)
+    const interaction = ctx.get('interaction')
+    if (interaction !== undefined) {
+      yield interaction.register({
+        domain: 'desktop',
+        describe: () => ({ id: interactionProviderId('cua-driver-mcp'), domains: ['desktop'], methods: ['observe', 'act', 'screenshot'], availability: 'ready' }),
+        open(agent: Agent, _signal: AbortSignal) {
+          return Promise.resolve({
+            execute: async (operation: InteractionOperation, signal: AbortSignal) => {
+              const selected = desktopTool(ctx, agent, operation)
+              return executeInteractionTool(ctx, agent, selected.name, selected.args, signal, ToolCallId(`interaction-${++interactionCallSequence}`))
+            },
+            close: async () => {},
+          })
+        },
+      })
+    }
     yield child.dispose
   }, 'computer-use-cua-driver-mcp.connection')
   await child.await()
-  const interaction = ctx.get('interaction')
-  if (interaction !== undefined) {
-    const release = interaction.register({
-      domain: 'desktop',
-      describe: () => ({ id: interactionProviderId('cua-driver-mcp'), domains: ['desktop'], methods: ['observe', 'act', 'screenshot'], availability: 'ready' }),
-      open(agent: Agent, _signal: AbortSignal) {
-        return Promise.resolve({
-          execute: async (operation: InteractionOperation, signal: AbortSignal) => {
-            const selected = desktopTool(ctx, agent, operation)
-            return executeInteractionTool(ctx, agent, selected.name, selected.args, signal)
-          },
-          close: async () => {},
-        })
-      },
-    })
-    ctx.effect(() => async () => { await release() }, 'computer-use-cua-driver-mcp.interaction')
-  }
 }

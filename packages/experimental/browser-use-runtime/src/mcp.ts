@@ -10,9 +10,8 @@ import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ToolRunContext, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
+import { interactionProviderId, isBrowserActionKind } from '@deepseek-ai/dsh-interaction'
 import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
@@ -99,36 +98,33 @@ interface ClientState {
   mask?: Scope
 }
 
-let interactionCallSequence = 0
-
 async function executeScopedTool(
   scope: Scope,
   agent: Agent,
   name: string,
   args: Record<string, JsonValue>,
   signal: AbortSignal,
+  callId: ToolCallId,
 ): Promise<JsonValue> {
-  const definition = scope.ctx.tools.get(name, agent)
-  if (definition === undefined) throw new Error(`browser provider tool "${name}" is unavailable`)
-  const token = Symbol() as ToolExecutionToken
-  const execution: ToolRunContext = {
-    callId: ToolCallId(`interaction-${++interactionCallSequence}`),
-    rootCallId: ToolCallId(`interaction-${interactionCallSequence}`),
-    name,
-    arguments: args,
-    agent,
+  const encoded = JSON.stringify(args)
+  if (encoded === undefined) throw new Error(`browser provider tool "${name}" arguments are not JSON-serializable`)
+  const batch = await scope.ctx.tools.execute({
+    calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
-    token,
-    deferContext: () => {},
-    concludeTurn: () => {},
-  }
-  const result: unknown = await definition.execute(args, execution)
-  if (!isJsonValue(result)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
-  const detached = JSON.parse(JSON.stringify(result)) as JsonValue
-  return projectProviderImages(scope.ctx, detached, name)
+    agent,
+  })
+  const settled = batch.results[0]?.result
+  if (settled === undefined) throw new Error(`browser provider tool "${name}" returned no result`)
+  if (!isJsonValue(settled)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
+  return JSON.parse(JSON.stringify(settled)) as JsonValue
 }
 
-/** Replace MCP image bytes with durable attachment references before a normalized result is logged. */
+/** Replace provider image bytes with durable attachment references before a normalized result is logged.
+ * @param ctx - context that owns the attachment store.
+ * @param result - detached provider result containing MCP-style content blocks.
+ * @param toolName - provider tool name used in diagnostics.
+ * @returns the result with image blocks replaced by attachment references.
+ */
 export async function projectProviderImages(ctx: Context, result: JsonValue, toolName: string): Promise<JsonValue> {
   if (typeof result !== 'object' || result === null || Array.isArray(result) || !Array.isArray(result.content)) return result
   const images: SaveImageAttachment[] = []
@@ -203,6 +199,7 @@ function browserOperation(scope: Scope, agent: Agent, operation: InteractionOper
     }
     const kind = operation.action.kind
     if (typeof kind !== 'string' || kind.length === 0) throw new Error('browser_act action.kind must be a non-empty string')
+    if (!isBrowserActionKind(kind)) throw new Error(`browser_act action.kind "${kind}" is not supported by the normalized facade`)
     const { kind: _kind, ...args } = operation.action
     return { name: providerTool(scope, agent, [`browser_${kind}`, kind]), args }
   }
@@ -221,6 +218,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
   const workingDirectory = ctx.get('workingDirectory')
   if (workingDirectory === undefined) throw new Error(`${options.name}: browser MCP requires a working-directory provider`)
   let resources!: SessionResources<Scope>
+  let interactionCallSequence = 0
   const clients = new Map<Agent, ClientState>()
   const toolPrefix = `mcp__${options.name}__`
   const resourceTools = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
@@ -255,7 +253,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
           return {
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               const selected = browserOperation(scope, agent, operation)
-              return executeScopedTool(scope, agent, selected.name, selected.args, operationSignal)
+              return executeScopedTool(scope, agent, selected.name, selected.args, operationSignal, ToolCallId(`interaction-${++interactionCallSequence}`))
             },
             close: async () => {},
           }

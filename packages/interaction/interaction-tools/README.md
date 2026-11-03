@@ -52,7 +52,7 @@ Tool definitions remain prefix-stable while provider availability and schemas st
 
 ## Known Limitations and Deferred Work
 
-- The first normalized browser adapter covers navigation, observation, tabs, and screenshots. Provider-specific action and extraction operations remain available through compatibility tools until an adapter supports them.
+- Normalized browser adapters cover navigation, observation, tabs, screenshots, and a closed action set; the Stagehand adapter also supports normalized actions and extraction. Provider-specific tools remain available when a backend exposes capabilities outside this shared surface.
 
 ### Dev Note
 

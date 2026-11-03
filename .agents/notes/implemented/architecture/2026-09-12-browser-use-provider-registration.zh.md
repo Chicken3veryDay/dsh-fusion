@@ -12,6 +12,8 @@ Status: implemented
 
 [`dsh-browser-use`](../../../../packages/browser-use/browser-use/README.zh.md) 拥有 `ctx.browserUse`，注册一个提供方拥有的名称并返回其 effect 清理器。第二次注册无论名称为何都会失败。服务不包含浏览器对象、共享操作类型、分派方法、资源生命周期或运行时选择器。[计算机操作注册决策](2026-09-12-computer-use-provider-registration.zh.md)仍独立拥有桌面提供方注册与共享桌面协调规则。
 
+独立的 [`dsh-interaction`](../../../../packages/interaction/interaction/README.zh.md) 服务拥有规范化的浏览器和桌面操作界面。Browser-use 仍是提供方注册服务；浏览器适配器向 dsh-interaction 注册规范化 Session，同时保留各自的工具和传输细节。
+
 [Playwright MCP](../../../../packages/experimental/browser-use-playwright-mcp/README.zh.md)、[Chrome DevTools MCP](../../../../packages/experimental/browser-use-chrome-devtools-mcp/README.zh.md) 与[原生 Stagehand](../../../../packages/experimental/browser-use-stagehand-native/README.zh.md) 拥有自己的浏览器工具，并通过常规 DSH 工具管线集成。它们是公共实验性可选功能。DSH 拥有任务规划与任务循环；Stagehand 提供单项 AI（人工智能）辅助操作。Profile 或 preset 配置为每次提供方激活选择启动或附加模式。
 
 浏览器资源属于确切的实时 Agent 与 Session，而非仅凭可复用的 Session id。调用跨轮次保留状态。运行时释放会关闭启动的资源，重新加载或 fork 不会继承启动的 profile。附加保留现有浏览器状态，并在该提供方实例内将外部浏览器独占保留给一个 Session。清理断开连接而不关闭外部浏览器。
@@ -48,6 +50,6 @@ MCP 客户端激活会等待连接和工具发现，但提供方可能在任何 
 
 ## 影响
 
-提供方独立演进自己的工具，而共享服务保持仅注册名称。三个提供方及其运行时辅助库作为实验性包发布，但不在内置默认配置中启用。浏览器包组不依赖实验性运行时代码。
+提供方独立演进自己的工具，而 browser-use 保持仅注册名称的服务。dsh-interaction 服务向消费者提供可移植的规范化界面和精确 Agent 生命周期。三个提供方及其运行时辅助库作为实验性包发布，但不在内置默认配置中启用。浏览器包组不依赖实验性运行时代码。
 
 附加保留机制作用于单个提供方实例；它不协调独立 DSH 进程或外部浏览器客户端。Session 重放不包含浏览器状态，取消不会撤销已交付的浏览器操作。提供方 README 拥有引擎支持、模型要求与上游限制。

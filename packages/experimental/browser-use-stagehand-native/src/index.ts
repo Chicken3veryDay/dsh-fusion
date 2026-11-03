@@ -11,7 +11,7 @@ import { SessionResources } from '@deepseek-ai/dsh-experimental-browser-use-runt
 import { projectProviderImages } from '@deepseek-ai/dsh-experimental-browser-use-runtime/mcp'
 import { createMcpToolDefinition } from '@deepseek-ai/dsh-mcp-client'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
+import { interactionProviderId, isBrowserActionKind } from '@deepseek-ai/dsh-interaction'
 import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { z } from 'zod'
 import { browserInputs, stagehandModelSchema, StagehandDrainError } from './native.ts'
@@ -91,6 +91,9 @@ function stagehandOperation(operation: InteractionOperation): { method: BrowserM
     case 'extract': return { method: 'extract', args: { ...page, instruction: operation.instruction, ...operation.schema === undefined ? {} : { schema: operation.schema } } }
     case 'act': {
       if (typeof operation.action !== 'object' || operation.action === null || Array.isArray(operation.action)) throw new Error('browser_act action must be an object')
+      if (typeof operation.action.kind !== 'string' || !isBrowserActionKind(operation.action.kind)) {
+        throw new Error('Stagehand browser action kind is not supported by the normalized facade')
+      }
       const instruction = typeof operation.action.instruction === 'string' ? operation.action.instruction : JSON.stringify(operation.action)
       return { method: 'act', args: { ...page, instruction } }
     }

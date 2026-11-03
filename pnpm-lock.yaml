@@ -12942,6 +12942,9 @@ importers:
       '@deepseek-ai/dsh-interaction':
         specifier: workspace:*
         version: link:../interaction
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~

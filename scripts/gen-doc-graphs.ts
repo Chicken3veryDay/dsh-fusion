@@ -264,6 +264,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'One provider-owned name per service instance. Each provider also owns its model tools; the service has no common action API, runtime selection, or Session workflow lock.',
   },
   {
+    key: 'interaction',
+    pkg: 'interaction',
+    title: 'Agent-native interaction capability',
+    mode: 'service',
+    implementations: ['experimental-browser-use-playwright-mcp', 'experimental-browser-use-chrome-devtools-mcp', 'experimental-browser-use-stagehand-native', 'experimental-computer-use-cua-driver-mcp'],
+    consumers: ['interaction-tools'],
+    note: 'Owns normalized browser and Linux desktop operations, exact-Agent resources, serialization, cancellation, and provider teardown; adapters retain backend-specific catalogs and host permission details.',
+  },
+  {
     key: 'cuaAccess', pkg: 'cua', title: 'Computer Use permission controls',
     mode: 'core', consumers: ['cua'],
     note: 'The native provider owns application consent and cancellation; the optional Client page queries and changes those decisions through its Remote.',
