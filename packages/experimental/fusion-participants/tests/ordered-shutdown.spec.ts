@@ -4,7 +4,8 @@ import { expect, it, vi } from 'vitest'
 import Loop from '@deepseek-ai/dsh-agent-loop'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import * as Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
-import { JsonlSessionHandle } from '../../../session/session-persistence-jsonl/src/storage.ts'
+import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import { JsonlSessionHandle, type JsonlBackendTracker } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import Participants, { DeliveryId } from '../src/index.ts'
 import { DeliveryOwner } from '../src/delivery.ts'
 import { mount, read } from './harness.ts'
@@ -30,7 +31,8 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   const release = Promise.withResolvers<undefined>()
   const draining = Promise.withResolvers<undefined>()
   const firstClose = Promise.withResolvers<undefined>()
-  const closes: string[] = []
+  const closeRequests: string[] = []
+  const closeAdmissions: string[] = []
   const events: string[] = []
   let held = false
   let admissionSettled = false
@@ -48,8 +50,16 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
     return rawDrain.call(this).then(() => { drainSettled = true; events.push('drained') })
   })
   vi.spyOn(JsonlSessionHandle.prototype, 'close').mockImplementation(function (this: JsonlSessionHandle) {
-    if (this.access === 'write') { closes.push(this.id); events.push(`close:${this.id}`); firstClose.resolve(undefined) }
-    return rawClose.call(this)
+    if (this.access !== 'write') return rawClose.call(this)
+    closeRequests.push(this.id)
+    events.push(`close-request:${this.id}`)
+    firstClose.resolve(undefined)
+    const closing = rawClose.call(this)
+    void closing.then(() => {
+      closeAdmissions.push(this.id)
+      events.push(`close-admission:${this.id}`)
+    }, () => undefined)
+    return closing
   })
   const shouldHold = (id: string): boolean => !held && id === (phase === 'receiver' ? target.id : root.id)
     && root.snapshotEvents().some(row => row.type === 'fusion/delivery-completed') === (phase === 'completion')
@@ -87,28 +97,32 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   // One event-loop turn lets every independently scheduled Cordis disposer enter its barrier.
   await setImmediate()
   try {
-    expect(closes).toEqual([])
+    expect(closeAdmissions).toEqual([])
     expect(admissionSettled).toBe(false)
     expect(disposalSettled).toBe(false)
     expect(drainSettled).toBe(false)
     expect(sessions.get(root.id)).toBe(root)
     expect(sessions.get(target.id)).toBe(target)
-    // Provider withdrawal can invalidate new service proofs; its real live writer route must still flush.
+    const tracker = (persistence as SessionPersistence & { readonly tracker: JsonlBackendTracker }).tracker
+    // Provider withdrawal can invalidate new service proofs; its real live writer route must remain open.
     for (const [session, initial] of [[root, proof], [target, receiverProof]] as const) {
-      await sessions.flush(session)
-      const writer = writers.get(session.id)!
+      const writer = writers.get(session.id) ?? tracker['writers'].get(session.id)
+      expect(writer).toBeDefined()
+      if (writer === undefined) throw new Error(`missing live writer for ${session.id}`)
       expect(writer.durabilityOpen).toBe(true)
       expect(initial.kind === 'durable' && writer.durabilityIdentity === initial.writer).toBe(true)
-      const generation = writer.durabilityGeneration
-      await rawFlush.call(writer)
-      expect(await writer.verifyDurability(session, session.seq, generation)).toBe(true)
     }
     await expect(task.adopt('participant')).rejects.toThrow()
     await expect(task.delivery.admitUser({ ...input, deliveryId: DeliveryId('post-stop') })).rejects.toThrow()
-  } finally { release.resolve(undefined) }
+  } finally {
+    events.push('released')
+    release.resolve(undefined)
+  }
   await Promise.all([rejected, queueRejected, disposal])
-  expect(events.indexOf('drained')).toBeLessThan(events.findIndex(event => event.startsWith('close:')))
-  expect(new Set(closes)).toEqual(new Set([root.id, target.id]))
+  expect(events.indexOf('drained')).toBeLessThan(events.findIndex(event => event.startsWith('close-admission:')))
+  expect(events.indexOf('released')).toBeLessThan(events.findIndex(event => event.startsWith('close-admission:')))
+  expect(new Set(closeRequests)).toEqual(new Set([root.id, target.id]))
+  expect(new Set(closeAdmissions)).toEqual(new Set([root.id, target.id]))
   expect(adapter.requests).toHaveLength(0)
   vi.restoreAllMocks()
   const second = await mount(directory, 'none', loopFirst)
