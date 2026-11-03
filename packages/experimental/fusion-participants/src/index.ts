@@ -301,7 +301,7 @@ export default class FusionParticipants extends Service {
       disposal = completion.promise
       // Fence delivery synchronously when a caller fiber unloads; the async
       // drain below joins this same memoized close after execution revocation.
-      void delivery?.dispose()
+      void delivery?.dispose().catch(() => {})
       void (async () => {
         try {
           const errors: unknown[] = []
@@ -391,8 +391,8 @@ export default class FusionParticipants extends Service {
       // A raw caller-fiber unload must fence both admission and execution
       // synchronously, before asynchronous writer cleanup starts.
       const fence = (): void => {
-        void deliveryOwner.dispose()
-        if (prepared !== undefined && this.hosts.has(prepared)) void execution?.dispose()
+        void deliveryOwner.dispose().catch(() => {})
+        if (prepared !== undefined && this.hosts.has(prepared)) void execution?.dispose().catch(() => {})
       }
       const ancestors = new Set<typeof this.ctx.fiber>()
       for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
