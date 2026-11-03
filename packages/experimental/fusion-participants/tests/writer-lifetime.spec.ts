@@ -40,7 +40,7 @@ for (const mode of ['live', 'close', 'replace', 'in-flight', 'settlement-flush',
     const held = Promise.withResolvers<undefined>(), resume = Promise.withResolvers<undefined>()
     const settlementEntered = Promise.withResolvers<undefined>(), settlementResume = Promise.withResolvers<undefined>()
     const firstClose = Promise.withResolvers<undefined>()
-    let bodies = 0, checks = 0, closeDone = false, releaseDone = false, holdingSettlement = false
+    let bodies = 0, checks = 0, closeDone = false, withdrawalDone = false, releaseDone = false, holdingSettlement = false
     let closed: Promise<void> | undefined, withdrawal: Promise<void> | undefined
     let dispatch: ReturnType<ToolExecutionPipeline['dispatch']> | undefined
     let reenteredClose: Promise<void> | undefined
@@ -88,7 +88,7 @@ for (const mode of ['live', 'close', 'replace', 'in-flight', 'settlement-flush',
       if (mode === 'reentrant') pin.signal.addEventListener('abort', () => { reenteredClose = writer.close() }, { once: true })
       if (mode === 'provider-withdrawal' || mode === 'provider-restart') {
         const fiber = [...ctx.registry.get(Jsonl)!.fibers][0]!
-        withdrawal = Promise.resolve(mode === 'provider-restart' ? fiber.restart() : fiber.dispose())
+        withdrawal = Promise.resolve(mode === 'provider-restart' ? fiber.restart() : fiber.dispose()).then(() => { withdrawalDone = true })
         expect(pin.signal.aborted, 'withdrawal signals synchronously').toBe(true)
         await bounded(firstClose.promise, 'first provider close')
       } else if (mode !== 'live') {
@@ -112,6 +112,10 @@ for (const mode of ['live', 'close', 'replace', 'in-flight', 'settlement-flush',
       record('settlement-stand-in')
       const finalBoundary = session.seq
       holdingSettlement = mode === 'settlement-flush'
+      if (mode === 'live') {
+        closed = writer.close().then(() => { closeDone = true })
+        expect(pin.signal.aborted, 'close synchronously fences').toBe(true)
+      }
       released = pin.release().then((result) => { releaseDone = true; return result })
       expect(pin.release()).toBe(pin.release())
       if (holdingSettlement) {
@@ -124,7 +128,14 @@ for (const mode of ['live', 'close', 'replace', 'in-flight', 'settlement-flush',
       const releaseResult = await bounded(released, 'reservation release')
       expect(releaseResult).toMatchObject({ kind: 'durable', boundary: finalBoundary })
       expect(pin.checkDispatch()).toMatchObject({ kind: 'refused' })
-      if (mode === 'live') closed = writer.close().then(() => { closeDone = true })
+      await setImmediate()
+      if (mode === 'provider-withdrawal' || mode === 'provider-restart') {
+        expect(withdrawalDone, 'provider close must remain pending while the retained participant is live').toBe(false)
+      } else {
+        expect(closeDone, 'close must remain pending while the retained participant is live').toBe(false)
+      }
+      await bounded(resident.dispose(), 'retained participant disposal')
+      await bounded(task.dispose(), 'retained task disposal')
       await bounded(closed ?? withdrawal!, 'actual close/release')
       if (mode === 'reentrant') expect(reenteredClose).toBe(writer.close())
       await reenteredClose
