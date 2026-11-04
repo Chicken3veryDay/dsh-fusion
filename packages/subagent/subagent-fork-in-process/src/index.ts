@@ -58,6 +58,7 @@ function completedTurnPrefix(parent: Agent): SessionEvent[] {
  * route). The child inherits its parent's preset composition.
  */
 class ForkInProcessProvider implements SubagentProvider {
+  readonly execution = { kind: 'in-process' } as const
   readonly capabilities: SubagentCapabilities = {
     agentOptions: true,
     agentPreset: false,

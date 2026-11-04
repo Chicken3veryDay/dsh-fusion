@@ -1,6 +1,9 @@
 /** Browser-safe Ticket identities, snapshots, requests, and Session events. */
 
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { CreatedWorktree } from '@deepseek-ai/dsh-experimental-worktree'
+import type { JobId } from '@deepseek-ai/dsh-jobs'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
 /** Stable identity for one durable Ticket. */
@@ -95,7 +98,7 @@ export interface ExecutionSlotSnapshot {
 }
 
 /** One durable direct-worker responsibility. */
-export interface AssignmentSnapshot {
+export interface AssignmentSnapshotV1 {
   readonly id: AssignmentId
   readonly revision: number
   readonly role: AssignmentRole
@@ -111,6 +114,8 @@ export interface AssignmentSnapshot {
 
 /** One bounded worker report retained by the Ticket. */
 export interface TicketReportSnapshot {
+  readonly specRevision?: number
+  readonly attemptId?: TicketAttemptId
   readonly id: TicketReportId
   readonly assignmentId: AssignmentId
   readonly authorId: SessionId
@@ -153,14 +158,14 @@ export interface TicketTerminalOutcome {
 }
 
 /** Complete durable Ticket value written to every `ticket/state` event. */
-export interface TicketSnapshot {
+export interface TicketSnapshotV1 {
   readonly id: TicketId
   readonly revision: number
   readonly subject: string
   readonly description: string
   readonly status: TicketStatus
   readonly coordinatorId: SessionId
-  readonly assignments: readonly AssignmentSnapshot[]
+  readonly assignments: readonly AssignmentSnapshotV1[]
   readonly reports: readonly TicketReportSnapshot[]
   readonly questions: readonly TicketQuestionSnapshot[]
   readonly attentions: readonly TicketAttentionSnapshot[]
@@ -211,6 +216,9 @@ export interface CreateTicketRequest {
   readonly subject: string
   readonly description: string
   readonly coordinatorId?: SessionId
+  readonly acceptanceCriteria?: readonly TicketAcceptanceCriterion[]
+  readonly dependencies?: readonly TicketId[]
+  readonly parent?: TicketParent
   readonly workScopes?: readonly WorkScope[]
 }
 
@@ -220,6 +228,7 @@ export interface AssignTicketRequest {
   readonly expectedRevision: number
   readonly actorId: SessionId
   readonly ownerId: SessionId
+  readonly contribution?: TicketContribution
   readonly role?: AssignmentRole
   readonly subject: string
   readonly instructions?: string
@@ -245,6 +254,7 @@ export interface ReleaseAssignmentRequest {
 
 /** Input for publishing one worker report. */
 export interface ReportTicketRequest {
+  readonly attemptId?: TicketAttemptId
   readonly ticketId: TicketId
   readonly expectedRevision: number
   readonly assignmentId: AssignmentId
@@ -326,6 +336,234 @@ export interface EndTicketRequest {
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /** Complete post-change Ticket value; the Session log is the durable authority. */
-    'ticket/state': { version: 1; sessionId: SessionId; ticket: TicketSnapshot }
+    'ticket/state':
+      | { version: 1; sessionId: SessionId; ticket: TicketSnapshotV1 }
+      | { version: 2; sessionId: SessionId; ticket: TicketSnapshot }
   }
+}
+
+/** Whether acceptance requires an Assignment result for the current specification. */
+export type TicketContribution = 'required' | 'advisory'
+/** Identity of one durable execution attempt. */
+export type TicketAttemptId = Branded<'TicketAttemptId'>
+/** Idempotency identity of one admitted attempt operation. */
+export type TicketOperationId = Branded<'TicketOperationId'>
+/** Identity of immutable content submitted for acceptance. */
+export type TicketCandidateId = Branded<'TicketCandidateId'>
+/** Identity of one criterion evaluation. */
+export type TicketCheckId = Branded<'TicketCheckId'>
+/** Identity of an acceptance criterion within a specification. */
+export type TicketCriterionId = Branded<'TicketCriterionId'>
+/** Identity of a Mission plan rooted at one Ticket. */
+export type MissionId = Branded<'MissionId'>
+
+/** Validate and brand an attempt identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded attempt identifier.
+ */
+export function TicketAttemptId(id: string): TicketAttemptId { return brandString<TicketAttemptId>(id) }
+/** Validate and brand an operation identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded operation identifier.
+ */
+export function TicketOperationId(id: string): TicketOperationId { return brandString<TicketOperationId>(id) }
+/** Validate and brand a candidate identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded candidate identifier.
+ */
+export function TicketCandidateId(id: string): TicketCandidateId { return brandString<TicketCandidateId>(id) }
+/** Validate and brand a check identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded check identifier.
+ */
+export function TicketCheckId(id: string): TicketCheckId { return brandString<TicketCheckId>(id) }
+/** Validate and brand a criterion identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded criterion identifier.
+ */
+export function TicketCriterionId(id: string): TicketCriterionId { return brandString<TicketCriterionId>(id) }
+/** Validate and brand a Mission identity.
+ * @param id - Nonempty identifier.
+ * @returns Branded Mission identifier.
+ */
+export function MissionId(id: string): MissionId { return brandString<MissionId>(id) }
+
+/** One acceptance obligation; required checks may require an independent author. */
+export interface TicketAcceptanceCriterion {
+  readonly id: TicketCriterionId
+  readonly description: string
+  readonly required: boolean
+  readonly independent: boolean
+}
+/** Parent reference; required children must complete before the parent is accepted. */
+export interface TicketParent { readonly ticketId: TicketId; readonly required: boolean }
+/** Current specification. Prior revisions remain in committed Session events. */
+export interface TicketSpecification {
+  readonly revision: number
+  readonly acceptanceCriteria: readonly TicketAcceptanceCriterion[]
+  readonly dependencies: readonly TicketId[]
+  readonly parent?: TicketParent
+}
+/** Direct-worker responsibility with explicit contribution and attempt identity. */
+export interface AssignmentSnapshot extends AssignmentSnapshotV1 {
+  readonly contribution: TicketContribution
+  readonly activeAttemptId?: TicketAttemptId
+}
+/** Workspace placement is independent from executor placement. */
+export interface TicketAttemptWorkspace {
+  readonly kind: 'shared-workspace' | 'isolated-worktree'
+  readonly directory: string
+  readonly baseCommit?: string
+}
+/** Execution provider selection; remote execution requires an explicit world. */
+export type TicketAttemptExecutor =
+  | { readonly kind: 'in-process' }
+  | { readonly kind: 'dedicated-process'; readonly provider: string }
+  | { readonly kind: 'remote'; readonly provider: string; readonly world: string }
+/** Runtime receipt retained across restarts, without a live handle. */
+export interface TicketRuntimeReceipt {
+  readonly runtimeId: string
+  readonly providerId: string
+  readonly childSessionId?: SessionId
+  readonly jobIds?: readonly JobId[]
+  readonly transportId?: string
+  readonly world?: string
+}
+/** Actual checkout location and immutable starting commit. */
+export interface TicketWorkspaceReceipt {
+  readonly directory: string
+  readonly baseCommit: string
+  readonly worktree?: CreatedWorktree
+}
+/** Common attempt facts; selections and identities cannot change after admission. */
+export interface TicketAttemptFacts {
+  readonly id: TicketAttemptId
+  readonly assignmentId: AssignmentId
+  readonly assignmentRevision: number
+  readonly specRevision: number
+  readonly workspace: TicketAttemptWorkspace
+  readonly executor: TicketAttemptExecutor
+  readonly modelSelection?: { readonly provider: string; readonly model: string; readonly settings: string }
+  readonly workspaceReceipt?: TicketWorkspaceReceipt
+  readonly runtimeReceipt?: TicketRuntimeReceipt
+  readonly diagnostics: readonly string[]
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+/** Unknown means settlement has not been established and conflicting work stays reserved. */
+export type TicketAttemptSnapshot = TicketAttemptFacts & (
+  | { readonly status: 'preparing' | 'running' | 'stopping' | 'unknown' }
+  | { readonly status: 'settled'; readonly outcome: 'succeeded' | 'failed' | 'cancelled' }
+)
+/** Immutable content identity; mutable path references are insufficient. */
+export type TicketCandidateContent =
+  | { readonly kind: 'commit'; readonly repository: string; readonly commit: string }
+  | { readonly kind: 'artifact'; readonly reference: string; readonly digest: string }
+/** Submission pins the specification and contributing responsibilities. */
+export interface TicketCandidateSnapshot {
+  readonly id: TicketCandidateId
+  readonly specRevision: number
+  readonly content: TicketCandidateContent
+  readonly assignmentIds: readonly AssignmentId[]
+  readonly reportIds: readonly TicketReportId[]
+  readonly authorId: SessionId
+  readonly createdAt: number
+}
+/** Evidence of one criterion evaluation for exact submitted content. */
+export interface TicketCheckSnapshot {
+  readonly id: TicketCheckId
+  readonly candidateId: TicketCandidateId
+  readonly criterionId: TicketCriterionId
+  readonly specRevision: number
+  readonly authorId: SessionId
+  readonly outcome: 'pass' | 'fail'
+  readonly evidence: readonly string[]
+  readonly createdAt: number
+}
+/** Durable deduplication record; request excludes the CAS revision. */
+export interface TicketOperationSnapshot { readonly id: TicketOperationId; readonly request: string }
+/** A Mission milestone references Ticket completion, never a second mutable status. */
+export interface MissionMilestone { readonly title: string; readonly ticketIds: readonly TicketId[] }
+/** Versioned plan; progress is derived from referenced Ticket terminal outcomes. */
+export interface MissionPlanSnapshot {
+  readonly id: MissionId
+  readonly revision: number
+  readonly title: string
+  readonly milestones: readonly MissionMilestone[]
+}
+/** Derived Mission progress at the current Session revision. */
+export interface MissionView {
+  readonly plan: MissionPlanSnapshot
+  readonly milestones: readonly { readonly title: string; readonly completed: number; readonly total: number }[]
+  readonly completed: number
+  readonly total: number
+}
+/** Current complete snapshot; the v1 event decoder supplies explicit defaults. */
+export interface TicketSnapshot extends Omit<TicketSnapshotV1, 'assignments'> {
+  readonly assignments: readonly AssignmentSnapshot[]
+  readonly specification: TicketSpecification
+  readonly attempts: readonly TicketAttemptSnapshot[]
+  readonly candidates: readonly TicketCandidateSnapshot[]
+  readonly currentCandidateId?: TicketCandidateId
+  readonly checks: readonly TicketCheckSnapshot[]
+  readonly operations: readonly TicketOperationSnapshot[]
+  readonly missionPlans: readonly MissionPlanSnapshot[]
+}
+/** Common CAS and actor arguments, authenticated by the calling adapter. */
+export interface TicketMutationRequest {
+  readonly ticketId: TicketId
+  readonly expectedRevision: number
+  readonly actorId: SessionId
+}
+/** Replace acceptance obligations, invalidating prior contributions and checks. */
+export interface ReviseTicketRequest extends TicketMutationRequest {
+  readonly acceptanceCriteria: readonly TicketAcceptanceCriterion[]
+  readonly dependencies: readonly TicketId[]
+  readonly parent?: TicketParent
+}
+/** Claim an attempt before any workspace or runtime side effect. */
+export interface BeginTicketAttemptRequest extends TicketMutationRequest {
+  readonly assignmentId: AssignmentId
+  readonly assignmentRevision?: number
+  readonly attemptId: TicketAttemptId
+  readonly operationId: TicketOperationId
+  readonly workspace: TicketAttemptWorkspace
+  readonly executor: TicketAttemptExecutor
+  readonly modelSelection?: TicketAttemptFacts['modelSelection']
+}
+/** Record runtime facts or uncertainty without releasing the reservation. */
+export interface UpdateTicketAttemptRequest extends TicketMutationRequest {
+  readonly attemptId: TicketAttemptId
+  readonly operationId: TicketOperationId
+  readonly status: 'running' | 'stopping' | 'unknown'
+  readonly workspaceReceipt?: TicketWorkspaceReceipt
+  readonly runtimeReceipt?: TicketRuntimeReceipt
+  readonly diagnostics?: readonly string[]
+}
+/** Establish actual producer settlement before releasing conflicting work. */
+export interface SettleTicketAttemptRequest extends Omit<UpdateTicketAttemptRequest, 'status'> {
+  readonly outcome: 'succeeded' | 'failed' | 'cancelled'
+}
+/** Pin immutable candidate content and its current contributing Assignments. */
+export interface SubmitTicketCandidateRequest extends TicketMutationRequest {
+  readonly candidateId: TicketCandidateId
+  readonly specRevision: number
+  readonly content: TicketCandidateContent
+  readonly assignmentIds: readonly AssignmentId[]
+}
+/** Append a current candidate's criterion result with readable evidence. */
+export interface CheckTicketCandidateRequest extends TicketMutationRequest {
+  readonly checkId: TicketCheckId
+  readonly candidateId: TicketCandidateId
+  readonly criterionId: TicketCriterionId
+  readonly specRevision: number
+  readonly outcome: 'pass' | 'fail'
+  readonly evidence: readonly string[]
+}
+/** Create or replace a Mission plan at its current plan revision (zero creates). */
+export interface PlanTicketMissionRequest extends TicketMutationRequest {
+  readonly missionId: MissionId
+  readonly expectedPlanRevision: number
+  readonly title: string
+  readonly milestones: readonly MissionMilestone[]
 }

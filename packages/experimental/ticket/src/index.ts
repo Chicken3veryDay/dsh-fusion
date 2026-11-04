@@ -7,9 +7,11 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { ticketProjectionDefinition, validateTicketChange } from './projection.ts'
 import type { TicketProjectionState } from './projection.ts'
+import { assertTicketAcceptance, validateTicketReferences } from './validation.ts'
 import { TicketError } from './errors.ts'
 import {
   AssignmentId,
+  TicketAttemptId, TicketOperationId, MissionId,
   ExecutionSlotId,
   TicketAttentionId,
   TicketId,
@@ -17,6 +19,9 @@ import {
   TicketReportId,
 } from './types.ts'
 import type {
+  BeginTicketAttemptRequest, UpdateTicketAttemptRequest, SettleTicketAttemptRequest, ReviseTicketRequest,
+  SubmitTicketCandidateRequest, CheckTicketCandidateRequest, PlanTicketMissionRequest, MissionView,
+  TicketAttemptSnapshot, TicketMutationRequest,
   AnswerTicketQuestionRequest,
   CloseTicketQuestionRequest,
   AskTicketQuestionRequest,
@@ -46,7 +51,7 @@ export { TicketError } from './errors.ts'
 export type { TicketErrorCode } from './errors.ts'
 export type * from './types.ts'
 export { ticketProjectionDefinition, ticketSnapshotSchema } from './projection.ts'
-export { AssignmentId, ExecutionSlotId, TicketAttentionId, TicketId, TicketQuestionId, TicketReportId } from './types.ts'
+export { TicketAttemptId, TicketCandidateId, TicketCheckId, TicketCriterionId, TicketOperationId, MissionId, AssignmentId, ExecutionSlotId, TicketAttentionId, TicketId, TicketQuestionId, TicketReportId } from './types.ts'
 export { TicketExecutionService } from './execution.ts'
 export type { PrepareTicketExecutionRequest, TicketExecutionHandle, TicketExecutionWorkspace } from './execution.ts'
 export { TicketTools } from './tools.ts'
@@ -81,6 +86,11 @@ function boundedList<T>(name: string, values: readonly T[] | undefined, limit: n
   const result = values === undefined ? [] : [...values]
   if (result.length > limit) throw new TicketError(`${name} exceeds ${String(limit)} items`, 'TICKET_LIMIT')
   return result
+}
+
+function operationFingerprint(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item !== null && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right))) : item)
 }
 
 function textBytes(value: string): number {
@@ -212,6 +222,11 @@ export class TicketService extends Service {
         attentions: [],
         workScopes: cloneScopes(request.workScopes, this.config.maxWorkScopes),
         executionSlots: [],
+        specification: {
+          revision: 1, acceptanceCriteria: [...request.acceptanceCriteria ?? []], dependencies: [...request.dependencies ?? []],
+          ...request.parent === undefined ? {} : { parent: request.parent },
+        },
+        attempts: [], candidates: [], checks: [], operations: [], missionPlans: [],
         createdAt: now,
         updatedAt: now,
       }
@@ -237,6 +252,7 @@ export class TicketService extends Service {
         id: assignmentId,
         revision: 1,
         role: request.role ?? 'worker',
+        contribution: request.contribution ?? (request.role === 'observer' ? 'advisory' : 'required'),
         subject,
         instructions: request.instructions ?? '',
         ownerId: request.ownerId,
@@ -268,6 +284,7 @@ export class TicketService extends Service {
   async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView> {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
+      if (assignment.activeAttemptId !== undefined && ticket.attempts.some(attempt => attempt.id === assignment.activeAttemptId && attempt.status !== 'settled')) throw new TicketError('settle the active attempt before claiming or releasing its Assignment', 'TICKET_ATTEMPT_STATE')
       if (assignment.ownerId !== request.actorId) throw new TicketError('only the assigned worker may claim the Assignment', 'TICKET_AUTHORITY')
       if (assignment.status !== 'assigned' && assignment.status !== 'released') throw new TicketError(`Assignment "${assignment.id}" cannot be claimed from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
       const slot = assignment.executionSlotId === undefined
@@ -299,6 +316,7 @@ export class TicketService extends Service {
   async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView> {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
+      if (assignment.activeAttemptId !== undefined && ticket.attempts.some(attempt => attempt.id === assignment.activeAttemptId && attempt.status !== 'settled')) throw new TicketError('settle the active attempt before claiming or releasing its Assignment', 'TICKET_ATTEMPT_STATE')
       if (assignment.ownerId !== request.actorId && ticket.coordinatorId !== request.actorId) throw new TicketError('only the assigned worker or coordinator may release the Assignment', 'TICKET_AUTHORITY')
       if (assignment.status !== 'running' && assignment.status !== 'claimed' && assignment.status !== 'assigned') throw new TicketError(`Assignment "${assignment.id}" cannot be released from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
       const nextAssignment: AssignmentSnapshot = { ...assignment, revision: assignment.revision + 1, status: 'released' }
@@ -321,12 +339,20 @@ export class TicketService extends Service {
       const assignment = this.assignment(ticket, request.assignmentId)
       if (assignment.ownerId !== request.actorId && ticket.coordinatorId !== request.actorId) throw new TicketError('only the assigned worker or coordinator may report', 'TICKET_AUTHORITY')
       if (!['assigned', 'claimed', 'running', 'blocked'].includes(assignment.status)) throw new TicketError(`Assignment "${assignment.id}" cannot report from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
+      if (assignment.activeAttemptId !== undefined) {
+        if (request.attemptId !== assignment.activeAttemptId) throw new TicketError('report must name the current active attempt', 'TICKET_STALE_ATTEMPT')
+        const attempt = ticket.attempts.find(item => item.id === request.attemptId)
+        if (attempt?.specRevision !== ticket.specification.revision) throw new TicketError('report belongs to an obsolete specification', 'TICKET_STALE_ATTEMPT')
+        if (attempt.status === 'settled' && (attempt.outcome !== 'succeeded' || request.kind !== 'result')) throw new TicketError('settled attempt cannot report progress or failure', 'TICKET_ATTEMPT_STATE')
+      } else if (request.attemptId !== undefined) throw new TicketError('unknown report attempt', 'TICKET_STALE_ATTEMPT')
       if (ticket.reports.length >= this.config.maxReports) throw new TicketError('report limit exhausted', 'TICKET_LIMIT')
       const summary = nonEmpty('report summary', request.summary)
       const id = TicketReportId(`report-${ticket.id}-${String(ticket.reports.length + 1)}`)
       const report: TicketReportSnapshot = {
         id,
         assignmentId: assignment.id,
+        specRevision: ticket.specification.revision,
+        ...request.attemptId === undefined ? {} : { attemptId: request.attemptId },
         authorId: request.actorId,
         kind: request.kind,
         summary,
@@ -501,6 +527,209 @@ export class TicketService extends Service {
     return await this.end(session, request, 'cancelled')
   }
 
+  /** Replace the specification; prior candidates, checks and contributions remain historical.
+   * @param session - Owning Session.
+   * @param request - Complete replacement obligations and CAS revision.
+   * @returns Committed Ticket with an incremented specification revision.
+   */
+  async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertCoordinator(ticket, request.actorId)
+      const { currentCandidateId: _candidate, ...withoutCandidate } = ticket
+      return {
+        ...withoutCandidate,
+        specification: {
+          revision: ticket.specification.revision + 1,
+          acceptanceCriteria: [...request.acceptanceCriteria], dependencies: [...request.dependencies],
+          ...request.parent === undefined ? {} : { parent: request.parent },
+        },
+      }
+    })
+  }
+
+  /** Admit one execution attempt before effects; repeated operation identities do not append.
+   * @param session - Owning Session.
+   * @param request - Attempt identity, placement, actor and CAS revision.
+   * @returns Current Ticket; rejects replacement of unsettled work or changed operation payloads.
+   */
+  async beginAttempt(session: Session, request: BeginTicketAttemptRequest): Promise<TicketView> {
+    return await this.attemptOperation(session, request, 'begin', (ticket) => {
+      const assignment = this.assignment(ticket, request.assignmentId)
+      this.assertParticipant(ticket, request.actorId, assignment.id)
+      if (request.assignmentRevision !== undefined && assignment.revision !== request.assignmentRevision) throw new TicketError('Assignment revision changed', 'TICKET_STALE_REVISION')
+      if (ticket.attempts.some(attempt => attempt.id === request.attemptId)) throw new TicketError('attempt identity is already used', 'TICKET_ATTEMPT_STATE')
+      if (ticket.attempts.some(attempt => attempt.assignmentId === assignment.id && attempt.status !== 'settled')) throw new TicketError('previous attempt has not settled', 'TICKET_ATTEMPT_STATE')
+      if (ticket.specification.dependencies.some(id => this.get(session, id).terminalOutcome?.kind !== 'completed')) throw new TicketError('dependencies must be accepted before execution', 'TICKET_ACCEPTANCE')
+      if (ticket.attempts.length >= this.config.maxReports) throw new TicketError('attempt limit exhausted', 'TICKET_LIMIT')
+      const now = Date.now()
+      const attempt: TicketAttemptSnapshot = {
+        id: request.attemptId, assignmentId: assignment.id, assignmentRevision: assignment.revision,
+        specRevision: ticket.specification.revision, workspace: request.workspace, executor: request.executor,
+        ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
+        diagnostics: [], status: 'preparing', createdAt: now, updatedAt: now,
+      }
+      const assignments = ticket.assignments.map(item => item.id === assignment.id
+        ? { ...item, revision: item.revision + 1, activeAttemptId: attempt.id, attempts: item.attempts + 1, status: 'running' as const } : item)
+      const next = { ...ticket, assignments, attempts: [...ticket.attempts, attempt] }
+      return { ...next, status: nextStatusForAssignment(next) }
+    })
+  }
+
+  /** Record runtime receipts, stopping or uncertainty without releasing work.
+   * @param session - Owning Session.
+   * @param request - Current attempt and stable operation identity.
+   * @returns Current Ticket; obsolete attempts and replaced receipts are rejected.
+   */
+  async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView> {
+    return await this.attemptOperation(session, request, 'update', ticket => this.changeAttempt(ticket, request, attempt => ({
+      ...attempt, status: request.status, updatedAt: Date.now(),
+      ...request.workspaceReceipt === undefined ? {} : { workspaceReceipt: request.workspaceReceipt },
+      ...request.runtimeReceipt === undefined ? {} : { runtimeReceipt: request.runtimeReceipt },
+      diagnostics: [...attempt.diagnostics, ...request.diagnostics ?? []],
+    })))
+  }
+
+  /** Record observed producer settlement; result reports alone never settle attempts.
+   * @param session - Owning Session.
+   * @param request - Current attempt, observed outcome and retained receipts.
+   * @returns Current Ticket with settled work; retrying the same operation is safe.
+   */
+  async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView> {
+    return await this.attemptOperation(session, request, 'settle', ticket => this.changeAttempt(ticket, request, attempt => ({
+      ...attempt, status: 'settled', outcome: request.outcome, updatedAt: Date.now(),
+      ...request.workspaceReceipt === undefined ? {} : { workspaceReceipt: request.workspaceReceipt },
+      ...request.runtimeReceipt === undefined ? {} : { runtimeReceipt: request.runtimeReceipt },
+      diagnostics: [...attempt.diagnostics, ...request.diagnostics ?? []],
+    })))
+  }
+
+  /** Pin immutable content and the contributing Assignments for the current specification.
+   * @param session - Owning Session.
+   * @param request - New candidate identity and immutable content reference.
+   * @returns Committed Ticket; all older checks remain historical.
+   */
+  async submitCandidate(session: Session, request: SubmitTicketCandidateRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertParticipant(ticket, request.actorId)
+      if (request.specRevision !== ticket.specification.revision) throw new TicketError('candidate specification is stale', 'TICKET_STALE_REVISION')
+      if (ticket.candidates.length >= this.config.maxReports) throw new TicketError('candidate limit exhausted', 'TICKET_LIMIT')
+      for (const id of request.assignmentIds) this.assignment(ticket, id)
+      return { ...ticket, currentCandidateId: request.candidateId, candidates: [...ticket.candidates, {
+        id: request.candidateId, specRevision: request.specRevision, content: request.content,
+        assignmentIds: [...request.assignmentIds],
+        reportIds: request.assignmentIds.flatMap((id) => {
+          const reportId = this.assignment(ticket, id).latestReportId
+          return reportId === undefined ? [] : [reportId]
+        }), authorId: request.actorId, createdAt: Date.now(),
+      }] }
+    })
+  }
+
+  /** Append criterion evidence; independent authors cannot contribute to the candidate.
+   * @param session - Owning Session.
+   * @param request - Current candidate, criterion and evidence.
+   * @returns Committed Ticket; stale checks append nothing.
+   */
+  async checkCandidate(session: Session, request: CheckTicketCandidateRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertParticipant(ticket, request.actorId)
+      if (ticket.currentCandidateId !== request.candidateId || ticket.specification.revision !== request.specRevision) throw new TicketError('check candidate or specification is stale', 'TICKET_STALE_REVISION')
+      const criterion = ticket.specification.acceptanceCriteria.find(item => item.id === request.criterionId)
+      const candidate = ticket.candidates.find(item => item.id === request.candidateId)
+      if (criterion === undefined || candidate === undefined) throw new TicketError('unknown candidate criterion', 'TICKET_INVALID_INPUT')
+      if (criterion.independent && (candidate.authorId === request.actorId || ticket.assignments.some(assignment => candidate.assignmentIds.includes(assignment.id) && assignment.ownerId === request.actorId))) throw new TicketError('independent check author contributed to candidate', 'TICKET_AUTHORITY')
+      if (ticket.checks.length >= this.config.maxReports) throw new TicketError('check limit exhausted', 'TICKET_LIMIT')
+      return { ...ticket, checks: [...ticket.checks, {
+        id: request.checkId, candidateId: request.candidateId, criterionId: request.criterionId,
+        specRevision: request.specRevision, authorId: request.actorId, outcome: request.outcome,
+        evidence: [...request.evidence], createdAt: Date.now(),
+      }] }
+    })
+  }
+
+  /** Version a Mission's Ticket references without adding mutable completion state.
+   * @param session - Owning Session.
+   * @param request - Plan references and current Ticket/plan revisions.
+   * @returns Committed Ticket containing the new plan revision.
+   */
+  async planMission(session: Session, request: PlanTicketMissionRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertCoordinator(ticket, request.actorId)
+      const previous = ticket.missionPlans.find(plan => plan.id === request.missionId)
+      if ((previous?.revision ?? 0) !== request.expectedPlanRevision) throw new TicketError('Mission plan revision changed', 'TICKET_STALE_REVISION')
+      if (previous === undefined && ticket.missionPlans.length >= this.config.maxTickets) throw new TicketError('Mission plan limit exhausted', 'TICKET_LIMIT')
+      const plan = {
+        id: request.missionId, revision: request.expectedPlanRevision + 1,
+        title: request.title, milestones: [...request.milestones],
+      }
+      const missionPlans = previous === undefined
+        ? [...ticket.missionPlans, plan]
+        : ticket.missionPlans.map(item => item.id === plan.id ? plan : item)
+      return { ...ticket, missionPlans }
+    })
+  }
+
+  /** Read Mission progress derived solely from referenced Ticket acceptance.
+   * @param session - Owning Session.
+   * @param ticketId - Ticket containing the plan.
+   * @param missionId - Mission identity.
+   * @returns Current plan with accepted and total Ticket counts.
+   */
+  mission(session: Session, ticketId: TicketId, missionId: MissionId): MissionView {
+    const plan = this.get(session, ticketId).missionPlans.find(item => item.id === missionId)
+    if (plan === undefined) throw new TicketError('unknown Mission', 'TICKET_INVALID_INPUT')
+    const milestones = plan.milestones.map(item => ({
+      title: item.title, total: item.ticketIds.length,
+      completed: item.ticketIds.filter(id => this.get(session, id).terminalOutcome?.kind === 'completed').length,
+    }))
+    return {
+      plan, milestones,
+      completed: milestones.reduce((sum, item) => sum + item.completed, 0),
+      total: milestones.reduce((sum, item) => sum + item.total, 0),
+    }
+  }
+
+  private changeAttempt(
+    ticket: TicketSnapshot,
+    request: TicketMutationRequest & { readonly attemptId: TicketAttemptId },
+    update: (attempt: TicketAttemptSnapshot) => TicketAttemptSnapshot,
+  ): TicketSnapshot {
+    const attempt = ticket.attempts.find(item => item.id === request.attemptId)
+    if (attempt === undefined) throw new TicketError('unknown attempt', 'TICKET_STALE_ATTEMPT')
+    const assignment = this.assignment(ticket, attempt.assignmentId)
+    this.assertParticipant(ticket, request.actorId, assignment.id)
+    if (assignment.activeAttemptId !== attempt.id) throw new TicketError('attempt has been superseded', 'TICKET_STALE_ATTEMPT')
+    if (attempt.status === 'settled') throw new TicketError('attempt is already settled', 'TICKET_ATTEMPT_STATE')
+    const next = update(attempt)
+    return { ...ticket, attempts: ticket.attempts.map(item => item.id === next.id ? next : item) }
+  }
+
+  private async attemptOperation<T extends TicketMutationRequest & { readonly operationId: TicketOperationId }>(
+    session: Session, request: T, kind: string, update: (ticket: TicketSnapshot) => TicketSnapshot,
+  ): Promise<TicketView> {
+    const { expectedRevision: _revision, ...payload } = request
+    const fingerprint = operationFingerprint({ kind, ...payload })
+    return await this.enqueue(session, async () => {
+      const ticket = this.get(session, request.ticketId)
+      this.assertParticipant(ticket, request.actorId)
+      const operation = ticket.operations.find(item => item.id === request.operationId)
+      if (operation !== undefined) {
+        if (operation.request !== fingerprint) throw new TicketError('operation identity was reused with different arguments', 'TICKET_OPERATION_CONFLICT')
+        return ticket
+      }
+      if (ticket.revision !== request.expectedRevision) throw new TicketError('Ticket revision changed', 'TICKET_STALE_REVISION')
+      if (ticket.terminalOutcome !== undefined) throw new TicketError('Ticket is terminal', 'TICKET_TERMINAL')
+      if (ticket.operations.length >= this.config.maxReports) throw new TicketError('operation limit exhausted', 'TICKET_LIMIT')
+      const changed = update(ticket)
+      const next = {
+        ...changed, revision: ticket.revision + 1, updatedAt: Date.now(),
+        operations: [...ticket.operations, { id: request.operationId, request: fingerprint }],
+      }
+      await this.commit(session, next)
+      return next
+    })
+  }
+
   /** Alias for {@link create} used by adapters. */
   readonly createTicket: TicketService['create'] = this.create.bind(this)
   /** Alias for {@link assign} used by adapters. */
@@ -542,6 +771,8 @@ export class TicketService extends Service {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       if (ticket.terminalOutcome !== undefined || ticket.status === 'completed' || ticket.status === 'failed' || ticket.status === 'cancelled') throw new TicketError(`Ticket "${ticket.id}" is already terminal`, 'TICKET_TERMINAL')
+      if (ticket.attempts.some(attempt => attempt.status !== 'settled')) throw new TicketError('settle all attempts before ending the Ticket', 'TICKET_ATTEMPT_STATE')
+      if (status === 'completed') assertTicketAcceptance(ticket, this.state(session).tickets)
       const summary = nonEmpty('terminal summary', request.summary)
       const at = Date.now()
       return {
@@ -594,12 +825,15 @@ export class TicketService extends Service {
     const previous = this.state(session).tickets.find(candidate => candidate.id === ticket.id)
     try {
       validateTicketChange(previous, ticket)
+      const tickets = [...this.state(session).tickets.filter(item => item.id !== ticket.id), ticket]
+      validateTicketReferences(tickets)
+      if (ticket.terminalOutcome?.kind === 'completed') assertTicketAcceptance(ticket, tickets)
     } catch (error) {
       throw new TicketError('Ticket candidate violates schema or lifecycle rules', 'TICKET_INVALID_INPUT', { cause: error })
     }
     const bytes = textBytes(JSON.stringify(ticket))
     if (bytes > this.config.maxSnapshotBytes) throw new TicketError(`Ticket snapshot exceeds ${String(this.config.maxSnapshotBytes)} bytes`, 'TICKET_SNAPSHOT_TOO_LARGE')
-    session.append('ticket/state', { version: 1, sessionId: session.id, ticket })
+    session.append('ticket/state', { version: 2, sessionId: session.id, ticket })
     if (this.ctx.sessions.get(session.id) === session) await this.ctx.sessions.flush(session)
   }
 

@@ -46,6 +46,12 @@
     },
     {
       "path": "../worktree"
+    },
+    {
+      "path": "../../subagent/subagent"
+    },
+    {
+      "path": "../../session/working-directory"
     }
   ]
 }

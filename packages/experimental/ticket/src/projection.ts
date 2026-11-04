@@ -3,9 +3,12 @@
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionEvent, SessionEventMap, SessionId } from '@deepseek-ai/dsh-session'
+import type { JobId } from '@deepseek-ai/dsh-jobs'
+import { assertTicketAcceptance, validateCurrentTicketChange, validateTicketReferences } from './validation.ts'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import {
   AssignmentId,
+  TicketAttemptId, TicketOperationId, TicketCandidateId, TicketCheckId, TicketCriterionId, MissionId,
   ExecutionSlotId,
   TicketAttentionId,
   TicketId,
@@ -13,13 +16,14 @@ import {
   TicketReportId,
 } from './types.ts'
 import type {
-  AssignmentSnapshot,
+  AssignmentSnapshotV1,
   ExecutionSlotSnapshot,
   TicketAttentionSnapshot,
   TicketProjection,
   TicketQuestionSnapshot,
   TicketReportSnapshot,
   TicketSnapshot,
+  TicketSnapshotV1,
   TicketStatus,
   WorkScope,
 } from './types.ts'
@@ -40,7 +44,7 @@ const workScopeSchema: z.ZodType<WorkScope> = z.object({
   exclusive: z.boolean().optional(),
 }).strict() as z.ZodType<WorkScope>
 
-const assignmentSchema: z.ZodType<AssignmentSnapshot> = z.object({
+const assignmentSchema: z.ZodType<AssignmentSnapshotV1> = z.object({
   id: assignmentIdSchema,
   revision: positiveInteger,
   role: z.enum(['worker', 'reviewer', 'integrator', 'observer']),
@@ -52,7 +56,7 @@ const assignmentSchema: z.ZodType<AssignmentSnapshot> = z.object({
   executionSlotId: executionSlotIdSchema.optional(),
   attempts: safeInteger,
   latestReportId: reportIdSchema.optional(),
-}).strict() as z.ZodType<AssignmentSnapshot>
+}).strict() as z.ZodType<AssignmentSnapshotV1>
 
 const executionSlotSchema: z.ZodType<ExecutionSlotSnapshot> = z.object({
   id: executionSlotIdSchema,
@@ -102,7 +106,7 @@ const terminalOutcomeSchema = z.object({
 }).strict()
 
 /** Runtime schema for a complete durable Ticket value. */
-export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = z.object({
+const ticketSnapshotV1Schema = z.object({
   id: ticketIdSchema,
   revision: positiveInteger,
   subject: z.string().min(1),
@@ -121,13 +125,102 @@ export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = z.object({
   terminalOutcome: terminalOutcomeSchema.optional(),
   createdAt: safeInteger,
   updatedAt: safeInteger,
+}).strict()
+
+const criterionSchema = z.object({
+  id: z.string().min(1).transform(value => TicketCriterionId(value)),
+  description: z.string().trim().min(1), required: z.boolean(), independent: z.boolean(),
+}).strict()
+const parentSchema = z.object({ ticketId: ticketIdSchema, required: z.boolean() }).strict()
+/** Parser for model-provided specification edits and durable v2 specifications. */
+export const ticketSpecificationSchema = z.object({
+  revision: positiveInteger, acceptanceCriteria: z.array(criterionSchema),
+  dependencies: z.array(ticketIdSchema), parent: parentSchema.optional(),
+}).strict()
+/** Parser for independent workspace and executor placement. */
+export const ticketAttemptWorkspaceSchema = z.object({
+  kind: z.enum(['shared-workspace', 'isolated-worktree']), directory: z.string().min(1), baseCommit: z.string().min(1).optional(),
+}).strict()
+/** Parser for provider selection, including explicit remote execution world. */
+export const ticketAttemptExecutorSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('in-process') }).strict(),
+  z.object({ kind: z.literal('dedicated-process'), provider: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('remote'), provider: z.string().min(1), world: z.string().min(1) }).strict(),
+])
+/** Parser for durable checkout receipts. */
+export const ticketWorkspaceReceiptSchema = z.object({
+  directory: z.string().min(1), baseCommit: z.string().min(1),
+  worktree: z.object({
+    path: z.string().min(1), branch: z.string().min(1),
+    baseCommit: z.string().min(1), repositoryRoot: z.string().min(1),
+  }).strict().optional(),
+}).strict()
+/** Parser for durable provider/runtime receipts. */
+export const ticketRuntimeReceiptSchema = z.object({
+  runtimeId: z.string().min(1), providerId: z.string().min(1), childSessionId: sessionIdSchema.optional(),
+  jobIds: z.array(z.string().min(1).transform(value => brandString<JobId>(value))).optional(),
+  transportId: z.string().min(1).optional(), world: z.string().min(1).optional(),
+}).strict()
+const attemptIdSchema = z.string().min(1).transform(value => TicketAttemptId(value))
+const candidateIdSchema = z.string().min(1).transform(value => TicketCandidateId(value))
+const attemptFields = {
+  id: attemptIdSchema, assignmentId: assignmentIdSchema, assignmentRevision: positiveInteger,
+  specRevision: positiveInteger, workspace: ticketAttemptWorkspaceSchema, executor: ticketAttemptExecutorSchema,
+  modelSelection: z.object({ provider: z.string().min(1), model: z.string().min(1), settings: z.string() }).strict().optional(),
+  workspaceReceipt: ticketWorkspaceReceiptSchema.optional(), runtimeReceipt: ticketRuntimeReceiptSchema.optional(),
+  diagnostics: z.array(z.string()), createdAt: safeInteger, updatedAt: safeInteger,
+}
+const attemptSchema = z.union([
+  z.object({ ...attemptFields, status: z.enum(['preparing', 'running', 'stopping', 'unknown']) }).strict(),
+  z.object({ ...attemptFields, status: z.literal('settled'), outcome: z.enum(['succeeded', 'failed', 'cancelled']) }).strict(),
+])
+/** Parser requiring immutable Git object identity or an artifact digest. */
+export const ticketCandidateContentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('commit'), repository: z.string().min(1), commit: z.string().regex(/^[a-f0-9]{40,64}$/) }).strict(),
+  z.object({ kind: z.literal('artifact'), reference: z.string().min(1), digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict(),
+])
+/** Parser for Mission milestone references, with progress derived at read time. */
+export const missionMilestoneSchema = z.object({ title: z.string().trim().min(1), ticketIds: z.array(ticketIdSchema).min(1) }).strict()
+/** Runtime schema for the complete current durable Ticket value. */
+export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = ticketSnapshotV1Schema.extend({
+  assignments: z.array(z.object({
+    id: assignmentIdSchema, revision: positiveInteger, role: z.enum(['worker', 'reviewer', 'integrator', 'observer']),
+    subject: z.string().min(1), instructions: z.string(), ownerId: sessionIdSchema,
+    status: z.enum(['assigned', 'claimed', 'running', 'released', 'completed', 'blocked', 'failed', 'cancelled']),
+    workScopes: z.array(workScopeSchema), executionSlotId: executionSlotIdSchema.optional(), attempts: safeInteger,
+    latestReportId: reportIdSchema.optional(), contribution: z.enum(['required', 'advisory']), activeAttemptId: attemptIdSchema.optional(),
+  }).strict()),
+  reports: z.array(z.object({
+    id: reportIdSchema, assignmentId: assignmentIdSchema, authorId: sessionIdSchema,
+    kind: z.enum(['progress', 'result', 'failure']), summary: z.string().min(1), evidence: z.array(z.string()),
+    nextSteps: z.array(z.string()), createdAt: safeInteger, specRevision: positiveInteger.optional(), attemptId: attemptIdSchema.optional(),
+  }).strict()),
+  specification: ticketSpecificationSchema, attempts: z.array(attemptSchema),
+  candidates: z.array(z.object({
+    id: candidateIdSchema, specRevision: positiveInteger, content: ticketCandidateContentSchema,
+    assignmentIds: z.array(assignmentIdSchema).min(1), reportIds: z.array(reportIdSchema),
+    authorId: sessionIdSchema, createdAt: safeInteger,
+  }).strict()),
+  currentCandidateId: candidateIdSchema.optional(),
+  checks: z.array(z.object({
+    id: z.string().min(1).transform(value => TicketCheckId(value)), candidateId: candidateIdSchema,
+    criterionId: z.string().min(1).transform(value => TicketCriterionId(value)), specRevision: positiveInteger,
+    authorId: sessionIdSchema, outcome: z.enum(['pass', 'fail']),
+    evidence: z.array(z.string().trim().min(1)).min(1), createdAt: safeInteger,
+  }).strict()),
+  operations: z.array(z.object({
+    id: z.string().min(1).transform(value => TicketOperationId(value)), request: z.string().min(1),
+  }).strict()),
+  missionPlans: z.array(z.object({
+    id: z.string().min(1).transform(value => MissionId(value)), revision: positiveInteger,
+    title: z.string().trim().min(1), milestones: z.array(missionMilestoneSchema),
+  }).strict()),
 }).strict() as z.ZodType<TicketSnapshot>
 
-const ticketEventSchema: z.ZodType<SessionEventMap['ticket/state']> = z.object({
-  version: z.literal(1),
-  sessionId: sessionIdSchema,
-  ticket: ticketSnapshotSchema,
-}).strict()
+const ticketEventSchema: z.ZodType<SessionEventMap['ticket/state']> = z.discriminatedUnion('version', [
+  z.object({ version: z.literal(1), sessionId: sessionIdSchema, ticket: ticketSnapshotV1Schema as z.ZodType<TicketSnapshotV1> }).strict(),
+  z.object({ version: z.literal(2), sessionId: sessionIdSchema, ticket: ticketSnapshotSchema }).strict(),
+])
 
 const ticketSelectorSchema = z.object({
   version: safeInteger,
@@ -138,6 +231,7 @@ const ticketSelectorSchema = z.object({
 export interface TicketProjectionState {
   readonly sessionId: SessionId
   readonly tickets: readonly TicketSnapshot[]
+  readonly currentVersionTickets: readonly TicketId[]
   readonly failure?: string
 }
 
@@ -146,7 +240,7 @@ export interface TicketProjectionState {
  * @returns empty projection state.
  */
 export function emptyTicketState(sessionId: SessionId): TicketProjectionState {
-  return { sessionId, tickets: [] }
+  return { sessionId, tickets: [], currentVersionTickets: [] }
 }
 
 /** The only durable event owned by this package. */
@@ -185,10 +279,6 @@ export function isTicketStatusTransitionAllowed(previous: TicketStatus, next: Ti
   return allowed[previous].includes(next)
 }
 
-function parsePersisted<T>(schema: z.ZodType<T>, value: unknown): T {
-  return schema.parse(value)
-}
-
 function replaceTicket(tickets: readonly TicketSnapshot[], index: number, ticket: TicketSnapshot): TicketSnapshot[] {
   const next = [...tickets]
   if (index < 0) next.push(ticket)
@@ -205,8 +295,8 @@ function assertUnique(ids: readonly string[], label: string): void {
  * @param ticket - Candidate complete value.
  * @returns Nothing; throws before admission when schema or lifecycle rules fail.
  */
-export function validateTicketChange(previous: TicketSnapshot | undefined, ticket: TicketSnapshot): void {
-  ticketSnapshotSchema.parse(ticket)
+function validateLegacyTicketChange(previous: TicketSnapshot | undefined, ticket: TicketSnapshotV1): void {
+  ticketSnapshotV1Schema.parse(ticket)
   if (previous === undefined) {
     if (ticket.revision !== 1) throw new Error(`ticket "${ticket.id}" must begin at revision 1`)
   } else {
@@ -225,21 +315,47 @@ export function validateTicketChange(previous: TicketSnapshot | undefined, ticke
   assertUnique(ticket.attentions.map(attention => attention.id), `ticket "${ticket.id}" attention`)
 }
 
-function applyCurrentEvent(state: TicketProjectionState, event: TicketSessionEvent): TicketProjectionState {
-  const ticket = event.data.ticket
-  const index = state.tickets.findIndex(candidate => candidate.id === ticket.id)
-  validateTicketChange(index < 0 ? undefined : state.tickets[index], ticket)
-  return { ...state, tickets: replaceTicket(state.tickets, index, ticket) }
+/** Validate current writes using the same semantics as v2 replay.
+ * @param previous - Prior committed snapshot.
+ * @param ticket - Complete proposed snapshot.
+ * @returns Nothing; rejects malformed or unsafe transitions.
+ */
+export function validateTicketChange(previous: TicketSnapshot | undefined, ticket: TicketSnapshot): void {
+  ticketSnapshotSchema.parse(ticket)
+  validateCurrentTicketChange(previous, ticket)
+}
+
+function upgradeLegacy(ticket: TicketSnapshotV1): TicketSnapshot {
+  return {
+    ...ticket,
+    assignments: ticket.assignments.map(assignment => ({ ...assignment, contribution: assignment.role === 'observer' ? 'advisory' : 'required' })),
+    specification: { revision: 1, acceptanceCriteria: [], dependencies: [] },
+    attempts: [], candidates: [], checks: [], operations: [], missionPlans: [],
+  }
 }
 
 function applyProjectionEvent(state: TicketProjectionState, event: SessionEvent): TicketProjectionState {
   if (state.failure !== undefined || !isTicketEvent(event)) return state
   try {
-    const decoded = parsePersisted(ticketEventSchema, event.data)
-    const selector = ticketSelectorSchema.parse(decoded)
+    const selector = ticketSelectorSchema.parse(event.data)
     if (selector.sessionId !== state.sessionId) return state
-    if (selector.version !== 1) throw new Error(`unsupported Ticket event version ${String(selector.version)}`)
-    return applyCurrentEvent(state, { ...event, data: decoded })
+    const decoded = ticketEventSchema.parse(event.data)
+    const index = state.tickets.findIndex(candidate => candidate.id === decoded.ticket.id)
+    const previous = index < 0 ? undefined : state.tickets[index]
+    if (decoded.version === 1) {
+      if (state.currentVersionTickets.includes(decoded.ticket.id)) throw new Error('Ticket event version cannot downgrade')
+      validateLegacyTicketChange(previous, decoded.ticket)
+      return { ...state, tickets: replaceTicket(state.tickets, index, upgradeLegacy(decoded.ticket)) }
+    }
+    validateTicketChange(previous, decoded.ticket)
+    const tickets = replaceTicket(state.tickets, index, decoded.ticket)
+    validateTicketReferences(tickets)
+    if (decoded.ticket.terminalOutcome?.kind === 'completed') assertTicketAcceptance(decoded.ticket, tickets)
+    return {
+      ...state, tickets,
+      currentVersionTickets: state.currentVersionTickets.includes(decoded.ticket.id)
+        ? state.currentVersionTickets : [...state.currentVersionTickets, decoded.ticket.id],
+    }
   } catch (error: unknown) {
     return { ...state, failure: error instanceof Error ? error.message : String(error) }
   }
@@ -264,10 +380,11 @@ export function ticketProjectionView(state: TicketProjectionState): TicketProjec
 /** Session projection for the durable Ticket domain. */
 export const ticketProjectionDefinition = {
   key: 'ticket',
-  stateVersion: 2,
+  stateVersion: 3,
   stateSchema: z.object({
     sessionId: sessionIdSchema,
     tickets: z.array(ticketSnapshotSchema),
+    currentVersionTickets: z.array(ticketIdSchema),
     failure: z.string().optional(),
   }).strict() as z.ZodType<TicketProjectionState>,
   init: header => emptyTicketState(header.id),

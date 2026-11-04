@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import TicketService, { TicketId, TicketReportId, ticketProjectionDefinition } from '../src/index.ts'
+import TicketService, { AssignmentId, TicketCandidateId, TicketId, TicketReportId, ticketProjectionDefinition } from '../src/index.ts'
 import type { TicketProjectionState } from '../src/projection.ts'
 
 async function harness() {
@@ -105,16 +105,42 @@ describe('Ticket service', () => {
     })
     expect(blocked).toMatchObject({ revision: 9, status: 'blocked' })
 
-    const completed = await ctx.tickets.complete(session, {
+    let resolved = await ctx.tickets.resolveAttention(session, {
       ticketId: blocked.id,
       expectedRevision: 9,
       actorId: SessionId('reviewer'),
+      attentionId: waiting.attentions[0]!.id,
+    })
+    resolved = await ctx.tickets.resolveAttention(session, {
+      ticketId: resolved.id,
+      expectedRevision: 10,
+      actorId: SessionId('reviewer'),
+      attentionId: blocked.attentions[blocked.attentions.length - 1]!.id,
+    })
+    expect(resolved).toMatchObject({ revision: 11, status: 'integrating' })
+    expect(resolved.attentions.every(attention => attention.status === 'resolved')).toBe(true)
+
+    const submitted = await ctx.tickets.submitCandidate(session, {
+      ticketId: resolved.id,
+      expectedRevision: 11,
+      actorId: SessionId('reviewer'),
+      candidateId: TicketCandidateId('candidate-1'),
+      specRevision: resolved.specification.revision,
+      content: { kind: 'commit', repository: 'origin', commit: 'b'.repeat(40) },
+      assignmentIds: [assignmentId],
+    })
+    expect(submitted).toMatchObject({ revision: 12, currentCandidateId: 'candidate-1' })
+
+    const completed = await ctx.tickets.complete(session, {
+      ticketId: submitted.id,
+      expectedRevision: 12,
+      actorId: SessionId('reviewer'),
       summary: 'Accepted after review',
     })
-    expect(completed).toMatchObject({ revision: 10, status: 'completed', terminalOutcome: { kind: 'completed' } })
+    expect(completed).toMatchObject({ revision: 13, status: 'completed', terminalOutcome: { kind: 'completed' } })
     await expect(ctx.tickets.block(session, {
       ticketId: completed.id,
-      expectedRevision: 10,
+      expectedRevision: 13,
       actorId: SessionId('reviewer'),
       reason: 'too late',
     })).rejects.toMatchObject({ code: 'TICKET_TERMINAL' })
@@ -192,7 +218,7 @@ it('rejects a proposed-to-completed transition before appending', async () => {
     expectedRevision: 1,
     actorId: session.id,
     summary: 'Premature',
-  })).rejects.toMatchObject({ code: 'TICKET_INVALID_INPUT' })
+  })).rejects.toMatchObject({ code: 'TICKET_ACCEPTANCE' })
   expect(session.snapshotEvents()).toEqual(events)
   expect(project(session)).toMatchObject({ tickets: [ticket] })
 })
@@ -602,44 +628,38 @@ it('keeps an attention limit failure atomic instead of losing the block reason',
 it('reads existing v1 repeated-result history while rejecting new late reports', async () => {
   const { ctx, session } = await harness()
   const worker = SessionId('worker')
-  let ticket = await ctx.tickets.create(session, { subject: 'Existing v1', description: '' })
-  ticket = await ctx.tickets.assign(session, {
-    ticketId: ticket.id,
-    expectedRevision: 1,
-    actorId: session.id,
-    ownerId: worker,
-    subject: 'Work',
-  })
-  ticket = await ctx.tickets.claim(session, {
-    ticketId: ticket.id,
-    expectedRevision: ticket.revision,
-    actorId: worker,
-    assignmentId: ticket.assignments[0]!.id,
-  })
-  ticket = await ctx.tickets.report(session, {
-    ticketId: ticket.id,
-    expectedRevision: ticket.revision,
-    actorId: worker,
-    assignmentId: ticket.assignments[0]!.id,
-    kind: 'result',
-    summary: 'Done',
-  })
-  const report = ticket.reports[0]!
+  const assignmentId = AssignmentId('assignment-1')
+  const reportId = TicketReportId('report-1')
   const repeatedId = TicketReportId('historical-repeat')
+  const at = Date.now()
+  const base = {
+    id: TicketId('v1-ticket'), revision: 1, subject: 'Existing v1', description: '',
+    status: 'executing' as const, coordinatorId: session.id,
+    assignments: [{
+      id: assignmentId, revision: 1, role: 'worker' as const, subject: 'Work', instructions: '',
+      ownerId: worker, status: 'completed' as const, workScopes: [], attempts: 1, latestReportId: reportId,
+    }],
+    reports: [{
+      id: reportId, assignmentId, authorId: worker, kind: 'result' as const,
+      summary: 'Done', evidence: [], nextSteps: [], createdAt: at,
+    }],
+    questions: [], attentions: [], workScopes: [], executionSlots: [], createdAt: at, updatedAt: at,
+  }
+  session.append('ticket/state', { version: 1, sessionId: session.id, ticket: base })
   const historical = {
-    ...ticket, revision: ticket.revision + 1,
-    assignments: ticket.assignments.map(assignment => ({ ...assignment, revision: assignment.revision + 1, latestReportId: repeatedId })),
-    reports: [...ticket.reports, { ...report, id: repeatedId, summary: 'Repeated result' }],
+    ...base, revision: 2, updatedAt: at + 1,
+    assignments: base.assignments.map(assignment => ({ ...assignment, revision: 2, latestReportId: repeatedId })),
+    reports: [...base.reports, { ...base.reports[0]!, id: repeatedId, summary: 'Repeated result', createdAt: at + 1 }],
   }
   session.append('ticket/state', { version: 1, sessionId: session.id, ticket: historical })
   expect(project(session).failure).toBeUndefined()
-  expect(ctx.tickets.get(session, ticket.id)).toEqual(historical)
+  expect(ctx.tickets.get(session, base.id)).toMatchObject(historical)
   const events = session.snapshotEvents()
   await expect(ctx.tickets.report(session, {
-    ticketId: ticket.id,
+    ticketId: base.id,
     expectedRevision: historical.revision,
     actorId: worker,
-    assignmentId: ticket.assignments[0]!.id,
+    assignmentId,
     kind: 'progress',
     summary: 'Late',
   })).rejects.toMatchObject({ code: 'TICKET_ASSIGNMENT_STATE' })

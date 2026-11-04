@@ -28,3 +28,5 @@ export type {
   TicketView,
   WorkScope,
 } from './types.ts'
+
+export type { TicketSpecification, TicketAcceptanceCriterion, TicketParent, TicketContribution, TicketAttemptId, TicketOperationId, TicketCandidateId, TicketCheckId, TicketCriterionId, TicketAttemptSnapshot, TicketAttemptWorkspace, TicketAttemptExecutor, TicketRuntimeReceipt, TicketWorkspaceReceipt, TicketCandidateSnapshot, TicketCandidateContent, TicketCheckSnapshot, MissionId, MissionMilestone, MissionPlanSnapshot, MissionView } from './types.ts'

@@ -122,6 +122,7 @@ function resolveSdkRoute(config: ResolvedConfig, requested: AgentOptions | undef
  * unsupported because their ownership does not cross this process boundary.
  */
 class SdkSubagentProvider implements SubagentProvider {
+  readonly execution = { kind: 'dedicated-process' } as const
   readonly capabilities = SDK_START_CAPABILITIES
   readonly agentRouteDefaults: Readonly<{ provider: string; model: string }>
   // Context contract: an out-of-process SDK child starts fresh — no parent conversation crosses the process boundary.

@@ -36,6 +36,7 @@ export const Config: z<Config> = z.object({
  * route). The selected preset owns persona and tool composition.
  */
 class SpawnInProcessProvider implements SubagentProvider {
+  readonly execution = { kind: 'in-process' } as const
   readonly capabilities: SubagentCapabilities = {
     agentOptions: true,
     agentPreset: true,

@@ -2,6 +2,10 @@
 
 /** Errors returned by Ticket commands, with stable machine-readable codes. */
 export type TicketErrorCode =
+  | 'TICKET_ACCEPTANCE'
+  | 'TICKET_ATTEMPT_STATE'
+  | 'TICKET_STALE_ATTEMPT'
+  | 'TICKET_OPERATION_CONFLICT'
   | 'TICKET_INVALID_INPUT'
   | 'TICKET_NOT_FOUND'
   | 'TICKET_STALE_REVISION'
