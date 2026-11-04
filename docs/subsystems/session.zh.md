@@ -1156,6 +1156,20 @@ create(id?: SessionId, options?: CreateSessionOptions): Session
 prepare(id?: SessionId, options?: PrepareSessionOptions): Session
 
 /**
+ * Whether an opted-in Session has begun withdrawal but has not yet completed its producer joins.
+ * @param session - exact live Session to inspect.
+ * @returns true while a withdrawal completion is pending.
+ */
+isWithdrawing(session: Session): boolean
+
+/**
+ * Return the exact pending withdrawal join for one opted-in Session.
+ * @param session - exact live Session to inspect.
+ * @returns the withdrawal completion, or undefined for an ordinary or already-detached Session.
+ */
+withdrawalOf(session: Session): Promise<void> | undefined
+
+/**
  * Enter a session into the store: install the module-private
  * append publication hooks and add it to the store. Writes remain disabled
  * until {@link announce} completes successfully. Returns the DETACH

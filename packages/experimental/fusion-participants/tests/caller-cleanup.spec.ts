@@ -73,7 +73,7 @@ it('releases caller hooks on failed task cleanup without discarding the owner fa
   await expect(disposal).rejects.toThrow('participant task cleanup failed')
   expect(callerHooks(ctx)).toBe(0)
   expect(task.dispose()).toBe(disposal)
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.list()).toHaveLength(2)
   const logger = vi.spyOn(ctx.logger, 'error')
   await [...ctx.registry.get(Participants)!.fibers][0]!.dispose()
   expect(logger).toHaveBeenCalled()

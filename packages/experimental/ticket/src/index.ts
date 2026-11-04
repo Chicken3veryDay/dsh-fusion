@@ -41,6 +41,9 @@ import type {
 export type * from './types.ts'
 export { ticketProjectionDefinition, ticketSnapshotSchema } from './projection.ts'
 export { AssignmentId, ExecutionSlotId, TicketAttentionId, TicketId, TicketQuestionId, TicketReportId } from './types.ts'
+export { TicketExecutionService } from './execution.ts'
+export type { PrepareTicketExecutionRequest, TicketExecutionHandle, TicketExecutionWorkspace } from './execution.ts'
+export { TicketTools } from './tools.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

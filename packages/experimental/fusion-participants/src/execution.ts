@@ -587,7 +587,9 @@ export class TaskExecutionOwner {
             return undefined
           } catch (error: unknown) { return error instanceof Error ? error : new ExecutionBlockedError('dispatch-fenced', error) }
         })
-        if (!row.dispatched) outcome = 'not-dispatched'
+        if (!row.dispatched) {
+          outcome = this.options.ctx.sessions.isWithdrawing(run.agent.session) ? 'uncertain' : 'not-dispatched'
+        }
       }
     } catch (error: unknown) {
       if (row.dispatched) outcome = 'uncertain'

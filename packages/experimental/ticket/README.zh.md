@@ -26,7 +26,9 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 
 将 `@deepseek-ai/dsh-experimental-ticket` 与持久化 Session 和 `@deepseek-ai/dsh-session-projection` 一起挂载。包会注册 `ctx.tickets` 和 `ticket` Session 投影。它以一个 Session 作为持久化权威，不建立第二个数据库。
 
-服务提供 `create`、`assign`、`claim`、`release`、`report`、`ask`、`attention`、`block`、`handoff`、`complete`、`fail` 和 `cancel`。修改命令携带 `expectedRevision`；过期版本返回 `TICKET_STALE_REVISION`，不会覆盖更新后的状态。Worker 是后续执行适配器提供的直接 Session 身份。此包只记录执行槽位和工作范围声明。
+服务提供 `create`、`assign`、`claim`、`release`、`report`、`ask`、`attention`、`block`、`handoff`、`complete`、`fail` 和 `cancel`。修改命令携带 `expectedRevision`；过期版本返回 `TICKET_STALE_REVISION`，不会覆盖更新后的状态。Worker 是执行适配器提供的直接 Session 身份。
+
+需要让模型协调时挂载 `TicketTools`，它注册 `ticket_*` 命令。需要共享目录、隔离 Worktree 或由 Worker Session 所有的后台任务时，和 Jobs、Worktree 提供者一起挂载 `TicketExecutionService`。执行适配器会认领持久化 Assignment、检查直接 Worker 身份、在该 Session 下启动任务，并在清理时释放仍在运行的 Assignment。
 
 [Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。
 
@@ -39,16 +41,16 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 - [`src/projection.ts`](src/projection.ts) 同步验证并折叠 `ticket/state` 事件，拒绝版本间隙、不可变身份变化、嵌套 id 重复和非法生命周期转换。
 - [`src/index.ts`](src/index.ts) 按 Session 串行化命令，执行权限和数量限制，通过 `ctx.sessions` 写入完整快照并提供 `ctx.tickets` 服务接口。
 
-此包有意独立于 Fusion、Agent Teams、Worktree、Jobs、UI、轮询和通用 Subagent 创建。后续包可以提供适配器，而 Ticket 继续负责分配和交接语义的持久化所有权。
+此包把 Fusion、Agent Teams、来源轮询和通用 Subagent 创建留在 Ticket 权威之外。可选的执行适配器组合现有 Jobs 和 Worktree 提供者，不把分配或交接的持久化语义移入这些包。
 
 <a id="model-experience"></a>
 ## 模型体验
 
-### 仅 Host 协调状态
+### Host 协调状态与可选工具
 
 #### 模型看到的内容
 
-此包不注册模型工具、提示词区段或自动事件触发器。Host-only 的 `ctx.tickets` 服务和仅日志的 `ticket/state` 事件不会进入模型上下文。后续适配器可以把 Ticket 视图或命令结果呈现给模型，模型可见文本由该适配器负责。
+核心服务和 `ticket/state` 事件不会进入模型上下文。`TicketTools` 是可选的，它注册返回 JSON Ticket 视图的直接 Worker 命令，不会创建 Worker，也不会绕过 CAS 版本检查。此包没有自动事件触发器。
 
 #### Token 影响
 
@@ -61,8 +63,8 @@ Ticket 状态变化不会修改请求头或模型提示词前缀。
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与后续工作
 
-- 执行槽位和工作范围是持久化声明。Worktree 创建、进程所有权、Jobs 输出、重叠检查、清理和重启适配器留待后续包实现。
-- 此包没有面向模型的工具或浏览器 UI。消费者决定哪些 Ticket 命令需要人工确认。
+- 执行适配器在内存中负责 Jobs 和 Worktree 生命周期；Ticket 日志保留 Assignment 和槽位状态，具体任务与 checkout 的恢复仍由提供者负责。
+- 此包没有来源接入策略或浏览器监督 UI。消费者决定哪些 Ticket 命令和执行模式需要人工确认。
 - Ticket 快照受部署配置限制，但首版不会压缩旧报告、问题或关注项历史。
 - Ticket 位于一个 Session 日志中。跨 Session 复制和来源接入由适配器负责。
 

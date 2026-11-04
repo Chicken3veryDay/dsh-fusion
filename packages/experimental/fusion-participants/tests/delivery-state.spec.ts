@@ -62,7 +62,8 @@ it.each(['duplicate-intent', 'duplicate-acceptance', 'orphan-instruction', 'inte
     await expect(task.delivery.reconcile()).rejects.toThrow()
     await expect(task.adopt('participant')).rejects.toThrow()
     expect(adapter.requests).toHaveLength(0)
-    await task.dispose()
+    if (invalid === 'interleaving') await expect(task.dispose()).rejects.toThrow()
+    else await task.dispose()
   },
 )
 

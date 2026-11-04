@@ -944,6 +944,27 @@ Types: [ExecutionHostProvider](../../packages/experimental/fusion-participants/R
 
 Source: [`packages/experimental/fusion-participants/src/index.ts`](../../packages/experimental/fusion-participants/src/index.ts)
 
+<a id="ctxticketexecution--ticketexecutionservice"></a>
+
+### `ctx.ticketExecution` — `TicketExecutionService`
+
+Composes durable Ticket assignment state with the existing Jobs and Worktree providers. The adapter owns runtime resources; Ticket remains the durable authority.
+
+```ts cordis-catalog
+/**
+ * Claim an assignment for the exact worker Agent and prepare its declared execution mode.
+ * Shared workspaces keep the caller's current directory; isolated workspaces use the existing
+ * Worktree service and retain its returned checkout metadata for recovery and review.
+ *
+ * @param agent - live worker Agent whose Session owns the assignment.
+ * @param request - Ticket identity, CAS revision, and optional worktree request.
+ * @returns an execution handle with Job and workspace ownership.
+ */
+async prepare(agent: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>
+```
+
+Source: [`packages/experimental/ticket/src/execution.ts`](../../packages/experimental/ticket/src/execution.ts)
+
 <a id="ctxtickets--ticketservice"></a>
 
 ### `ctx.tickets` — `TicketService`

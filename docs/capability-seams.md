@@ -7,6 +7,8 @@ A service can be a core spine service, a swappable capability seam, a bundle/com
 
 ```mermaid
 flowchart LR
+  pkg_experimental_ticket["experimental-ticket"]
+  svc_ticketExecution["ctx.ticketExecution<br/>Ticket execution adapter"]
   pkg_action_cards["action-cards"]
   svc_actionCards["ctx.actionCards<br/>Optional action cards"]
   pkg_creation_recommendations["creation-recommendations"]
@@ -197,7 +199,6 @@ flowchart LR
   svc_fusionConfig["ctx.fusionConfig<br/>Opt-in Fusion configuration"]
   pkg_experimental_fusion_participants["experimental-fusion-participants"]
   svc_fusionParticipants["ctx.fusionParticipants<br/>Retained Fusion participant contexts"]
-  pkg_experimental_ticket["experimental-ticket"]
   svc_tickets["ctx.tickets<br/>Durable Ticket coordination domain"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
@@ -390,6 +391,7 @@ flowchart LR
   pkg_experimental_ptc_runtime_python --> svc_ptcRuntime
   pkg_experimental_speech_to_text --> svc_speechToText
   pkg_experimental_speech_to_text_sensevoice --> svc_speechToText
+  pkg_experimental_ticket --> svc_ticketExecution
   pkg_experimental_ticket --> svc_tickets
   pkg_experimental_translator --> svc_translator
   pkg_experimental_worktree --> svc_worktrees
@@ -668,6 +670,7 @@ flowchart LR
 
 | ctx key | Role | Owner | Implementations | Direct consumers | Companion plugins | Note |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ctx.ticketExecution` | `service` | [`experimental-ticket`](../packages/experimental/ticket) | - | - | - | Claims direct-worker assignments and binds their durable state to shared workspaces, isolated Worktrees, and owned background Jobs. |
 | `ctx.actionCards` | `service` | [`action-cards`](../packages/experimental/action-cards) | - | [`creation-recommendations`](../packages/experimental/creation-recommendations), [`client-ui-action-cards`](../packages/experimental/client-ui-action-cards) | - | Owns the card tool, card state, user actions and status notices; card kinds register their actions and handlers. |
 | `ctx.pluginRecommendations` | `service` | [`plugin-recommendations`](../packages/experimental/plugin-recommendations) | - | [`client-ui-plugin-recommendations`](../packages/experimental/client-ui-plugin-recommendations) | - | Reads the current catalog text of an official plugin card and enables the plugin through the profile plugin manager after a click. |
 | `ctx.headlessStartup` | `core` | [`headless`](../packages/bundle/headless) | - | [`headless`](../packages/bundle/headless) | - | Supplies parsed task and run options to the headless runner and its sandbox-policy configuration. |

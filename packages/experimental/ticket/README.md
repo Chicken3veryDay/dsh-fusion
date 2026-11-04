@@ -26,7 +26,9 @@ Ticket is the durable coordination record for one piece of work shared by a soft
 
 Mount `@deepseek-ai/dsh-experimental-ticket` beside durable Session storage and `@deepseek-ai/dsh-session-projection`. The package registers `ctx.tickets` and the `ticket` Session projection. It accepts a Session as the durable authority and never creates a second database.
 
-The service exposes `create`, `assign`, `claim`, `release`, `report`, `ask`, `attention`, `block`, `handoff`, `complete`, `fail`, and `cancel`. Mutating commands carry `expectedRevision`; a stale value returns `TICKET_STALE_REVISION` and leaves the newer state untouched. Workers are direct Session identities supplied by the later execution adapter. Execution slots and work scopes are declarations only in this package.
+The service exposes `create`, `assign`, `claim`, `release`, `report`, `ask`, `attention`, `block`, `handoff`, `complete`, `fail`, and `cancel`. Mutating commands carry `expectedRevision`; a stale value returns `TICKET_STALE_REVISION` and leaves the newer state untouched. Workers are direct Session identities supplied by the execution adapter.
+
+Mount `TicketTools` when model callers should coordinate through `ticket_*` commands. Mount `TicketExecutionService` with Jobs and Worktree providers when an assignment needs a shared workspace, an isolated worktree, or owned background jobs. The execution adapter claims the durable Assignment, checks the direct worker identity, starts jobs under that worker Session, and releases live assignments during cleanup.
 
 The [Session projection](../../session/session-projection/README.md) is the browser-safe read path. Every `ticket/state` event carries the complete post-change value, so opening a Session or replaying its events produces the same state and rejects malformed or out-of-order revisions.
 
@@ -43,11 +45,11 @@ The service is deliberately independent of Fusion, Agent Teams, Worktree, Jobs, 
 <a id="model-experience"></a>
 ## Model Experience
 
-### Host-only coordination state
+### Host coordination and optional tools
 
 #### What the model sees
 
-This package registers no model tool, prompt section, or automatic event trigger. The Host-only `ctx.tickets` service and log-only `ticket/state` event stay outside model context. A later adapter may render Ticket views or command results to a model; that adapter owns the model-facing text.
+The core service and `ticket/state` event stay outside model context. `TicketTools` is opt-in and registers direct-worker commands that return JSON Ticket views; it does not create workers or bypass the CAS revision check. There is no automatic event trigger.
 
 #### Token effect
 
@@ -59,8 +61,8 @@ Ticket state changes do not alter request headers or model prompt prefixes.
 
 ## Known Limitations and Deferred Work
 
-- Execution slots and work scopes are durable declarations. Worktree creation, process ownership, Jobs output, overlap enforcement, cleanup, and restart adapters are deferred to later packages.
-- The package has no model-facing tool surface or browser UI. Consumers decide which Ticket commands require a human approval step.
+- The execution adapter owns Jobs and Worktree lifetimes in memory; the Ticket log retains the assignment and slot state, while provider-specific job and checkout recovery remains provider-owned.
+- The package has no source admission policy or browser supervision UI. Consumers decide which Ticket commands and execution modes require human approval.
 - Ticket snapshots are bounded by deployment config, but the first version does not compact old reports, questions, or attention history.
 - A Ticket is rooted in one Session log. Cross-Session replication and source-specific ingress remain adapter responsibilities.
 

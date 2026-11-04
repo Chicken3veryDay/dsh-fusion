@@ -249,10 +249,9 @@ it('refuses successful task cleanup after a retained descendant rejects, before 
   await expect(task.dispose()).rejects.toThrow('participant task cleanup failed')
   await expect(task.adopt('participant')).rejects.toThrow('not owned')
   expect(ctx.agents.list()).toHaveLength(0)
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.list()).toHaveLength(2)
   for (const id of [task.roster.rootSessionId, ...task.roster.participants.map(row => row.id)]) {
-    const writer = await ctx.sessionPersistence.open(id, 'write')
-    await writer.close()
+    expect(ctx.sessions.get(id)).toBeDefined()
   }
   const independent = await ctx.fusionParticipants.prepare('single-test')
   const next = await independent.adopt('participant')
@@ -298,7 +297,7 @@ it('refuses re-adoption after nested plugin setup and rollback fail in the Loade
   expect(ctx.sessions.list().length).toBeGreaterThan(0)
   await expect(task.adopt('participant')).rejects.toThrow('cleanup remains unknown')
   await expect(task.dispose()).rejects.toThrow('participant task cleanup failed')
-  expect(ctx.sessions.list()).toHaveLength(0)
+  expect(ctx.sessions.list()).toHaveLength(2)
   expect(adapter.requests).toHaveLength(0)
   expect(claims).not.toHaveBeenCalled()
 })

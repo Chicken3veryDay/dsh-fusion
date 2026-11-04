@@ -209,7 +209,10 @@ for (const which of ['root', 'participant'] as const) {
       await setImmediate()
       expect(closed).toBe(false)
       hold.resume.resolve(undefined)
-      await work; await f.owner.dispose(); await closing
+      await work
+      await f.owner.dispose()
+      await f.disposeResources()
+      await closing
       expect(f.control.bodies).toBe(0)
       expect(f.control.cleanups).toBe(1)
     } finally {
@@ -253,7 +256,10 @@ for (const lifecycle of ['withdrawal', 'restart'] as const) {
       }
       expect(f.owner.snapshot().owner).toBeNull()
       hold.resume.resolve(undefined)
-      await work; await f.owner.dispose(); await stopping
+      await work
+      await f.owner.dispose()
+      await f.disposeResources()
+      await stopping
       expect(f.control.bodies).toBe(0)
       expect(f.control.cleanups).toBe(1)
     } finally { hold.resume.resolve(undefined); await Promise.allSettled([work, stopping]); await f.dispose() }

@@ -3274,6 +3274,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['if a session with `id` already exists, metadata is not a plain lossless-JSON record with valid scalar fields, or `meta.cwd` is a non-absolute path.'],
       },
       {
+        signature: 'isWithdrawing(session: Session): boolean',
+        description: 'Whether an opted-in Session has begun withdrawal but has not yet completed its producer joins.',
+        parameters: [{ name: 'session', description: 'exact live Session to inspect.' }],
+        returns: 'true while a withdrawal completion is pending.',
+      },
+      {
+        signature: 'withdrawalOf(session: Session): Promise<void> | undefined',
+        description: 'Return the exact pending withdrawal join for one opted-in Session.',
+        parameters: [{ name: 'session', description: 'exact live Session to inspect.' }],
+        returns: 'the withdrawal completion, or undefined for an ordinary or already-detached Session.',
+      },
+      {
         signature: 'enter(session: Session): () => void',
         description: 'Enter a session into the store: install the module-private append publication hooks and add it to the store. Writes remain disabled until announce completes successfully. Returns the DETACH disposer (hooks + store removal). Does NOT emit `session/created` — the caller yields this disposer inside its effect and THEN calls announce, so a throwing `session/created` listener rolls the attach back instead of leaking it.\n\nRe-checks the id for a duplicate: `prepare` and `enter` are public cross-package primitives and a caller may interleave arbitrary work (or another create) between them, so a stale prepared session must NOT overwrite a live store entry of the same id — its detach disposer would later delete the REAL session. The create convenience and the agent factory call the two back-to-back so they never trip this, but the public API cannot assume that.',
         parameters: [{ name: 'session', description: 'an unentered session; independent instances become store-owned.' }],
@@ -4074,6 +4086,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List fresh snapshots for exactly one owner.',
         parameters: [{ name: 'owner', description: 'exact owner whose sessions are visible.' }],
         returns: 'owner-visible snapshots in publication order.',
+      },
+    ],
+  },
+  {
+    key: 'ticketExecution',
+    summary: 'Composes durable Ticket assignment state with the existing Jobs and Worktree providers.',
+    description: 'Composes durable Ticket assignment state with the existing Jobs and Worktree providers. The adapter owns runtime resources; Ticket remains the durable authority.',
+    methods: [
+      {
+        signature: 'async prepare(agent: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>',
+        description: 'Claim an assignment for the exact worker Agent and prepare its declared execution mode. Shared workspaces keep the caller\'s current directory; isolated workspaces use the existing Worktree service and retain its returned checkout metadata for recovery and review.',
+        parameters: [{ name: 'agent', description: 'live worker Agent whose Session owns the assignment.' }, { name: 'request', description: 'Ticket identity, CAS revision, and optional worktree request.' }],
+        returns: 'an execution handle with Job and workspace ownership.',
       },
     ],
   },
@@ -8014,6 +8039,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type PrepareSessionOptions = (CreateSessionOptions & {\n    readonly eventState?: undefined;\n}) | RestoredSessionOptions;',
   },
   {
+    name: 'PrepareTicketExecutionRequest',
+    declaration: 'export interface PrepareTicketExecutionRequest {\n    readonly rootSessionId: SessionId;\n    readonly ticketId: TicketId;\n    readonly assignmentId: AssignmentSnapshot[\'id\'];\n    readonly expectedRevision: number;\n    readonly worktreeName?: string;\n    readonly from?: string;\n    readonly signal?: AbortSignal;\n}',
+  },
+  {
     name: 'PresetDefinition',
     declaration: 'export interface PresetDefinition {\n    readonly id: string;\n    readonly name?: string;\n    readonly description?: string;\n    readonly order?: number;\n    readonly plugins: readonly (Omit<EntryOptions, \'id\' | \'disabled\'> & {\n        id?: string;\n        disabled?: EntryOptions[\'disabled\'] | JsExpr;\n    })[];\n}',
   },
@@ -9988,6 +10017,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TicketAttentionStatus',
     declaration: 'export type TicketAttentionStatus = \'open\' | \'acknowledged\' | \'resolved\';',
+  },
+  {
+    name: 'TicketExecutionHandle',
+    declaration: 'export interface TicketExecutionHandle {\n    readonly ticket: TicketView;\n    readonly assignment: AssignmentSnapshot;\n    readonly workspace: TicketExecutionWorkspace;\n    readonly jobs: readonly JobId[];\n    startJob(label: string, run: (job: JobHandle) => JobHooks, signal?: AbortSignal): JobId;\n    dispose(): Promise<void>;\n}',
+  },
+  {
+    name: 'TicketExecutionWorkspace',
+    declaration: 'export interface TicketExecutionWorkspace {\n    readonly mode: ExecutionSlotMode;\n    readonly worktree?: CreatedWorktree;\n}',
   },
   {
     name: 'TicketId',

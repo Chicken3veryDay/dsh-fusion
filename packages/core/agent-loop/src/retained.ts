@@ -9,6 +9,10 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const markerSchema = z.strictObject({ rootSessionId: z.string().min(1) })
 
+function isExternalFlushAware(writer: SessionHandle): writer is SessionHandle & { allowCloseDuringExternalFlush: () => void } {
+  return 'allowCloseDuringExternalFlush' in writer && typeof writer.allowCloseDuringExternalFlush === 'function'
+}
+
 /** Required ownership marker projection; invalid or duplicate markers refuse activation. */
 export const runtimeOwnerProjection = {
   key: 'runtimeOwner',
@@ -150,6 +154,7 @@ export async function retainSession(
         throw new Error(`retained writer release refused: ${released.reason}`,
           'cause' in released ? { cause: released.cause } : undefined)
       }
+      if (writer !== undefined && isExternalFlushAware(writer)) writer.allowCloseDuringExternalFlush()
       await writer?.close()
     } catch (error: unknown) {
       throw new AggregateError([error], 'retained session cleanup failed')
@@ -213,7 +218,9 @@ export async function retainSession(
       session,
       async adopt(): Promise<AgentHandle> {
         signal.throwIfAborted()
-        if (initialization.kind === 'failed' || initialization.kind === 'pending') throw new Error('retained session cleanup remains unknown')
+        if (initialization.kind === 'failed' || initialization.kind === 'pending') {
+          throw new Error('retained session cleanup remains unknown')
+        }
         if (disposed || resident !== undefined || adoption !== undefined) throw new Error('retained session cannot be adopted twice')
         initialization = { kind: 'not-started' }
         adoption = (async () => {

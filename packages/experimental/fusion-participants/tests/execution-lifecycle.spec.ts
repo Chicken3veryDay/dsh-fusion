@@ -14,8 +14,9 @@ it('rolls back a known partial writer acquisition before returning initializatio
     await expect(opening).rejects.toThrow('missing-writer')
     const rootHandle = f.handles.find(row => row.id === f.root.session.id)
     if (rootHandle === undefined) throw new Error('missing root handle')
+    expect(rootHandle).toHaveProperty('hasReservations', true)
+    await f.disposeResources()
     expect(rootHandle).toHaveProperty('hasReservations', false)
-    await rootHandle.close()
     expect(f.projection.stateOf(f.root.session).opened).toBeNull()
   } finally { spy.mockRestore(); await f.dispose() }
 })
@@ -43,6 +44,7 @@ it('publishes the disposal join before reentrant transport cleanup and retains w
     expect(closed).toBe(false)
     hold.resume.resolve(undefined)
     await first
+    await f.disposeResources()
     await closing
   } finally { hold.resume.resolve(undefined); await closing; await f.dispose() }
 })

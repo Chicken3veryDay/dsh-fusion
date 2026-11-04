@@ -15,29 +15,29 @@
   en: 76368b6b1da79c80
   zh: 03a4bf09d960f762
 /deepseek-ai-dsh-experimental-ticket/use-this-package:
-  en: 98cd122eb2ed2ef1
-  zh: 166428a758bb015f
+  en: 842f6e90b6ec3957
+  zh: b52e45f96444431f
 /deepseek-ai-dsh-experimental-ticket/understand-the-implementation:
   en: 4e6cbe4e089710be
-  zh: b4da32d9fd9fa496
+  zh: 644ad48d2d427ee0
 /deepseek-ai-dsh-experimental-ticket/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
-/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state:
-  en: 3895ccef20889166
-  zh: 2a47088541b2c3fb
-/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/what-the-model-sees:
-  en: fca9ea0407944c15
-  zh: b4eb4bf7954a2069
-/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/token-effect:
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-coordination-and-optional-tools:
+  en: b2faf8b1ba9edf7b
+  zh: 7e54c3fa7034aba2
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-coordination-and-optional-tools/what-the-model-sees:
+  en: 875678def7f9efc1
+  zh: 8f6f1b40b320c656
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-coordination-and-optional-tools/token-effect:
   en: 9f2af065b0bc26a7
   zh: e351331023ce8b5b
-/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/kv-cache-effect:
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-coordination-and-optional-tools/kv-cache-effect:
   en: 23703d4eacc2141a
   zh: 61334c15b3612ad9
 /deepseek-ai-dsh-experimental-ticket/known-limitations-and-deferred-work:
-  en: ac301d35656db9f3
-  zh: 27f7bb31f0e9d8de
+  en: 4a81ff217c4445eb
+  zh: 7d2a4515f73153d2
 /deepseek-ai-dsh-experimental-ticket/known-limitations-and-deferred-work/dev-note:
   en: 9d607d7aa7388dd9
   zh: 9dda6cfdd16807ed

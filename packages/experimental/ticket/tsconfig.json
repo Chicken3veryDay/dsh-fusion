@@ -4,14 +4,48 @@
     "rootDir": "src",
     "outDir": "lib/types"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../../vendor/cosmokit" },
-    { "path": "../../../vendor/schemastery" },
-    { "path": "../../../vendor/cordis" },
-    { "path": "../../util/brand" },
-    { "path": "../../core/session" },
-    { "path": "../../session/session-persistence" },
-    { "path": "../../session/session-projection" }
+    {
+      "path": "../../../vendor/cosmokit"
+    },
+    {
+      "path": "../../../vendor/schemastery"
+    },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../session/session-persistence"
+    },
+    {
+      "path": "../../session/session-projection"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../test-support/agent-loop-testkit"
+    },
+    {
+      "path": "../../core/tools"
+    },
+    {
+      "path": "../../workspace/workspace"
+    },
+    {
+      "path": "../../jobs/jobs"
+    },
+    {
+      "path": "../worktree"
+    }
   ]
 }

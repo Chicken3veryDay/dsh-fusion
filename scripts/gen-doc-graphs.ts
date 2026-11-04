@@ -108,6 +108,13 @@ const GROUP_ORDER = [
 
 const SERVICE_ROLES: ServiceRole[] = [
   {
+    key: 'ticketExecution',
+    pkg: 'experimental-ticket',
+    title: 'Ticket execution adapter',
+    mode: 'service',
+    note: 'Claims direct-worker assignments and binds their durable state to shared workspaces, isolated Worktrees, and owned background Jobs.',
+  },
+  {
     key: 'actionCards',
     pkg: 'action-cards',
     title: 'Optional action cards',

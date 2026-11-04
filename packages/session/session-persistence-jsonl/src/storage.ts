@@ -157,6 +157,8 @@ export class JsonlSessionHandle implements SessionHandle {
   private chain: Promise<unknown> = Promise.resolve()
   private closing: Promise<void> | undefined
   private closeJoin: Promise<void> | undefined
+  private externalFlushDepth = 0
+  private externalFlushCloseAllowed = false
   private observedLength = 0
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
@@ -286,6 +288,13 @@ export class JsonlSessionHandle implements SessionHandle {
     })
   }
 
+  /** Permit the owning retained-session cleanup to wait for an external flush callback. */
+  allowCloseDuringExternalFlush(): void { this.externalFlushCloseAllowed = true }
+  /** Mark a SessionPersistence.flush callback as active for reentrant close fencing. */
+  beginExternalFlush(): void { this.externalFlushDepth += 1 }
+  /** Clear the SessionPersistence.flush callback marker. */
+  endExternalFlush(): void { this.externalFlushDepth -= 1 }
+
   /** Current flush generation, captured before a store flush begins. */
   get durabilityGeneration(): number { return this.flushGeneration }
 
@@ -332,6 +341,24 @@ export class JsonlSessionHandle implements SessionHandle {
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing
     if (this.closeRequested) return this.closeJoin ?? Promise.reject(new Error(`session "${this.id}": close request is unresolved`))
+    if (this.externalFlushDepth > 0 && !this.externalFlushCloseAllowed) {
+      // A provider can reenter close from its own flush/append callback. Waiting
+      // for reservations here would wait for the callback that is awaiting close.
+      // Publish ordinary close admission, return a fast refusal to the reentrant
+      // caller, and let the actual close join the pins after the operation unwinds.
+      this.closeRequested = true
+      const result = Promise.withResolvers<void>()
+      this.closeJoin = result.promise
+      void result.promise.catch(() => {})
+      queueMicrotask(() => {
+        void (async () => {
+          await Promise.all([...this.pins].map(pin => pin.done))
+          this.closing = result.promise
+          await this.finishClose()
+        })().then(result.resolve, result.reject)
+      })
+      return Promise.reject(new Error(`session "${this.id}": close reentered during ${this.access} operation`))
+    }
     if (!this.hasReservations && !this.lifetimeUncertain) return this.closeStock()
     this.retainedClose = true
     this.closeRequested = true
@@ -778,7 +805,14 @@ export class JsonlBackendTracker {
           })
           yield removeListener
           // Setup rollback must never close a writer belonging to an earlier pin.
-          yield () => routeArmed && !writer.closeRequestedState ? writer.close() : undefined
+          yield async () => {
+            if (!routeArmed || writer.closeRequestedState) return
+            const withdrawal = ctx.sessions.withdrawalOf(session)
+            if (withdrawal !== undefined) {
+              try { await withdrawal } catch { return }
+            }
+            await writer.close()
+          }
         }.bind(this), 'retained JSONL writer and event route')
         this.retainedRoutes.set(writer, { dispose: newRoute, remove })
       }
@@ -910,6 +944,11 @@ export class JsonlBackendTracker {
         const errors: unknown[] = []
         for (const handle of [...openHandles]) {
           try {
+            const session = bindings.get(handle as JsonlSessionHandle)
+            const withdrawal = session === undefined ? undefined : ctx.sessions.withdrawalOf(session)
+            if (withdrawal !== undefined) {
+              try { await withdrawal } catch { continue }
+            }
             await handle.close()
           } catch (error: unknown) {
             errors.push(error)
@@ -941,7 +980,12 @@ export class JsonlBackendTracker {
         if (writer === null || writer === undefined) return undefined
         return (async () => {
           await writer.drainLive()
-          await writer.flush()
+          writer.beginExternalFlush()
+          try {
+            await writer.flush()
+          } finally {
+            writer.endExternalFlush()
+          }
           if (this.active && writer.durabilityOpen && writers.get(session.id) === writer) {
             flushReceipts.set(writer, (flushReceipts.get(writer) ?? 0) + 1)
           }

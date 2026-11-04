@@ -9,6 +9,8 @@
 
 ```mermaid
 flowchart LR
+  pkg_experimental_ticket["experimental-ticket"]
+  svc_ticketExecution["ctx.ticketExecution<br/>Ticket execution adapter"]
   pkg_action_cards["action-cards"]
   svc_actionCards["ctx.actionCards<br/>Optional action cards"]
   pkg_creation_recommendations["creation-recommendations"]
@@ -199,7 +201,6 @@ flowchart LR
   svc_fusionConfig["ctx.fusionConfig<br/>Opt-in Fusion configuration"]
   pkg_experimental_fusion_participants["experimental-fusion-participants"]
   svc_fusionParticipants["ctx.fusionParticipants<br/>Retained Fusion participant contexts"]
-  pkg_experimental_ticket["experimental-ticket"]
   svc_tickets["ctx.tickets<br/>Durable Ticket coordination domain"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
@@ -392,6 +393,7 @@ flowchart LR
   pkg_experimental_ptc_runtime_python --> svc_ptcRuntime
   pkg_experimental_speech_to_text --> svc_speechToText
   pkg_experimental_speech_to_text_sensevoice --> svc_speechToText
+  pkg_experimental_ticket --> svc_ticketExecution
   pkg_experimental_ticket --> svc_tickets
   pkg_experimental_translator --> svc_translator
   pkg_experimental_worktree --> svc_worktrees
@@ -670,6 +672,7 @@ flowchart LR
 
 | ctx 键 | 角色 | 所属包 | 实现 | 直接消费方 | 配套插件 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ctx.ticketExecution` | `service` | [`experimental-ticket`](../packages/experimental/ticket) | - | - | - | 负责认领直接 Worker 分配，并将持久状态绑定到共享工作区、隔离 Worktree 和自有后台 Jobs。 |
 | `ctx.actionCards` | `service` | [`action-cards`](../packages/experimental/action-cards) | - | [`creation-recommendations`](../packages/experimental/creation-recommendations), [`client-ui-action-cards`](../packages/experimental/client-ui-action-cards) | - | 负责卡片工具、卡片状态、用户操作和状态通知；各卡片种类注册自己的动作和处理器。 |
 | `ctx.pluginRecommendations` | `service` | [`plugin-recommendations`](../packages/experimental/plugin-recommendations) | - | [`client-ui-plugin-recommendations`](../packages/experimental/client-ui-plugin-recommendations) | - | 读取官方插件卡片的当前目录文本，并在用户点击后通过配置插件管理器启用该插件。 |
 | `ctx.headlessStartup` | `core` | [`headless`](../packages/bundle/headless) | - | [`headless`](../packages/bundle/headless) | - | 将解析后的任务和运行选项提供给无界面运行器及其 sandbox-policy 配置。 |

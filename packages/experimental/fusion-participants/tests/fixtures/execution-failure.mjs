@@ -34,7 +34,7 @@ const adapter = {
   async prepare() {
     return {
       async run(fence) {
-        if (mode === 'detach') detaches.get(child.session)()
+        if (mode === 'detach') void detaches.get(child.session)().catch(() => {})
         if (fence() !== undefined) return 'failed'
         bodies++
         if (mode === 'crash-effect') {
