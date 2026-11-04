@@ -26,11 +26,13 @@ Ticket is the durable coordination record for one piece of work shared by a soft
 
 Mount `@deepseek-ai/dsh-experimental-ticket` beside durable Session storage and `@deepseek-ai/dsh-session-projection`. The package registers `ctx.tickets` and the `ticket` Session projection. It accepts a Session as the durable authority and never creates a second database.
 
-The service exposes `create`, `assign`, `claim`, `release`, `report`, `ask`, `attention`, `block`, `handoff`, `complete`, `fail`, and `cancel`. Mutating commands carry `expectedRevision`; a stale value returns `TICKET_STALE_REVISION` and leaves the newer state untouched. Workers are direct Session identities supplied by the execution adapter.
+The service exposes `create`, `assign`, `claim`, `release`, `report`, `ask`, `answer`, `closeQuestion`, `attention`, `acknowledgeAttention`, `resolveAttention`, `block`, `handoff`, `complete`, `fail`, and `cancel`. Mutating commands carry `expectedRevision`; a stale value returns `TICKET_STALE_REVISION` and leaves the newer state untouched. Workers are direct Session identities supplied by the execution adapter. The current coordinator answers open questions and acknowledges or resolves attention; question authors may also close their own open or answered questions. Acknowledgement retains the blocker. Worker progress, claims, and release preserve unresolved questions and attention; resolving the last blocker recomputes readiness from assignments. Finished or released assignments reject reports.
 
 Mount `TicketTools` when model callers should coordinate through `ticket_*` commands. Mount `TicketExecutionService` with Jobs and Worktree providers when an assignment needs a shared workspace, an isolated worktree, or owned background jobs. The execution adapter claims the durable Assignment, checks the direct worker identity, starts jobs under that worker Session, and releases live assignments during cleanup.
 
-The [Session projection](../../session/session-projection/README.md) is the browser-safe read path. Every `ticket/state` event carries the complete post-change value, so opening a Session or replaying its events produces the same state and rejects malformed or out-of-order revisions.
+The [Session projection](../../session/session-projection/README.md) is the browser-safe read path. Every `ticket/state` event carries the complete post-change value, so opening a Session or replaying its events produces the same state and rejects malformed or out-of-order revisions. Command admission and replay share semantic validation; invalid commands append nothing. A proposed Ticket cannot complete directly. Persistence flush failures may occur after append and require reading the current revision before retrying.
+
+Work scopes normalize slash-separated relative paths, collapse `.` and `..`, and reject workspace escapes, absolute paths, drive prefixes, and backslashes. An assignment scope must stay within a declared Ticket scope without escalating read access to write access; a Ticket with no declared scopes leaves assignment declarations unrestricted. Scope declarations and `exclusive` coordinate worker ownership; they do not confine filesystem access or enforce exclusion through a lock.
 
 ## Understand the implementation
 
@@ -49,7 +51,7 @@ The service is deliberately independent of Fusion, Agent Teams, Worktree, Jobs, 
 
 #### What the model sees
 
-The core service and `ticket/state` event stay outside model context. `TicketTools` is opt-in and registers direct-worker commands that return JSON Ticket views; it does not create workers or bypass the CAS revision check. There is no automatic event trigger.
+The core service and `ticket/state` event stay outside model context. `TicketTools` is opt-in and registers direct-worker commands that return JSON Ticket views; it does not create workers or bypass the CAS revision check. Creation is restricted to the caller’s Session and coordinator identity; use handoff to transfer coordination. Cross-Session reads expose only Tickets where the caller coordinates or owns an assignment. There is no automatic event trigger.
 
 #### Token effect
 

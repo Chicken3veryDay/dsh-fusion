@@ -78,7 +78,7 @@ export type TicketAttentionKind = 'review' | 'question' | 'blocked' | 'decision'
 /** Attention lifecycle. */
 export type TicketAttentionStatus = 'open' | 'acknowledged' | 'resolved'
 
-/** One declared workspace path and the access it permits. */
+/** Declared relative workspace access; exclusivity coordinates workers and does not confine filesystem access. */
 export interface WorkScope {
   readonly path: string
   readonly access: 'read' | 'write'
@@ -262,6 +262,31 @@ export interface AskTicketQuestionRequest {
   readonly assignmentId?: AssignmentId
   readonly actorId: SessionId
   readonly question: string
+}
+
+/** Coordinator response to an open durable question. */
+export interface AnswerTicketQuestionRequest {
+  readonly ticketId: TicketId
+  readonly expectedRevision: number
+  readonly actorId: SessionId
+  readonly questionId: TicketQuestionId
+  readonly answer: string
+}
+
+/** Author or coordinator closure of an open or answered question. */
+export interface CloseTicketQuestionRequest {
+  readonly ticketId: TicketId
+  readonly expectedRevision: number
+  readonly actorId: SessionId
+  readonly questionId: TicketQuestionId
+}
+
+/** Coordinator acknowledgement or resolution of one attention item. */
+export interface UpdateTicketAttentionRequest {
+  readonly ticketId: TicketId
+  readonly expectedRevision: number
+  readonly actorId: SessionId
+  readonly attentionId: TicketAttentionId
 }
 
 /** Input for human or coordinator attention. */

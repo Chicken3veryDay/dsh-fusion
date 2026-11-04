@@ -171,13 +171,13 @@ export function isTicketStatusTransitionAllowed(previous: TicketStatus, next: Ti
   if (previous === next) return true
   const allowed: Record<TicketStatus, readonly TicketStatus[]> = {
     proposed: ['ready', 'coordinating', 'executing', 'waiting', 'blocked', 'cancelled'],
-    ready: ['coordinating', 'executing', 'waiting', 'blocked', 'cancelled'],
+    ready: ['coordinating', 'executing', 'integrating', 'waiting', 'blocked', 'cancelled'],
     coordinating: ['ready', 'executing', 'integrating', 'reviewing', 'waiting', 'blocked', 'cancelled'],
     executing: ['ready', 'integrating', 'reviewing', 'waiting', 'blocked', 'completed', 'failed', 'cancelled'],
-    integrating: ['reviewing', 'waiting', 'blocked', 'completed', 'failed', 'cancelled'],
+    integrating: ['ready', 'executing', 'reviewing', 'waiting', 'blocked', 'completed', 'failed', 'cancelled'],
     reviewing: ['executing', 'waiting', 'completed', 'failed', 'blocked', 'cancelled'],
-    waiting: ['ready', 'coordinating', 'executing', 'blocked', 'completed', 'failed', 'cancelled'],
-    blocked: ['ready', 'coordinating', 'executing', 'waiting', 'completed', 'failed', 'cancelled'],
+    waiting: ['ready', 'coordinating', 'executing', 'integrating', 'blocked', 'completed', 'failed', 'cancelled'],
+    blocked: ['ready', 'coordinating', 'executing', 'integrating', 'waiting', 'completed', 'failed', 'cancelled'],
     completed: [],
     failed: [],
     cancelled: [],
@@ -200,10 +200,13 @@ function assertUnique(ids: readonly string[], label: string): void {
   if (new Set(ids).size !== ids.length) throw new Error(`${label} ids are duplicated`)
 }
 
-function applyCurrentEvent(state: TicketProjectionState, event: TicketSessionEvent): TicketProjectionState {
-  const ticket = event.data.ticket
-  const index = state.tickets.findIndex(candidate => candidate.id === ticket.id)
-  const previous = index < 0 ? undefined : state.tickets[index]
+/** Validate one candidate using the same rules as durable replay.
+ * @param previous - Last committed value, or undefined for creation.
+ * @param ticket - Candidate complete value.
+ * @returns Nothing; throws before admission when schema or lifecycle rules fail.
+ */
+export function validateTicketChange(previous: TicketSnapshot | undefined, ticket: TicketSnapshot): void {
+  ticketSnapshotSchema.parse(ticket)
   if (previous === undefined) {
     if (ticket.revision !== 1) throw new Error(`ticket "${ticket.id}" must begin at revision 1`)
   } else {
@@ -220,6 +223,12 @@ function applyCurrentEvent(state: TicketProjectionState, event: TicketSessionEve
   assertUnique(ticket.reports.map(report => report.id), `ticket "${ticket.id}" report`)
   assertUnique(ticket.questions.map(question => question.id), `ticket "${ticket.id}" question`)
   assertUnique(ticket.attentions.map(attention => attention.id), `ticket "${ticket.id}" attention`)
+}
+
+function applyCurrentEvent(state: TicketProjectionState, event: TicketSessionEvent): TicketProjectionState {
+  const ticket = event.data.ticket
+  const index = state.tickets.findIndex(candidate => candidate.id === ticket.id)
+  validateTicketChange(index < 0 ? undefined : state.tickets[index], ticket)
   return { ...state, tickets: replaceTicket(state.tickets, index, ticket) }
 }
 
@@ -255,7 +264,7 @@ export function ticketProjectionView(state: TicketProjectionState): TicketProjec
 /** Session projection for the durable Ticket domain. */
 export const ticketProjectionDefinition = {
   key: 'ticket',
-  stateVersion: 1,
+  stateVersion: 2,
   stateSchema: z.object({
     sessionId: sessionIdSchema,
     tickets: z.array(ticketSnapshotSchema),

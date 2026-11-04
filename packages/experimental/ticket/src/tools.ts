@@ -7,9 +7,13 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { InferValue } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { TicketError } from './errors.ts'
+import type { TicketSnapshot } from './types.ts'
 import {
   AssignmentId,
   TicketId,
+  TicketQuestionId,
+  TicketAttentionId,
   type WorkScope,
 } from './types.ts'
 
@@ -27,6 +31,10 @@ function sessionOf(ctx: Context, id: string | undefined, agent: Agent): import('
   const session = ctx.sessions.get(SessionId(id ?? agent.id))
   if (session === undefined) throw new Error(`Ticket Session "${id ?? agent.id}" is not live`)
   return session
+}
+
+function canRead(ticket: TicketSnapshot, actorId: SessionId): boolean {
+  return ticket.coordinatorId === actorId || ticket.assignments.some(assignment => assignment.ownerId === actorId)
 }
 
 const JSON_OUTPUT_SCHEMA = { type: 'json' } as const
@@ -88,7 +96,10 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_list')
-        return Promise.resolve(asJson({ tickets: this.ctx.tickets.list(sessionOf(this.ctx, args.root_session_id, agent)) }))
+        const session = sessionOf(this.ctx, args.root_session_id, agent)
+        const tickets = this.ctx.tickets.list(session).filter(ticket => session.id === agent.id || canRead(ticket, agent.id))
+        if (session.id !== agent.id && tickets.length === 0) throw new TicketError('caller has no Ticket in this Session', 'TICKET_AUTHORITY')
+        return Promise.resolve(asJson({ tickets }))
       },
     }))
     register(defineTool({
@@ -101,7 +112,10 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_get')
-        return Promise.resolve(asJson(this.ctx.tickets.get(sessionOf(this.ctx, args.root_session_id, agent), TicketId(args.ticket_id))))
+        const session = sessionOf(this.ctx, args.root_session_id, agent)
+        const ticket = this.ctx.tickets.get(session, TicketId(args.ticket_id))
+        if (session.id !== agent.id && !canRead(ticket, agent.id)) throw new TicketError('caller is not a Ticket participant', 'TICKET_AUTHORITY')
+        return Promise.resolve(asJson(ticket))
       },
     }))
     register(defineTool({
@@ -111,8 +125,8 @@ export class TicketTools extends Service {
       parameters: {
         subject: { type: 'string', required: true, description: 'Concise work subject.' },
         description: { type: 'string', required: true, description: 'Acceptance criteria and context.' },
-        root_session_id: { type: 'string', description: 'Session that owns the Ticket log. Defaults to the calling Agent Session.' },
-        coordinator_id: { type: 'string', description: 'Soft coordinator Session id. Defaults to the caller.' },
+        root_session_id: { type: 'string', description: 'Must be the calling Agent Session when supplied.' },
+        coordinator_id: { type: 'string', description: 'Must be the caller when supplied. Use ticket_handoff to transfer authority.' },
         work_scopes: {
           type: 'array',
           items: { type: 'object', additionalProperties: true },
@@ -123,6 +137,9 @@ export class TicketTools extends Service {
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_create')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
+        if (session.id !== agent.id || (args.coordinator_id !== undefined && args.coordinator_id !== agent.id)) {
+          throw new TicketError('create Tickets in the calling Session with the caller as coordinator; use handoff to transfer authority', 'TICKET_AUTHORITY')
+        }
         return asJson(await this.ctx.tickets.create(session, {
           subject: args.subject,
           description: args.description,
@@ -248,6 +265,65 @@ export class TicketTools extends Service {
         }))
       },
     }))
+    register(defineTool({
+      name: 'ticket_answer',
+      description: 'Answer an open Ticket question as its current coordinator.',
+      parameters: {
+        root_session_id: { type: 'string', required: true },
+        ticket_id: { type: 'string', required: true },
+        question_id: { type: 'string', required: true },
+        expected_revision: { type: 'integer', required: true },
+        answer: { type: 'string', required: true },
+      },
+      output: jsonOutput(),
+      execute: async (args, exec) => {
+        const agent = agentOf(exec.agent, 'ticket_answer')
+        return asJson(await this.ctx.tickets.answer(sessionOf(this.ctx, args.root_session_id, agent), {
+          ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
+          expectedRevision: args.expected_revision, actorId: agent.id, answer: args.answer,
+        }))
+      },
+    }))
+    register(defineTool({
+      name: 'ticket_close_question',
+      description: 'Close an open or answered Ticket question as its author or current coordinator.',
+      parameters: {
+        root_session_id: { type: 'string', required: true },
+        ticket_id: { type: 'string', required: true },
+        question_id: { type: 'string', required: true },
+        expected_revision: { type: 'integer', required: true },
+      },
+      output: jsonOutput(),
+      execute: async (args, exec) => {
+        const agent = agentOf(exec.agent, 'ticket_close_question')
+        return asJson(await this.ctx.tickets.closeQuestion(sessionOf(this.ctx, args.root_session_id, agent), {
+          ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
+          expectedRevision: args.expected_revision, actorId: agent.id,
+        }))
+      },
+    }))
+    for (const [toolName, action] of [['ticket_acknowledge_attention', 'acknowledgeAttention'], ['ticket_resolve_attention', 'resolveAttention']] as const) {
+      register(defineTool({
+        name: toolName,
+        description: action === 'acknowledgeAttention'
+          ? 'Acknowledge an open Ticket attention item as coordinator; it remains unresolved.'
+          : 'Resolve a Ticket attention item as coordinator while preserving other blockers.',
+        parameters: {
+          root_session_id: { type: 'string', required: true },
+          ticket_id: { type: 'string', required: true },
+          attention_id: { type: 'string', required: true },
+          expected_revision: { type: 'integer', required: true },
+        },
+        output: jsonOutput(),
+        execute: async (args, exec) => {
+          const agent = agentOf(exec.agent, toolName)
+          return asJson(await this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), attentionId: TicketAttentionId(args.attention_id),
+            expectedRevision: args.expected_revision, actorId: agent.id,
+          }))
+        },
+      }))
+    }
     register(defineTool({
       name: 'ticket_attention',
       description: 'Raise a human-visible review, question, blocked, or decision item for a Ticket.',

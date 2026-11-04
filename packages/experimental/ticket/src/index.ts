@@ -5,8 +5,9 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
-import { ticketProjectionDefinition, ticketSnapshotSchema } from './projection.ts'
+import { ticketProjectionDefinition, validateTicketChange } from './projection.ts'
 import type { TicketProjectionState } from './projection.ts'
+import { TicketError } from './errors.ts'
 import {
   AssignmentId,
   ExecutionSlotId,
@@ -16,6 +17,8 @@ import {
   TicketReportId,
 } from './types.ts'
 import type {
+  AnswerTicketQuestionRequest,
+  CloseTicketQuestionRequest,
   AskTicketQuestionRequest,
   AssignmentSnapshot,
   AssignTicketRequest,
@@ -35,9 +38,12 @@ import type {
   TicketSnapshot,
   TicketStatus,
   TicketView,
+  UpdateTicketAttentionRequest,
   WorkScope,
 } from './types.ts'
 
+export { TicketError } from './errors.ts'
+export type { TicketErrorCode } from './errors.ts'
 export type * from './types.ts'
 export { ticketProjectionDefinition, ticketSnapshotSchema } from './projection.ts'
 export { AssignmentId, ExecutionSlotId, TicketAttentionId, TicketId, TicketQuestionId, TicketReportId } from './types.ts'
@@ -58,27 +64,6 @@ const DEFAULT_MAX_QUESTIONS = 128
 const DEFAULT_MAX_ATTENTIONS = 128
 const DEFAULT_MAX_WORK_SCOPES = 64
 const DEFAULT_MAX_SNAPSHOT_BYTES = 1_048_576
-
-/** Errors returned by Ticket commands, with stable machine-readable codes. */
-export type TicketErrorCode =
-  | 'TICKET_INVALID_INPUT'
-  | 'TICKET_NOT_FOUND'
-  | 'TICKET_STALE_REVISION'
-  | 'TICKET_AUTHORITY'
-  | 'TICKET_ASSIGNMENT_NOT_FOUND'
-  | 'TICKET_ASSIGNMENT_STATE'
-  | 'TICKET_TERMINAL'
-  | 'TICKET_RECOVERY_FAILED'
-  | 'TICKET_LIMIT'
-  | 'TICKET_SNAPSHOT_TOO_LARGE'
-
-/** Structured failure from a Ticket command or projection recovery. */
-export class TicketError extends Error {
-  constructor(message: string, readonly code: TicketErrorCode, options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'TicketError'
-  }
-}
 
 function positiveLimit(name: string, value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -104,13 +89,30 @@ function textBytes(value: string): number {
 
 function cloneScopes(scopes: readonly WorkScope[] | undefined, limit: number): WorkScope[] {
   const result = boundedList('workScopes', scopes, limit)
-  for (const scope of result) {
-    nonEmpty('work scope path', scope.path)
+  return result.map(scope => ({ ...scope, path: normalizeScopePath(scope.path) }))
+}
+
+function normalizeScopePath(path: string): string {
+  nonEmpty('work scope path', path)
+  if (path.startsWith('/') || path.includes('\\') || /^[A-Za-z]:/.test(path) || path.includes('\0')) {
+    throw new TicketError('work scope path must be a relative workspace path', 'TICKET_INVALID_INPUT')
   }
-  return result.map(scope => ({ ...scope }))
+  const segments: string[] = []
+  for (const segment of path.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length === 0) throw new TicketError('work scope path escapes the workspace', 'TICKET_INVALID_INPUT')
+      segments.pop()
+    } else segments.push(segment)
+  }
+  return segments.join('/') || '.'
 }
 
 function nextStatusForAssignment(ticket: TicketSnapshot): TicketStatus {
+  if (ticket.attentions.some(item => item.kind === 'blocked' && item.status !== 'resolved')
+    || ticket.assignments.some(assignment => assignment.status === 'failed' || assignment.status === 'blocked')) return 'blocked'
+  if (ticket.questions.some(question => question.status === 'open')
+    || ticket.attentions.some(item => item.status !== 'resolved')) return 'waiting'
   const live = ticket.assignments.some(assignment => assignment.status === 'assigned' || assignment.status === 'claimed' || assignment.status === 'running')
   const complete = ticket.assignments.length > 0 && ticket.assignments.every(assignment => assignment.status === 'completed' || assignment.status === 'cancelled')
   if (complete) return 'integrating'
@@ -213,7 +215,6 @@ export class TicketService extends Service {
         createdAt: now,
         updatedAt: now,
       }
-      ticketSnapshotSchema.parse(ticket)
       await this.commit(session, ticket)
       return ticket
     })
@@ -285,7 +286,8 @@ export class TicketService extends Service {
       const executionSlots = ticket.executionSlots.map(candidate => candidate.id === slot?.id
         ? { ...candidate, status: 'running' as const, holderId: request.actorId }
         : candidate)
-      return { ...ticket, status: 'executing', assignments, executionSlots }
+      const next = { ...ticket, assignments, executionSlots }
+      return { ...next, status: nextStatusForAssignment(next) }
     })
   }
 
@@ -318,6 +320,7 @@ export class TicketService extends Service {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
       if (assignment.ownerId !== request.actorId && ticket.coordinatorId !== request.actorId) throw new TicketError('only the assigned worker or coordinator may report', 'TICKET_AUTHORITY')
+      if (!['assigned', 'claimed', 'running', 'blocked'].includes(assignment.status)) throw new TicketError(`Assignment "${assignment.id}" cannot report from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
       if (ticket.reports.length >= this.config.maxReports) throw new TicketError('report limit exhausted', 'TICKET_LIMIT')
       const summary = nonEmpty('report summary', request.summary)
       const id = TicketReportId(`report-${ticket.id}-${String(ticket.reports.length + 1)}`)
@@ -340,11 +343,11 @@ export class TicketService extends Service {
       }
       const assignments = ticket.assignments.map(candidate => candidate.id === assignment.id ? nextAssignment : candidate)
       const next = { ...ticket, assignments, reports: [...ticket.reports, report] }
-      return { ...next, status: request.kind === 'failure' ? 'blocked' : nextStatusForAssignment(next) }
+      return { ...next, status: nextStatusForAssignment(next) }
     })
   }
 
-  /** Ask a durable question and move the Ticket into waiting.
+  /** Ask a durable question; blocked Tickets remain blocked, otherwise they wait.
    * @param session - Session whose log owns the Ticket.
    * @param request - worker question request.
    * @returns the committed Ticket view.
@@ -361,11 +364,63 @@ export class TicketService extends Service {
         status: 'open',
         createdAt: Date.now(),
       }
-      return { ...ticket, status: 'waiting', questions: [...ticket.questions, question] }
+      const next = { ...ticket, questions: [...ticket.questions, question] }
+      return { ...next, status: nextStatusForAssignment(next) }
     })
   }
 
-  /** Add one human-visible attention item and move the Ticket into waiting.
+  /** Answer an open question under coordinator authority; other blockers remain active.
+   * @param session - Session owning the Ticket.
+   * @param request - Question identity, answer, actor, and CAS revision.
+   * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+   */
+  async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertCoordinator(ticket, request.actorId)
+      const question = this.question(ticket, request.questionId)
+      if (question.status !== 'open') throw new TicketError('only an open question may be answered', 'TICKET_INVALID_INPUT')
+      const answer = nonEmpty('answer', request.answer)
+      const next = { ...ticket, questions: ticket.questions.map(item => item.id === question.id
+        ? { ...item, status: 'answered' as const, answer, answeredBy: request.actorId } : item) }
+      return { ...next, status: nextStatusForAssignment(next) }
+    })
+  }
+
+  /** Close an open or answered question as its author or current coordinator.
+   * @param session - Session owning the Ticket.
+   * @param request - Question identity, actor, and CAS revision.
+   * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+   */
+  async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      const question = this.question(ticket, request.questionId)
+      if (request.actorId !== question.authorId) this.assertCoordinator(ticket, request.actorId)
+      if (question.status === 'closed') throw new TicketError('question is already closed', 'TICKET_INVALID_INPUT')
+      const next = { ...ticket, questions: ticket.questions.map(item => item.id === question.id
+        ? { ...item, status: 'closed' as const } : item) }
+      return { ...next, status: nextStatusForAssignment(next) }
+    })
+  }
+
+  /** Acknowledge an open attention item as coordinator; acknowledgement retains its blocker.
+   * @param session - Session owning the Ticket.
+   * @param request - Attention identity, actor, and CAS revision.
+   * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+   */
+  async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView> {
+    return await this.updateAttention(session, request, 'acknowledged')
+  }
+
+  /** Resolve an open or acknowledged attention item as coordinator, preserving other blockers.
+   * @param session - Session owning the Ticket.
+   * @param request - Attention identity, actor, and CAS revision.
+   * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+   */
+  async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView> {
+    return await this.updateAttention(session, request, 'resolved')
+  }
+
+  /** Add a human-visible attention item; blocked attention keeps the Ticket blocked.
    * @param session - Session whose log owns the Ticket.
    * @param request - attention request.
    * @returns the committed Ticket view.
@@ -382,7 +437,8 @@ export class TicketService extends Service {
         status: 'open',
         createdAt: Date.now(),
       }
-      return { ...ticket, status: 'waiting', attentions: [...ticket.attentions, attention] }
+      const next = { ...ticket, attentions: [...ticket.attentions, attention] }
+      return { ...next, status: nextStatusForAssignment(next) }
     })
   }
 
@@ -394,15 +450,14 @@ export class TicketService extends Service {
   async block(session: Session, request: BlockTicketRequest): Promise<TicketView> {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       this.assertParticipant(ticket, request.actorId)
-      return { ...ticket, status: 'blocked', attentions: ticket.attentions.length >= this.config.maxAttentions
-        ? ticket.attentions
-        : [...ticket.attentions, {
-          id: TicketAttentionId(`attention-${ticket.id}-${String(ticket.attentions.length + 1)}`),
-          kind: 'blocked' as const,
-          message: nonEmpty('block reason', request.reason),
-          status: 'open' as const,
-          createdAt: Date.now(),
-        }] }
+      if (ticket.attentions.length >= this.config.maxAttentions) throw new TicketError('attention limit exhausted', 'TICKET_LIMIT')
+      return { ...ticket, status: 'blocked', attentions: [...ticket.attentions, {
+        id: TicketAttentionId(`attention-${ticket.id}-${String(ticket.attentions.length + 1)}`),
+        kind: 'blocked' as const,
+        message: nonEmpty('block reason', request.reason),
+        status: 'open' as const,
+        createdAt: Date.now(),
+      }] }
     })
   }
 
@@ -463,6 +518,26 @@ export class TicketService extends Service {
   /** Alias for {@link handoff} used by adapters. */
   readonly handoffCoordinator: TicketService['handoff'] = this.handoff.bind(this)
 
+  private question(ticket: TicketSnapshot, id: TicketQuestionId): TicketQuestionSnapshot {
+    const question = ticket.questions.find(item => item.id === id)
+    if (question === undefined) throw new TicketError(`unknown question "${id}"`, 'TICKET_INVALID_INPUT')
+    return question
+  }
+
+  private async updateAttention(session: Session, request: UpdateTicketAttentionRequest, status: 'acknowledged' | 'resolved'): Promise<TicketView> {
+    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+      this.assertCoordinator(ticket, request.actorId)
+      const attention = ticket.attentions.find(item => item.id === request.attentionId)
+      if (attention === undefined) throw new TicketError(`unknown attention "${request.attentionId}"`, 'TICKET_INVALID_INPUT')
+      if (attention.status === 'resolved' || (status === 'acknowledged' && attention.status !== 'open')) {
+        throw new TicketError('attention item cannot make this status change', 'TICKET_INVALID_INPUT')
+      }
+      const next = { ...ticket, attentions: ticket.attentions.map(item => item.id === attention.id
+        ? { ...item, status, ...status === 'resolved' ? { resolvedAt: Date.now() } : {} } : item) }
+      return { ...next, status: nextStatusForAssignment(next) }
+    })
+  }
+
   private async end(session: Session, request: EndTicketRequest, status: Extract<TicketStatus, 'completed' | 'failed' | 'cancelled'>): Promise<TicketView> {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
@@ -503,7 +578,6 @@ export class TicketService extends Service {
         createdAt: ticket.createdAt,
         updatedAt: Date.now(),
       }
-      ticketSnapshotSchema.parse(next)
       await this.commit(session, next)
       return next
     })
@@ -517,6 +591,12 @@ export class TicketService extends Service {
   }
 
   private async commit(session: Session, ticket: TicketSnapshot): Promise<void> {
+    const previous = this.state(session).tickets.find(candidate => candidate.id === ticket.id)
+    try {
+      validateTicketChange(previous, ticket)
+    } catch (error) {
+      throw new TicketError('Ticket candidate violates schema or lifecycle rules', 'TICKET_INVALID_INPUT', { cause: error })
+    }
     const bytes = textBytes(JSON.stringify(ticket))
     if (bytes > this.config.maxSnapshotBytes) throw new TicketError(`Ticket snapshot exceeds ${String(this.config.maxSnapshotBytes)} bytes`, 'TICKET_SNAPSHOT_TOO_LARGE')
     session.append('ticket/state', { version: 1, sessionId: session.id, ticket })
@@ -534,9 +614,10 @@ export class TicketService extends Service {
   }
 
   private assertParticipant(ticket: TicketSnapshot, actorId: SessionId, assignmentId?: AssignmentId): void {
+    if (assignmentId !== undefined) this.assignment(ticket, assignmentId)
     if (ticket.coordinatorId === actorId) return
-    if (assignmentId !== undefined
-      && ticket.assignments.some(assignment => assignment.id === assignmentId && assignment.ownerId === actorId)) return
+    if (ticket.assignments.some(assignment =>
+      (assignmentId === undefined || assignment.id === assignmentId) && assignment.ownerId === actorId)) return
     throw new TicketError('caller is not the coordinator or assigned worker', 'TICKET_AUTHORITY')
   }
 
@@ -544,7 +625,11 @@ export class TicketService extends Service {
     const scopes = cloneScopes(requested, this.config.maxWorkScopes)
     if (ticket.workScopes.length === 0) return scopes
     for (const scope of scopes) {
-      const covered = ticket.workScopes.some(parent => scope.path === parent.path || scope.path.startsWith(parent.path.endsWith('/') ? parent.path : `${parent.path}/`))
+      const covered = ticket.workScopes.some((parent) => {
+        const parentPath = normalizeScopePath(parent.path)
+        return (scope.access === 'read' || parent.access === 'write')
+          && (parentPath === '.' || scope.path === parentPath || scope.path.startsWith(`${parentPath}/`))
+      })
       if (!covered) throw new TicketError(`assignment work scope "${scope.path}" is outside the Ticket scope`, 'TICKET_INVALID_INPUT')
     }
     return scopes
