@@ -79,6 +79,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'team/message/delivered',
   'team/message/queued',
   'team/task',
+  'ticket/state',
   'todo/write',
   'tool-workflow/agent-end',
   'tool-workflow/agent-start',

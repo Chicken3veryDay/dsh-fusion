@@ -1,0 +1,43 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/ticket/README.md
+/:
+  en: 3c2097db505db774
+  zh: efa4044f4d3e9b78
+/deepseek-ai-dsh-experimental-ticket:
+  en: a075715ae30fde16
+  zh: 95db1aa061d125c2
+/deepseek-ai-dsh-experimental-ticket/summary:
+  en: d97b5578093ae71d
+  zh: ab664b01c045a922
+/deepseek-ai-dsh-experimental-ticket/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: 76368b6b1da79c80
+/deepseek-ai-dsh-experimental-ticket/use-this-package:
+  en: 98cd122eb2ed2ef1
+  zh: 14dc153c18ca6f6e
+/deepseek-ai-dsh-experimental-ticket/understand-the-implementation:
+  en: 4e6cbe4e089710be
+  zh: 5b550928c9803004
+/deepseek-ai-dsh-experimental-ticket/model-experience:
+  en: 215e7ba838619b7b
+  zh: 215e7ba838619b7b
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state:
+  en: 3895ccef20889166
+  zh: 3895ccef20889166
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/what-the-model-sees:
+  en: fca9ea0407944c15
+  zh: bc2cb1925bedb9d4
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/token-effect:
+  en: 9f2af065b0bc26a7
+  zh: 9dace7470dea663e
+/deepseek-ai-dsh-experimental-ticket/model-experience/host-only-coordination-state/kv-cache-effect:
+  en: 23703d4eacc2141a
+  zh: ca4bc6786810dbd9
+/deepseek-ai-dsh-experimental-ticket/known-limitations-and-deferred-work:
+  en: ac301d35656db9f3
+  zh: fa74542242fc568e
+/deepseek-ai-dsh-experimental-ticket/known-limitations-and-deferred-work/dev-note:
+  en: 9d607d7aa7388dd9
+  zh: e3ab8dc9b13e3ef0

@@ -1430,6 +1430,35 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-subagent-oar -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-ticket -->
+<a id="deepseek-aidsh-experimental-ticket"></a>
+
+## `@deepseek-ai/dsh-experimental-ticket`
+
+- `inject`: `sessions` · `sessionProjections`
+- `source`: [`packages/experimental/ticket/src/types.ts:191`](../packages/experimental/ticket/src/types.ts)
+
+```ts config-catalog
+/** Deployment bounds for one Ticket service instance. */
+export interface Config {
+  /** Maximum Tickets retained in one Session projection. */
+  readonly maxTickets?: number
+  /** Maximum direct worker Assignments retained per Ticket. */
+  readonly maxAssignments?: number
+  /** Maximum Reports retained per Ticket. */
+  readonly maxReports?: number
+  /** Maximum Questions retained per Ticket. */
+  readonly maxQuestions?: number
+  /** Maximum Attention items retained per Ticket. */
+  readonly maxAttentions?: number
+  /** Maximum WorkScope declarations retained per Ticket or Assignment. */
+  readonly maxWorkScopes?: number
+  /** Maximum serialized bytes in one complete Ticket snapshot event. */
+  readonly maxSnapshotBytes?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-ticket -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-tool-agent-team -->
 <a id="deepseek-aidsh-experimental-tool-agent-team"></a>
 
