@@ -301,7 +301,7 @@ export default class FusionParticipants extends Service {
       disposal = completion.promise
       // Fence delivery synchronously when a caller fiber unloads; the async
       // drain below joins this same memoized close after execution revocation.
-      void delivery?.dispose().catch(() => {})
+      void delivery?.dispose()
       void (async () => {
         try {
           const errors: unknown[] = []
@@ -313,9 +313,9 @@ export default class FusionParticipants extends Service {
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
           try { removeStatus?.() } catch (error: unknown) { errors.push(error) }
           try { await removeFence?.() } catch (error: unknown) { errors.push(error) }
+          if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
           if (prepared !== undefined) this.owned.delete(prepared)
-          if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
         } finally { await releaseCaller() }
       })().then(completion.resolve, completion.reject)
       return completion.promise
@@ -390,10 +390,7 @@ export default class FusionParticipants extends Service {
       const deliveryOwner = delivery
       // A raw caller-fiber unload must fence both admission and execution
       // synchronously, before asynchronous writer cleanup starts.
-      const fence = (): void => {
-        void deliveryOwner.dispose().catch(() => {})
-        if (prepared !== undefined && this.hosts.has(prepared)) void execution?.dispose().catch(() => {})
-      }
+      const fence = (): void => { void deliveryOwner.dispose(); void execution?.dispose() }
       const ancestors = new Set<typeof this.ctx.fiber>()
       for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
         ancestors.add(fiber)

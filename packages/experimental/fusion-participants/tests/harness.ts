@@ -51,7 +51,6 @@ export function retainUntilProcessExit(ctx: Context, root: string): void {
   if (index !== -1) contexts.splice(index, 1)
   const rootIndex = roots.indexOf(root)
   if (rootIndex !== -1) roots.splice(rootIndex, 1)
-  retainedUntilProcessExit.push({ ctx, root })
 }
 export async function mount(root?: string, compression: 'none' | 'zstd' = 'none', loopFirst = false, projectionCache = false) {
   root ??= await mkdtemp(join(tmpdir(), 'fusion-participants-'))
