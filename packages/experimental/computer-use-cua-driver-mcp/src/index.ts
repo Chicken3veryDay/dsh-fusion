@@ -12,7 +12,7 @@ import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
-import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
+import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-computer-use'
 import type {} from '@deepseek-ai/dsh-tools'
 
@@ -82,7 +82,6 @@ async function executeInteractionTool(
   callId: ToolCallId,
 ): Promise<JsonValue> {
   const encoded = JSON.stringify(args)
-  if (encoded === undefined) throw new Error(`Cua Driver MCP tool "${name}" arguments are not JSON-serializable`)
   const batch = await ctx.tools.execute({
     calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
@@ -90,7 +89,6 @@ async function executeInteractionTool(
   })
   const settled = batch.results[0]?.result
   if (settled === undefined) throw new Error(`Cua Driver MCP tool "${name}" returned no result`)
-  if (!isJsonValue(settled)) throw new Error(`Cua Driver MCP tool "${name}" returned a non-JSON result`)
   return JSON.parse(JSON.stringify(settled)) as JsonValue
 }
 

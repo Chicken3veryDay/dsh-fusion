@@ -31,7 +31,7 @@ async function fakeFixture(configure?: (options: ExecutionOwnerOptions) => Execu
     return configure?.(options) ?? options
   } })
   // No real writer was pinned. The retained Session handles remain ordinary unpinned storage.
-  const dispose = async () => { await f.owner.dispose().catch(() => {}); await f.disposeResources() }
+  const dispose = async () => { await f.owner.dispose().catch(() => {}); await f.disposeResources().catch(() => {}) }
   return { ...f, hooks, writers, dispose }
 }
 

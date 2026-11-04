@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Ticket",
+    "description": "用于直接 Worker 分配、报告、问题、关注项和协调者交接的持久化协调记录。"
+  }
+}

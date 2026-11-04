@@ -956,6 +956,121 @@ Types: [ExecutionHostProvider](../../packages/experimental/fusion-participants/R
 
 Source: [`packages/experimental/fusion-participants/src/index.ts`](../../packages/experimental/fusion-participants/src/index.ts)
 
+<a id="ctxtickets--ticketservice"></a>
+
+### `ctx.tickets` — `TicketService`
+
+Standalone durable Ticket domain service.
+
+```ts cordis-catalog
+/** Read all Tickets recovered from one Session's durable log.
+ * @param session - Session whose log is replayed.
+ * @returns recovered Ticket views.
+ */
+recover(session: Session): TicketView[]
+
+/** Read one Ticket from the projection.
+ * @param session - Session whose projection is read.
+ * @param id - Ticket identity.
+ * @returns the current Ticket view.
+ */
+get(session: Session, id: TicketId): TicketView
+
+/** Read all Tickets in creation order.
+ * @param session - Session whose projection is read.
+ * @returns current Ticket views.
+ */
+list(session: Session): TicketView[]
+
+/** Create the first whole-value state event for one Ticket.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - Ticket creation request.
+ * @returns the committed Ticket view.
+ */
+async create(session: Session, request: CreateTicketRequest): Promise<TicketView>
+
+/** Assign one direct worker under coordinator authority.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - direct worker assignment request.
+ * @returns the committed Ticket view.
+ */
+async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>
+
+/** Claim one assigned responsibility by its direct worker.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - worker claim request.
+ * @returns the committed Ticket view.
+ */
+async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>
+
+/** Release one responsibility while preserving its durable worker owner.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - Assignment release request.
+ * @returns the committed Ticket view.
+ */
+async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>
+
+/** Publish a bounded worker report and update its Assignment's latest report.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - worker report request.
+ * @returns the committed Ticket view.
+ */
+async report(session: Session, request: ReportTicketRequest): Promise<TicketView>
+
+/** Ask a durable question and move the Ticket into waiting.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - worker question request.
+ * @returns the committed Ticket view.
+ */
+async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>
+
+/** Add one human-visible attention item and move the Ticket into waiting.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - attention request.
+ * @returns the committed Ticket view.
+ */
+async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>
+
+/** Block a Ticket with a coordinator or direct worker reason.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - block request.
+ * @returns the committed Ticket view.
+ */
+async block(session: Session, request: BlockTicketRequest): Promise<TicketView>
+
+/** Transfer coordinator authority while keeping the Ticket revision and history intact.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - coordinator handoff request.
+ * @returns the committed Ticket view.
+ */
+async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<TicketView>
+
+/** Finish a Ticket with a completed outcome.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - terminal completion request.
+ * @returns the committed Ticket view.
+ */
+async complete(session: Session, request: EndTicketRequest): Promise<TicketView>
+
+/** Finish a Ticket with a failed outcome.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - terminal failure request.
+ * @returns the committed Ticket view.
+ */
+async fail(session: Session, request: EndTicketRequest): Promise<TicketView>
+
+/** Cancel a Ticket with a terminal outcome.
+ * @param session - Session whose log owns the Ticket.
+ * @param request - terminal cancellation request.
+ * @returns the committed Ticket view.
+ */
+async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>
+```
+
+Types: [Session](session.zh.md)
+
+Source: [`packages/experimental/ticket/src/index.ts`](../../packages/experimental/ticket/src/index.ts)
+
 <a id="agent-events"></a>
 
 ### `agent/*` events

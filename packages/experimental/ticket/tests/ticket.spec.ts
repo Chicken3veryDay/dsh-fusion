@@ -30,7 +30,7 @@ describe('Ticket service', () => {
       id: TicketId('ticket-1'),
       subject: 'Implement the change',
       description: 'A direct-worker responsibility',
-      workScopes: [{ path: 'packages/ticket', access: 'write', exclusive: true }],
+      workScopes: [{ path: 'packages/experimental/ticket', access: 'write', exclusive: true }],
     })
     expect(ticket).toMatchObject({ id: 'ticket-1', revision: 1, status: 'proposed', coordinatorId: root })
 
@@ -40,7 +40,7 @@ describe('Ticket service', () => {
       actorId: root,
       ownerId: worker,
       subject: 'Build the domain',
-      workScopes: [{ path: 'packages/ticket/src', access: 'write' }],
+      workScopes: [{ path: 'packages/experimental/ticket/src', access: 'write' }],
       executionMode: 'isolated-worktree',
     })
     expect(assigned).toMatchObject({ revision: 2, status: 'ready', assignments: [{ ownerId: worker, status: 'assigned' }] })

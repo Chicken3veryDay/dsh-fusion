@@ -4078,6 +4078,143 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'tickets',
+    summary: 'Standalone durable Ticket domain service.',
+    description: 'Standalone durable Ticket domain service.',
+    methods: [
+      {
+        signature: 'recover(session: Session): TicketView[]',
+        description: 'Read all Tickets recovered from one Session\'s durable log.',
+        parameters: [{ name: 'session', description: 'Session whose log is replayed.' }],
+        returns: 'recovered Ticket views.',
+      },
+      {
+        signature: 'get(session: Session, id: TicketId): TicketView',
+        description: 'Read one Ticket from the projection.',
+        parameters: [{ name: 'session', description: 'Session whose projection is read.' }, { name: 'id', description: 'Ticket identity.' }],
+        returns: 'the current Ticket view.',
+      },
+      {
+        signature: 'list(session: Session): TicketView[]',
+        description: 'Read all Tickets in creation order.',
+        parameters: [{ name: 'session', description: 'Session whose projection is read.' }],
+        returns: 'current Ticket views.',
+      },
+      {
+        signature: 'async create(session: Session, request: CreateTicketRequest): Promise<TicketView>',
+        description: 'Create the first whole-value state event for one Ticket.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'Ticket creation request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>',
+        description: 'Assign one direct worker under coordinator authority.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'direct worker assignment request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>',
+        description: 'Claim one assigned responsibility by its direct worker.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'worker claim request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>',
+        description: 'Release one responsibility while preserving its durable worker owner.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'Assignment release request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async report(session: Session, request: ReportTicketRequest): Promise<TicketView>',
+        description: 'Publish a bounded worker report and update its Assignment\'s latest report.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'worker report request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>',
+        description: 'Ask a durable question and move the Ticket into waiting.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'worker question request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>',
+        description: 'Add one human-visible attention item and move the Ticket into waiting.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'attention request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async block(session: Session, request: BlockTicketRequest): Promise<TicketView>',
+        description: 'Block a Ticket with a coordinator or direct worker reason.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'block request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<TicketView>',
+        description: 'Transfer coordinator authority while keeping the Ticket revision and history intact.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'coordinator handoff request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async complete(session: Session, request: EndTicketRequest): Promise<TicketView>',
+        description: 'Finish a Ticket with a completed outcome.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'terminal completion request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async fail(session: Session, request: EndTicketRequest): Promise<TicketView>',
+        description: 'Finish a Ticket with a failed outcome.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'terminal failure request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>',
+        description: 'Cancel a Ticket with a terminal outcome.',
+        parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'terminal cancellation request.' }],
+        returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'readonly createTicket: TicketService[\'create\'] = this.create.bind(this)',
+        description: 'Alias for create used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly assignWorker: TicketService[\'assign\'] = this.assign.bind(this)',
+        description: 'Alias for assign used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly claimAssignment: TicketService[\'claim\'] = this.claim.bind(this)',
+        description: 'Alias for claim used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly releaseAssignment: TicketService[\'release\'] = this.release.bind(this)',
+        description: 'Alias for release used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly reportResult: TicketService[\'report\'] = this.report.bind(this)',
+        description: 'Alias for report used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly askQuestion: TicketService[\'ask\'] = this.ask.bind(this)',
+        description: 'Alias for ask used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly requestAttention: TicketService[\'attention\'] = this.attention.bind(this)',
+        description: 'Alias for attention used by adapters.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly handoffCoordinator: TicketService[\'handoff\'] = this.handoff.bind(this)',
+        description: 'Alias for handoff used by adapters.',
+        parameters: [],
+      },
+    ],
+  },
+  {
     key: 'timer',
     summary: 'Disposable timer helpers mixed into Cordis contexts.',
     description: 'Disposable timer helpers mixed into Cordis contexts.',
@@ -5713,6 +5850,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AskOptions {\n    options?: readonly string[];\n    header?: string;\n    multiSelect?: true;\n}',
   },
   {
+    name: 'AskTicketQuestionRequest',
+    declaration: 'export interface AskTicketQuestionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId?: AssignmentId;\n    readonly actorId: SessionId;\n    readonly question: string;\n}',
+  },
+  {
     name: 'AskUserQuestionAnswer',
     declaration: 'export interface AskUserQuestionAnswer {\n    answers: AskUserQuestionAnswerItem[];\n}',
   },
@@ -5751,6 +5892,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AssembledSection',
     declaration: 'export interface AssembledSection {\n    name: string;\n    text: string;\n    interpolate?: boolean;\n}',
+  },
+  {
+    name: 'AssignmentId',
+    declaration: 'export type AssignmentId = Branded<\'AssignmentId\'>;',
+  },
+  {
+    name: 'AssignmentRole',
+    declaration: 'export type AssignmentRole = \'worker\' | \'reviewer\' | \'integrator\' | \'observer\';',
+  },
+  {
+    name: 'AssignmentSnapshot',
+    declaration: 'export interface AssignmentSnapshot {\n    readonly id: AssignmentId;\n    readonly revision: number;\n    readonly role: AssignmentRole;\n    readonly subject: string;\n    readonly instructions: string;\n    readonly ownerId: SessionId;\n    readonly status: AssignmentStatus;\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlotId?: ExecutionSlotId;\n    readonly attempts: number;\n    readonly latestReportId?: TicketReportId;\n}',
+  },
+  {
+    name: 'AssignmentStatus',
+    declaration: 'export type AssignmentStatus = \'assigned\' | \'claimed\' | \'running\' | \'released\' | \'completed\' | \'blocked\' | \'failed\' | \'cancelled\';',
+  },
+  {
+    name: 'AssignTicketRequest',
+    declaration: 'export interface AssignTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly ownerId: SessionId;\n    readonly role?: AssignmentRole;\n    readonly subject: string;\n    readonly instructions?: string;\n    readonly workScopes?: readonly WorkScope[];\n    readonly executionMode?: ExecutionSlotMode;\n}',
   },
   {
     name: 'AssistantMessage',
@@ -5869,6 +6030,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface BindingReadiness {\n    readonly binding: Binding;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly code: \'configured\' | \'missing-provider\' | \'route-mismatch\' | \'unknown-capability\' | \'unsupported-capability\' | \'unsupported-effort\' | \'missing-credential\' | \'credential-failed\' | \'adapter-failed\' | \'absent-model\' | \'metadata-unknown\' | \'cancelled\';\n    readonly membership?: Membership;\n}',
   },
   {
+    name: 'BlockTicketRequest',
+    declaration: 'export interface BlockTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly reason: string;\n}',
+  },
+  {
     name: 'BoxProps',
     declaration: 'export interface BoxProps {\n    readonly flexDirection?: \'row\' | \'column\' | undefined;\n    readonly paddingX?: number | undefined;\n    readonly paddingY?: number | undefined;\n    readonly padding?: number | undefined;\n    readonly gap?: number | undefined;\n    readonly border?: boolean | string | undefined;\n    readonly borderColor?: string | undefined;\n    readonly children?: UiNode | undefined;\n}',
   },
@@ -5943,6 +6108,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CheckState',
     declaration: 'export type CheckState = \'pending\' | \'success\' | \'failure\' | \'neutral\' | \'skipped\' | \'cancelled\';',
+  },
+  {
+    name: 'ClaimAssignmentRequest',
+    declaration: 'export interface ClaimAssignmentRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n}',
   },
   {
     name: 'ClaimOutcome',
@@ -6237,6 +6406,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CreateTeamTaskRequest {\n    readonly subject: string;\n    readonly description: string;\n    readonly blockedBy?: readonly TeamTaskId[];\n    readonly writeScopes?: readonly string[];\n}',
   },
   {
+    name: 'CreateTicketRequest',
+    declaration: 'export interface CreateTicketRequest {\n    readonly id?: TicketId;\n    readonly subject: string;\n    readonly description: string;\n    readonly coordinatorId?: SessionId;\n    readonly workScopes?: readonly WorkScope[];\n}',
+  },
+  {
     name: 'CreateWorktreePhase',
     declaration: 'export type CreateWorktreePhase = \'prepare\' | \'checkout\';',
   },
@@ -6481,6 +6654,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EncodedImageAttachment {\n    mediaType: ImageMediaType;\n    data: string;\n    name?: string;\n}',
   },
   {
+    name: 'EndTicketRequest',
+    declaration: 'export interface EndTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly summary: string;\n}',
+  },
+  {
     name: 'EpochHeader',
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    tools?: ToolSchema[];\n    system?: never;\n}',
   },
@@ -6523,6 +6700,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ExecutionSettlement',
     declaration: 'export type ExecutionSettlement = {\n    readonly kind: \'settled\';\n    readonly outcome: \'completed\' | \'failed\' | \'not-dispatched\';\n} | {\n    readonly kind: \'blocked\';\n    readonly reason: ExecutionBlockReason;\n    readonly attemptId: ExecutionAttemptId;\n    readonly cause: unknown;\n};',
+  },
+  {
+    name: 'ExecutionSlotId',
+    declaration: 'export type ExecutionSlotId = Branded<\'ExecutionSlotId\'>;',
+  },
+  {
+    name: 'ExecutionSlotMode',
+    declaration: 'export type ExecutionSlotMode = \'shared-workspace\' | \'isolated-worktree\' | \'dedicated-process\';',
+  },
+  {
+    name: 'ExecutionSlotSnapshot',
+    declaration: 'export interface ExecutionSlotSnapshot {\n    readonly id: ExecutionSlotId;\n    readonly mode: ExecutionSlotMode;\n    readonly status: ExecutionSlotStatus;\n    readonly assignmentId: AssignmentId;\n    readonly holderId?: SessionId;\n}',
+  },
+  {
+    name: 'ExecutionSlotStatus',
+    declaration: 'export type ExecutionSlotStatus = \'reserved\' | \'running\' | \'released\' | \'failed\';',
   },
   {
     name: 'ExecutionSnapshot',
@@ -6815,6 +7008,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GrantRecord',
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
+  },
+  {
+    name: 'HandoffCoordinatorRequest',
+    declaration: 'export interface HandoffCoordinatorRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly newCoordinatorId: SessionId;\n}',
   },
   {
     name: 'HeldAttempt',
@@ -8041,6 +8238,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RelayPublishView {\n    readonly ok: boolean;\n    readonly blocking: boolean;\n    readonly error?: string;\n}',
   },
   {
+    name: 'ReleaseAssignmentRequest',
+    declaration: 'export interface ReleaseAssignmentRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n}',
+  },
+  {
     name: 'Reload',
     declaration: 'export interface Reload {\n    filename: string;\n    modules: ReloadModules;\n    runtime?: Plugin.Runtime | undefined;\n}',
   },
@@ -8137,6 +8338,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ReplayEnvelope {\n    response: unknown;\n    blocks?: readonly unknown[];\n}',
   },
   {
+    name: 'ReportTicketRequest',
+    declaration: 'export interface ReportTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence?: readonly string[];\n    readonly nextSteps?: readonly string[];\n}',
+  },
+  {
     name: 'RequestContext',
     declaration: 'export interface RequestContext {\n    provider: string;\n    model: string;\n    contextWindow?: number;\n    systemPromptUpdate?: SystemPromptUpdate;\n}',
   },
@@ -8159,6 +8364,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RequestRunOutcome',
     declaration: 'export type RequestRunOutcome = \'approved\' | \'completed\' | \'rejected\' | \'cancelled\' | \'failed\';',
+  },
+  {
+    name: 'RequestTicketAttentionRequest',
+    declaration: 'export interface RequestTicketAttentionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId?: AssignmentId;\n    readonly actorId: SessionId;\n    readonly kind: TicketAttentionKind;\n    readonly message: string;\n}',
   },
   {
     name: 'RequestUserInput',
@@ -9765,6 +9974,70 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface TextProps {\n    readonly color?: string | undefined;\n    readonly bold?: boolean | undefined;\n    readonly dimColor?: boolean | undefined;\n    readonly italic?: boolean | undefined;\n    readonly underline?: boolean | undefined;\n    readonly children?: UiNode | undefined;\n}',
   },
   {
+    name: 'TicketAttentionId',
+    declaration: 'export type TicketAttentionId = Branded<\'TicketAttentionId\'>;',
+  },
+  {
+    name: 'TicketAttentionKind',
+    declaration: 'export type TicketAttentionKind = \'review\' | \'question\' | \'blocked\' | \'decision\';',
+  },
+  {
+    name: 'TicketAttentionSnapshot',
+    declaration: 'export interface TicketAttentionSnapshot {\n    readonly id: TicketAttentionId;\n    readonly assignmentId?: AssignmentId;\n    readonly kind: TicketAttentionKind;\n    readonly message: string;\n    readonly status: TicketAttentionStatus;\n    readonly createdAt: number;\n    readonly resolvedAt?: number;\n}',
+  },
+  {
+    name: 'TicketAttentionStatus',
+    declaration: 'export type TicketAttentionStatus = \'open\' | \'acknowledged\' | \'resolved\';',
+  },
+  {
+    name: 'TicketId',
+    declaration: 'export type TicketId = Branded<\'TicketId\'>;',
+  },
+  {
+    name: 'TicketQuestionId',
+    declaration: 'export type TicketQuestionId = Branded<\'TicketQuestionId\'>;',
+  },
+  {
+    name: 'TicketQuestionSnapshot',
+    declaration: 'export interface TicketQuestionSnapshot {\n    readonly id: TicketQuestionId;\n    readonly assignmentId?: AssignmentId;\n    readonly authorId: SessionId;\n    readonly question: string;\n    readonly status: TicketQuestionStatus;\n    readonly answer?: string;\n    readonly answeredBy?: SessionId;\n    readonly createdAt: number;\n}',
+  },
+  {
+    name: 'TicketQuestionStatus',
+    declaration: 'export type TicketQuestionStatus = \'open\' | \'answered\' | \'closed\';',
+  },
+  {
+    name: 'TicketReportId',
+    declaration: 'export type TicketReportId = Branded<\'TicketReportId\'>;',
+  },
+  {
+    name: 'TicketReportKind',
+    declaration: 'export type TicketReportKind = \'progress\' | \'result\' | \'failure\';',
+  },
+  {
+    name: 'TicketReportSnapshot',
+    declaration: 'export interface TicketReportSnapshot {\n    readonly id: TicketReportId;\n    readonly assignmentId: AssignmentId;\n    readonly authorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence: readonly string[];\n    readonly nextSteps: readonly string[];\n    readonly createdAt: number;\n}',
+  },
+  {
+    name: 'TicketService',
+    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>;\n    async block(session: Session, request: BlockTicketRequest): Promise<TicketView>;\n    async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<TicketView>;\n    async complete(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    async fail(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    readonly createTicket: TicketService[\'create\'];\n    readonly assignWorker: TicketService[\'assign\'];\n    readonly claimAssignment: TicketService[\'cl /* …truncated — full shape in source */',
+  },
+  {
+    name: 'TicketSnapshot',
+    declaration: 'export interface TicketSnapshot {\n    readonly id: TicketId;\n    readonly revision: number;\n    readonly subject: string;\n    readonly description: string;\n    readonly status: TicketStatus;\n    readonly coordinatorId: SessionId;\n    readonly assignments: readonly AssignmentSnapshot[];\n    readonly reports: readonly TicketReportSnapshot[];\n    readonly questions: readonly TicketQuestionSnapshot[];\n    readonly attentions: readonly TicketAttentionSnapshot[];\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlots: readonly ExecutionSlotSnapshot[];\n    readonly terminalOutcome?: TicketTerminalOutcome;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n}',
+  },
+  {
+    name: 'TicketStatus',
+    declaration: 'export type TicketStatus = \'proposed\' | \'ready\' | \'coordinating\' | \'executing\' | \'integrating\' | \'reviewing\' | \'waiting\' | \'blocked\' | \'completed\' | \'failed\' | \'cancelled\';',
+  },
+  {
+    name: 'TicketTerminalOutcome',
+    declaration: 'export interface TicketTerminalOutcome {\n    readonly kind: Extract<TicketStatus, \'completed\' | \'failed\' | \'cancelled\'>;\n    readonly summary: string;\n    readonly actorId: SessionId;\n    readonly at: number;\n}',
+  },
+  {
+    name: 'TicketView',
+    declaration: 'export type TicketView = TicketSnapshot;',
+  },
+  {
     name: 'TimedUserQuestionResult',
     declaration: 'export type TimedUserQuestionResult = AskUserQuestionAnswer | {\n    pending: true;\n    callId: ToolCallId;\n};',
   },
@@ -10359,6 +10632,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkflowStopReason',
     declaration: 'export type WorkflowStopReason = \'completed\' | \'cancelled\' | \'error\';',
+  },
+  {
+    name: 'WorkScope',
+    declaration: 'export interface WorkScope {\n    readonly path: string;\n    readonly access: \'read\' | \'write\';\n    readonly exclusive?: boolean;\n}',
   },
   {
     name: 'Workspace',

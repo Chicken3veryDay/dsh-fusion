@@ -666,6 +666,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Retains root and participant Sessions for parked Agent adoption without task activation.',
   },
   {
+    key: 'tickets',
+    pkg: 'experimental-ticket',
+    title: 'Durable Ticket coordination domain',
+    mode: 'core',
+    note: 'Owns durable direct-worker assignments, execution declarations, reports, questions, attention items, coordinator handoff, and terminal outcomes in Session event logs.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

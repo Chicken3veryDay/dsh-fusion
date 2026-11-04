@@ -313,9 +313,9 @@ export default class FusionParticipants extends Service {
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
           try { removeStatus?.() } catch (error: unknown) { errors.push(error) }
           try { await removeFence?.() } catch (error: unknown) { errors.push(error) }
-          if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
           if (prepared !== undefined) this.owned.delete(prepared)
+          if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
         } finally { await releaseCaller() }
       })().then(completion.resolve, completion.reject)
       return completion.promise

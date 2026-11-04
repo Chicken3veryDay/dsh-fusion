@@ -12,7 +12,7 @@ import type { Scope } from '@deepseek-ai/dsh-scope'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { interactionProviderId, isBrowserActionKind } from '@deepseek-ai/dsh-interaction'
-import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
+import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
 import type {} from '@deepseek-ai/dsh-attachment'
@@ -107,7 +107,6 @@ async function executeScopedTool(
   callId: ToolCallId,
 ): Promise<JsonValue> {
   const encoded = JSON.stringify(args)
-  if (encoded === undefined) throw new Error(`browser provider tool "${name}" arguments are not JSON-serializable`)
   const batch = await scope.ctx.tools.execute({
     calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
@@ -115,7 +114,6 @@ async function executeScopedTool(
   })
   const settled = batch.results[0]?.result
   if (settled === undefined) throw new Error(`browser provider tool "${name}" returned no result`)
-  if (!isJsonValue(settled)) throw new Error(`browser provider tool "${name}" returned a non-JSON result`)
   return JSON.parse(JSON.stringify(settled)) as JsonValue
 }
 
