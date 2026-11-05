@@ -14,7 +14,7 @@ import {
   WorkstreamAction, type ChangeRequestsRead, type WorkstreamActionInjected, type WorkstreamActionProps, type WorkstreamFailure,
 } from '../src/client/WorkstreamAction.tsx'
 import { en } from '../src/client/locales.ts'
-import { build, docs, evidence, REVIEWER, ROOT, ticket, tickets, WORKER, workstream } from './fixtures.ts'
+import { build, docs, evidence, REVIEWER, ROOT, ticket, tickets, WORKER, workstream } from './fixtures.client.ts'
 
 afterEach(() => {
   cleanup()

@@ -8,7 +8,7 @@ import { RemoteError, type RemoteResult, type TypertRemoteContribution } from '@
 import type { WorkstreamActionInjected, WorkstreamCommand } from '../src/client/WorkstreamAction.tsx'
 import { WorkstreamAction } from '../src/client/WorkstreamAction.tsx'
 import { failureOf, inject, mountWorkstreamPanel } from '../src/client/mount.ts'
-import { build, REVIEWER, ROOT, WORKER } from './fixtures.ts'
+import { build, REVIEWER, ROOT, WORKER } from './fixtures.client.ts'
 
 const contribution: TypertRemoteContribution = { package: '@deepseek-ai/dsh-experimental-client-ui-workstream', descriptors: [] }
 const ok: RemoteResult<void> = { ok: true, value: undefined }

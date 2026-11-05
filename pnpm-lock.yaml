@@ -1022,6 +1022,9 @@ importers:
       '@deepseek-ai/dsh-experimental-speech-to-text':
         specifier: workspace:*
         version: link:../../packages/experimental/speech-to-text
+      '@deepseek-ai/dsh-experimental-ticket':
+        specifier: workspace:*
+        version: link:../../packages/experimental/ticket
       '@deepseek-ai/dsh-experimental-voice-input-bundle':
         specifier: workspace:*
         version: link:../../packages/experimental/voice-input-bundle
@@ -1031,6 +1034,12 @@ importers:
       '@deepseek-ai/dsh-experimental-webworker-runtime':
         specifier: workspace:*
         version: link:../../packages/experimental/webworker-runtime
+      '@deepseek-ai/dsh-experimental-workstream':
+        specifier: workspace:*
+        version: link:../../packages/experimental/workstream
+      '@deepseek-ai/dsh-experimental-workstream-evidence':
+        specifier: workspace:*
+        version: link:../../packages/experimental/workstream-evidence
       '@deepseek-ai/dsh-experimental-worktree':
         specifier: workspace:*
         version: link:../../packages/experimental/worktree
