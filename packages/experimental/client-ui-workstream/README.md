@@ -27,7 +27,7 @@ This package adds a Workstream action to the Web conversation header. Its panel 
 
 Enable this package through [`@deepseek-ai/dsh-experimental-workstream-profile`](../workstream-profile/README.md), which supplies the Ticket, Workstream, and Workstream Evidence services and this panel together. The Web Client loader mounts the `/client` export, and the Host loads the root export as the `workstreamPanel` Remote. The package has no user configuration fields.
 
-The header action appears only in a conversation whose Workstream root projects a Workstream: the owner Session, or a member opened as a continuable child of the owner. Its badge counts the items in Needs you. Clicking the action opens the panel; outside clicks and Escape close it.
+The header action appears only in a conversation whose Workstream root projects a Workstream: the owner Session, or a member opened as a continuable child of the owner. Its badge counts the items in Needs you. Clicking the action opens the panel; outside clicks and Escape close it. In a narrow header the action shows only its icon and badge, and a phone-width panel hides the per-view counts on its tabs.
 
 ### Act on questions and attention
 

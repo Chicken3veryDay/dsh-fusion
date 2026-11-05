@@ -27,7 +27,7 @@ kind: "package-reference"
 
 通过 [`@deepseek-ai/dsh-experimental-workstream-profile`](../workstream-profile/README.zh.md) 启用本包。该层同时提供 Ticket、Workstream 与 Workstream Evidence 服务以及本面板。Web Client loader 挂载 `/client` export，Host 将 root export 加载为 `workstreamPanel` Remote。本包没有用户配置字段。
 
-页头 action 只出现在 Workstream 根投影了 Workstream 的会话中：所有者 Session，或作为所有者 continuable 子会话打开的成员。徽标显示待你处理中的事项数。点击 action 打开面板；点击外部或按 Escape 关闭。
+页头 action 只出现在 Workstream 根投影了 Workstream 的会话中：所有者 Session，或作为所有者 continuable 子会话打开的成员。徽标显示待你处理中的事项数。点击 action 打开面板；点击外部或按 Escape 关闭。页头较窄时 action 只显示图标和徽标；手机宽度的面板会隐藏标签页上的各视图数量。
 
 ### 处理问题与关注事项
 

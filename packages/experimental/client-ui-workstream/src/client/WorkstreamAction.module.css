@@ -58,6 +58,7 @@
   max-height: min(680px, calc(100vh - 32px));
   padding: 12px 2px 0;
   overflow: hidden;
+  container-type: inline-size;
   border: 0;
   border-radius: 12px;
   outline: none;
@@ -96,6 +97,12 @@
 
 .tabs {
   width: 100%;
+}
+
+/* Five equal tabs share the panel width, so the shared 12px tab inset
+   shrinks before any label truncates. */
+.tabs button {
+  padding: 0 6px;
 }
 
 .tabLabel {
@@ -423,4 +430,22 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Phone-width panels keep every tab label whole: counts leave the tabs (the
+   trigger badge and section headings still show them) and labels drop one
+   step in size. */
+@container (max-width: 440px) {
+  .tabs button {
+    padding: 0 2px;
+    font-size: 12px;
+  }
+
+  .tabLabel .count {
+    display: none;
+  }
+
+  .header {
+    padding: 0 10px 10px;
+  }
 }
