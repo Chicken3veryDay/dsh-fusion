@@ -1284,11 +1284,17 @@ list(caller: Agent): WorkstreamSnapshot[]
  */
 async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember>
 
-/** Transfer the coordinator role while preserving every child parent and root log.
+/** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.
+ *
+ * Tickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the
+ * Tickets have not yet followed. Each move is authenticated by the Ticket's own current coordinator, which the Workstream
+ * has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous
+ * coordinator as the handing-off actor.
  * @param caller - current coordinator or immutable owner.
  * @param rootSessionId - explicit technical owner.
  * @param request - CAS revision and active new coordinator.
  * @returns committed next snapshot.
+ * @throws WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.
  */
 async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>
 
@@ -1331,7 +1337,7 @@ interrupt(caller: Agent, rootSessionId: SessionId, targetId: SessionId): void
  */
 async stop(caller: Agent, rootSessionId: SessionId, targetId: SessionId): Promise<WorkstreamMember>
 
-/** Create a Ticket in the stable root; peers may propose work.
+/** Create a Ticket in the stable root, coordinated by the current Workstream coordinator; peers may propose work.
  * @param caller - exact live member.
  * @param rootSessionId - Ticket-owning Workstream root.
  * @param request - Ticket content; coordinator authority is supplied by Workstream.
@@ -1339,16 +1345,16 @@ async stop(caller: Agent, rootSessionId: SessionId, targetId: SessionId): Promis
  */
 async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, 'coordinatorId'>): Promise<TicketView>
 
-/** Assign a Ticket under current coordinator authentication and stable root authority.
- * @param caller - exact current coordinator or owner.
+/** Assign a Ticket as the current coordinator; the Ticket records that caller as actor.
+ * @param caller - exact current coordinator; the owner must first reclaim the role with {@link handoff}.
  * @param rootSessionId - root owning the Ticket.
  * @param request - assignment to an active Workstream member.
  * @returns committed Ticket view.
  */
 async assignTicket(caller: Agent, rootSessionId: SessionId, request: Omit<AssignTicketRequest, 'actorId'>): Promise<TicketView>
 
-/** End a Ticket through its existing completion checks after authenticating coordinator role.
- * @param caller - current coordinator or technical owner.
+/** End a Ticket through its existing completion checks as the current coordinator; the Ticket records that caller as actor.
+ * @param caller - exact current coordinator; the owner must first reclaim the role with {@link handoff}.
  * @param rootSessionId - root owning the Ticket.
  * @param request - Ticket CAS revision and summary.
  * @returns completed Ticket view.

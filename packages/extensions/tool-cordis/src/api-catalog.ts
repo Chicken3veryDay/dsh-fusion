@@ -5102,9 +5102,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>',
-        description: 'Transfer the coordinator role while preserving every child parent and root log.',
+        description: 'Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.\n\nTickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the Tickets have not yet followed. Each move is authenticated by the Ticket\'s own current coordinator, which the Workstream has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous coordinator as the handing-off actor.',
         parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit technical owner.' }, { name: 'request', description: 'CAS revision and active new coordinator.' }],
         returns: 'committed next snapshot.',
+        throws: ['WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.'],
       },
       {
         signature: 'async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage>',
@@ -5137,20 +5138,20 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, \'coordinatorId\'>): Promise<TicketView>',
-        description: 'Create a Ticket in the stable root; peers may propose work.',
+        description: 'Create a Ticket in the stable root, coordinated by the current Workstream coordinator; peers may propose work.',
         parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'Ticket-owning Workstream root.' }, { name: 'request', description: 'Ticket content; coordinator authority is supplied by Workstream.' }],
         returns: 'committed Ticket view.',
       },
       {
         signature: 'async assignTicket(caller: Agent, rootSessionId: SessionId, request: Omit<AssignTicketRequest, \'actorId\'>): Promise<TicketView>',
-        description: 'Assign a Ticket under current coordinator authentication and stable root authority.',
-        parameters: [{ name: 'caller', description: 'exact current coordinator or owner.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'assignment to an active Workstream member.' }],
+        description: 'Assign a Ticket as the current coordinator; the Ticket records that caller as actor.',
+        parameters: [{ name: 'caller', description: 'exact current coordinator; the owner must first reclaim the role with {@link handoff}.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'assignment to an active Workstream member.' }],
         returns: 'committed Ticket view.',
       },
       {
         signature: 'async endTicket(caller: Agent, rootSessionId: SessionId, request: Omit<EndTicketRequest, \'actorId\'>): Promise<TicketView>',
-        description: 'End a Ticket through its existing completion checks after authenticating coordinator role.',
-        parameters: [{ name: 'caller', description: 'current coordinator or technical owner.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'Ticket CAS revision and summary.' }],
+        description: 'End a Ticket through its existing completion checks as the current coordinator; the Ticket records that caller as actor.',
+        parameters: [{ name: 'caller', description: 'exact current coordinator; the owner must first reclaim the role with {@link handoff}.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'Ticket CAS revision and summary.' }],
         returns: 'completed Ticket view.',
       },
     ],
