@@ -1438,7 +1438,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-ticket`
 
 - `inject`: `sessions` · `sessionProjections`
-- `source`: [`packages/experimental/ticket/src/types.ts:191`](../packages/experimental/ticket/src/types.ts)
+- `source`: [`packages/experimental/ticket/src/types.ts:196`](../packages/experimental/ticket/src/types.ts)
 
 ```ts config-catalog
 /** Deployment bounds for one Ticket service instance. */
@@ -1539,6 +1539,58 @@ export type AnonymousTranslationProvider = 'google' | 'bing'
 export type PaidTranslationProvider = 'deepseek-account' | 'deepseek-official'
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-translator -->
+
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-workstream -->
+<a id="deepseek-aidsh-experimental-workstream"></a>
+
+## `@deepseek-ai/dsh-experimental-workstream`
+
+- `inject`: `agents` · `sessions` · `sessionPersistence` · `sessionProjections` · `subagents` · `tickets`
+- `source`: [`packages/experimental/workstream/src/types.ts:56`](../packages/experimental/workstream/src/types.ts)
+
+```ts config-catalog
+/** Deployment bounds apply to complete retained snapshots and operations. */
+export interface Config {
+  /** Maximum members retained in one Workstream, including stopped members (default: 16). */
+  readonly maxMembers?: number
+  /** Maximum peer message receipts retained in one Workstream (default: 256). */
+  readonly maxMessages?: number
+  /** Maximum serialized byte size of one complete Workstream snapshot (default: 1 MiB). */
+  readonly maxSnapshotBytes?: number
+  /** Maximum serialized byte size of one peer message, including its context packet (default: 64 KiB). */
+  readonly maxMessageBytes?: number
+  /** Maximum `timeoutMs` accepted by one wait, in milliseconds (default: 1 hour). */
+  readonly maxWaitMs?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-workstream -->
+
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-workstream-evidence -->
+<a id="deepseek-aidsh-experimental-workstream-evidence"></a>
+
+## `@deepseek-ai/dsh-experimental-workstream-evidence`
+
+- `inject`: `agents` · `sessions` · `sessionPersistence` · `sessionProjections` · `attachments` · `workstreams`
+- `source`: [`packages/experimental/workstream-evidence/src/types.ts:39`](../packages/experimental/workstream-evidence/src/types.ts)
+
+```ts config-catalog
+/** Deployment bounds and limits for Workstream Evidence. */
+export interface Config {
+  /** Maximum byte size accepted for a single evidence payload (default: 10 MiB). */
+  readonly maxBytesPerArtifact?: number
+  /** Maximum number of distinct artifact logical identities per Workstream (default: 256). */
+  readonly maxArtifacts?: number
+  /** Maximum number of versions per artifact (default: 64). */
+  readonly maxVersionsPerArtifact?: number
+  /** Maximum aggregate byte size of all stored artifacts in a Workstream (default: 100 MiB). */
+  readonly maxTotalBytes?: number
+  /** Maximum byte length of a serialized context packet (default: 65,536). */
+  readonly maxContextPacketBytes?: number
+  /** Maximum byte size of one evidence version returned as text to a model tool (default: 65,536). */
+  readonly maxToolTextBytes?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-workstream-evidence -->
 
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-worktree -->
 <a id="deepseek-aidsh-experimental-worktree"></a>
@@ -5060,6 +5112,7 @@ export interface Config {
 | `@deepseek-ai/dsh-experimental-voice-input-bundle` | — | [`packages/experimental/voice-input-bundle/src/index.ts`](../packages/experimental/voice-input-bundle/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-webworker-packer` | — | [`packages/experimental/webworker-packer/src/index.ts`](../packages/experimental/webworker-packer/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-webworker-runtime` | — | [`packages/experimental/webworker-runtime/src/index.ts`](../packages/experimental/webworker-runtime/src/index.ts) |
+| `@deepseek-ai/dsh-experimental-workstream-profile` | — | [`packages/experimental/workstream-profile/src/index.ts`](../packages/experimental/workstream-profile/src/index.ts) |
 | `@deepseek-ai/dsh-fs-patch` | — | [`packages/fs/fs-patch/src/index.ts`](../packages/fs/fs-patch/src/index.ts) |
 | `@deepseek-ai/dsh-home-paths` | — | [`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts) |
 | `@deepseek-ai/dsh-hook-protocol` | — | [`packages/experimental/hook-protocol/src/index.ts`](../packages/experimental/hook-protocol/src/index.ts) |

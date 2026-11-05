@@ -54,10 +54,15 @@ export interface WorkstreamSnapshot {
 
 /** Deployment bounds apply to complete retained snapshots and operations. */
 export interface Config {
+  /** Maximum members retained in one Workstream, including stopped members (default: 16). */
   readonly maxMembers?: number
+  /** Maximum peer message receipts retained in one Workstream (default: 256). */
   readonly maxMessages?: number
+  /** Maximum serialized byte size of one complete Workstream snapshot (default: 1 MiB). */
   readonly maxSnapshotBytes?: number
+  /** Maximum serialized byte size of one peer message, including its context packet (default: 64 KiB). */
   readonly maxMessageBytes?: number
+  /** Maximum `timeoutMs` accepted by one wait, in milliseconds (default: 1 hour). */
   readonly maxWaitMs?: number
 }
 

@@ -4091,14 +4091,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'ticketExecution',
-    summary: 'Composes durable Ticket assignment state with the existing Jobs and Worktree providers.',
-    description: 'Composes durable Ticket assignment state with the existing Jobs and Worktree providers. The adapter owns runtime resources; Ticket remains the durable authority.',
+    summary: 'Serializes attempt admission, retains uncertain resources, and waits for producer settlement.',
+    description: 'Serializes attempt admission, retains uncertain resources, and waits for producer settlement.',
     methods: [
       {
-        signature: 'async prepare(agent: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>',
-        description: 'Claim an assignment for the exact worker Agent and prepare its declared execution mode. Shared workspaces keep the caller\'s current directory; isolated workspaces use the existing Worktree service and retain its returned checkout metadata for recovery and review.',
-        parameters: [{ name: 'agent', description: 'live worker Agent whose Session owns the assignment.' }, { name: 'request', description: 'Ticket identity, CAS revision, and optional worktree request.' }],
-        returns: 'an execution handle with Job and workspace ownership.',
+        signature: 'prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>',
+        description: 'Prepare or return the exact live attempt; recovered attempts cannot replay effects.',
+        parameters: [{ name: 'caller', description: 'Exact registered owner or current coordinator.' }, { name: 'request', description: 'Stable operation and attempt ids, CAS, and explicit placement.' }],
+        returns: 'The single resource handle retained for this preparation.',
       },
     ],
   },
@@ -4157,13 +4157,37 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>',
-        description: 'Ask a durable question and move the Ticket into waiting.',
+        description: 'Ask a durable question; blocked Tickets remain blocked, otherwise they wait.',
         parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'worker question request.' }],
         returns: 'the committed Ticket view.',
       },
       {
+        signature: 'async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>',
+        description: 'Answer an open question under coordinator authority; other blockers remain active.',
+        parameters: [{ name: 'session', description: 'Session owning the Ticket.' }, { name: 'request', description: 'Question identity, answer, actor, and CAS revision.' }],
+        returns: 'Committed Ticket; rejects without appending for denied or invalid changes.',
+      },
+      {
+        signature: 'async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>',
+        description: 'Close an open or answered question as its author or current coordinator.',
+        parameters: [{ name: 'session', description: 'Session owning the Ticket.' }, { name: 'request', description: 'Question identity, actor, and CAS revision.' }],
+        returns: 'Committed Ticket; rejects without appending for denied or invalid changes.',
+      },
+      {
+        signature: 'async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>',
+        description: 'Acknowledge an open attention item as coordinator; acknowledgement retains its blocker.',
+        parameters: [{ name: 'session', description: 'Session owning the Ticket.' }, { name: 'request', description: 'Attention identity, actor, and CAS revision.' }],
+        returns: 'Committed Ticket; rejects without appending for denied or invalid changes.',
+      },
+      {
+        signature: 'async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>',
+        description: 'Resolve an open or acknowledged attention item as coordinator, preserving other blockers.',
+        parameters: [{ name: 'session', description: 'Session owning the Ticket.' }, { name: 'request', description: 'Attention identity, actor, and CAS revision.' }],
+        returns: 'Committed Ticket; rejects without appending for denied or invalid changes.',
+      },
+      {
         signature: 'async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>',
-        description: 'Add one human-visible attention item and move the Ticket into waiting.',
+        description: 'Add a human-visible attention item; blocked attention keeps the Ticket blocked.',
         parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'attention request.' }],
         returns: 'the committed Ticket view.',
       },
@@ -4196,6 +4220,54 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Cancel a Ticket with a terminal outcome.',
         parameters: [{ name: 'session', description: 'Session whose log owns the Ticket.' }, { name: 'request', description: 'terminal cancellation request.' }],
         returns: 'the committed Ticket view.',
+      },
+      {
+        signature: 'async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView>',
+        description: 'Replace the specification; prior candidates, checks and contributions remain historical.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Complete replacement obligations and CAS revision.' }],
+        returns: 'Committed Ticket with an incremented specification revision.',
+      },
+      {
+        signature: 'async beginAttempt(session: Session, request: BeginTicketAttemptRequest): Promise<TicketView>',
+        description: 'Admit one execution attempt before effects; repeated operation identities do not append.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Attempt identity, placement, actor and CAS revision.' }],
+        returns: 'Current Ticket; rejects replacement of unsettled work or changed operation payloads.',
+      },
+      {
+        signature: 'async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView>',
+        description: 'Record runtime receipts, stopping or uncertainty without releasing work.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Current attempt and stable operation identity.' }],
+        returns: 'Current Ticket; obsolete attempts and replaced receipts are rejected.',
+      },
+      {
+        signature: 'async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView>',
+        description: 'Record observed producer settlement; result reports alone never settle attempts.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Current attempt, observed outcome and retained receipts.' }],
+        returns: 'Current Ticket with settled work; retrying the same operation is safe.',
+      },
+      {
+        signature: 'async submitCandidate(session: Session, request: SubmitTicketCandidateRequest): Promise<TicketView>',
+        description: 'Pin immutable content and the contributing Assignments for the current specification.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'New candidate identity and immutable content reference.' }],
+        returns: 'Committed Ticket; all older checks remain historical.',
+      },
+      {
+        signature: 'async checkCandidate(session: Session, request: CheckTicketCandidateRequest): Promise<TicketView>',
+        description: 'Append criterion evidence; independent authors cannot contribute to the candidate.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Current candidate, criterion and evidence.' }],
+        returns: 'Committed Ticket; stale checks append nothing.',
+      },
+      {
+        signature: 'async planMission(session: Session, request: PlanTicketMissionRequest): Promise<TicketView>',
+        description: 'Version a Mission\'s Ticket references without adding mutable completion state.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Plan references and current Ticket/plan revisions.' }],
+        returns: 'Committed Ticket containing the new plan revision.',
+      },
+      {
+        signature: 'mission(session: Session, ticketId: TicketId, missionId: MissionId): MissionView',
+        description: 'Read Mission progress derived solely from referenced Ticket acceptance.',
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'ticketId', description: 'Ticket containing the plan.' }, { name: 'missionId', description: 'Mission identity.' }],
+        returns: 'Current plan with accepted and total Ticket counts.',
       },
       {
         signature: 'readonly createTicket: TicketService[\'create\'] = this.create.bind(this)',
@@ -4940,6 +5012,146 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Resolve by canonical directory path without creating or mutating a workspace. A missing path rejects during `realpath`; an existing unowned directory returns `undefined`.',
         parameters: [{ name: 'path', description: 'Existing directory path in a fully qualified spelling.' }],
         returns: 'the workspace owning the canonical path, when one exists.',
+      },
+    ],
+  },
+  {
+    key: 'workstreamEvidence',
+    summary: 'Service managing durable, immutable Workstream evidence versions.',
+    description: 'Service managing durable, immutable Workstream evidence versions.',
+    methods: [
+      {
+        signature: 'async publish( caller: Agent, rootSessionId: SessionId, request: PublishEvidenceRequest, ): Promise<WorkstreamEvidenceVersionRecord>',
+        description: 'Publish an immutable evidence version in the owning Workstream session. Idempotent retry with same payload returns the existing version; changed payload is rejected.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }, { name: 'request', description: 'artifact id, expected next version, operation id, and bounded content.' }],
+        returns: 'The retained version record.',
+      },
+      {
+        signature: 'get( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, ): WorkstreamEvidenceVersionRecord',
+        description: 'Get metadata for one retained evidence artifact version.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }, { name: 'artifactId', description: 'logical artifact id.' }, { name: 'version', description: 'version number, or undefined for the latest.' }],
+        returns: 'The retained version record.',
+      },
+      {
+        signature: 'list(caller: Agent, rootSessionId: SessionId): readonly WorkstreamEvidenceArtifactRecord[]',
+        description: 'List all evidence artifacts and version histories for one Workstream.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }],
+        returns: 'Every retained artifact with its complete version history.',
+      },
+      {
+        signature: 'async read( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, signal?: AbortSignal, ): Promise<{ metadata: WorkstreamEvidenceVersionRecord; data: Uint8Array }>',
+        description: 'Read and verify immutable evidence content from attachments. Validates digest and byte length before returning.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }, { name: 'artifactId', description: 'logical artifact id.' }, { name: 'version', description: 'version number, or undefined for the latest.' }, { name: 'signal', description: 'aborts the attachment read.' }],
+        returns: 'Version metadata and the verified bytes.',
+      },
+      {
+        signature: 'async readText( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, signal?: AbortSignal, ): Promise<{ metadata: WorkstreamEvidenceVersionRecord; text: string }>',
+        description: 'Read one verified evidence version as UTF-8 text for model-visible output.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }, { name: 'artifactId', description: 'logical artifact id.' }, { name: 'version', description: 'version number, or undefined for the latest.' }, { name: 'signal', description: 'aborts the attachment read.' }],
+        returns: 'Version metadata and decoded text.',
+        throws: ['WorkstreamEvidenceError `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED` above `maxToolTextBytes`; `WORKSTREAM_EVIDENCE_INVALID_INPUT` for bytes that are not valid UTF-8.'],
+      },
+      {
+        signature: 'prepareContext( caller: Agent, rootSessionId: SessionId, request: PrepareContextRequest, ): WorkstreamContextPacket',
+        description: 'Construct a bounded WorkstreamContextPacket from exact retained evidence versions. Rejects mutable or foreign links.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }, { name: 'request', description: 'packet fields and the exact artifact versions to include.' }],
+        returns: 'A packet whose artifacts carry retained refs and digests.',
+      },
+      {
+        signature: 'aggregateChangeRequests( caller: Agent, rootSessionId: SessionId, ): AggregatedChangeRequestsResult',
+        description: 'Aggregate change request bindings across the root and active member Sessions.',
+        parameters: [{ name: 'caller', description: 'live Workstream member.' }, { name: 'rootSessionId', description: 'Workstream root Session id.' }],
+        returns: 'Deduplicated change requests, diagnostics, and whether every Session was read.',
+      },
+    ],
+  },
+  {
+    key: 'workstreams',
+    summary: 'Host service; unknown intents are reconciled but never automatically executed again.',
+    description: 'Host service; unknown intents are reconciled but never automatically executed again.',
+    methods: [
+      {
+        signature: 'async open(caller: Agent, request: { operationId: WorkstreamOperationId; title: string }): Promise<WorkstreamSnapshot>',
+        description: 'Open one root-owned Workstream, idempotently for the same creation key.',
+        parameters: [{ name: 'caller', description: 'exact live technical owner.' }, { name: 'request', description: 'stable operation identity and human-readable title.' }],
+        returns: 'committed Workstream snapshot.',
+      },
+      {
+        signature: 'requireMembership(caller: Agent, rootSessionId: SessionId): WorkstreamMembership',
+        description: 'Resolve exact live membership against the immutable technical owner.',
+        parameters: [{ name: 'caller', description: 'live caller, never an id supplied as authorization.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }],
+        returns: 'technical owner, detached snapshot and durable member.',
+      },
+      {
+        signature: 'get(caller: Agent, rootSessionId: SessionId): WorkstreamSnapshot',
+        description: 'Read one Workstream visible to the exact live caller.',
+        parameters: [{ name: 'caller', description: 'authenticated member.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }],
+        returns: 'detached current value.',
+      },
+      {
+        signature: 'list(caller: Agent): WorkstreamSnapshot[]',
+        description: 'List live Workstream roots visible to one live member.',
+        parameters: [{ name: 'caller', description: 'exact live Agent.' }],
+        returns: 'bounded list, at most the caller\'s root Workstream.',
+      },
+      {
+        signature: 'async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember>',
+        description: 'Provision or reconcile one continuable direct child under a stable operation id.',
+        parameters: [{ name: 'caller', description: 'owner or current coordinator.' }, { name: 'rootSessionId', description: 'stable technical owner.' }, { name: 'request', description: 'immutable intent and cancellation before acceptance.' }],
+        returns: 'active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.',
+      },
+      {
+        signature: 'async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>',
+        description: 'Transfer the coordinator role while preserving every child parent and root log.',
+        parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit technical owner.' }, { name: 'request', description: 'CAS revision and active new coordinator.' }],
+        returns: 'committed next snapshot.',
+      },
+      {
+        signature: 'async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage>',
+        description: 'Deliver one immutable message intent with durable acceptance distinct from processing.',
+        parameters: [{ name: 'caller', description: 'exact live sending member.' }, { name: 'rootSessionId', description: 'explicit root selecting recipient membership.' }, { name: 'request', description: 'stable operation id, target, message and optional logged context packet.' }],
+        returns: 'current durable delivery receipt; unresolved retries never send again.',
+      },
+      {
+        signature: 'async acknowledge(caller: Agent, rootSessionId: SessionId, operationId: WorkstreamOperationId): Promise<WorkstreamMessage>',
+        description: 'Record recipient acknowledgement; idle status never implies processing.',
+        parameters: [{ name: 'caller', description: 'exact live recipient.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }, { name: 'operationId', description: 'accepted send being acknowledged.' }],
+        returns: 'the explicit processed receipt.',
+      },
+      {
+        signature: 'async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>',
+        description: 'Observe any durable root event, including Ticket progress, without polling.',
+        parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }, { name: 'request', description: 'last Workstream revision, finite timeout, and caller cancellation.' }],
+        returns: 'a revision change, another durable event, or timeout; abort and shutdown reject.',
+      },
+      {
+        signature: 'interrupt(caller: Agent, rootSessionId: SessionId, targetId: SessionId): void',
+        description: 'Request cancellation of one member\'s current turn; pending inbox remains owned by Subagent.',
+        parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit root.' }, { name: 'targetId', description: 'active child member.' }],
+      },
+      {
+        signature: 'async stop(caller: Agent, rootSessionId: SessionId, targetId: SessionId): Promise<WorkstreamMember>',
+        description: 'Stop and await the selected child before persisting its stopped phase.',
+        parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit root.' }, { name: 'targetId', description: 'child member; coordinator must hand off before stopping itself.' }],
+        returns: 'stopped durable member after actual producer settlement.',
+      },
+      {
+        signature: 'async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, \'coordinatorId\'>): Promise<TicketView>',
+        description: 'Create a Ticket in the stable root; peers may propose work.',
+        parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'Ticket-owning Workstream root.' }, { name: 'request', description: 'Ticket content; coordinator authority is supplied by Workstream.' }],
+        returns: 'committed Ticket view.',
+      },
+      {
+        signature: 'async assignTicket(caller: Agent, rootSessionId: SessionId, request: Omit<AssignTicketRequest, \'actorId\'>): Promise<TicketView>',
+        description: 'Assign a Ticket under current coordinator authentication and stable root authority.',
+        parameters: [{ name: 'caller', description: 'exact current coordinator or owner.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'assignment to an active Workstream member.' }],
+        returns: 'committed Ticket view.',
+      },
+      {
+        signature: 'async endTicket(caller: Agent, rootSessionId: SessionId, request: Omit<EndTicketRequest, \'actorId\'>): Promise<TicketView>',
+        description: 'End a Ticket through its existing completion checks after authenticating coordinator role.',
+        parameters: [{ name: 'caller', description: 'current coordinator or technical owner.' }, { name: 'rootSessionId', description: 'root owning the Ticket.' }, { name: 'request', description: 'Ticket CAS revision and summary.' }],
+        returns: 'completed Ticket view.',
       },
     ],
   },
@@ -5751,6 +5963,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
   {
+    name: 'AddWorkstreamMemberRequest',
+    declaration: 'export interface AddWorkstreamMemberRequest {\n    readonly operationId: WorkstreamOperationId;\n    readonly name: string;\n    readonly description: string;\n    readonly provider: string;\n    readonly prompt: string;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
     name: 'AdmissionSnapshot',
     declaration: 'export interface AdmissionSnapshot {\n    readonly decisionInputRevision: number;\n    readonly dirtyGeneration: number;\n    readonly reservations: readonly DeliveryId[];\n    readonly transportPending: readonly DeliveryId[];\n    readonly classificationPending: readonly DeliveryId[];\n}',
   },
@@ -5823,6 +6039,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type AgentStatus = \'idle\' | \'running\';',
   },
   {
+    name: 'AggregatedChangeRequest',
+    declaration: 'export interface AggregatedChangeRequest {\n    readonly url: string;\n    readonly ref: SessionChangeRequest[\'ref\'];\n    readonly contributions: readonly ChangeRequestContribution[];\n}',
+  },
+  {
+    name: 'AggregatedChangeRequestsResult',
+    declaration: 'export interface AggregatedChangeRequestsResult {\n    readonly complete: boolean;\n    readonly changeRequests: readonly AggregatedChangeRequest[];\n    readonly diagnostics: readonly string[];\n}',
+  },
+  {
     name: 'AnalyticsPreset',
     declaration: 'export type AnalyticsPreset = \'creator\' | \'ptc\' | \'minimal\' | \'standard\';',
   },
@@ -5833,6 +6057,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AnonymousTranslationSpec',
     declaration: 'export interface AnonymousTranslationSpec extends TranslationSpecFields {\n    readonly provider: AnonymousTranslationProvider;\n}',
+  },
+  {
+    name: 'AnswerTicketQuestionRequest',
+    declaration: 'export interface AnswerTicketQuestionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly questionId: TicketQuestionId;\n    readonly answer: string;\n}',
   },
   {
     name: 'AnyHook',
@@ -5928,7 +6156,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AssignmentSnapshot',
-    declaration: 'export interface AssignmentSnapshot {\n    readonly id: AssignmentId;\n    readonly revision: number;\n    readonly role: AssignmentRole;\n    readonly subject: string;\n    readonly instructions: string;\n    readonly ownerId: SessionId;\n    readonly status: AssignmentStatus;\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlotId?: ExecutionSlotId;\n    readonly attempts: number;\n    readonly latestReportId?: TicketReportId;\n}',
+    declaration: 'export interface AssignmentSnapshot extends AssignmentSnapshotV1 {\n    readonly contribution: TicketContribution;\n    readonly activeAttemptId?: TicketAttemptId;\n}',
+  },
+  {
+    name: 'AssignmentSnapshotV1',
+    declaration: 'export interface AssignmentSnapshotV1 {\n    readonly id: AssignmentId;\n    readonly revision: number;\n    readonly role: AssignmentRole;\n    readonly subject: string;\n    readonly instructions: string;\n    readonly ownerId: SessionId;\n    readonly status: AssignmentStatus;\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlotId?: ExecutionSlotId;\n    readonly attempts: number;\n    readonly latestReportId?: TicketReportId;\n}',
   },
   {
     name: 'AssignmentStatus',
@@ -5936,7 +6168,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AssignTicketRequest',
-    declaration: 'export interface AssignTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly ownerId: SessionId;\n    readonly role?: AssignmentRole;\n    readonly subject: string;\n    readonly instructions?: string;\n    readonly workScopes?: readonly WorkScope[];\n    readonly executionMode?: ExecutionSlotMode;\n}',
+    declaration: 'export interface AssignTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly ownerId: SessionId;\n    readonly contribution?: TicketContribution;\n    readonly role?: AssignmentRole;\n    readonly subject: string;\n    readonly instructions?: string;\n    readonly workScopes?: readonly WorkScope[];\n    readonly executionMode?: ExecutionSlotMode;\n}',
   },
   {
     name: 'AssistantMessage',
@@ -6043,6 +6275,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface BashEnvVariableInfo extends BashEnvVariable {\n    contributor: string;\n    key: DshEnvironmentKey;\n}',
   },
   {
+    name: 'BeginTicketAttemptRequest',
+    declaration: 'export interface BeginTicketAttemptRequest extends TicketMutationRequest {\n    readonly assignmentId: AssignmentId;\n    readonly assignmentRevision?: number;\n    readonly attemptId: TicketAttemptId;\n    readonly operationId: TicketOperationId;\n    readonly workspace: TicketAttemptWorkspace;\n    readonly executor: TicketAttemptExecutor;\n    readonly modelSelection?: TicketAttemptFacts[\'modelSelection\'];\n}',
+  },
+  {
     name: 'Binding',
     declaration: 'export type Binding = Readonly<Omit<ModelDefinition, \'leadEffort\' | \'executorEffort\' | \'alias\' | \'credentialRef\'> & {\n    credentialRef: ReturnType<typeof credentialRef>;\n    effort: z.infer<typeof effortSchema>;\n}>;',
   },
@@ -6099,6 +6335,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ChangeRequestCheck {\n    readonly name: string;\n    readonly state: CheckState;\n    readonly url: string | null;\n    readonly workflow: string | null;\n    readonly startedAt: string | null;\n    readonly completedAt: string | null;\n}',
   },
   {
+    name: 'ChangeRequestContribution',
+    declaration: 'export interface ChangeRequestContribution {\n    readonly sessionId: SessionId;\n    readonly origin: SessionChangeRequest[\'origin\'];\n    readonly update: SessionChangeRequest[\'update\'];\n}',
+  },
+  {
     name: 'ChangeRequestKey',
     declaration: 'export type ChangeRequestKey = Branded<\'ChangeRequestKey\'>;',
   },
@@ -6135,6 +6375,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CheckState = \'pending\' | \'success\' | \'failure\' | \'neutral\' | \'skipped\' | \'cancelled\';',
   },
   {
+    name: 'CheckTicketCandidateRequest',
+    declaration: 'export interface CheckTicketCandidateRequest extends TicketMutationRequest {\n    readonly checkId: TicketCheckId;\n    readonly candidateId: TicketCandidateId;\n    readonly criterionId: TicketCriterionId;\n    readonly specRevision: number;\n    readonly outcome: \'pass\' | \'fail\';\n    readonly evidence: readonly string[];\n}',
+  },
+  {
     name: 'ClaimAssignmentRequest',
     declaration: 'export interface ClaimAssignmentRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n}',
   },
@@ -6145,6 +6389,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly ctimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'CloseTicketQuestionRequest',
+    declaration: 'export interface CloseTicketQuestionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly questionId: TicketQuestionId;\n}',
   },
   {
     name: 'CollectedOutput',
@@ -6432,7 +6680,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CreateTicketRequest',
-    declaration: 'export interface CreateTicketRequest {\n    readonly id?: TicketId;\n    readonly subject: string;\n    readonly description: string;\n    readonly coordinatorId?: SessionId;\n    readonly workScopes?: readonly WorkScope[];\n}',
+    declaration: 'export interface CreateTicketRequest {\n    readonly id?: TicketId;\n    readonly subject: string;\n    readonly description: string;\n    readonly coordinatorId?: SessionId;\n    readonly acceptanceCriteria?: readonly TicketAcceptanceCriterion[];\n    readonly dependencies?: readonly TicketId[];\n    readonly parent?: TicketParent;\n    readonly workScopes?: readonly WorkScope[];\n}',
   },
   {
     name: 'CreateWorktreePhase',
@@ -7691,6 +7939,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MetadataReceipt {\n    readonly host: string;\n    readonly endpoint: string;\n    readonly retrievedAt: string;\n    readonly pages: number;\n    readonly bytes: number;\n    readonly listingDigest: string;\n    readonly selectedId: string;\n    readonly providerEvidence: \'absent\' | \'consistent\';\n}',
   },
   {
+    name: 'MissionId',
+    declaration: 'export type MissionId = Branded<\'MissionId\'>;',
+  },
+  {
+    name: 'MissionMilestone',
+    declaration: 'export interface MissionMilestone {\n    readonly title: string;\n    readonly ticketIds: readonly TicketId[];\n}',
+  },
+  {
+    name: 'MissionPlanSnapshot',
+    declaration: 'export interface MissionPlanSnapshot {\n    readonly id: MissionId;\n    readonly revision: number;\n    readonly title: string;\n    readonly milestones: readonly MissionMilestone[];\n}',
+  },
+  {
+    name: 'MissionView',
+    declaration: 'export interface MissionView {\n    readonly plan: MissionPlanSnapshot;\n    readonly milestones: readonly {\n        readonly title: string;\n        readonly completed: number;\n        readonly total: number;\n    }[];\n    readonly completed: number;\n    readonly total: number;\n}',
+  },
+  {
     name: 'ModDefinition',
     declaration: 'export interface ModDefinition {\n    readonly name: string;\n    readonly version?: string;\n    readonly root?: string;\n    readonly options?: PluginOptions;\n    readonly register: ModRegister;\n}',
   },
@@ -7895,6 +8159,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PiAiRequestHeaderContext extends Readonly<Pick<GenerateOptions<string>, \'provider\' | \'model\' | \'sessionId\' | \'purpose\'>> {\n    readonly baseURL: string;\n}',
   },
   {
+    name: 'PlanTicketMissionRequest',
+    declaration: 'export interface PlanTicketMissionRequest extends TicketMutationRequest {\n    readonly missionId: MissionId;\n    readonly expectedPlanRevision: number;\n    readonly title: string;\n    readonly milestones: readonly MissionMilestone[];\n}',
+  },
+  {
     name: 'PlatformSession',
     declaration: 'export interface PlatformSession {\n    readonly origin: string;\n    readonly token: string;\n    readonly userId: AccountUserId | null;\n    readonly embeddedPageDist?: string;\n    readonly requestHeaders?: Readonly<Record<string, string>>;\n}',
   },
@@ -8011,6 +8279,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PreflightReport {\n    readonly selection: Selection;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly agentPreset: \'ready\' | \'blocked\';\n    readonly bindings: readonly (BindingReadiness & {\n        readonly roles: readonly string[];\n    })[];\n    readonly coverage: \'live-unverified\';\n    readonly defaultEligible: false;\n    readonly productAdmission: \'unavailable-until-runtime-safety-gates\';\n}',
   },
   {
+    name: 'PrepareContextRequest',
+    declaration: 'export interface PrepareContextRequest {\n    readonly requirements: string;\n    readonly decisions: readonly string[];\n    readonly cursor: string;\n    readonly changes: string;\n    readonly artifacts: readonly {\n        readonly artifactId: string;\n        readonly version: number;\n    }[];\n}',
+  },
+  {
     name: 'PreparedAdapterCall',
     declaration: 'export interface PreparedAdapterCall {\n    readonly model: LlmResolvedModelInfo;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
@@ -8040,7 +8312,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PrepareTicketExecutionRequest',
-    declaration: 'export interface PrepareTicketExecutionRequest {\n    readonly rootSessionId: SessionId;\n    readonly ticketId: TicketId;\n    readonly assignmentId: AssignmentSnapshot[\'id\'];\n    readonly expectedRevision: number;\n    readonly worktreeName?: string;\n    readonly from?: string;\n    readonly signal?: AbortSignal;\n}',
+    declaration: 'export interface PrepareTicketExecutionRequest extends Omit<BeginTicketAttemptRequest, \'actorId\'> {\n    readonly rootSessionId: Session[\'id\'];\n    readonly worktreeName?: string;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'PresetDefinition',
@@ -8215,6 +8487,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PtcRunSpec extends PtcRunRequest {\n    cwd: string;\n    timeoutMs: number | null;\n}',
   },
   {
+    name: 'PublishEvidenceRequest',
+    declaration: 'export interface PublishEvidenceRequest {\n    readonly operationId: WorkstreamEvidenceOperationId;\n    readonly artifactId: WorkstreamEvidenceArtifactId;\n    readonly name?: string | undefined;\n    readonly expectedVersion: number;\n    readonly content: string | Uint8Array;\n    readonly signal?: AbortSignal | undefined;\n}',
+  },
+  {
     name: 'QueueAction',
     declaration: 'export type QueueAction = {\n    readonly kind: \'edit\';\n    readonly content: readonly TextBlock[];\n} | {\n    readonly kind: \'remove\';\n} | {\n    readonly kind: \'steer\';\n};',
   },
@@ -8368,7 +8644,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ReportTicketRequest',
-    declaration: 'export interface ReportTicketRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence?: readonly string[];\n    readonly nextSteps?: readonly string[];\n}',
+    declaration: 'export interface ReportTicketRequest {\n    readonly attemptId?: TicketAttemptId;\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence?: readonly string[];\n    readonly nextSteps?: readonly string[];\n}',
   },
   {
     name: 'RequestContext',
@@ -8461,6 +8737,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ReviewDecision',
     declaration: 'export type ReviewDecision = \'approved\' | \'changes-requested\' | \'review-required\' | \'none\';',
+  },
+  {
+    name: 'ReviseTicketRequest',
+    declaration: 'export interface ReviseTicketRequest extends TicketMutationRequest {\n    readonly acceptanceCriteria: readonly TicketAcceptanceCriterion[];\n    readonly dependencies: readonly TicketId[];\n    readonly parent?: TicketParent;\n}',
   },
   {
     name: 'Roster',
@@ -8665,6 +8945,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SendTeamMessageResult',
     declaration: 'export interface SendTeamMessageResult {\n    readonly messageId: MessageId;\n}',
+  },
+  {
+    name: 'SendWorkstreamMessageRequest',
+    declaration: 'export interface SendWorkstreamMessageRequest {\n    readonly operationId: WorkstreamOperationId;\n    readonly targetId: SessionId;\n    readonly text: string;\n    readonly context?: WorkstreamContextPacket;\n    readonly signal: AbortSignal;\n}',
   },
   {
     name: 'SerializedElement',
@@ -9371,6 +9655,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SettingsSecretView {\n    path: string[];\n    set: boolean;\n}',
   },
   {
+    name: 'SettleTicketAttemptRequest',
+    declaration: 'export interface SettleTicketAttemptRequest extends Omit<UpdateTicketAttemptRequest, \'status\'> {\n    readonly outcome: \'succeeded\' | \'failed\' | \'cancelled\';\n}',
+  },
+  {
     name: 'ShareAccess',
     declaration: 'export interface ShareAccess {\n    readonly mode: \'open\' | \'selected\';\n    readonly selected: readonly ShareAccessSelection[];\n    readonly deploymentAllowedSubjectIds: readonly string[];\n    readonly shareAllowedSubjectIds: readonly string[];\n    readonly broadenedByDeploymentSubjects: boolean;\n    readonly identityKeyAcl: true;\n}',
   },
@@ -9696,7 +9984,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentProvider',
-    declaration: 'export interface SubagentProvider {\n    readonly name: string;\n    readonly capabilities: SubagentCapabilities;\n    readonly inheritsParentContext: boolean;\n    readonly agentRouteDefaults?: Readonly<{\n        provider: string;\n        model: string;\n    }>;\n    start?(request: ResolvedSubagentStartRequest): Promise<SubagentRun>;\n    prepareContinuable?(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;\n}',
+    declaration: 'export interface SubagentProvider {\n    readonly name: string;\n    readonly execution?: {\n        readonly kind: \'in-process\' | \'dedicated-process\';\n    } | {\n        readonly kind: \'remote\';\n        readonly world: string;\n    };\n    readonly capabilities: SubagentCapabilities;\n    readonly inheritsParentContext: boolean;\n    readonly agentRouteDefaults?: Readonly<{\n        provider: string;\n        model: string;\n    }>;\n    start?(request: ResolvedSubagentStartRequest): Promise<SubagentRun>;\n    prepareContinuable?(request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;\n}',
   },
   {
     name: 'SubagentResult',
@@ -9737,6 +10025,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SubagentStopReasonMap',
     declaration: 'export interface SubagentStopReasonMap {\n    completed: \'completed\';\n    aborted: \'aborted\';\n    error: \'error\';\n    \'max-tokens\': \'max-tokens\';\n    refusal: \'refusal\';\n}',
+  },
+  {
+    name: 'SubmitTicketCandidateRequest',
+    declaration: 'export interface SubmitTicketCandidateRequest extends TicketMutationRequest {\n    readonly candidateId: TicketCandidateId;\n    readonly specRevision: number;\n    readonly content: TicketCandidateContent;\n    readonly assignmentIds: readonly AssignmentId[];\n}',
   },
   {
     name: 'SubprocessCollect',
@@ -10003,6 +10295,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface TextProps {\n    readonly color?: string | undefined;\n    readonly bold?: boolean | undefined;\n    readonly dimColor?: boolean | undefined;\n    readonly italic?: boolean | undefined;\n    readonly underline?: boolean | undefined;\n    readonly children?: UiNode | undefined;\n}',
   },
   {
+    name: 'TicketAcceptanceCriterion',
+    declaration: 'export interface TicketAcceptanceCriterion {\n    readonly id: TicketCriterionId;\n    readonly description: string;\n    readonly required: boolean;\n    readonly independent: boolean;\n}',
+  },
+  {
+    name: 'TicketAttemptExecutor',
+    declaration: 'export type TicketAttemptExecutor = {\n    readonly kind: \'in-process\';\n} | {\n    readonly kind: \'dedicated-process\';\n    readonly provider: string;\n} | {\n    readonly kind: \'remote\';\n    readonly provider: string;\n    readonly world: string;\n};',
+  },
+  {
+    name: 'TicketAttemptFacts',
+    declaration: 'export interface TicketAttemptFacts {\n    readonly id: TicketAttemptId;\n    readonly assignmentId: AssignmentId;\n    readonly assignmentRevision: number;\n    readonly specRevision: number;\n    readonly workspace: TicketAttemptWorkspace;\n    readonly executor: TicketAttemptExecutor;\n    readonly modelSelection?: {\n        readonly provider: string;\n        readonly model: string;\n        readonly settings: string;\n    };\n    readonly workspaceReceipt?: TicketWorkspaceReceipt;\n    readonly runtimeReceipt?: TicketRuntimeReceipt;\n    readonly diagnostics: readonly string[];\n    readonly createdAt: number;\n    readonly updatedAt: number;\n}',
+  },
+  {
+    name: 'TicketAttemptId',
+    declaration: 'export type TicketAttemptId = Branded<\'TicketAttemptId\'>;',
+  },
+  {
+    name: 'TicketAttemptSnapshot',
+    declaration: 'export type TicketAttemptSnapshot = TicketAttemptFacts & ({\n    readonly status: \'preparing\' | \'running\' | \'stopping\' | \'unknown\';\n} | {\n    readonly status: \'settled\';\n    readonly outcome: \'succeeded\' | \'failed\' | \'cancelled\';\n});',
+  },
+  {
+    name: 'TicketAttemptWorkspace',
+    declaration: 'export interface TicketAttemptWorkspace {\n    readonly kind: \'shared-workspace\' | \'isolated-worktree\';\n    readonly directory: string;\n    readonly baseCommit?: string;\n}',
+  },
+  {
     name: 'TicketAttentionId',
     declaration: 'export type TicketAttentionId = Branded<\'TicketAttentionId\'>;',
   },
@@ -10019,16 +10335,60 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type TicketAttentionStatus = \'open\' | \'acknowledged\' | \'resolved\';',
   },
   {
+    name: 'TicketCandidateContent',
+    declaration: 'export type TicketCandidateContent = {\n    readonly kind: \'commit\';\n    readonly repository: string;\n    readonly commit: string;\n} | {\n    readonly kind: \'artifact\';\n    readonly reference: string;\n    readonly digest: string;\n};',
+  },
+  {
+    name: 'TicketCandidateId',
+    declaration: 'export type TicketCandidateId = Branded<\'TicketCandidateId\'>;',
+  },
+  {
+    name: 'TicketCandidateSnapshot',
+    declaration: 'export interface TicketCandidateSnapshot {\n    readonly id: TicketCandidateId;\n    readonly specRevision: number;\n    readonly content: TicketCandidateContent;\n    readonly assignmentIds: readonly AssignmentId[];\n    readonly reportIds: readonly TicketReportId[];\n    readonly authorId: SessionId;\n    readonly createdAt: number;\n}',
+  },
+  {
+    name: 'TicketCheckId',
+    declaration: 'export type TicketCheckId = Branded<\'TicketCheckId\'>;',
+  },
+  {
+    name: 'TicketCheckSnapshot',
+    declaration: 'export interface TicketCheckSnapshot {\n    readonly id: TicketCheckId;\n    readonly candidateId: TicketCandidateId;\n    readonly criterionId: TicketCriterionId;\n    readonly specRevision: number;\n    readonly authorId: SessionId;\n    readonly outcome: \'pass\' | \'fail\';\n    readonly evidence: readonly string[];\n    readonly createdAt: number;\n}',
+  },
+  {
+    name: 'TicketContribution',
+    declaration: 'export type TicketContribution = \'required\' | \'advisory\';',
+  },
+  {
+    name: 'TicketCriterionId',
+    declaration: 'export type TicketCriterionId = Branded<\'TicketCriterionId\'>;',
+  },
+  {
     name: 'TicketExecutionHandle',
-    declaration: 'export interface TicketExecutionHandle {\n    readonly ticket: TicketView;\n    readonly assignment: AssignmentSnapshot;\n    readonly workspace: TicketExecutionWorkspace;\n    readonly jobs: readonly JobId[];\n    startJob(label: string, run: (job: JobHandle) => JobHooks, signal?: AbortSignal): JobId;\n    dispose(): Promise<void>;\n}',
+    declaration: 'export interface TicketExecutionHandle {\n    readonly ticket: TicketView;\n    readonly assignment: AssignmentSnapshot;\n    readonly attempt: TicketAttemptSnapshot;\n    readonly workspace: TicketExecutionWorkspace;\n    readonly activation?: SubagentActivation;\n    readonly result?: Promise<SubagentResult>;\n    readonly jobs: readonly JobId[];\n    startJob(label: string, run: (job: JobHandle) => JobHooks, signal?: AbortSignal): Promise<JobId>;\n    settle(): Promise<void>;\n    dispose(): Promise<void>;\n}',
   },
   {
     name: 'TicketExecutionWorkspace',
-    declaration: 'export interface TicketExecutionWorkspace {\n    readonly mode: ExecutionSlotMode;\n    readonly worktree?: CreatedWorktree;\n}',
+    declaration: 'export type TicketExecutionWorkspace = TicketWorkspaceReceipt;',
   },
   {
     name: 'TicketId',
     declaration: 'export type TicketId = Branded<\'TicketId\'>;',
+  },
+  {
+    name: 'TicketMutationRequest',
+    declaration: 'export interface TicketMutationRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n}',
+  },
+  {
+    name: 'TicketOperationId',
+    declaration: 'export type TicketOperationId = Branded<\'TicketOperationId\'>;',
+  },
+  {
+    name: 'TicketOperationSnapshot',
+    declaration: 'export interface TicketOperationSnapshot {\n    readonly id: TicketOperationId;\n    readonly request: string;\n}',
+  },
+  {
+    name: 'TicketParent',
+    declaration: 'export interface TicketParent {\n    readonly ticketId: TicketId;\n    readonly required: boolean;\n}',
   },
   {
     name: 'TicketQuestionId',
@@ -10052,15 +10412,27 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TicketReportSnapshot',
-    declaration: 'export interface TicketReportSnapshot {\n    readonly id: TicketReportId;\n    readonly assignmentId: AssignmentId;\n    readonly authorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence: readonly string[];\n    readonly nextSteps: readonly string[];\n    readonly createdAt: number;\n}',
+    declaration: 'export interface TicketReportSnapshot {\n    readonly specRevision?: number;\n    readonly attemptId?: TicketAttemptId;\n    readonly id: TicketReportId;\n    readonly assignmentId: AssignmentId;\n    readonly authorId: SessionId;\n    readonly kind: TicketReportKind;\n    readonly summary: string;\n    readonly evidence: readonly string[];\n    readonly nextSteps: readonly string[];\n    readonly createdAt: number;\n}',
+  },
+  {
+    name: 'TicketRuntimeReceipt',
+    declaration: 'export interface TicketRuntimeReceipt {\n    readonly runtimeId: string;\n    readonly providerId: string;\n    readonly childSessionId?: SessionId;\n    readonly jobIds?: readonly JobId[];\n    readonly transportId?: string;\n    readonly world?: string;\n}',
   },
   {
     name: 'TicketService',
-    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>;\n    async block(session: Session, request: BlockTicketRequest): Promise<TicketView>;\n    async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<TicketView>;\n    async complete(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    async fail(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>;\n    readonly createTicket: TicketService[\'create\'];\n    readonly assignWorker: TicketService[\'assign\'];\n    readonly claimAssignment: TicketService[\'cl /* …truncated — full shape in source */',
+    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>;\n    async block(session: Session, request: BlockTicketRequest): Promise<TicketView>;\n    async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<Tick /* …truncated — full shape in source */',
   },
   {
     name: 'TicketSnapshot',
-    declaration: 'export interface TicketSnapshot {\n    readonly id: TicketId;\n    readonly revision: number;\n    readonly subject: string;\n    readonly description: string;\n    readonly status: TicketStatus;\n    readonly coordinatorId: SessionId;\n    readonly assignments: readonly AssignmentSnapshot[];\n    readonly reports: readonly TicketReportSnapshot[];\n    readonly questions: readonly TicketQuestionSnapshot[];\n    readonly attentions: readonly TicketAttentionSnapshot[];\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlots: readonly ExecutionSlotSnapshot[];\n    readonly terminalOutcome?: TicketTerminalOutcome;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n}',
+    declaration: 'export interface TicketSnapshot extends Omit<TicketSnapshotV1, \'assignments\'> {\n    readonly assignments: readonly AssignmentSnapshot[];\n    readonly specification: TicketSpecification;\n    readonly attempts: readonly TicketAttemptSnapshot[];\n    readonly candidates: readonly TicketCandidateSnapshot[];\n    readonly currentCandidateId?: TicketCandidateId;\n    readonly checks: readonly TicketCheckSnapshot[];\n    readonly operations: readonly TicketOperationSnapshot[];\n    readonly missionPlans: readonly MissionPlanSnapshot[];\n}',
+  },
+  {
+    name: 'TicketSnapshotV1',
+    declaration: 'export interface TicketSnapshotV1 {\n    readonly id: TicketId;\n    readonly revision: number;\n    readonly subject: string;\n    readonly description: string;\n    readonly status: TicketStatus;\n    readonly coordinatorId: SessionId;\n    readonly assignments: readonly AssignmentSnapshotV1[];\n    readonly reports: readonly TicketReportSnapshot[];\n    readonly questions: readonly TicketQuestionSnapshot[];\n    readonly attentions: readonly TicketAttentionSnapshot[];\n    readonly workScopes: readonly WorkScope[];\n    readonly executionSlots: readonly ExecutionSlotSnapshot[];\n    readonly terminalOutcome?: TicketTerminalOutcome;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n}',
+  },
+  {
+    name: 'TicketSpecification',
+    declaration: 'export interface TicketSpecification {\n    readonly revision: number;\n    readonly acceptanceCriteria: readonly TicketAcceptanceCriterion[];\n    readonly dependencies: readonly TicketId[];\n    readonly parent?: TicketParent;\n}',
   },
   {
     name: 'TicketStatus',
@@ -10073,6 +10445,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TicketView',
     declaration: 'export type TicketView = TicketSnapshot;',
+  },
+  {
+    name: 'TicketWorkspaceReceipt',
+    declaration: 'export interface TicketWorkspaceReceipt {\n    readonly directory: string;\n    readonly baseCommit: string;\n    readonly worktree?: CreatedWorktree;\n}',
   },
   {
     name: 'TimedUserQuestionResult',
@@ -10479,6 +10855,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface UpdateTeamTaskRequest {\n    readonly taskId: TeamTaskId;\n    readonly expectedRevision: number;\n    readonly action: TeamTaskAction;\n    readonly subject?: string;\n    readonly description?: string;\n    readonly blockedBy?: readonly TeamTaskId[];\n    readonly writeScopes?: readonly string[];\n    readonly owner?: string;\n}',
   },
   {
+    name: 'UpdateTicketAttemptRequest',
+    declaration: 'export interface UpdateTicketAttemptRequest extends TicketMutationRequest {\n    readonly attemptId: TicketAttemptId;\n    readonly operationId: TicketOperationId;\n    readonly status: \'running\' | \'stopping\' | \'unknown\';\n    readonly workspaceReceipt?: TicketWorkspaceReceipt;\n    readonly runtimeReceipt?: TicketRuntimeReceipt;\n    readonly diagnostics?: readonly string[];\n}',
+  },
+  {
+    name: 'UpdateTicketAttentionRequest',
+    declaration: 'export interface UpdateTicketAttentionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly attentionId: TicketAttentionId;\n}',
+  },
+  {
     name: 'UserMessage',
     declaration: 'export interface UserMessage extends MessageBase {\n    readonly role: \'user\';\n}',
   },
@@ -10813,6 +11197,50 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceView',
     declaration: 'export interface WorkspaceView {\n    readonly workspaceId: WorkspaceId;\n    readonly path: string;\n    readonly title: string;\n    readonly sessionIds: readonly SessionId[];\n    readonly createdAt: string;\n    readonly updatedAt: string;\n}',
+  },
+  {
+    name: 'WorkstreamContextPacket',
+    declaration: 'export interface WorkstreamContextPacket {\n    readonly requirements: string;\n    readonly decisions: readonly string[];\n    readonly cursor: string;\n    readonly changes: string;\n    readonly artifacts: readonly {\n        readonly ref: string;\n        readonly digest: string;\n    }[];\n}',
+  },
+  {
+    name: 'WorkstreamEvidenceArtifactId',
+    declaration: 'export type WorkstreamEvidenceArtifactId = Branded<\'WorkstreamEvidenceArtifactId\'>;',
+  },
+  {
+    name: 'WorkstreamEvidenceArtifactRecord',
+    declaration: 'export interface WorkstreamEvidenceArtifactRecord {\n    readonly artifactId: WorkstreamEvidenceArtifactId;\n    readonly latestVersion: number;\n    readonly versions: readonly WorkstreamEvidenceVersionRecord[];\n}',
+  },
+  {
+    name: 'WorkstreamEvidenceOperationId',
+    declaration: 'export type WorkstreamEvidenceOperationId = Branded<\'WorkstreamEvidenceOperationId\'>;',
+  },
+  {
+    name: 'WorkstreamEvidenceVersionRecord',
+    declaration: 'export interface WorkstreamEvidenceVersionRecord {\n    readonly artifactId: WorkstreamEvidenceArtifactId;\n    readonly version: number;\n    readonly name: string;\n    readonly ref: string;\n    readonly digest: string;\n    readonly bytes: number;\n    readonly authorSessionId: SessionId;\n    readonly operationId: WorkstreamEvidenceOperationId;\n    readonly createdAt: string;\n}',
+  },
+  {
+    name: 'WorkstreamMember',
+    declaration: 'export interface WorkstreamMember {\n    readonly id: SessionId;\n    readonly name: string;\n    readonly role: \'owner\' | \'member\';\n    readonly diagnostic: string | null;\n    readonly description: string;\n    readonly provider: string;\n    readonly operationId: WorkstreamOperationId;\n    readonly prompt: string;\n    readonly phase: \'provisioning\' | \'active\' | \'stopping\' | \'stopped\';\n}',
+  },
+  {
+    name: 'WorkstreamMembership',
+    declaration: 'export interface WorkstreamMembership {\n    readonly owner: Agent;\n    readonly snapshot: WorkstreamSnapshot;\n    readonly member: WorkstreamMember;\n}',
+  },
+  {
+    name: 'WorkstreamMessage',
+    declaration: 'export interface WorkstreamMessage {\n    readonly operationId: WorkstreamOperationId;\n    readonly senderId: SessionId;\n    readonly targetId: SessionId;\n    readonly text: string;\n    readonly diagnostic: string | null;\n    readonly context: WorkstreamContextPacket | null;\n    readonly delivery: {\n        readonly phase: \'intent\';\n    } | {\n        readonly phase: \'accepted\';\n        readonly messageId: MessageId;\n    } | {\n        readonly phase: \'processed\';\n        readonly messageId: MessageId;\n    };\n}',
+  },
+  {
+    name: 'WorkstreamOperationId',
+    declaration: 'export type WorkstreamOperationId = Branded<\'WorkstreamOperationId\'>;',
+  },
+  {
+    name: 'WorkstreamSnapshot',
+    declaration: 'export interface WorkstreamSnapshot {\n    readonly ownerSessionId: SessionId;\n    readonly coordinatorId: SessionId;\n    readonly operationId: WorkstreamOperationId;\n    readonly revision: number;\n    readonly title: string;\n    readonly members: readonly WorkstreamMember[];\n    readonly messages: readonly WorkstreamMessage[];\n}',
+  },
+  {
+    name: 'WorkstreamWaitResult',
+    declaration: 'export interface WorkstreamWaitResult {\n    readonly timedOut: boolean;\n    readonly revision: number;\n}',
   },
   {
     name: 'WriterLifetimeFlush',

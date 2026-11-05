@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Workstream Evidence",
-    "description": "Immutable Workstream evidence versions, context packets, and aggregated member change requests"
+    "description": "Versiones inmutables de evidencia del Workstream, paquetes de contexto y solicitudes de cambio agregadas de los miembros."
   }
 }

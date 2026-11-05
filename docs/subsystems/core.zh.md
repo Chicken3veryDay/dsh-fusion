@@ -960,19 +960,15 @@ Source: [`packages/experimental/fusion-participants/src/index.ts`](../../package
 
 ### `ctx.ticketExecution` — `TicketExecutionService`
 
-Composes durable Ticket assignment state with the existing Jobs and Worktree providers. The adapter owns runtime resources; Ticket remains the durable authority.
+Serializes attempt admission, retains uncertain resources, and waits for producer settlement.
 
 ```ts cordis-catalog
-/**
- * Claim an assignment for the exact worker Agent and prepare its declared execution mode.
- * Shared workspaces keep the caller's current directory; isolated workspaces use the existing
- * Worktree service and retain its returned checkout metadata for recovery and review.
- *
- * @param agent - live worker Agent whose Session owns the assignment.
- * @param request - Ticket identity, CAS revision, and optional worktree request.
- * @returns an execution handle with Job and workspace ownership.
+/** Prepare or return the exact live attempt; recovered attempts cannot replay effects.
+ * @param caller - Exact registered owner or current coordinator.
+ * @param request - Stable operation and attempt ids, CAS, and explicit placement.
+ * @returns The single resource handle retained for this preparation.
  */
-async prepare(agent: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>
+prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>
 ```
 
 Source: [`packages/experimental/ticket/src/execution.ts`](../../packages/experimental/ticket/src/execution.ts)
@@ -1038,14 +1034,42 @@ async release(session: Session, request: ReleaseAssignmentRequest): Promise<Tick
  */
 async report(session: Session, request: ReportTicketRequest): Promise<TicketView>
 
-/** Ask a durable question and move the Ticket into waiting.
+/** Ask a durable question; blocked Tickets remain blocked, otherwise they wait.
  * @param session - Session whose log owns the Ticket.
  * @param request - worker question request.
  * @returns the committed Ticket view.
  */
 async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>
 
-/** Add one human-visible attention item and move the Ticket into waiting.
+/** Answer an open question under coordinator authority; other blockers remain active.
+ * @param session - Session owning the Ticket.
+ * @param request - Question identity, answer, actor, and CAS revision.
+ * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+ */
+async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>
+
+/** Close an open or answered question as its author or current coordinator.
+ * @param session - Session owning the Ticket.
+ * @param request - Question identity, actor, and CAS revision.
+ * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+ */
+async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>
+
+/** Acknowledge an open attention item as coordinator; acknowledgement retains its blocker.
+ * @param session - Session owning the Ticket.
+ * @param request - Attention identity, actor, and CAS revision.
+ * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+ */
+async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>
+
+/** Resolve an open or acknowledged attention item as coordinator, preserving other blockers.
+ * @param session - Session owning the Ticket.
+ * @param request - Attention identity, actor, and CAS revision.
+ * @returns Committed Ticket; rejects without appending for denied or invalid changes.
+ */
+async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>
+
+/** Add a human-visible attention item; blocked attention keeps the Ticket blocked.
  * @param session - Session whose log owns the Ticket.
  * @param request - attention request.
  * @returns the committed Ticket view.
@@ -1086,11 +1110,265 @@ async fail(session: Session, request: EndTicketRequest): Promise<TicketView>
  * @returns the committed Ticket view.
  */
 async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>
+
+/** Replace the specification; prior candidates, checks and contributions remain historical.
+ * @param session - Owning Session.
+ * @param request - Complete replacement obligations and CAS revision.
+ * @returns Committed Ticket with an incremented specification revision.
+ */
+async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView>
+
+/** Admit one execution attempt before effects; repeated operation identities do not append.
+ * @param session - Owning Session.
+ * @param request - Attempt identity, placement, actor and CAS revision.
+ * @returns Current Ticket; rejects replacement of unsettled work or changed operation payloads.
+ */
+async beginAttempt(session: Session, request: BeginTicketAttemptRequest): Promise<TicketView>
+
+/** Record runtime receipts, stopping or uncertainty without releasing work.
+ * @param session - Owning Session.
+ * @param request - Current attempt and stable operation identity.
+ * @returns Current Ticket; obsolete attempts and replaced receipts are rejected.
+ */
+async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView>
+
+/** Record observed producer settlement; result reports alone never settle attempts.
+ * @param session - Owning Session.
+ * @param request - Current attempt, observed outcome and retained receipts.
+ * @returns Current Ticket with settled work; retrying the same operation is safe.
+ */
+async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView>
+
+/** Pin immutable content and the contributing Assignments for the current specification.
+ * @param session - Owning Session.
+ * @param request - New candidate identity and immutable content reference.
+ * @returns Committed Ticket; all older checks remain historical.
+ */
+async submitCandidate(session: Session, request: SubmitTicketCandidateRequest): Promise<TicketView>
+
+/** Append criterion evidence; independent authors cannot contribute to the candidate.
+ * @param session - Owning Session.
+ * @param request - Current candidate, criterion and evidence.
+ * @returns Committed Ticket; stale checks append nothing.
+ */
+async checkCandidate(session: Session, request: CheckTicketCandidateRequest): Promise<TicketView>
+
+/** Version a Mission's Ticket references without adding mutable completion state.
+ * @param session - Owning Session.
+ * @param request - Plan references and current Ticket/plan revisions.
+ * @returns Committed Ticket containing the new plan revision.
+ */
+async planMission(session: Session, request: PlanTicketMissionRequest): Promise<TicketView>
+
+/** Read Mission progress derived solely from referenced Ticket acceptance.
+ * @param session - Owning Session.
+ * @param ticketId - Ticket containing the plan.
+ * @param missionId - Mission identity.
+ * @returns Current plan with accepted and total Ticket counts.
+ */
+mission(session: Session, ticketId: TicketId, missionId: MissionId): MissionView
 ```
 
 Types: [Session](session.zh.md)
 
 Source: [`packages/experimental/ticket/src/index.ts`](../../packages/experimental/ticket/src/index.ts)
+
+<a id="ctxworkstreamevidence--workstreamevidenceservice"></a>
+
+### `ctx.workstreamEvidence` — `WorkstreamEvidenceService`
+
+Service managing durable, immutable Workstream evidence versions.
+
+```ts cordis-catalog
+/**
+ * Publish an immutable evidence version in the owning Workstream session.
+ * Idempotent retry with same payload returns the existing version; changed payload is rejected.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @param request - artifact id, expected next version, operation id, and bounded content.
+ * @returns The retained version record.
+ */
+async publish( caller: Agent, rootSessionId: SessionId, request: PublishEvidenceRequest, ): Promise<WorkstreamEvidenceVersionRecord>
+
+/**
+ * Get metadata for one retained evidence artifact version.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @param artifactId - logical artifact id.
+ * @param version - version number, or undefined for the latest.
+ * @returns The retained version record.
+ */
+get( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, ): WorkstreamEvidenceVersionRecord
+
+/**
+ * List all evidence artifacts and version histories for one Workstream.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @returns Every retained artifact with its complete version history.
+ */
+list(caller: Agent, rootSessionId: SessionId): readonly WorkstreamEvidenceArtifactRecord[]
+
+/**
+ * Read and verify immutable evidence content from attachments.
+ * Validates digest and byte length before returning.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @param artifactId - logical artifact id.
+ * @param version - version number, or undefined for the latest.
+ * @param signal - aborts the attachment read.
+ * @returns Version metadata and the verified bytes.
+ */
+async read( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, signal?: AbortSignal, ): Promise<{ metadata: WorkstreamEvidenceVersionRecord; data: Uint8Array }>
+
+/**
+ * Read one verified evidence version as UTF-8 text for model-visible output.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @param artifactId - logical artifact id.
+ * @param version - version number, or undefined for the latest.
+ * @param signal - aborts the attachment read.
+ * @returns Version metadata and decoded text.
+ * @throws WorkstreamEvidenceError `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED` above `maxToolTextBytes`;
+ * `WORKSTREAM_EVIDENCE_INVALID_INPUT` for bytes that are not valid UTF-8.
+ */
+async readText( caller: Agent, rootSessionId: SessionId, artifactId: string, version?: number, signal?: AbortSignal, ): Promise<{ metadata: WorkstreamEvidenceVersionRecord; text: string }>
+
+/**
+ * Construct a bounded WorkstreamContextPacket from exact retained evidence versions.
+ * Rejects mutable or foreign links.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @param request - packet fields and the exact artifact versions to include.
+ * @returns A packet whose artifacts carry retained refs and digests.
+ */
+prepareContext( caller: Agent, rootSessionId: SessionId, request: PrepareContextRequest, ): WorkstreamContextPacket
+
+/**
+ * Aggregate change request bindings across the root and active member Sessions.
+ * @param caller - live Workstream member.
+ * @param rootSessionId - Workstream root Session id.
+ * @returns Deduplicated change requests, diagnostics, and whether every Session was read.
+ */
+aggregateChangeRequests( caller: Agent, rootSessionId: SessionId, ): AggregatedChangeRequestsResult
+```
+
+Source: [`packages/experimental/workstream-evidence/src/index.ts`](../../packages/experimental/workstream-evidence/src/index.ts)
+
+<a id="ctxworkstreams--workstreamservice"></a>
+
+### `ctx.workstreams` — `WorkstreamService`
+
+Host service; unknown intents are reconciled but never automatically executed again.
+
+```ts cordis-catalog
+/** Open one root-owned Workstream, idempotently for the same creation key.
+ * @param caller - exact live technical owner.
+ * @param request - stable operation identity and human-readable title.
+ * @returns committed Workstream snapshot.
+ */
+async open(caller: Agent, request: { operationId: WorkstreamOperationId; title: string }): Promise<WorkstreamSnapshot>
+
+/** Resolve exact live membership against the immutable technical owner.
+ * @param caller - live caller, never an id supplied as authorization.
+ * @param rootSessionId - explicit Workstream root.
+ * @returns technical owner, detached snapshot and durable member.
+ */
+requireMembership(caller: Agent, rootSessionId: SessionId): WorkstreamMembership
+
+/** Read one Workstream visible to the exact live caller.
+ * @param caller - authenticated member.
+ * @param rootSessionId - explicit Workstream root.
+ * @returns detached current value.
+ */
+get(caller: Agent, rootSessionId: SessionId): WorkstreamSnapshot
+
+/** List live Workstream roots visible to one live member.
+ * @param caller - exact live Agent.
+ * @returns bounded list, at most the caller's root Workstream.
+ */
+list(caller: Agent): WorkstreamSnapshot[]
+
+/** Provision or reconcile one continuable direct child under a stable operation id.
+ * @param caller - owner or current coordinator.
+ * @param rootSessionId - stable technical owner.
+ * @param request - immutable intent and cancellation before acceptance.
+ * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.
+ */
+async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember>
+
+/** Transfer the coordinator role while preserving every child parent and root log.
+ * @param caller - current coordinator or immutable owner.
+ * @param rootSessionId - explicit technical owner.
+ * @param request - CAS revision and active new coordinator.
+ * @returns committed next snapshot.
+ */
+async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>
+
+/** Deliver one immutable message intent with durable acceptance distinct from processing.
+ * @param caller - exact live sending member.
+ * @param rootSessionId - explicit root selecting recipient membership.
+ * @param request - stable operation id, target, message and optional logged context packet.
+ * @returns current durable delivery receipt; unresolved retries never send again.
+ */
+async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage>
+
+/** Record recipient acknowledgement; idle status never implies processing.
+ * @param caller - exact live recipient.
+ * @param rootSessionId - explicit Workstream root.
+ * @param operationId - accepted send being acknowledged.
+ * @returns the explicit processed receipt.
+ */
+async acknowledge(caller: Agent, rootSessionId: SessionId, operationId: WorkstreamOperationId): Promise<WorkstreamMessage>
+
+/** Observe any durable root event, including Ticket progress, without polling.
+ * @param caller - exact live member.
+ * @param rootSessionId - explicit Workstream root.
+ * @param request - last Workstream revision, finite timeout, and caller cancellation.
+ * @returns a revision change, another durable event, or timeout; abort and shutdown reject.
+ */
+async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>
+
+/** Request cancellation of one member's current turn; pending inbox remains owned by Subagent.
+ * @param caller - current coordinator or immutable owner.
+ * @param rootSessionId - explicit root.
+ * @param targetId - active child member.
+ */
+interrupt(caller: Agent, rootSessionId: SessionId, targetId: SessionId): void
+
+/** Stop and await the selected child before persisting its stopped phase.
+ * @param caller - current coordinator or immutable owner.
+ * @param rootSessionId - explicit root.
+ * @param targetId - child member; coordinator must hand off before stopping itself.
+ * @returns stopped durable member after actual producer settlement.
+ */
+async stop(caller: Agent, rootSessionId: SessionId, targetId: SessionId): Promise<WorkstreamMember>
+
+/** Create a Ticket in the stable root; peers may propose work.
+ * @param caller - exact live member.
+ * @param rootSessionId - Ticket-owning Workstream root.
+ * @param request - Ticket content; coordinator authority is supplied by Workstream.
+ * @returns committed Ticket view.
+ */
+async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, 'coordinatorId'>): Promise<TicketView>
+
+/** Assign a Ticket under current coordinator authentication and stable root authority.
+ * @param caller - exact current coordinator or owner.
+ * @param rootSessionId - root owning the Ticket.
+ * @param request - assignment to an active Workstream member.
+ * @returns committed Ticket view.
+ */
+async assignTicket(caller: Agent, rootSessionId: SessionId, request: Omit<AssignTicketRequest, 'actorId'>): Promise<TicketView>
+
+/** End a Ticket through its existing completion checks after authenticating coordinator role.
+ * @param caller - current coordinator or technical owner.
+ * @param rootSessionId - root owning the Ticket.
+ * @param request - Ticket CAS revision and summary.
+ * @returns completed Ticket view.
+ */
+async endTicket(caller: Agent, rootSessionId: SessionId, request: Omit<EndTicketRequest, 'actorId'>): Promise<TicketView>
+```
+
+Source: [`packages/experimental/workstream/src/index.ts`](../../packages/experimental/workstream/src/index.ts)
 
 <a id="agent-events"></a>
 

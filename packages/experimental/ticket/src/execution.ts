@@ -96,7 +96,7 @@ export class TicketExecutionService extends Service {
       this.closing = true
       await Promise.allSettled([...this.reservations.values()].map(entry => entry.preparation))
       const results = await Promise.allSettled([...this.handles].map(handle => this.disposeHandle(handle)))
-      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
       if (failures.length > 0) throw new AggregateError(failures, 'Ticket execution teardown did not settle')
     }, 'ticket-execution.runtime()')
   }
@@ -136,7 +136,7 @@ export class TicketExecutionService extends Service {
       this.reservations.set(key, { caller, fingerprint, preparation })
       return preparation
     } catch (error: unknown) {
-      return Promise.reject(error)
+      return Promise.reject(error instanceof Error ? error : new Error('Ticket execution preparation failed', { cause: error }))
     }
   }
 
@@ -198,6 +198,7 @@ export class TicketExecutionService extends Service {
       }
       await this.update(root, caller, request, 'workspace', { status: 'running', workspaceReceipt: workspace })
       signal.throwIfAborted()
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can set `closing` during the awaited workspace update.
       if (this.closing) throw new Error('Ticket execution admission is closed')
       if (request.executor.kind !== 'in-process') {
         activation = await this.ctx.subagents.startActivation({
@@ -279,7 +280,10 @@ export class TicketExecutionService extends Service {
         if (signal.aborted) cancel()
         else {
           signal.addEventListener('abort', cancel, { once: true })
-          void this.ctx.jobs.wait(id, this.config.settlementTimeoutMs, handle.caller.id).finally(() => signal.removeEventListener('abort', cancel)).catch(() => {})
+          void this.ctx.jobs.wait(id, this.config.settlementTimeoutMs, handle.caller.id)
+            .finally(() => { signal.removeEventListener('abort', cancel) })
+            // Listener cleanup only: job failures and timeouts settle through the attempt, not this wait.
+            .catch((_error: unknown) => undefined)
         }
       }
       return id
@@ -336,7 +340,7 @@ export class TicketExecutionService extends Service {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('Ticket producer settlement timed out')), this.config.settlementTimeoutMs)
+        timer = setTimeout(() => { reject(new Error('Ticket producer settlement timed out')) }, this.config.settlementTimeoutMs)
       })])
     } finally { clearTimeout(timer) }
   }

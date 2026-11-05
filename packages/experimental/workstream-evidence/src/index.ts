@@ -85,6 +85,10 @@ export class WorkstreamEvidenceService extends Service {
   /**
    * Publish an immutable evidence version in the owning Workstream session.
    * Idempotent retry with same payload returns the existing version; changed payload is rejected.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @param request - artifact id, expected next version, operation id, and bounded content.
+   * @returns The retained version record.
    */
   async publish(
     caller: Agent,
@@ -223,10 +227,11 @@ export class WorkstreamEvidenceService extends Service {
 
   /**
    * Get metadata for one retained evidence artifact version.
-   * @param caller - authenticated member.
-   * @param rootSessionId - Workstream root.
-   * @param artifactId - logical artifact ID.
-   * @param version - version number, or undefined for latest.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @param artifactId - logical artifact id.
+   * @param version - version number, or undefined for the latest.
+   * @returns The retained version record.
    */
   get(
     caller: Agent,
@@ -260,6 +265,9 @@ export class WorkstreamEvidenceService extends Service {
 
   /**
    * List all evidence artifacts and version histories for one Workstream.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @returns Every retained artifact with its complete version history.
    */
   list(caller: Agent, rootSessionId: SessionId): readonly WorkstreamEvidenceArtifactRecord[] {
     this.live(caller)
@@ -271,6 +279,12 @@ export class WorkstreamEvidenceService extends Service {
   /**
    * Read and verify immutable evidence content from attachments.
    * Validates digest and byte length before returning.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @param artifactId - logical artifact id.
+   * @param version - version number, or undefined for the latest.
+   * @param signal - aborts the attachment read.
+   * @returns Version metadata and the verified bytes.
    */
   async read(
     caller: Agent,
@@ -368,6 +382,10 @@ export class WorkstreamEvidenceService extends Service {
   /**
    * Construct a bounded WorkstreamContextPacket from exact retained evidence versions.
    * Rejects mutable or foreign links.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @param request - packet fields and the exact artifact versions to include.
+   * @returns A packet whose artifacts carry retained refs and digests.
    */
   prepareContext(
     caller: Agent,
@@ -418,7 +436,10 @@ export class WorkstreamEvidenceService extends Service {
   }
 
   /**
-   * Aggregate change request bindings across all active member sessions.
+   * Aggregate change request bindings across the root and active member Sessions.
+   * @param caller - live Workstream member.
+   * @param rootSessionId - Workstream root Session id.
+   * @returns Deduplicated change requests, diagnostics, and whether every Session was read.
    */
   aggregateChangeRequests(
     caller: Agent,

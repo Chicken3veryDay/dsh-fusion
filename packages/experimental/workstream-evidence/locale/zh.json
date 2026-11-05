@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Workstream Evidence",
-    "description": "Immutable Workstream evidence versions, context packets, and aggregated member change requests"
+    "description": "不可变的 Workstream 证据版本、上下文包和聚合的成员变更请求。"
   }
 }
