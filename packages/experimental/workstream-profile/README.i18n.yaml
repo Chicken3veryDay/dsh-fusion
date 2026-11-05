@@ -1,0 +1,52 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/workstream-profile/README.md
+/:
+  en: e2430367e69aafd6
+  zh: 170aaf597beaf15a
+/deepseek-ai-dsh-experimental-workstream-profile:
+  en: 82b519663748b62b
+  zh: fd7d34d6263debac
+/deepseek-ai-dsh-experimental-workstream-profile/summary:
+  en: c2c13f026e9892dc
+  zh: 4b1f46a35911a881
+/deepseek-ai-dsh-experimental-workstream-profile/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-experimental-workstream-profile/use-this-package:
+  en: bbff250eba0f1b89
+  zh: 0a618f05cc88ee2b
+/deepseek-ai-dsh-experimental-workstream-profile/use-this-package/install-into-a-profile:
+  en: 6a521a2c9098f15d
+  zh: 6b33e3df39d46b2a
+/deepseek-ai-dsh-experimental-workstream-profile/use-this-package/what-you-get:
+  en: 375d0a5719a832bc
+  zh: e585afbd7ef32e22
+/deepseek-ai-dsh-experimental-workstream-profile/understand-the-implementation:
+  en: 60a6ab524076aae3
+  zh: 39151bf2196f27f8
+/deepseek-ai-dsh-experimental-workstream-profile/further-exploration:
+  en: 9f784f7785b9c1bd
+  zh: 8c8cdca9af3fd130
+/deepseek-ai-dsh-experimental-workstream-profile/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-workstream-profile/model-experience/ticket-workstream-and-evidence-tools:
+  en: 8999b8a7d5d0b831
+  zh: 00415a9f40b7f8eb
+/deepseek-ai-dsh-experimental-workstream-profile/model-experience/ticket-workstream-and-evidence-tools/what-the-model-sees:
+  en: 7ace049e126b06eb
+  zh: 865dd9f8eac33ea8
+/deepseek-ai-dsh-experimental-workstream-profile/model-experience/ticket-workstream-and-evidence-tools/token-effect:
+  en: d9f99ea54dd2dc7b
+  zh: 6a91d848f57fa017
+/deepseek-ai-dsh-experimental-workstream-profile/model-experience/ticket-workstream-and-evidence-tools/kv-cache-effect:
+  en: 1257e01eaf4dd8a1
+  zh: d3a6ef5e137c708c
+/deepseek-ai-dsh-experimental-workstream-profile/known-limitations-and-deferred-work:
+  en: 30b267f9c750f0e8
+  zh: 4b7009e7c298d7a1
+/deepseek-ai-dsh-experimental-workstream-profile/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: bd8a8936229e035e

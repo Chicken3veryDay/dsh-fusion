@@ -553,6 +553,7 @@
     { "path": "./packages/experimental/ticket" },
     { "path": "./packages/experimental/workstream" },
     { "path": "./packages/experimental/workstream-evidence" },
+    { "path": "./packages/experimental/workstream-profile" },
     { "path": "./packages/experimental/agent-team-profile" },
     { "path": "./packages/experimental/inspector-profile" },
     { "path": "./packages/experimental/liveshare-protocol/tsconfig.host.json" },

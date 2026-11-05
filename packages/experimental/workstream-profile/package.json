@@ -1,0 +1,68 @@
+{
+  "name": "@deepseek-ai/dsh-experimental-workstream-profile",
+  "description": "Experimental Workstream, Ticket, and Evidence services and model tools in one profile layer",
+  "version": "0.2.2-alpha.2",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/experimental/workstream-profile"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./ticket-tools": {
+      "types": "./lib/types/ticket-tools.d.ts",
+      "default": "./lib/types/ticket-tools.js"
+    },
+    "./workstream-tools": {
+      "types": "./lib/types/workstream-tools.d.ts",
+      "default": "./lib/types/workstream-tools.js"
+    },
+    "./workstream-evidence-tools": {
+      "types": "./lib/types/workstream-evidence-tools.d.ts",
+      "default": "./lib/types/workstream-evidence-tools.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "locale/*.json",
+    "lib/index.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "listedByDefault": false
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-experimental-ticket": "workspace:*",
+    "@deepseek-ai/dsh-experimental-workstream": "workspace:*",
+    "@deepseek-ai/dsh-experimental-workstream-evidence": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:~"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/cordis-plugin-include": "workspace:~",
+    "@deepseek-ai/dsh-loader-smoke": "workspace:*",
+    "@deepseek-ai/dsh-llm": "workspace:*",
+    "execa": "^10.0.1",
+    "js-yaml": "^4.3.2"
+  }
+}

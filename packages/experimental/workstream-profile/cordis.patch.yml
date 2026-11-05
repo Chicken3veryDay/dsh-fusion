@@ -1,0 +1,45 @@
+# Experimental Workstream profile layer. Apply after dsh-base: Ticket is the only work
+# board, Workstream owns membership, coordinator handoff and acknowledged peer messaging,
+# and Workstream Evidence owns immutable shared artifacts. Agent Team is not mounted:
+# Workstream delivers messages through the Subagent inbox and its Ticket tools replace
+# the Team task board. Base delegation and Subagent tools stay as they are.
+
+- insert:
+    - id: tickets
+      name: '@deepseek-ai/dsh-experimental-ticket'
+      config:
+        maxTickets: 64
+        maxAssignments: 128
+        maxReports: 256
+        maxQuestions: 128
+        maxAttentions: 128
+        maxWorkScopes: 64
+        maxSnapshotBytes: 1048576
+
+    - id: workstreams
+      name: '@deepseek-ai/dsh-experimental-workstream'
+      config:
+        maxMembers: 16
+        maxMessages: 256
+        maxSnapshotBytes: 1048576
+        maxMessageBytes: 65536
+        maxWaitMs: 3600000
+
+    - id: workstream-evidence
+      name: '@deepseek-ai/dsh-experimental-workstream-evidence'
+      config:
+        maxBytesPerArtifact: 10485760
+        maxArtifacts: 256
+        maxVersionsPerArtifact: 64
+        maxTotalBytes: 104857600
+        maxContextPacketBytes: 65536
+        maxToolTextBytes: 65536
+
+    - id: tool-ticket
+      name: '@deepseek-ai/dsh-experimental-workstream-profile/ticket-tools'
+
+    - id: tool-workstream
+      name: '@deepseek-ai/dsh-experimental-workstream-profile/workstream-tools'
+
+    - id: tool-workstream-evidence
+      name: '@deepseek-ai/dsh-experimental-workstream-profile/workstream-evidence-tools'

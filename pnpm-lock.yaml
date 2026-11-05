@@ -586,6 +586,9 @@ importers:
       '@deepseek-ai/dsh-experimental-tool-agent-team':
         specifier: workspace:*
         version: link:../../packages/experimental/tool-agent-team
+      '@deepseek-ai/dsh-experimental-workstream-profile':
+        specifier: workspace:*
+        version: link:../../packages/experimental/workstream-profile
       '@deepseek-ai/dsh-fs-observation-policy':
         specifier: workspace:*
         version: link:../../packages/fs/fs-observation-policy
@@ -12033,6 +12036,37 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
+
+  packages/experimental/workstream-profile:
+    dependencies:
+      '@deepseek-ai/dsh-experimental-ticket':
+        specifier: workspace:*
+        version: link:../ticket
+      '@deepseek-ai/dsh-experimental-workstream':
+        specifier: workspace:*
+        version: link:../workstream
+      '@deepseek-ai/dsh-experimental-workstream-evidence':
+        specifier: workspace:*
+        version: link:../workstream-evidence
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:~
+        version: link:../../../vendor/include
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-loader-smoke':
+        specifier: workspace:*
+        version: link:../../test-support/loader-smoke
+      execa:
+        specifier: ^10.0.1
+        version: 10.0.1
+      js-yaml:
+        specifier: ^4.3.2
+        version: 4.3.2
 
   packages/experimental/worktree:
     dependencies:

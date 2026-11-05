@@ -71,6 +71,7 @@ Promotion requires a named product role, documented public behavior and limitati
 | [`voice-input-bundle`](voice-input-bundle/README.md) | Default-disabled optional voice input composition | — |
 | [`agent-team-profile`](agent-team-profile/README.md) | Agent Teams collaboration, tools, and Web UI bundle | — |
 | [`agent-team`](agent-team/README.md) | Named teammates with direct messages and a durable shared task board | `ctx.agentTeams` |
+| [`workstream-profile`](workstream-profile/README.md) | Ticket, Workstream, and Workstream Evidence services and model tools layer | — |
 | [`ticket`](ticket/README.md) | Durable Ticket lifecycle, direct worker assignments, reports, questions, attention, and coordinator handoff | `ctx.tickets` |
 | [`workstream`](workstream/README.md) | Durable Workstream membership, coordinator handoff, acknowledged peer messaging, and root-owned Ticket operations | `ctx.workstreams` |
 | [`workstream-evidence`](workstream-evidence/README.md) | Immutable Workstream evidence versions, context packets, and aggregated member change requests | `ctx.workstreamEvidence` |
