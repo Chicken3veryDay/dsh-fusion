@@ -72,6 +72,8 @@ kind: "package-group"
 | [`agent-team-profile`](agent-team-profile/README.zh.md) | Agent Teams 协作、工具与 Web UI 组合包 | — |
 | [`agent-team`](agent-team/README.zh.md) | 具名 teammate，成员之间直接消息与持久共享任务板 | `ctx.agentTeams` |
 | [`ticket`](ticket/README.zh.md) | 持久化 Ticket 生命周期、直接 Worker 分配、报告、问题、关注项和协调者交接 | `ctx.tickets` |
+| [`workstream`](workstream/README.zh.md) | 持久化 Workstream 成员关系、协调者交接、带确认的 peer 消息，以及根 Session 所有的 Ticket 操作 | `ctx.workstreams` |
+| [`workstream-evidence`](workstream-evidence/README.zh.md) | 不可变的 Workstream 证据版本、上下文包和聚合的成员变更请求 | `ctx.workstreamEvidence` |
 | [`client-ui-agent-team`](client-ui-agent-team/README.zh.md) | Web Team roster、任务板与 teammate 导航 | — |
 | [`client-ui-stats`](client-ui-stats/README.zh.md) | Web 端按轮次与步骤展示上下文、耗时、缓存与工具成本 | — |
 | [`auto-review`](auto-review/README.zh.md) | 显式 Web 层，在每个原生或 PTC inner 工具调用前使用同一模型审查 | — |

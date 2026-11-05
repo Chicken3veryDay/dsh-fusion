@@ -329,6 +329,10 @@ interface SubagentRun {
 interface SubagentProvider {
   /** Unique registry name (e.g. `spawn`, `fork`, `acp`). */
   readonly name: string
+  /** Execution placement attested by this provider; omission cannot satisfy a constrained placement request. */
+  readonly execution?:
+    | { readonly kind: 'in-process' | 'dedicated-process' }
+    | { readonly kind: 'remote'; readonly world: string }
   /** The start-time features this provider supports (see {@link SubagentCapabilities}). */
   readonly capabilities: SubagentCapabilities
   /**

@@ -1,0 +1,43 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/workstream-evidence/README.md
+/:
+  en: 289f0b710088b03c
+  zh: ec40902cccca535a
+/deepseek-ai-dsh-experimental-workstream-evidence:
+  en: 2421fb67ddc422e4
+  zh: 0f4749152bc3f570
+/deepseek-ai-dsh-experimental-workstream-evidence/summary:
+  en: 5bb56d88a365b72c
+  zh: 3ea22f3caaabf0b7
+/deepseek-ai-dsh-experimental-workstream-evidence/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: 03a4bf09d960f762
+/deepseek-ai-dsh-experimental-workstream-evidence/use-this-package:
+  en: 91a2ecd5bcf55089
+  zh: e649ee3433e8b246
+/deepseek-ai-dsh-experimental-workstream-evidence/understand-the-implementation:
+  en: 2099d0eaadd7656c
+  zh: f95320b1ed34a4e7
+/deepseek-ai-dsh-experimental-workstream-evidence/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-workstream-evidence/model-experience/opt-in-workstream-evidence-tools:
+  en: b440c295cf614266
+  zh: 374fa54fc2b96495
+/deepseek-ai-dsh-experimental-workstream-evidence/model-experience/opt-in-workstream-evidence-tools/what-the-model-sees:
+  en: aa4154c02f89ba69
+  zh: f1faf2a608858f7d
+/deepseek-ai-dsh-experimental-workstream-evidence/model-experience/opt-in-workstream-evidence-tools/token-effect:
+  en: 7cec0fffbec6c5f3
+  zh: bd233a0193d00c49
+/deepseek-ai-dsh-experimental-workstream-evidence/model-experience/opt-in-workstream-evidence-tools/kv-cache-effect:
+  en: 9c260414df5a7c63
+  zh: ede88a2a12f56ef3
+/deepseek-ai-dsh-experimental-workstream-evidence/known-limitations-and-deferred-work:
+  en: 9af3902ef8596d83
+  zh: f512dddc568c21c0
+/deepseek-ai-dsh-experimental-workstream-evidence/known-limitations-and-deferred-work/dev-note:
+  en: 9d607d7aa7388dd9
+  zh: 9dda6cfdd16807ed

@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for factory-missions-workstreams.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/research/factory-missions-workstreams.md
+/factory-missions-and-workstreams-implications-for-ticket-and-job:
+  en: 810d8c9335e2da42
+  zh: 199bc458ff96a88f
+/factory-missions-and-workstreams-implications-for-ticket-and-job/local-baseline:
+  en: f7a0fa9c8f79e472
+  zh: 5710d28fc6323555
+/factory-missions-and-workstreams-implications-for-ticket-and-job/distinct-factory-capabilities:
+  en: caf6fdbe77b6e4df
+  zh: a57e8f625852a4e1
+/factory-missions-and-workstreams-implications-for-ticket-and-job/distinct-factory-capabilities/missions:
+  en: f33343a8e72494f2
+  zh: 50ee801dd030ea8b
+/factory-missions-and-workstreams-implications-for-ticket-and-job/distinct-factory-capabilities/workstreams:
+  en: 712a6b38dced1e99
+  zh: 45342ebe47507d64
+/factory-missions-and-workstreams-implications-for-ticket-and-job/comparison-to-dsh:
+  en: 0f324f42f05eb88e
+  zh: 3897dc70c60b067f
+/factory-missions-and-workstreams-implications-for-ticket-and-job/adoption-ranking:
+  en: 652bc425c5814340
+  zh: 8615ecb883ba203a
+/factory-missions-and-workstreams-implications-for-ticket-and-job/adoption-ranking/adopt:
+  en: 5fb5e63c066d59ef
+  zh: 7a14bdbc740fcff0
+/factory-missions-and-workstreams-implications-for-ticket-and-job/adoption-ranking/adapt:
+  en: dd7f312719025638
+  zh: f5e8cf7350712073
+/factory-missions-and-workstreams-implications-for-ticket-and-job/adoption-ranking/defer:
+  en: 36c6896cff34d401
+  zh: 333653cc838d0d56
+/factory-missions-and-workstreams-implications-for-ticket-and-job/uncertainty-and-absence:
+  en: f27653f5c1cb4b38
+  zh: 7be5a4be75ec084a
+/factory-missions-and-workstreams-implications-for-ticket-and-job/sources:
+  en: 3debf6fe251f13d1
+  zh: 9a1082c7b6f10209

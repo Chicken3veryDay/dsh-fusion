@@ -1,5 +1,7 @@
 # Factory Missions and Workstreams: implications for Ticket and Job
 
+English | [中文](factory-missions-workstreams.zh.md)
+
 Research date: 2026-11-04
 
 This note compares the public Factory documentation for Missions and Workstreams with the repository's current experimental Ticket and Jobs contracts. Factory claims below link to first-party Factory documentation or Factory's own architecture article. The comparison is an architectural recommendation, not a claim that DSH should reproduce Factory.
