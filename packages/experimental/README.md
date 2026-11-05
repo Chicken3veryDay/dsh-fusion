@@ -76,6 +76,7 @@ Promotion requires a named product role, documented public behavior and limitati
 | [`workstream`](workstream/README.md) | Durable Workstream membership, coordinator handoff, acknowledged peer messaging, and root-owned Ticket operations | `ctx.workstreams` |
 | [`workstream-evidence`](workstream-evidence/README.md) | Immutable Workstream evidence versions, context packets, and aggregated member change requests | `ctx.workstreamEvidence` |
 | [`client-ui-agent-team`](client-ui-agent-team/README.md) | Team roster, task board, and teammate navigation for Web | — |
+| [`client-ui-workstream`](client-ui-workstream/README.md) | Workstream questions, Tickets, members, change requests, and evidence files for Web | `ctx.workstreamPanel` |
 | [`client-ui-stats`](client-ui-stats/README.md) | Per-turn and per-step context, timing, cache, and tool cost for Web | — |
 | [`auto-review`](auto-review/README.md) | Explicit Web layer for same-model review before each native or PTC inner tool call | — |
 | [`subagent-oar`](subagent-oar/README.md) | Run standalone external coding-agent tasks through OAR | `ctx.subagents` |

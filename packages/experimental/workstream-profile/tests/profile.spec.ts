@@ -14,9 +14,10 @@ const SERVICES = [
   '@deepseek-ai/dsh-experimental-workstream',
   '@deepseek-ai/dsh-experimental-workstream-evidence',
 ]
+const UI = '@deepseek-ai/dsh-experimental-client-ui-workstream'
 
 describe('Workstream profile bundle', () => {
-  it('declares an unlisted parseable layer without Agent Team', () => {
+  it('declares an unlisted parseable layer with the Web panel and without Agent Team', () => {
     const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
       private?: boolean
       dependencies?: Record<string, string>
@@ -24,7 +25,7 @@ describe('Workstream profile bundle', () => {
     }
     expect(manifest.private).toBeUndefined()
     expect(manifest.dsh?.bundle).toEqual({ patch: './cordis.patch.yml', listedByDefault: false })
-    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual(SERVICES)
+    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([UI, ...SERVICES])
 
     const parsed = yaml.load(readFileSync(resolve(root, 'cordis.patch.yml'), 'utf8'), { schema: entryListSchema })
     const inserted = (parsed as { insert?: { id?: string; name?: string }[] }[]).flatMap(patch => patch.insert ?? [])
@@ -35,6 +36,7 @@ describe('Workstream profile bundle', () => {
       ['tool-ticket', '@deepseek-ai/dsh-experimental-workstream-profile/ticket-tools'],
       ['tool-workstream', '@deepseek-ai/dsh-experimental-workstream-profile/workstream-tools'],
       ['tool-workstream-evidence', '@deepseek-ai/dsh-experimental-workstream-profile/workstream-evidence-tools'],
+      ['ui-workstream', UI],
     ])
     expect(JSON.stringify(parsed)).not.toContain('agent-team')
   })
@@ -58,7 +60,7 @@ describe('Workstream profile bundle', () => {
     expect(shipped.length).toBeGreaterThan(0)
     for (const file of shipped) {
       const text = readFileSync(resolve(repo, file), 'utf8')
-      for (const name of [...SERVICES, '@deepseek-ai/dsh-experimental-workstream-profile']) {
+      for (const name of [...SERVICES, UI, '@deepseek-ai/dsh-experimental-workstream-profile']) {
         expect(text, `${file} must not mount ${name}`).not.toContain(name)
       }
     }

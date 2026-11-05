@@ -352,6 +352,8 @@ export default defineConfig({
         // The Team browser entry binds its source-covered mount lifecycle to
         // the generated Team Remote contribution, which likewise exists only in lib.
         'packages/experimental/client-ui-agent-team/src/client/index.ts',
+        // The Workstream panel entry likewise binds its source-covered mount to the generated panel Remote.
+        'packages/experimental/client-ui-workstream/src/client/index.ts',
         // The speech entry also imports generated Remote definitions; voice-input.e2e.ts
         // exercises the built entry, while source tests cover mountVoiceInput.
         'packages/experimental/client-ui-voice-input/src/client/index.ts',

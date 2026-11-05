@@ -1,0 +1,43 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/client-ui-workstream/README.md
+/:
+  en: 60cdf0ff28ea104c
+  zh: 20ee862799a4bb57
+/deepseek-ai-dsh-experimental-client-ui-workstream:
+  en: 1dc2e09508df41c2
+  zh: 5f92f6d7f7071afa
+/deepseek-ai-dsh-experimental-client-ui-workstream/summary:
+  en: eea2a40fc94f39df
+  zh: 7472c584e8318542
+/deepseek-ai-dsh-experimental-client-ui-workstream/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-experimental-client-ui-workstream/use-this-package:
+  en: 4679c2b93fc27214
+  zh: 266168bb4bf318c4
+/deepseek-ai-dsh-experimental-client-ui-workstream/use-this-package/act-on-questions-and-attention:
+  en: dbe4a6128f47801f
+  zh: 1ad8eb9eac8acd8b
+/deepseek-ai-dsh-experimental-client-ui-workstream/use-this-package/inspect-work-team-changes-and-files:
+  en: ca1c01b1c73ee1c8
+  zh: bc7bf5504fb37cd4
+/deepseek-ai-dsh-experimental-client-ui-workstream/understand-the-implementation:
+  en: ecbd655f145bd627
+  zh: a60f81955d26cade
+/deepseek-ai-dsh-experimental-client-ui-workstream/further-exploration:
+  en: 005d164bff284966
+  zh: 56c5995387500926
+/deepseek-ai-dsh-experimental-client-ui-workstream/model-experience:
+  en: 3ea788b0932e8ce7
+  zh: c3a2cd7384c90b90
+/deepseek-ai-dsh-experimental-client-ui-workstream/model-experience/kv-cache-effect:
+  en: 9598156156a1ef8f
+  zh: a67ad859efe8e260
+/deepseek-ai-dsh-experimental-client-ui-workstream/known-limitations-and-deferred-work:
+  en: 616cfc721a4e44f3
+  zh: a6a1ebf0a0fdaa0f
+/deepseek-ai-dsh-experimental-client-ui-workstream/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 8ec3e73528ddb1a6

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-experimental-workstream-profile` mounts the [Ticket](../ticket/README.md), [Workstream](../workstream/package.json), and [Workstream Evidence](../workstream-evidence/package.json) services and registers their `ticket_*`, `workstream_*`, and `workstream_evidence_*` model tools. Tickets are the only work board; Workstream adds members, coordinator handoff, and acknowledged messages; Evidence adds immutable shared artifacts. Agent Teams is not mounted. The layer ships unlisted and is added only to an initialized profile.
+`dsh-experimental-workstream-profile` mounts the [Ticket](../ticket/README.md), [Workstream](../workstream/package.json), and [Workstream Evidence](../workstream-evidence/package.json) services and registers their `ticket_*`, `workstream_*`, and `workstream_evidence_*` model tools. Tickets are the only work board; Workstream adds members, coordinator handoff, and acknowledged messages; Evidence adds immutable shared artifacts; a [Web panel](../client-ui-workstream/README.md) shows them and answers Ticket questions. Agent Teams is not mounted. The layer ships unlisted and is added only to an initialized profile.
 
 ## Table of Contents
 
@@ -36,13 +36,14 @@ The profile must already contain `@deepseek-ai/dsh-base`, whose Session, Subagen
 
 ### What you get
 
-The patch inserts three services and three tool rows after `dsh-base`:
+The patch inserts three services, three tool rows, and the Web panel after `dsh-base`:
 
 | Row | Mounts | Model tools |
 |---|---|---|
 | `tickets`, `tool-ticket` | `ctx.tickets` | `ticket_*` |
 | `workstreams`, `tool-workstream` | `ctx.workstreams` | `workstream_*` |
 | `workstream-evidence`, `tool-workstream-evidence` | `ctx.workstreamEvidence` | `workstream_evidence_*` |
+| `ui-workstream` | `ctx.workstreamPanel`, Web header action | — |
 
 Every service limit is an explicit Config value in the patch, equal to the package default.
 
@@ -104,7 +105,6 @@ The system prompt and tool schemas stay prefix-stable while the patch and config
 
 - **Opt-in only** — no shipped CLI, Web, SDK, ACP, or Python profile enables it.
 - **No execution service** — Ticket attempt execution with Jobs and Worktree providers is not mounted.
-- **No Web UI** — the layer carries tools and services only.
 - **Base profile required** — the patch depends on services supplied by `dsh-base`.
 
 <a id="dev-note"></a>

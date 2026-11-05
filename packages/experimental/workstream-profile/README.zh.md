@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-`dsh-experimental-workstream-profile` 挂载 [Ticket](../ticket/README.zh.md)、[Workstream](../workstream/package.json) 与 [Workstream Evidence](../workstream-evidence/package.json) 服务，并注册它们的 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 模型工具。Ticket 是唯一的工作看板；Workstream 增加成员、协调者交接和带确认的消息；Evidence 增加不可变的共享产物。本层不挂载 Agent Teams，默认不在插件列表中显示，只能添加到已初始化的 profile。
+`dsh-experimental-workstream-profile` 挂载 [Ticket](../ticket/README.zh.md)、[Workstream](../workstream/package.json) 与 [Workstream Evidence](../workstream-evidence/package.json) 服务，并注册它们的 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 模型工具。Ticket 是唯一的工作看板；Workstream 增加成员、协调者交接和带确认的消息；Evidence 增加不可变的共享产物；[Web 面板](../client-ui-workstream/README.zh.md) 展示这些内容并回答工单问题。本层不挂载 Agent Teams，默认不在插件列表中显示，只能添加到已初始化的 profile。
 
 ## 目录
 
@@ -36,13 +36,14 @@ profile 必须已经包含 `@deepseek-ai/dsh-base`，本层会使用其中的 Se
 
 ### 获得的功能
 
-patch 在 `dsh-base` 之后插入三个服务和三个工具行：
+patch 在 `dsh-base` 之后插入三个服务、三个工具行和 Web 面板：
 
 | 行 | 挂载 | 模型工具 |
 |---|---|---|
 | `tickets`、`tool-ticket` | `ctx.tickets` | `ticket_*` |
 | `workstreams`、`tool-workstream` | `ctx.workstreams` | `workstream_*` |
 | `workstream-evidence`、`tool-workstream-evidence` | `ctx.workstreamEvidence` | `workstream_evidence_*` |
+| `ui-workstream` | `ctx.workstreamPanel`、Web 页头 action | — |
 
 patch 中每个服务限制都是显式 Config 值，与包默认值相同。
 
@@ -104,7 +105,6 @@ patch 与已配置工具不变时，系统提示与工具 schema 保持前缀稳
 
 - **仅限显式启用**——随产品发布的 CLI、Web、SDK、ACP 或 Python profile 均不启用本层。
 - **无执行服务**——挂载 Jobs 与 Worktree 提供方的 Ticket 尝试执行未启用。
-- **无 Web UI**——本层只包含工具和服务。
 - **需要 base profile**——patch 依赖 `dsh-base` 提供的服务。
 
 <a id="dev-note"></a>
