@@ -11,15 +11,15 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import { steerHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import type { AssignTicketRequest, CreateTicketRequest, EndTicketRequest, TicketView } from '@deepseek-ai/dsh-experimental-ticket'
-import { WorkstreamError } from './error.ts'
+import type { AssignTicketRequest, CreateTicketRequest, EndTicketRequest, TicketId, TicketView } from '@deepseek-ai/dsh-experimental-ticket'
+import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 import { workstreamProjectionDefinition } from './projection.ts'
 import type { WorkstreamProjectionState } from './projection.ts'
 import type { AddWorkstreamMemberRequest, Config, SendWorkstreamMessageRequest, WorkstreamMember, WorkstreamMessage,
   WorkstreamOperationId, WorkstreamSnapshot } from './types.ts'
 
 export { WorkstreamOperationId } from './ids.ts'
-export { WorkstreamError } from './error.ts'
+export { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 export type { WorkstreamErrorCode } from './error.ts'
 export type * from './types.ts'
 export { WorkstreamTools } from './tools.ts'
@@ -205,11 +205,17 @@ export class WorkstreamService extends Service {
     })
   }
 
-  /** Transfer the coordinator role while preserving every child parent and root log.
+  /** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.
+   *
+   * Tickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the
+   * Tickets have not yet followed. Each move is authenticated by the Ticket's own current coordinator, which the Workstream
+   * has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous
+   * coordinator as the handing-off actor.
    * @param caller - current coordinator or immutable owner.
    * @param rootSessionId - explicit technical owner.
    * @param request - CAS revision and active new coordinator.
    * @returns committed next snapshot.
+   * @throws WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.
    */
   async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }):
   Promise<WorkstreamSnapshot> {
@@ -218,6 +224,7 @@ export class WorkstreamService extends Service {
       if (snapshot.revision !== request.expectedRevision) throw new
       WorkstreamError('Workstream changed; refresh before handoff', 'WORKSTREAM_CONFLICT')
       this.target(snapshot, request.coordinatorId)
+      await this.moveTickets(owner, snapshot, request.coordinatorId)
       return this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId })
     })
   }
@@ -344,38 +351,44 @@ export class WorkstreamService extends Service {
     })
   }
 
-  /** Create a Ticket in the stable root; peers may propose work.
+  /** Create a Ticket in the stable root, coordinated by the current Workstream coordinator; peers may propose work.
    * @param caller - exact live member.
    * @param rootSessionId - Ticket-owning Workstream root.
    * @param request - Ticket content; coordinator authority is supplied by Workstream.
    * @returns committed Ticket view.
    */
   async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, 'coordinatorId'>): Promise<TicketView> {
-    const { owner } = this.requireMembership(caller, rootSessionId)
-    return this.ctx.tickets.create(owner.session, { ...request, coordinatorId: owner.id })
+    return this.enqueue(rootSessionId, async () => {
+      const { owner, snapshot } = this.requireMembership(caller, rootSessionId)
+      return this.ctx.tickets.create(owner.session, { ...request, coordinatorId: snapshot.coordinatorId })
+    })
   }
 
-  /** Assign a Ticket under current coordinator authentication and stable root authority.
-   * @param caller - exact current coordinator or owner.
+  /** Assign a Ticket as the current coordinator; the Ticket records that caller as actor.
+   * @param caller - exact current coordinator; the owner must first reclaim the role with {@link handoff}.
    * @param rootSessionId - root owning the Ticket.
    * @param request - assignment to an active Workstream member.
    * @returns committed Ticket view.
    */
   async assignTicket(caller: Agent, rootSessionId: SessionId, request: Omit<AssignTicketRequest, 'actorId'>): Promise<TicketView> {
-    const { owner, snapshot } = this.coordinator(caller, rootSessionId)
-    this.child(snapshot, request.ownerId)
-    return this.ctx.tickets.assign(owner.session, { ...request, actorId: owner.id })
+    return this.enqueue(rootSessionId, async () => {
+      const { owner, snapshot } = this.actingCoordinator(caller, rootSessionId)
+      this.child(snapshot, request.ownerId)
+      return this.ctx.tickets.assign(owner.session, { ...request, actorId: caller.id })
+    })
   }
 
-  /** End a Ticket through its existing completion checks after authenticating coordinator role.
-   * @param caller - current coordinator or technical owner.
+  /** End a Ticket through its existing completion checks as the current coordinator; the Ticket records that caller as actor.
+   * @param caller - exact current coordinator; the owner must first reclaim the role with {@link handoff}.
    * @param rootSessionId - root owning the Ticket.
    * @param request - Ticket CAS revision and summary.
    * @returns completed Ticket view.
    */
   async endTicket(caller: Agent, rootSessionId: SessionId, request: Omit<EndTicketRequest, 'actorId'>): Promise<TicketView> {
-    const { owner } = this.coordinator(caller, rootSessionId)
-    return this.ctx.tickets.complete(owner.session, { ...request, actorId: owner.id })
+    return this.enqueue(rootSessionId, async () => {
+      const { owner } = this.actingCoordinator(caller, rootSessionId)
+      return this.ctx.tickets.complete(owner.session, { ...request, actorId: caller.id })
+    })
   }
 
   private live(caller: Agent): void {
@@ -388,6 +401,29 @@ export class WorkstreamService extends Service {
     if (caller.id !== membership.owner.id && caller.id !== membership.snapshot.coordinatorId) throw new
     WorkstreamError('Current Workstream coordinator authority is required', 'WORKSTREAM_UNAUTHORIZED')
     return membership
+  }
+  /** Ticket mutations record the acting identity, so only the sitting coordinator may issue them. */
+  private actingCoordinator(caller: Agent, rootSessionId: SessionId): WorkstreamMembership {
+    const membership = this.requireMembership(caller, rootSessionId)
+    if (caller.id !== membership.snapshot.coordinatorId) throw new
+    WorkstreamError('Current Workstream coordinator authority is required; the owner may reclaim it by handoff', 'WORKSTREAM_UNAUTHORIZED')
+    return membership
+  }
+  /** Hand every open Ticket coordinated by a Workstream member to the target; unmoved Tickets are reported, never skipped. */
+  private async moveTickets(owner: Agent, snapshot: WorkstreamSnapshot, coordinatorId: SessionId): Promise<void> {
+    const moved: TicketId[] = []
+    const pending: TicketId[] = []
+    let cause: unknown
+    for (const ticket of this.ctx.tickets.list(owner.session)) {
+      if (ticket.terminalOutcome !== undefined || ticket.coordinatorId === coordinatorId
+        || !snapshot.members.some(member => member.id === ticket.coordinatorId)) continue
+      try {
+        await this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
+          actorId: ticket.coordinatorId, newCoordinatorId: coordinatorId })
+        moved.push(ticket.id)
+      } catch (error: unknown) { pending.push(ticket.id); cause ??= error }
+    }
+    if (pending.length > 0) throw new WorkstreamPartialHandoffError(moved, pending, { cause })
   }
   private target(snapshot: WorkstreamSnapshot, id: SessionId): WorkstreamMember {
     const member = snapshot.members.find(candidate => candidate.id === id && candidate.phase === 'active')

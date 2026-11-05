@@ -1513,7 +1513,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'workstream/state': { readonly version: 1; readonly snapshot: WorkstreamSnapshot }
 ```
 
-来源：[`packages/experimental/workstream/src/types.ts:86`](../packages/experimental/workstream/src/types.ts)
+来源：[`packages/experimental/workstream/src/types.ts:91`](../packages/experimental/workstream/src/types.ts)
 
 ## 已解析的持久化类型
 
@@ -10370,7 +10370,7 @@ SHA-256: `2235d957bf4b7c6cf959231d480f0ba1f3a6d72d82981493fb6c7c963021d3d5`
 
 SHA-256: `09926446155fbffbcb9bef57a9e0a334dd1913fea88107f8d9945965af74730f`
 
-来源：[`packages/experimental/workstream/src/types.ts:100`](../packages/experimental/workstream/src/types.ts)
+来源：[`packages/experimental/workstream/src/types.ts:105`](../packages/experimental/workstream/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -10641,7 +10641,7 @@ SHA-256: `5dd766ccd1702a1142ad8b4bd44f2242f8e8a6752669ad3de0a5d224329b1438`
 
 SHA-256: `94bf973ec39b121e16d4bbcb6b6b07dd2484755b24629c0ad531cebdc6fa7886`
 
-来源：[`packages/experimental/workstream/src/types.ts:86`](../packages/experimental/workstream/src/types.ts)
+来源：[`packages/experimental/workstream/src/types.ts:91`](../packages/experimental/workstream/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

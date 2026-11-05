@@ -18,6 +18,20 @@ const output = {
 const root = { type: 'string' as const, required: true as const, description: 'Stable technical owner Session id.' }
 const operation = { type: 'string' as const, required: true as const, description: 'Stable operation id; reuse exactly for retries.' }
 
+const contextPacket = {
+  type: 'object' as const, additionalProperties: false, description: 'Optional context for the recipient; every field is logged.',
+  properties: {
+    requirements: { type: 'string' as const, required: true as const, description: 'Current requirements the recipient must work from.' },
+    decisions: { type: 'array' as const, required: true as const, items: { type: 'string' as const }, description: 'Relevant decisions.' },
+    cursor: { type: 'string' as const, required: true as const, description: 'Opaque cursor this packet is current to.' },
+    changes: { type: 'string' as const, required: true as const, description: 'Changes since the recipient\'s recorded cursor.' },
+    artifacts: { type: 'array' as const, required: true as const, description: 'Selected artifact refs with digests.', items: {
+      type: 'object' as const, additionalProperties: false, properties: { ref: { type: 'string' as const, required: true as const,
+        description: 'Artifact reference.' }, digest: { type: 'string' as const, required: true as const, description:
+        'Content digest.' } } } },
+  },
+}
+
 /** Opt-in Workstream tool registration with reversible Cordis ownership. */
 export class WorkstreamTools extends Service {
   static inject = ['tools', 'workstreams']
@@ -54,12 +68,16 @@ export class WorkstreamTools extends Service {
     }))
     register(defineTool({
       name: 'workstream_send', description:
-        'Send a peer message. Accepted means durable inbox acceptance; only recipient acknowledgement marks processed.',
+        'Send a peer message, optionally with a context packet (current requirements, decisions, changes since your cursor, artifact refs). '
+        + 'The recipient sees and the log keeps the whole packet; the complete message is bounded by maxMessageBytes. '
+        + 'Accepted means durable inbox acceptance; only recipient acknowledgement marks processed.',
       parameters: { root_session_id: root, operation_id: operation, target_id: { type: 'string', required: true, description:
-        'Recipient member Session id.' }, text: { type: 'string', required: true, description: 'Message content.' } }, output,
+        'Recipient member Session id.' }, text: { type: 'string', required: true, description: 'Message content.' }, context:
+        contextPacket }, output,
       execute: async (args, exec) => z.json().parse(await this.ctx.workstreams.sendMessage(caller(exec.agent),
         SessionId(args.root_session_id), { operationId: WorkstreamOperationId(args.operation_id), targetId:
-        SessionId(args.target_id), text: args.text, signal: exec.signal })),
+        SessionId(args.target_id), text: args.text, ...args.context === undefined ? {} : { context: args.context },
+        signal: exec.signal })),
     }))
     register(defineTool({
       name: 'workstream_acknowledge', description: 'Explicitly acknowledge processing a message addressed to you.',

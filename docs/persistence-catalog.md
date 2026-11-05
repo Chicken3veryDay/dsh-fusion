@@ -1511,7 +1511,7 @@ Source: [`packages/deliverables/workspace-changes/src/types.ts:106`](../packages
 'workstream/state': { readonly version: 1; readonly snapshot: WorkstreamSnapshot }
 ```
 
-Source: [`packages/experimental/workstream/src/types.ts:86`](../packages/experimental/workstream/src/types.ts)
+Source: [`packages/experimental/workstream/src/types.ts:91`](../packages/experimental/workstream/src/types.ts)
 
 ## Resolved persistence types
 
@@ -10368,7 +10368,7 @@ Sources: [`packages/session/working-directory/src/index.ts:29`](../packages/sess
 
 SHA-256: `09926446155fbffbcb9bef57a9e0a334dd1913fea88107f8d9945965af74730f`
 
-Sources: [`packages/experimental/workstream/src/types.ts:100`](../packages/experimental/workstream/src/types.ts)
+Sources: [`packages/experimental/workstream/src/types.ts:105`](../packages/experimental/workstream/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -10639,7 +10639,7 @@ Sources: [`packages/compaction/compaction/src/types.ts:82`](../packages/compacti
 
 SHA-256: `94bf973ec39b121e16d4bbcb6b6b07dd2484755b24629c0ad531cebdc6fa7886`
 
-Sources: [`packages/experimental/workstream/src/types.ts:86`](../packages/experimental/workstream/src/types.ts)
+Sources: [`packages/experimental/workstream/src/types.ts:91`](../packages/experimental/workstream/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
