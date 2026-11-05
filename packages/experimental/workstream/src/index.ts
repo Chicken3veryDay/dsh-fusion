@@ -8,11 +8,12 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { MessageId } from '@deepseek-ai/dsh-llm'
 import { steerHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import type { AssignTicketRequest, CreateTicketRequest, EndTicketRequest, TicketId, TicketView } from '@deepseek-ai/dsh-experimental-ticket'
 import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
+import { acceptedMessage } from './accepted-message.ts'
 import { workstreamProjectionDefinition } from './projection.ts'
 import type { WorkstreamProjectionState } from './projection.ts'
 import type { AddWorkstreamMemberRequest, Config, SendWorkstreamMessageRequest, WorkstreamMember, WorkstreamMessage,
@@ -47,18 +48,6 @@ const defaults: Required<Config> = {
 
 /** Byte size of the complete JSON value, including framing and metadata. */
 function bytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value), 'utf8') }
-
-/** Durable message evidence includes admitted history and the surviving pending inbox. */
-function acceptedMessage(events: readonly SessionEvent[], predicate: (message: UserMessage) => boolean): MessageId | undefined {
-  const pending: Record<'next-turn' | 'next-step', UserMessage[]> = { 'next-turn': [], 'next-step': [] }
-  for (const event of events) {
-    if (event.type === 'user/message' && predicate(event.data)) return event.data.id
-    if (event.type === 'agent/inbox/spliced') {
-      pending[event.data.target].splice(event.data.start, event.data.removedCount ?? 0, ...event.data.inserted)
-    }
-  }
-  return [...pending['next-turn'], ...pending['next-step']].find(predicate)?.id
-}
 
 /** Host service; unknown intents are reconciled but never automatically executed again. */
 export class WorkstreamService extends Service {
