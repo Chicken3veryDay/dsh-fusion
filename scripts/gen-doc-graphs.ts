@@ -673,6 +673,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Retains root and participant Sessions for parked Agent adoption without task activation.',
   },
   {
+    key: 'workstreamPanel',
+    pkg: 'experimental-client-ui-workstream',
+    title: 'Workstream panel Remote',
+    mode: 'service',
+    note: 'Runs Ticket question and attention commands as the displayed live Session on its Workstream root and reads aggregated member change requests for the Web panel.',
+  },
+  {
     key: 'tickets',
     pkg: 'experimental-ticket',
     title: 'Durable Ticket coordination domain',

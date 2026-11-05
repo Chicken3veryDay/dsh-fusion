@@ -13,6 +13,12 @@ import { build, REVIEWER, ROOT, WORKER } from './fixtures.client.ts'
 const contribution: TypertRemoteContribution = { package: '@deepseek-ai/dsh-experimental-client-ui-workstream', descriptors: [] }
 const ok: RemoteResult<void> = { ok: true, value: undefined }
 
+function assertActions(value: Record<string, unknown>): asserts value is Record<string, unknown> & WorkstreamActionInjected {
+  for (const key of ['openMember', 'command', 'changeRequests']) {
+    if (typeof value[key] !== 'function') throw new Error(`Workstream header action lacks ${key}`)
+  }
+}
+
 async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) {
   const ctx = new Context()
   const unmount = vi.fn(async () => {})
@@ -46,7 +52,11 @@ async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) 
   } as never, () => null)
   const dispose = await mountWorkstreamPanel(ctx, contribution)
   const entry = () => ctx.slots.entries('conversation.session.header.actions').find(candidate => candidate.component === WorkstreamAction)
-  const actions = () => entry()!.inject!() as unknown as WorkstreamActionInjected
+  const actions = (): WorkstreamActionInjected => {
+    const injected = entry()!.inject!()
+    assertActions(injected)
+    return injected
+  }
   return { ctx, panel, refreshProjections, navigation, dispose, unmount, entry, actions }
 }
 

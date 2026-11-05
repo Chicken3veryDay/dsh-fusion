@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import type { SessionListState, SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionListState, SessionSnapshot, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
@@ -44,14 +44,19 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
     command: vi.fn<WorkstreamActionInjected['command']>(async () => null),
     changeRequests: vi.fn<WorkstreamActionInjected['changeRequests']>(async () => ({ ok: true, value: changes })),
   }
+  const useSessions = bindSnapshotSelector(sessions)
   const props = {
     sessionId,
     useSession: bindSnapshotSelector(session),
-    useSessions: bindSnapshotSelector(sessions),
+    useProjection: ((key: string, select?: (value: unknown) => unknown) => {
+      const value = useSessions(state => state.projectionsBySession[sessionId]?.values[key as keyof Values])
+      return select === undefined ? value : select(value)
+    }) as UseProjection,
+    useSessions,
     useSessionStatus: bindSnapshotSelector(createSnapshotStore<SessionStatusSnapshot>(new Map())),
     ...injected,
     t: makeTranslate(en, commonEn),
-  } as unknown as WorkstreamActionProps
+  } as WorkstreamActionProps
   const setValues = (values: Values): void => {
     act(() => {
       const current = sessions.getSnapshot()

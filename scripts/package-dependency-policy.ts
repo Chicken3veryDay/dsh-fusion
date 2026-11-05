@@ -78,6 +78,9 @@ const PEER_REQUIRED_HOST_EXPORTS = {
   '@deepseek-ai/dsh-user-questions': ['UserQuestionError'],
   // `instanceof` checks need the translator's own class instance.
   '@deepseek-ai/dsh-experimental-translator': ['TranslationError'],
+  // The Workstream panel types Ticket and Workstream refusals with `instanceof` against the mounted services' classes.
+  '@deepseek-ai/dsh-experimental-ticket': ['TicketError'],
+  '@deepseek-ai/dsh-experimental-workstream': ['WorkstreamError'],
   // Stateless; a safe classification would turn the forge panel's forge and worktree peers into dependencies.
   '@deepseek-ai/dsh-experimental-forge': ['changeRequestKey'],
   '@deepseek-ai/dsh-experimental-worktree': ['generatedWorktreeName'],

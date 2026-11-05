@@ -1242,6 +1242,60 @@ aggregateChangeRequests( caller: Agent, rootSessionId: SessionId, ): AggregatedC
 
 Source: [`packages/experimental/workstream-evidence/src/index.ts`](../../packages/experimental/workstream-evidence/src/index.ts)
 
+<a id="ctxworkstreampanel--workstreampanelcontroller"></a>
+
+### `ctx.workstreamPanel` — `WorkstreamPanelController`
+
+Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session's resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller's own Session header, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root's Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.
+
+```ts cordis-catalog
+/**
+ * Aggregate the change requests that the caller's Workstream members bind.
+ * @param agent - displayed Session's Agent, supplied by the Gateway.
+ * @returns aggregated change requests; `complete` is false when a Session or the forge service could not be read.
+ * @throws `workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.
+ */
+@Remote changeRequests(agent: Agent): AggregatedChangeRequestsResult
+
+/**
+ * Answer an open Ticket question as the caller.
+ * @param agent - displayed Session's Agent, supplied by the Gateway.
+ * @param request - question, answer text, and the Ticket revision the panel read.
+ * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
+ */
+@Remote async answerQuestion(agent: Agent, request: WorkstreamQuestionAnswer): Promise<void>
+
+/**
+ * Close an open or answered Ticket question as the caller.
+ * @param agent - displayed Session's Agent, supplied by the Gateway.
+ * @param request - question and the Ticket revision the panel read.
+ * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/denied` unless the caller authored the question or coordinates the Ticket.
+ */
+@Remote async closeQuestion(agent: Agent, request: WorkstreamQuestionTarget): Promise<void>
+
+/**
+ * Acknowledge an open attention item as the caller; the item keeps blocking until resolved.
+ * @param agent - displayed Session's Agent, supplied by the Gateway.
+ * @param request - attention item and the Ticket revision the panel read.
+ * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
+ */
+@Remote async acknowledgeAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>
+
+/**
+ * Resolve an open or acknowledged attention item as the caller.
+ * @param agent - displayed Session's Agent, supplied by the Gateway.
+ * @param request - attention item and the Ticket revision the panel read.
+ * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
+ */
+@Remote async resolveAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>
+```
+
+Source: [`packages/experimental/client-ui-workstream/src/index.ts`](../../packages/experimental/client-ui-workstream/src/index.ts)
+
 <a id="ctxworkstreams--workstreamservice"></a>
 
 ### `ctx.workstreams` — `WorkstreamService`

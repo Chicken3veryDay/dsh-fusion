@@ -5066,6 +5066,44 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'workstreamPanel',
+    summary: 'Serves the Workstream panel.',
+    description: 'Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session\'s resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller\'s own Session header, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root\'s Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.',
+    methods: [
+      {
+        signature: '@Remote changeRequests(agent: Agent): AggregatedChangeRequestsResult',
+        description: 'Aggregate the change requests that the caller\'s Workstream members bind.',
+        parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }],
+        returns: 'aggregated change requests; `complete` is false when a Session or the forge service could not be read.',
+        throws: ['`workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.'],
+      },
+      {
+        signature: '@Remote async answerQuestion(agent: Agent, request: WorkstreamQuestionAnswer): Promise<void>',
+        description: 'Answer an open Ticket question as the caller.',
+        parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }, { name: 'request', description: 'question, answer text, and the Ticket revision the panel read.' }],
+        throws: ['`workstreamPanel/stale-revision` after a concurrent Ticket change.', '`workstreamPanel/denied` unless the caller coordinates the Ticket.'],
+      },
+      {
+        signature: '@Remote async closeQuestion(agent: Agent, request: WorkstreamQuestionTarget): Promise<void>',
+        description: 'Close an open or answered Ticket question as the caller.',
+        parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }, { name: 'request', description: 'question and the Ticket revision the panel read.' }],
+        throws: ['`workstreamPanel/stale-revision` after a concurrent Ticket change.', '`workstreamPanel/denied` unless the caller authored the question or coordinates the Ticket.'],
+      },
+      {
+        signature: '@Remote async acknowledgeAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>',
+        description: 'Acknowledge an open attention item as the caller; the item keeps blocking until resolved.',
+        parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }, { name: 'request', description: 'attention item and the Ticket revision the panel read.' }],
+        throws: ['`workstreamPanel/stale-revision` after a concurrent Ticket change.', '`workstreamPanel/denied` unless the caller coordinates the Ticket.'],
+      },
+      {
+        signature: '@Remote async resolveAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>',
+        description: 'Resolve an open or acknowledged attention item as the caller.',
+        parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }, { name: 'request', description: 'attention item and the Ticket revision the panel read.' }],
+        throws: ['`workstreamPanel/stale-revision` after a concurrent Ticket change.', '`workstreamPanel/denied` unless the caller coordinates the Ticket.'],
+      },
+    ],
+  },
+  {
     key: 'workstreams',
     summary: 'Host service; unknown intents are reconciled but never automatically executed again.',
     description: 'Host service; unknown intents are reconciled but never automatically executed again.',
@@ -11200,6 +11238,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface WorkspaceView {\n    readonly workspaceId: WorkspaceId;\n    readonly path: string;\n    readonly title: string;\n    readonly sessionIds: readonly SessionId[];\n    readonly createdAt: string;\n    readonly updatedAt: string;\n}',
   },
   {
+    name: 'WorkstreamAttentionTarget',
+    declaration: 'export interface WorkstreamAttentionTarget {\n    readonly ticketId: TicketId;\n    readonly attentionId: TicketAttentionId;\n    readonly expectedRevision: number;\n}',
+  },
+  {
     name: 'WorkstreamContextPacket',
     declaration: 'export interface WorkstreamContextPacket {\n    readonly requirements: string;\n    readonly decisions: readonly string[];\n    readonly cursor: string;\n    readonly changes: string;\n    readonly artifacts: readonly {\n        readonly ref: string;\n        readonly digest: string;\n    }[];\n}',
   },
@@ -11234,6 +11276,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkstreamOperationId',
     declaration: 'export type WorkstreamOperationId = Branded<\'WorkstreamOperationId\'>;',
+  },
+  {
+    name: 'WorkstreamQuestionAnswer',
+    declaration: 'export interface WorkstreamQuestionAnswer extends WorkstreamQuestionTarget {\n    readonly answer: string;\n}',
+  },
+  {
+    name: 'WorkstreamQuestionTarget',
+    declaration: 'export interface WorkstreamQuestionTarget {\n    readonly ticketId: TicketId;\n    readonly questionId: TicketQuestionId;\n    readonly expectedRevision: number;\n}',
   },
   {
     name: 'WorkstreamSnapshot',
