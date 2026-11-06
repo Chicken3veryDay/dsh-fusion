@@ -53,9 +53,9 @@ it.each(['short-circuit', 'reject-before', 'reject-after', 'throw-after', 'abort
   vi.spyOn(h.ctx.tools, 'resolve').mockImplementation(async (input) => {
     const selected = await resolve(input)
     const index = disposals.push(0) - 1
-    return { ...selected, dispose() { disposals[index]++; selected.dispose() } }
+    return { ...selected, dispose() { disposals[index] = (disposals[index] ?? 0) + 1; selected.dispose() } }
   })
-  const cancel = () => h.agent.cancel({ kind: 'user' })
+  const cancel = (): void => { h.agent.cancel({ kind: 'user' }) }
   if (path === 'abort-condition') h.ctx.tools.register(defineTool({ name: 'conditional', description: 'Condition cancellation.', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => 'unused' }), { when: () => { cancel(); return true } })
   if (path === 'throw-assembly') h.ctx.on('system-prompt/assemble', async () => { throw new Error('assembly failure') })
   if (path === 'abort-policy') h.ctx.tools.registerAdmissionPolicy(({ candidates }) => { cancel(); return [...candidates.keys()] })

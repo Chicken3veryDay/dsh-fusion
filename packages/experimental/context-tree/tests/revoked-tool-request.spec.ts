@@ -47,7 +47,7 @@ async function harness(adapter: MockAdapter) {
   vi.spyOn(ctx.tools, 'resolve').mockImplementation(async (input) => {
     const selected = await resolve(input)
     const index = disposals.push(0) - 1
-    return { ...selected, dispose() { disposals[index]++; selected.dispose() } }
+    return { ...selected, dispose() { disposals[index] = (disposals[index] ?? 0) + 1; selected.dispose() } }
   })
   const calls: string[] = []
   const register = (name: string) => ctx.tools.register(defineTool({
