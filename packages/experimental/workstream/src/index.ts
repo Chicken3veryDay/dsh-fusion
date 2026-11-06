@@ -49,6 +49,12 @@ const defaults: Required<Config> = {
 /** Byte size of the complete JSON value, including framing and metadata. */
 function bytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value), 'utf8') }
 
+/** Result of the queued half of `addMember`: a recorded member, or an unconfirmed launch the caller settles outside the queue. */
+type ProvisionOutcome = { readonly kind: 'provisioned'; readonly member: WorkstreamMember }
+  | { readonly kind: 'uncertain'; readonly owner: Agent; readonly memberId: SessionId; readonly error: unknown }
+
+function deliveryKey(root: SessionId, operationId: WorkstreamOperationId): string { return `${root}\u0000${operationId}` }
+
 /** Host service; unknown intents are reconciled but never automatically executed again. */
 export class WorkstreamService extends Service {
   static inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'subagents', 'tickets']
@@ -65,6 +71,12 @@ export class WorkstreamService extends Service {
   private ready = false
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly pending = new Set<Promise<unknown>>()
+  /** Work that runs outside the root queue (child drains, message deliveries); shutdown awaits it after draining the members. */
+  private readonly detached = new Set<Promise<unknown>>()
+  /** Running message deliveries by root and operation, so a retry joins the delivery instead of reporting it unknown. */
+  private readonly deliveries = new Map<string, Promise<WorkstreamMessage>>()
+  /** Running message deliveries by recipient, which `stop` lets finish before it drains that recipient. */
+  private readonly deliveriesTo = new Map<SessionId, Set<Promise<unknown>>>()
   private readonly lifetime = new AbortController()
 
   constructor(ctx: Context, config: Config = {}) {
@@ -155,7 +167,11 @@ export class WorkstreamService extends Service {
     const rootId = caller.session.header.parentSession ?? caller.id
     const owner = this.ctx.agents.get(rootId)
     if (owner === undefined || this.projection.stateOf(owner.session).snapshot === null) return []
-    return [this.get(caller, rootId)]
+    try { return [this.get(caller, rootId)] } catch (error: unknown) {
+      // A stopped member or an ordinary child of the root has no membership to list.
+      if (error instanceof WorkstreamError && error.code === 'WORKSTREAM_UNAUTHORIZED') return []
+      throw error
+    }
   }
 
   /** Provision or reconcile one continuable direct child under a stable operation id.
@@ -165,49 +181,58 @@ export class WorkstreamService extends Service {
    * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.
    */
   async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember> {
-    return this.enqueue(rootSessionId, async () => {
-      const { owner, snapshot } = this.coordinator(caller, rootSessionId)
-      request.signal.throwIfAborted()
-      const prior = snapshot.members.find(member => member.operationId === request.operationId)
-      if (prior !== undefined) {
-        if (prior.name !== request.name || prior.provider !== request.provider || prior.prompt !== request.prompt ||
-          prior.description !== request.description) throw new WorkstreamError('Member operation id was reused with different input',
-          'WORKSTREAM_CONFLICT')
-        if (prior.phase === 'active') return this.durable(owner, prior)
-        if (prior.phase !== 'provisioning') throw new
-        WorkstreamError('Member is stopped or stopping; use a new operation id and name', 'WORKSTREAM_CONFLICT')
-        return this.reconcileMember(owner, snapshot, prior, request.signal)
-      }
-      this.text(request.name, 'name'); this.text(request.description, 'description'); this.text(request.provider,
-        'provider'); this.text(request.prompt, 'prompt')
-      if (snapshot.members.length >= this.config.maxMembers) throw new WorkstreamError('Workstream member limit reached',
-        'WORKSTREAM_LIMIT')
-      if (snapshot.members.some(member => member.name === request.name)) throw new
-      WorkstreamError('Member name is already reserved', 'WORKSTREAM_CONFLICT')
-      const provider = this.ctx.subagents.getProvider(request.provider)
-      if (provider?.prepareContinuable === undefined) throw new
-      WorkstreamError('Member provider must support local continuable children', 'WORKSTREAM_INVALID_INPUT')
-      const member: WorkstreamMember = { id: SessionId(randomUUID()), role: 'member', operationId: request.operationId, name:
-        request.name, description: request.description, provider: request.provider, prompt: request.prompt, phase: 'provisioning',
-      diagnostic: 'Provisioning acceptance is not yet confirmed; retry the same operation to reconcile' }
-      await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, members: [...snapshot.members, member] })
-      try {
-        const started = await this.ctx.subagents.startActivation({
-          delivery: 'parent', childId: member.id, provider: member.provider, label: member.description,
-          request: { parent: owner, prompt: [{ type: 'text', text: member.prompt }] },
-          signal: AbortSignal.any([request.signal, this.lifetime.signal]),
-        })
-        const session = this.ctx.sessions.get(member.id)
-        if (session === undefined) throw new
-        WorkstreamError('Provisioned child left the live registry before durability confirmation', 'WORKSTREAM_UNKNOWN')
-        await this.ctx.sessions.flush(session)
-        return await this.reconcileMember(owner, this.state(owner), member, request.signal, started.messageId)
-      } catch (error: unknown) {
-        await this.ctx.subagents.drainChildren(owner, [member.id])
-        throw new WorkstreamError(`Member provisioning remains uncertain; inspect ${member.id} and retry the same operation`,
-          'WORKSTREAM_UNKNOWN', { cause: error })
-      }
-    })
+    const outcome = await this.enqueue(rootSessionId, (): Promise<ProvisionOutcome> => this.provisionMember(caller, rootSessionId, request))
+    if (outcome.kind === 'provisioned') return outcome.member
+    // Settle the unconfirmed child outside the root queue: its first Workstream tool call may be queued behind this operation
+    // and must be able to finish for the drain to complete. The member stays `provisioning`, so there is nothing to commit
+    // afterwards; a retry of the same operation reconciles it from the child's log.
+    const cause = await this.track(this.ctx.subagents.drainChildren(outcome.owner, [outcome.memberId]).then(
+      () => outcome.error, (drainError: unknown) => new AggregateError([outcome.error, drainError], 'Provisioning failed and the child did not drain')))
+    throw new WorkstreamError(`Member provisioning remains uncertain; inspect ${outcome.memberId} and retry the same operation`,
+      'WORKSTREAM_UNKNOWN', { cause })
+  }
+
+  /** The queued part of {@link addMember}: records and launches the member; when the launch is uncertain it returns, not drains. */
+  private async provisionMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<ProvisionOutcome> {
+    const { owner, snapshot } = this.coordinator(caller, rootSessionId)
+    request.signal.throwIfAborted()
+    const prior = snapshot.members.find(member => member.operationId === request.operationId)
+    if (prior !== undefined) {
+      if (prior.name !== request.name || prior.provider !== request.provider || prior.prompt !== request.prompt ||
+        prior.description !== request.description) throw new WorkstreamError('Member operation id was reused with different input',
+        'WORKSTREAM_CONFLICT')
+      if (prior.phase === 'active') return { kind: 'provisioned', member: await this.durable(owner, prior) }
+      if (prior.phase !== 'provisioning') throw new
+      WorkstreamError('Member is stopped or stopping; use a new operation id and name', 'WORKSTREAM_CONFLICT')
+      return { kind: 'provisioned', member: await this.reconcileMember(owner, snapshot, prior, request.signal) }
+    }
+    this.text(request.name, 'name'); this.text(request.description, 'description'); this.text(request.provider,
+      'provider'); this.text(request.prompt, 'prompt')
+    if (snapshot.members.length >= this.config.maxMembers) throw new WorkstreamError('Workstream member limit reached',
+      'WORKSTREAM_LIMIT')
+    if (snapshot.members.some(member => member.name === request.name)) throw new
+    WorkstreamError('Member name is already reserved', 'WORKSTREAM_CONFLICT')
+    const provider = this.ctx.subagents.getProvider(request.provider)
+    if (provider?.prepareContinuable === undefined) throw new
+    WorkstreamError('Member provider must support local continuable children', 'WORKSTREAM_INVALID_INPUT')
+    const member: WorkstreamMember = { id: SessionId(randomUUID()), role: 'member', operationId: request.operationId, name:
+      request.name, description: request.description, provider: request.provider, prompt: request.prompt, phase: 'provisioning',
+    diagnostic: 'Provisioning acceptance is not yet confirmed; retry the same operation to reconcile' }
+    await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, members: [...snapshot.members, member] })
+    try {
+      const started = await this.ctx.subagents.startActivation({
+        delivery: 'parent', childId: member.id, provider: member.provider, label: member.description,
+        request: { parent: owner, prompt: [{ type: 'text', text: member.prompt }] },
+        signal: AbortSignal.any([request.signal, this.lifetime.signal]),
+      })
+      const session = this.ctx.sessions.get(member.id)
+      if (session === undefined) throw new
+      WorkstreamError('Provisioned child left the live registry before durability confirmation', 'WORKSTREAM_UNKNOWN')
+      await this.ctx.sessions.flush(session)
+      return { kind: 'provisioned', member: await this.reconcileMember(owner, this.state(owner), member, request.signal, started.messageId) }
+    } catch (error: unknown) {
+      return { kind: 'uncertain', owner, memberId: member.id, error }
+    }
   }
 
   /** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.
@@ -251,40 +276,75 @@ export class WorkstreamService extends Service {
    * @returns current durable delivery receipt; unresolved retries never send again.
    */
   async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage> {
-    return this.enqueue(rootSessionId, async () => {
-      const { owner, snapshot } = this.requireMembership(caller, rootSessionId)
-      request.signal.throwIfAborted()
-      this.target(snapshot, request.targetId)
-      if (request.targetId === caller.id) throw new WorkstreamError('Choose another Workstream member', 'WORKSTREAM_INVALID_INPUT')
-      const prior = snapshot.messages.find(message => message.operationId === request.operationId)
-      if (prior !== undefined) {
-        if (prior.senderId !== caller.id || prior.targetId !== request.targetId || prior.text !== request.text ||
-          JSON.stringify(prior.context) !== JSON.stringify(request.context ?? null)) throw new
-        WorkstreamError('Message operation id was reused with different input', 'WORKSTREAM_CONFLICT')
-        if (prior.delivery.phase !== 'intent') return this.durable(owner, prior)
-        return this.reconcileMessage(owner, snapshot, prior, request.signal)
-      }
-      this.text(request.text, 'text')
-      if (snapshot.messages.length >= this.config.maxMessages) throw new WorkstreamError('Workstream message limit reached',
-        'WORKSTREAM_LIMIT')
-      const message: WorkstreamMessage = { operationId: request.operationId, senderId: caller.id, targetId: request.targetId,
-        text: request.text, context: request.context ?? null, diagnostic:
-        'Inbox acceptance is not yet confirmed; retry the same operation to reconcile', delivery: { phase: 'intent' } }
-      if (bytes(message) > this.config.maxMessageBytes) throw new
-      WorkstreamError('Complete Workstream message exceeds maxMessageBytes', 'WORKSTREAM_LIMIT')
-      await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, messages: [...snapshot.messages, message] })
-      const source = { kind: 'workstream-message' as const, rootSessionId, operationId: request.operationId, senderSessionId: caller.id }
-      const content = [{ type: 'text' as const, text: JSON.stringify({ sender: caller.id, text: message.text, context: message.context }) }]
-      try {
-        if (request.targetId === owner.id) owner.steer(createUserMessage({ content, source }))
-        else await steerHostSubagentPrompt(this.ctx.subagents, owner, request.targetId, content, source,
-          AbortSignal.any([request.signal, this.lifetime.signal]))
-        return await this.reconcileMessage(owner, this.state(owner), message, request.signal)
-      } catch (error: unknown) {
-        throw new WorkstreamError('Message delivery remains uncertain; retry the same operation to inspect inbox evidence',
-          'WORKSTREAM_UNKNOWN', { cause: error })
-      }
-    })
+    // The queue covers only the durable intent and the durable receipt. Delivery runs outside it: a closing recipient's
+    // disposal waits for that recipient's own queued Workstream tools, which cannot start while this operation holds the queue.
+    const { settled } = await this.enqueue(rootSessionId, () => this.admitMessage(caller, rootSessionId, request))
+    return settled
+  }
+
+  /** The queued part of {@link sendMessage}: validates, records the intent, and starts its delivery. */
+  private async admitMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest):
+  Promise<{ readonly settled: Promise<WorkstreamMessage> }> {
+    const { owner, snapshot } = this.requireMembership(caller, rootSessionId)
+    request.signal.throwIfAborted()
+    const prior = snapshot.messages.find(message => message.operationId === request.operationId)
+    if (prior !== undefined) {
+      if (prior.senderId !== caller.id || prior.targetId !== request.targetId || prior.text !== request.text ||
+        JSON.stringify(prior.context) !== JSON.stringify(request.context ?? null)) throw new
+      WorkstreamError('Message operation id was reused with different input', 'WORKSTREAM_CONFLICT')
+      if (prior.delivery.phase !== 'intent') return { settled: Promise.resolve(await this.durable(owner, prior)) }
+      // A delivery of this operation that is still running owns the outcome; a retry joins it instead of reporting it unknown.
+      const running = this.deliveries.get(deliveryKey(rootSessionId, request.operationId))
+      if (running !== undefined) return { settled: running }
+      return { settled: Promise.resolve(await this.reconcileMessage(owner, snapshot, prior, request.signal)) }
+    }
+    this.target(snapshot, request.targetId)
+    if (request.targetId === caller.id) throw new WorkstreamError('Choose another Workstream member', 'WORKSTREAM_INVALID_INPUT')
+    this.text(request.text, 'text')
+    if (snapshot.messages.length >= this.config.maxMessages) throw new WorkstreamError('Workstream message limit reached',
+      'WORKSTREAM_LIMIT')
+    const message: WorkstreamMessage = { operationId: request.operationId, senderId: caller.id, targetId: request.targetId,
+      text: request.text, context: request.context ?? null, diagnostic:
+      'Inbox acceptance is not yet confirmed; retry the same operation to reconcile', delivery: { phase: 'intent' } }
+    if (bytes(message) > this.config.maxMessageBytes) throw new
+    WorkstreamError('Complete Workstream message exceeds maxMessageBytes', 'WORKSTREAM_LIMIT')
+    await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, messages: [...snapshot.messages, message] })
+    // Registered before the queue is released, so a `stop` queued next already sees this delivery.
+    const delivery = this.track(this.deliver(owner, message, request))
+    this.registerDelivery(rootSessionId, message, delivery)
+    return { settled: delivery }
+  }
+
+  private async deliver(owner: Agent, message: WorkstreamMessage, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage> {
+    const source = { kind: 'workstream-message' as const, rootSessionId: owner.id, operationId: request.operationId,
+      senderSessionId: message.senderId }
+    const content = [{ type: 'text' as const, text: JSON.stringify({ sender: message.senderId, text: message.text, context: message.context }) }]
+    try {
+      if (request.targetId === owner.id) owner.steer(createUserMessage({ content, source }))
+      else await steerHostSubagentPrompt(this.ctx.subagents, owner, request.targetId, content, source,
+        AbortSignal.any([request.signal, this.lifetime.signal]))
+      return await this.enqueue(owner.id, () => {
+        const current = this.state(owner).messages.find(candidate => candidate.operationId === message.operationId)
+        if (current === undefined) throw new WorkstreamError('Message disappeared during delivery', 'WORKSTREAM_UNKNOWN')
+        // Another reconciliation may have recorded acceptance while this delivery ran.
+        if (current.delivery.phase !== 'intent') return this.durable(owner, current)
+        return this.reconcileMessage(owner, this.state(owner), current, request.signal)
+      })
+    } catch (error: unknown) {
+      throw new WorkstreamError('Message delivery remains uncertain; retry the same operation to inspect inbox evidence',
+        'WORKSTREAM_UNKNOWN', { cause: error })
+    }
+  }
+
+  private registerDelivery(rootSessionId: SessionId, message: WorkstreamMessage, delivery: Promise<WorkstreamMessage>): void {
+    const key = deliveryKey(rootSessionId, message.operationId)
+    const toTarget = this.deliveriesTo.get(message.targetId) ?? new Set<Promise<unknown>>()
+    this.deliveries.set(key, delivery); toTarget.add(delivery); this.deliveriesTo.set(message.targetId, toTarget)
+    const release = (): void => {
+      this.deliveries.delete(key); toTarget.delete(delivery)
+      if (toTarget.size === 0 && this.deliveriesTo.get(message.targetId) === toTarget) this.deliveriesTo.delete(message.targetId)
+    }
+    void delivery.then(release, release)
   }
 
   /** Record recipient acknowledgement; idle status never implies processing.
@@ -365,7 +425,9 @@ export class WorkstreamService extends Service {
     })
     if (begun.stopped !== undefined) return this.durable(begun.owner, begun.stopped)
     // Drain outside the root queue: the child's own queued Workstream tools must be able to finish for it to settle.
-    await this.ctx.subagents.drainChildren(begun.owner, [targetId])
+    // A delivery already running to this member finishes first, so none resumes the member after its drain.
+    await Promise.allSettled([...this.deliveriesTo.get(targetId) ?? []])
+    await this.track(this.ctx.subagents.drainChildren(begun.owner, [targetId]))
     return this.enqueue(rootSessionId, async () => {
       const snapshot = this.state(begun.owner)
       const current = snapshot.members.find(candidate => candidate.id === targetId)
@@ -580,6 +642,12 @@ export class WorkstreamService extends Service {
       'WORKSTREAM_UNKNOWN')
     return this.saveMessage(owner, snapshot, { ...message, diagnostic: null, delivery: { phase: 'accepted', messageId: id } })
   }
+  private track<T>(work: Promise<T>): Promise<T> {
+    this.detached.add(work)
+    const release = (): void => { this.detached.delete(work) }
+    void work.then(release, release)
+    return work
+  }
   private enqueue<T>(root: SessionId, action: () => Promise<T>): Promise<T> {
     if (this.lifetime.signal.aborted) return Promise.reject(new WorkstreamError('Workstream service has stopped', 'WORKSTREAM_DISPOSED'))
     const prior = this.tails.get(root) ?? Promise.resolve()
@@ -599,6 +667,8 @@ export class WorkstreamService extends Service {
     }))
     const failures = results.filter(result => result.status === 'rejected').map((result) => { const reason: unknown =
       result.reason; return reason })
+    // Deliveries and drains outside the queue end once the members are drained and the queue rejects new work.
+    await Promise.allSettled([...this.detached])
     if (failures.length > 0) throw new AggregateError(failures, 'Workstream child settlement failed')
   }
 }
