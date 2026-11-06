@@ -708,6 +708,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Splits instruction files and documentation into sections with stable ids, content hashes, and anchors, and renders bounded catalogs and section reads through ctx.fs.',
   },
   {
+    key: 'contextTree',
+    pkg: 'experimental-context-tree',
+    title: 'On-demand context tree',
+    mode: 'service',
+    note: 'Publishes a browsable tree of instructions, sources, and tools; loads sections as revocable grants, activates hidden tools through a tool admission policy, and derives both from the Session log through a projection.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

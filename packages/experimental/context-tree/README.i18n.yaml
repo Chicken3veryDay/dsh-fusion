@@ -1,0 +1,82 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/context-tree/README.md
+/:
+  en: 79a556663c1c87e6
+  zh: 240fb1ca4d67b8ce
+/deepseek-ai-dsh-experimental-context-tree:
+  en: a1227dc57194cd50
+  zh: 6b6fb5a1196dcaee
+/deepseek-ai-dsh-experimental-context-tree/summary:
+  en: 9e70ba2f39229f41
+  zh: 77e0757e01ee40af
+/deepseek-ai-dsh-experimental-context-tree/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: ddafa933c150c4d1
+/deepseek-ai-dsh-experimental-context-tree/use-this-package:
+  en: b6b36127cb08ea20
+  zh: 662174e352d32902
+/deepseek-ai-dsh-experimental-context-tree/use-this-package/the-tree:
+  en: 9b69c27443401915
+  zh: b4818da51a35a097
+/deepseek-ai-dsh-experimental-context-tree/use-this-package/tools:
+  en: 20b191451686e33c
+  zh: 71f2c8dde92d91b4
+/deepseek-ai-dsh-experimental-context-tree/use-this-package/service-api:
+  en: 29e02944f40268ed
+  zh: c093bada694fa478
+/deepseek-ai-dsh-experimental-context-tree/use-this-package/configuration:
+  en: 07f00c056b73bdc1
+  zh: 0c3c76389458b838
+/deepseek-ai-dsh-experimental-context-tree/use-this-package/events:
+  en: fbca302fec9b3f52
+  zh: 04a5b0e46305261d
+/deepseek-ai-dsh-experimental-context-tree/understand-the-implementation:
+  en: 9eea0c29c85e141b
+  zh: 929e16f7923d202d
+/deepseek-ai-dsh-experimental-context-tree/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools:
+  en: b20ad65f6a4bb3e6
+  zh: 2b2a12946c6eba9d
+/deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/what-the-model-sees:
+  en: b175e2cc57940f21
+  zh: 38c57aac9e2a68fc
+/deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/token-effect:
+  en: 904c3e9be8ffb0d4
+  zh: fdfdd651d8236c59
+/deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/kv-cache-effect:
+  en: e03bf9946427df44
+  zh: 616a90e737115a89
+/deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog:
+  en: ce0006b65eb45f4e
+  zh: a96b72ac47c42cbb
+/deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/what-the-model-sees:
+  en: d65a105fd055c99d
+  zh: c18e92b65dcc5175
+/deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/token-effect:
+  en: 0018da35fda9891c
+  zh: 47631bf6b8fb2fb2
+/deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/kv-cache-effect:
+  en: 22e765d1a2564312
+  zh: d8301d808d95c46d
+/deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations:
+  en: be1e80618681ae17
+  zh: 42a8160467bdcdb0
+/deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/what-the-model-sees:
+  en: 5a5b16b339c03dd2
+  zh: b4f369e44f0a4dd4
+/deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/token-effect:
+  en: 428874abcc011103
+  zh: 3b80138658158bbc
+/deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/kv-cache-effect:
+  en: 7d38d58e56a1a8ef
+  zh: 9def3af5f0ad09b4
+/deepseek-ai-dsh-experimental-context-tree/known-limitations-and-deferred-work:
+  en: 913ccb4855f8de9c
+  zh: ad25d850ed8ab527
+/deepseek-ai-dsh-experimental-context-tree/known-limitations-and-deferred-work/dev-note:
+  en: 572f1cb721684820
+  zh: 87ab7897146058f1

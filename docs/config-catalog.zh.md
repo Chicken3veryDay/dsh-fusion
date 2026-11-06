@@ -1159,6 +1159,40 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-index -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-tree -->
+<a id="deepseek-aidsh-experimental-context-tree"></a>
+
+## `@deepseek-ai/dsh-experimental-context-tree`
+
+- `inject`: `tools` · `compaction` · `contextIndex` · `sessionProjections` · `workingDirectory`
+- `source`: [`packages/experimental/context-tree/src/types.ts:179`](../packages/experimental/context-tree/src/types.ts)
+
+```ts config-catalog
+/**
+ * Context tree configuration. Every field has a working default, so no configuration is
+ * required. Misconfigured values make the service fail at mount.
+ */
+export interface Config {
+  /** Tools that are always exposed and never appear in the tree; names that are not registered are absent. */
+  baseTools?: string[]
+  /** Deepest `depth` a browse may ask for; larger requests are lowered to it (default 3). */
+  maxBrowseDepth?: number
+  /** Most nodes one browse lists (default 64). */
+  maxBrowseNodes?: number
+  /** UTF-8 bytes of the rendered browse listing (default 8,192). */
+  maxBrowseBytes?: number
+  /** Most paths one load accepts (default 16). */
+  maxLoadPaths?: number
+  /** UTF-8 bytes of section text one load injects (default 32,768). */
+  maxLoadBytes?: number
+  /** Most tools one load activates (default 32). */
+  maxActivatedTools?: number
+  /** Longest summary line a node shows, in UTF-8 bytes (default 160). */
+  maxSummaryBytes?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-tree -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-cua-macos -->
 <a id="deepseek-aidsh-experimental-cua-macos"></a>
 
@@ -5151,6 +5185,7 @@ export interface Config {
 | `@deepseek-ai/dsh-experimental-agent-team-profile` | — | [`packages/experimental/agent-team-profile/src/index.ts`](../packages/experimental/agent-team-profile/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-badge-skill-bundle` | — | [`packages/experimental/badge-skill-bundle/src/index.ts`](../packages/experimental/badge-skill-bundle/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-browser-use-runtime` | — | [`packages/experimental/browser-use-runtime/src/index.ts`](../packages/experimental/browser-use-runtime/src/index.ts) |
+| `@deepseek-ai/dsh-experimental-context-profile` | — | [`packages/experimental/context-profile/src/index.ts`](../packages/experimental/context-profile/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-cot-translation-bundle` | — | [`packages/experimental/cot-translation-bundle/src/index.ts`](../packages/experimental/cot-translation-bundle/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-forge-bundle` | — | [`packages/experimental/forge-bundle/src/index.ts`](../packages/experimental/forge-bundle/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-inspector-profile` | — | [`packages/experimental/inspector-profile/src/index.ts`](../packages/experimental/inspector-profile/src/index.ts) |

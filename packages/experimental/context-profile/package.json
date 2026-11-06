@@ -1,0 +1,60 @@
+{
+  "name": "@deepseek-ai/dsh-experimental-context-profile",
+  "description": "Experimental context tree profile layer: on-demand instructions, sources and tools with a small eager core",
+  "version": "0.2.2-alpha.2",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/experimental/context-profile"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./context-tree-tools": {
+      "types": "./lib/types/context-tree-tools.d.ts",
+      "default": "./lib/types/context-tree-tools.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "locale/*.json",
+    "lib/index.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.js",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "listedByDefault": false
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-experimental-context-index": "workspace:*",
+    "@deepseek-ai/dsh-experimental-context-tree": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:~"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/cordis-plugin-include": "workspace:~",
+    "@deepseek-ai/dsh-llm": "workspace:*",
+    "@deepseek-ai/dsh-loader-smoke": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*",
+    "execa": "^10.0.1",
+    "js-yaml": "^4.3.2"
+  }
+}

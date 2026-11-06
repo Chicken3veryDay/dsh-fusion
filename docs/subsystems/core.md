@@ -925,6 +925,77 @@ renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBud
 
 Source: [`packages/experimental/context-index/src/index.ts`](../../packages/experimental/context-index/src/index.ts)
 
+<a id="ctxcontexttree--contexttreeservice"></a>
+
+### `ctx.contextTree` — `ContextTreeService`
+
+Service that builds the context tree and loads from it.
+
+```ts cordis-catalog
+/**
+ * Say where a set of tools belongs in the tree. A registration made through the caller's
+ * context lasts as long as that context.
+ * @param hint - tool names or a name prefix, plus origin and group.
+ * @returns the disposer.
+ * @throws {@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for a hint that covers nothing or has an unusable group.
+ */
+registerToolGroup(hint: ToolGroupHint): () => Promise<void>
+
+/**
+ * Decide where tools appear in the tree. Assigners run in registration order and the first
+ * opinion wins; tools nobody places go under Global, grouped by name. A later curator
+ * registers here to regroup tools.
+ * @param assigner - decision for one tool; must be pure and cheap, because it runs on every browse and step.
+ * @returns the disposer.
+ */
+registerToolPlacement(assigner: ToolPlacementAssigner): () => Promise<void>
+
+/**
+ * Whether a tool is always exposed.
+ * @param name - tool name.
+ * @returns true for a configured base tool.
+ */
+isBaseTool(name: string): boolean
+
+/**
+ * Tools the conversation has activated and not yet lost to compaction.
+ * @param agent - the agent.
+ * @returns the names, in log order.
+ */
+activeTools(agent: Agent): ReadonlySet<string>
+
+/**
+ * Tools shown under Global only because no assigner recorded their origin.
+ * @param agent - the agent whose tool view applies.
+ * @param signal - cancellation.
+ * @returns their names, in registration order.
+ */
+async unresolvedToolOrigins(agent: Agent, signal?: AbortSignal): Promise<readonly string[]>
+
+/**
+ * List the subtree under a node: titles and summaries only.
+ * @param agent - the browsing agent.
+ * @param request - path, depth, and offset.
+ * @param signal - cancellation.
+ * @returns a listing within the node and byte bounds.
+ * @throws {@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for an unknown path or a depth or offset that is not a valid integer.
+ */
+async browse(agent: Agent, request: ContextBrowseRequest = {}, signal?: AbortSignal): Promise<ContextBrowseResult>
+
+/**
+ * Resolve a load into the messages to log. Nothing is logged here: the caller appends
+ * `contexts` in order, and the next step's admission sees the activations.
+ * @param agent - the loading agent.
+ * @param request - paths from a browse.
+ * @param signal - cancellation.
+ * @returns section grant messages, at most one activation message, and the report.
+ * @throws {@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for no paths or more than `maxLoadPaths`.
+ */
+async load(agent: Agent, request: ContextLoadRequest, signal?: AbortSignal): Promise<ContextLoadOutcome>
+```
+
+Source: [`packages/experimental/context-tree/src/index.ts`](../../packages/experimental/context-tree/src/index.ts)
+
 <a id="ctxfusionconfig--fusionconfig"></a>
 
 ### `ctx.fusionConfig` — `FusionConfig`

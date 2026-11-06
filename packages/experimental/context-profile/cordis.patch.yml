@@ -1,0 +1,24 @@
+# Experimental context tree profile layer. Apply after dsh-base. Instructions, reference
+# documents and most tools leave the first request: the model browses a small tree
+# (`context_browse`) and loads what it needs (`context_load`). Loaded text and activated tools
+# stay until compaction, which revokes them and republishes the tree. The agent-instructions
+# budget below is the eager core: the leading files of each chain up to 4096 bytes, with a
+# marker for what the budget left out; everything else is reachable through the tree.
+# Base delegation, Skill and Subagent tools stay as they are. Tool admission starts from the
+# context-tree base set (read, read_image, write, edit, apply_patch, glob, grep, bash,
+# web_search, web_fetch, todo_write, skill and the two context tools); a deployment changes it
+# through the context-tree `baseTools` field.
+
+- id: agent-instructions
+  config:
+    maxBytes: 4096
+
+- insert:
+    - id: context-index
+      name: '@deepseek-ai/dsh-experimental-context-index'
+
+    - id: context-tree
+      name: '@deepseek-ai/dsh-experimental-context-tree'
+
+    - id: tool-context-tree
+      name: '@deepseek-ai/dsh-experimental-context-profile/context-tree-tools'

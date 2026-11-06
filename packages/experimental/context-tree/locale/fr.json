@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Arbre de contexte",
+    "description": "Parcourir et charger à la demande instructions, sources et outils ; le contenu chargé est retiré lors du compactage."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Kontextbaum-Profil",
+    "description": "Optionale Schicht für den Kontextbaum: kleiner fester Kern, Anweisungen, Quellen und Werkzeuge werden bei Bedarf geladen."
+  }
+}

@@ -905,6 +905,58 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'contextTree',
+    summary: 'Service that builds the context tree and loads from it.',
+    description: 'Service that builds the context tree and loads from it.',
+    methods: [
+      {
+        signature: 'registerToolGroup(hint: ToolGroupHint): () => Promise<void>',
+        description: 'Say where a set of tools belongs in the tree. A registration made through the caller\'s context lasts as long as that context.',
+        parameters: [{ name: 'hint', description: 'tool names or a name prefix, plus origin and group.' }],
+        returns: 'the disposer.',
+        throws: ['{@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for a hint that covers nothing or has an unusable group.'],
+      },
+      {
+        signature: 'registerToolPlacement(assigner: ToolPlacementAssigner): () => Promise<void>',
+        description: 'Decide where tools appear in the tree. Assigners run in registration order and the first opinion wins; tools nobody places go under Global, grouped by name. A later curator registers here to regroup tools.',
+        parameters: [{ name: 'assigner', description: 'decision for one tool; must be pure and cheap, because it runs on every browse and step.' }],
+        returns: 'the disposer.',
+      },
+      {
+        signature: 'isBaseTool(name: string): boolean',
+        description: 'Whether a tool is always exposed.',
+        parameters: [{ name: 'name', description: 'tool name.' }],
+        returns: 'true for a configured base tool.',
+      },
+      {
+        signature: 'activeTools(agent: Agent): ReadonlySet<string>',
+        description: 'Tools the conversation has activated and not yet lost to compaction.',
+        parameters: [{ name: 'agent', description: 'the agent.' }],
+        returns: 'the names, in log order.',
+      },
+      {
+        signature: 'async unresolvedToolOrigins(agent: Agent, signal?: AbortSignal): Promise<readonly string[]>',
+        description: 'Tools shown under Global only because no assigner recorded their origin.',
+        parameters: [{ name: 'agent', description: 'the agent whose tool view applies.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'their names, in registration order.',
+      },
+      {
+        signature: 'async browse(agent: Agent, request: ContextBrowseRequest = {}, signal?: AbortSignal): Promise<ContextBrowseResult>',
+        description: 'List the subtree under a node: titles and summaries only.',
+        parameters: [{ name: 'agent', description: 'the browsing agent.' }, { name: 'request', description: 'path, depth, and offset.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'a listing within the node and byte bounds.',
+        throws: ['{@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for an unknown path or a depth or offset that is not a valid integer.'],
+      },
+      {
+        signature: 'async load(agent: Agent, request: ContextLoadRequest, signal?: AbortSignal): Promise<ContextLoadOutcome>',
+        description: 'Resolve a load into the messages to log. Nothing is logged here: the caller appends `contexts` in order, and the next step\'s admission sees the activations.',
+        parameters: [{ name: 'agent', description: 'the loading agent.' }, { name: 'request', description: 'paths from a browse.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'section grant messages, at most one activation message, and the report.',
+        throws: ['{@link ContextTreeError} `CONTEXT_TREE_INVALID_INPUT` for no paths or more than `maxLoadPaths`.'],
+      },
+    ],
+  },
+  {
     key: 'cotTranslation',
     summary: 'Optional reasoning translation delegates Session-bound storage to the translator.',
     description: 'Optional reasoning translation delegates Session-bound storage to the translator.',
@@ -6645,6 +6697,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ContentBlockType = keyof ContentBlockMap;',
   },
   {
+    name: 'ContextActivation',
+    declaration: 'export interface ContextActivation {\n    readonly path: string;\n    readonly tools: readonly string[];\n}',
+  },
+  {
+    name: 'ContextBrowseRequest',
+    declaration: 'export interface ContextBrowseRequest {\n    readonly path?: string;\n    readonly depth?: number;\n    readonly offset?: number;\n}',
+  },
+  {
+    name: 'ContextBrowseResult',
+    declaration: 'export interface ContextBrowseResult {\n    readonly path: string;\n    readonly depth: number;\n    readonly depthCapped: boolean;\n    readonly nodes: readonly ContextNodeView[];\n    readonly total: number;\n    readonly offset: number;\n    readonly remaining: number;\n}',
+  },
+  {
     name: 'ContextCatalog',
     declaration: 'export interface ContextCatalog {\n    readonly text: string;\n    readonly bytes: number;\n    readonly included: number;\n    readonly omitted: number;\n    readonly maxBytes: number;\n}',
   },
@@ -6661,12 +6725,40 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ContextDiagnosticCode = \'unreadable\' | \'too-large\' | \'not-utf8\' | \'limit-exceeded\' | \'directory-unreadable\';',
   },
   {
+    name: 'ContextGrantedSection',
+    declaration: 'export interface ContextGrantedSection {\n    readonly path: string;\n    readonly anchor: string;\n    readonly bytes: number;\n    readonly truncated: boolean;\n}',
+  },
+  {
     name: 'ContextIndexScope',
     declaration: 'export interface ContextIndexScope {\n    readonly workingDirectory: string;\n}',
   },
   {
     name: 'ContextIndexSnapshot',
     declaration: 'export interface ContextIndexSnapshot {\n    readonly scope: ContextIndexScope;\n    readonly revision: number;\n    readonly sources: readonly ContextSourceMeta[];\n    readonly sections: readonly ContextSectionMeta[];\n    readonly diagnostics: readonly ContextDiagnostic[];\n}',
+  },
+  {
+    name: 'ContextLoadOutcome',
+    declaration: 'export interface ContextLoadOutcome {\n    readonly contexts: readonly UserMessage[];\n    readonly result: ContextLoadResult;\n}',
+  },
+  {
+    name: 'ContextLoadRequest',
+    declaration: 'export interface ContextLoadRequest {\n    readonly paths: readonly string[];\n}',
+  },
+  {
+    name: 'ContextLoadResult',
+    declaration: 'export interface ContextLoadResult {\n    readonly granted: readonly ContextGrantedSection[];\n    readonly activated: readonly ContextActivation[];\n    readonly alreadyLoaded: readonly string[];\n    readonly alreadyActive: readonly string[];\n    readonly missing: readonly string[];\n    readonly omittedSections: readonly string[];\n    readonly omittedTools: readonly string[];\n}',
+  },
+  {
+    name: 'ContextNodeKind',
+    declaration: 'export type ContextNodeKind = \'folder\' | \'source\' | \'section\' | \'tool-group\' | \'tool\';',
+  },
+  {
+    name: 'ContextNodeView',
+    declaration: 'export interface ContextNodeView {\n    readonly path: string;\n    readonly kind: ContextNodeKind;\n    readonly title: string;\n    readonly summary: string;\n    readonly children: number;\n}',
+  },
+  {
+    name: 'ContextOrigin',
+    declaration: 'export type ContextOrigin = \'global\' | \'project\';',
   },
   {
     name: 'ContextPressureProjection',
@@ -10713,8 +10805,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolExecutor {\n    readonly sections?: readonly ToolPromptSection[];\n    describe(tools: readonly ToolDefinition[]): ToolModelInput;\n    execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n}',
   },
   {
+    name: 'ToolFacts',
+    declaration: 'export interface ToolFacts {\n    readonly name: string;\n    readonly description: string;\n}',
+  },
+  {
     name: 'ToolFailure',
     declaration: 'export interface ToolFailure {\n    message: string;\n    info?: ToolErrorInfo;\n}',
+  },
+  {
+    name: 'ToolGroupHint',
+    declaration: 'export interface ToolGroupHint extends ToolPlacement {\n    readonly names?: readonly string[];\n    readonly prefix?: string;\n}',
   },
   {
     name: 'ToolGuard',
@@ -10739,6 +10839,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ToolOutputDefinition',
     declaration: 'export interface ToolOutputDefinition {\n    readonly schema: JsonSchemaNode;\n    render(args: unknown, value: JsonValue): ContentBlock[];\n    presentationMeta?(args: unknown, value: JsonValue): JsonValue;\n}',
+  },
+  {
+    name: 'ToolPlacement',
+    declaration: 'export interface ToolPlacement {\n    readonly origin: ContextOrigin;\n    readonly group: string;\n    readonly title?: string;\n    readonly summary?: string;\n}',
+  },
+  {
+    name: 'ToolPlacementAssigner',
+    declaration: 'export type ToolPlacementAssigner = (tool: ToolFacts) => ToolPlacement | undefined;',
   },
   {
     name: 'ToolPromptSection',

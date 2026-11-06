@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Profil de l’arbre de contexte",
+    "description": "Couche optionnelle qui monte l’arbre de contexte : un petit noyau initial, le reste des instructions, sources et outils étant chargé à la demande."
+  }
+}

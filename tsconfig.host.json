@@ -555,6 +555,8 @@
     { "path": "./packages/experimental/workstream" },
     { "path": "./packages/experimental/workstream-evidence" },
     { "path": "./packages/experimental/context-index" },
+    { "path": "./packages/experimental/context-tree" },
+    { "path": "./packages/experimental/context-profile" },
     { "path": "./packages/experimental/workstream-profile" },
     { "path": "./packages/experimental/client-ui-workstream/tsconfig.host.json" },
     { "path": "./packages/experimental/agent-team-profile" },

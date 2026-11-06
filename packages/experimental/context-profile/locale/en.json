@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Context tree profile",
+    "description": "Opt-in layer that mounts the context tree: a small eager core, with instructions, sources and tools loaded on demand."
+  }
+}

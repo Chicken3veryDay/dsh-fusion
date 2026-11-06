@@ -580,6 +580,9 @@ importers:
       '@deepseek-ai/dsh-experimental-agent-team':
         specifier: workspace:*
         version: link:../../packages/experimental/agent-team
+      '@deepseek-ai/dsh-experimental-context-profile':
+        specifier: workspace:*
+        version: link:../../packages/experimental/context-profile
       '@deepseek-ai/dsh-experimental-ptc-runtime-python':
         specifier: workspace:*
         version: link:../../packages/experimental/ptc-runtime-python
@@ -9768,6 +9771,92 @@ importers:
       '@deepseek-ai/dsh-home-paths':
         specifier: workspace:*
         version: link:../../util/home-paths
+
+  packages/experimental/context-profile:
+    dependencies:
+      '@deepseek-ai/dsh-experimental-context-index':
+        specifier: workspace:*
+        version: link:../context-index
+      '@deepseek-ai/dsh-experimental-context-tree':
+        specifier: workspace:*
+        version: link:../context-tree
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:~
+        version: link:../../../vendor/include
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-loader-smoke':
+        specifier: workspace:*
+        version: link:../../test-support/loader-smoke
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+      execa:
+        specifier: ^10.0.1
+        version: 10.0.1
+      js-yaml:
+        specifier: ^4.3.2
+        version: 4.3.2
+
+  packages/experimental/context-tree:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-compaction':
+        specifier: workspace:*
+        version: link:../../compaction/compaction
+      '@deepseek-ai/dsh-compaction-basic':
+        specifier: workspace:*
+        version: link:../../compaction/compaction-basic
+      '@deepseek-ai/dsh-experimental-context-index':
+        specifier: workspace:*
+        version: link:../context-index
+      '@deepseek-ai/dsh-fs-local':
+        specifier: workspace:*
+        version: link:../../fs/fs-local
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../../core/session
+      '@deepseek-ai/dsh-session-projection':
+        specifier: workspace:*
+        version: link:../../session/session-projection
+      '@deepseek-ai/dsh-system-prompt':
+        specifier: workspace:*
+        version: link:../../core/system-prompt
+      '@deepseek-ai/dsh-token-meter':
+        specifier: workspace:*
+        version: link:../../llm/token-meter
+      '@deepseek-ai/dsh-tool-executor-native':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-native
+      '@deepseek-ai/dsh-tool-testkit':
+        specifier: workspace:*
+        version: link:../../test-support/tool-testkit
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+      '@deepseek-ai/dsh-working-directory':
+        specifier: workspace:*
+        version: link:../../session/working-directory
 
   packages/experimental/cot-translation-bundle:
     dependencies:

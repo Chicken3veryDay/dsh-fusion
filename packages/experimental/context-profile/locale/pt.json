@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Perfil da árvore de contexto",
+    "description": "Camada opcional que monta a árvore de contexto: um pequeno núcleo inicial, com instruções, fontes e ferramentas carregadas sob demanda."
+  }
+}
