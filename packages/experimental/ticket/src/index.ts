@@ -140,6 +140,9 @@ function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
 
+/** Synchronous decision on the coordinator a new Ticket names; `undefined` keeps the requested one. */
+export type CoordinatorAuthority = (session: Session, requested: SessionId) => SessionId | undefined
+
 /** Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent. */
 export class TicketService extends Service {
   static inject = ['sessions', 'sessionProjections', 'agents']
@@ -158,6 +161,7 @@ export class TicketService extends Service {
   private projection: ProjectionHandle<TicketProjectionState> | undefined
   private admission: Promise<void> = Promise.resolve()
   private readonly tails = new Map<SessionId, Promise<void>>()
+  private readonly coordinatorAuthorities = new Set<CoordinatorAuthority>()
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'tickets')
@@ -175,6 +179,20 @@ export class TicketService extends Service {
   protected async [Service.init](): Promise<void> {
     this.projection = await this.ctx.sessionProjections.register(ticketProjectionDefinition)
     this.ctx.effect(() => () => { this.tails.clear() }, 'tickets.runtime()')
+  }
+
+  /** Register an owner of coordination that may replace the coordinator a new Ticket would name.
+   *
+   * `create` consults every authority inside the Session's command queue, in the same synchronous step that reads the
+   * Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment.
+   * The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that
+   * returns an id replaces it. An authority that throws fails the creation with nothing appended.
+   * @param authority - synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.
+   * @returns disposer that removes the authority.
+   */
+  registerCoordinatorAuthority(authority: CoordinatorAuthority): () => void {
+    this.coordinatorAuthorities.add(authority)
+    return () => { this.coordinatorAuthorities.delete(authority) }
   }
 
   /** Read all Tickets recovered from one Session's durable log.
@@ -225,7 +243,7 @@ export class TicketService extends Service {
         subject,
         description: request.description,
         status: 'proposed',
-        coordinatorId: request.coordinatorId ?? session.id,
+        coordinatorId: this.authorizedCoordinator(session, request.coordinatorId ?? session.id),
         assignments: [],
         reports: [],
         questions: [],
@@ -949,6 +967,14 @@ export class TicketService extends Service {
     const assignment = ticket.assignments.find(candidate => candidate.id === id)
     if (assignment === undefined) throw new TicketError(`unknown Assignment "${id}"`, 'TICKET_ASSIGNMENT_NOT_FOUND')
     return assignment
+  }
+
+  private authorizedCoordinator(session: Session, requested: SessionId): SessionId {
+    for (const authority of this.coordinatorAuthorities) {
+      const coordinatorId = authority(session, requested)
+      if (coordinatorId !== undefined) return coordinatorId
+    }
+    return requested
   }
 
   private assertCaller(actorId: SessionId | undefined): Agent {
