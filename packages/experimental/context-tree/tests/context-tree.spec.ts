@@ -968,6 +968,19 @@ describe('curator seams', () => {
     expect(grants(await stepMessages(w, 1))).toHaveLength(0)
   })
 
+  it('grants the core sections that fit the budget in order and skips one that does not', async () => {
+    const probe = await world()
+    const metas = (await probe.ctx.contextIndex.snapshot({ workingDirectory: probe.project }))
+      .sections.filter(section => section.kind === 'project-instructions')
+    const [large, small] = metas.toSorted((a, b) => b.bytes - a.bytes)
+    expect(large!.bytes).toBeGreaterThan(small!.bytes)
+
+    const w = await world({ coreBytes: small!.bytes })
+    w.tree.registerEagerCore(() => [large!.id, small!.id])
+    const first = grants(await stepMessages(w, 1))
+    expect(first.map(message => (message.source as { key: string }).key)).toEqual([small!.id])
+  })
+
   it('removes the group, core, and managed registrations with their disposers', async () => {
     const w = await world()
     w.ctx.tools.register(probeTool('map_edit', w.calls))

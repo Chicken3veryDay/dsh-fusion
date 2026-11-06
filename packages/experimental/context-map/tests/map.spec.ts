@@ -131,7 +131,7 @@ describe('groups', () => {
   })
 })
 
-describe('notes, provenance, and staleness', () => {
+describe('notes, citations, and staleness', () => {
   it('requires a citation and stamps section citations with the hash the index has now', async () => {
     const { w, map, sections, groupId, revision } = await withGroup()
     const note = (cites: readonly string[]) => map.addNote(w.owner, { expectedRevision: revision, groupId, text: 'Tests run with vitest.', cites })

@@ -63,7 +63,7 @@ Both return the disposer for the registration. `registerToolPlacement` is the se
 Three generic registrations let a curator shape the tree without the tree importing it; the [context map](../context-map/README.md) uses them.
 
 - `registerCuratedGroups(provider)`: for an agent, returns groups (`root`, `origin`, `name`, `title`, `summary`, member `sections` and `tools`). A curated group is a folder node with its own title and summary. Its sections leave their file node, and its tools are placed ahead of hints and names.
-- `registerEagerCore(provider)`: returns section ids that the tree grants once at the start of a conversation and again after compaction, as ordinary logged grants within `coreBytes`. A section the budget would cut is skipped, never granted in part.
+- `registerEagerCore(provider)`: returns section ids that the tree grants once at the start of a conversation and again after compaction, as ordinary logged grants within `coreBytes`. A section that does not fit the bytes left is skipped, never granted in part, and later smaller sections still fit.
 - `registerManagedTools(names, admit)`: tools that only the agents `admit` accepts may see, enforced in tool admission.
 
 ### Configuration

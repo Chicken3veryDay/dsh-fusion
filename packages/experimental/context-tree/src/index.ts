@@ -427,9 +427,12 @@ export class ContextTreeService extends Service {
     const tree = await this.treeFor(agent, signal)
     const held = grantedHashes(this.projection.stateOf(agent.session))
     const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
+    let room = this.config.coreBytes
     const missing = wanted.filter((id) => {
       const leaf = leaves.get(id)
-      return leaf !== undefined && held.get(id) !== leaf.section.hash
+      if (leaf === undefined || held.get(id) === leaf.section.hash || leaf.section.bytes > room) return false
+      room -= leaf.section.bytes
+      return true
     })
     if (missing.length === 0) return []
     const read = await this.ctx.contextIndex.read(

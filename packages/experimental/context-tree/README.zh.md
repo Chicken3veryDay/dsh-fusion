@@ -63,7 +63,7 @@ export function placeTools(ctx: Context) {
 三个通用注册接口让策展者塑造树，而树无需导入它；[上下文地图](../context-map/README.zh.md)使用它们。
 
 - `registerCuratedGroups(provider)`：针对某个智能体返回分组（`root`、`origin`、`name`、`title`、`summary`、成员 `sections` 和 `tools`）。策展分组是带有自己标题和摘要的文件夹节点。其章节不再显示文件节点，其工具的位置优先于提示和名称。
-- `registerEagerCore(provider)`：返回树在对话开始时授予一次、压缩之后再授予一次的章节 id，作为普通的已记录授权，受 `coreBytes` 限制。预算会截断的章节被跳过，绝不只授予一部分。
+- `registerEagerCore(provider)`：返回树在对话开始时授予一次、压缩之后再授予一次的章节 id，作为普通的已记录授权，受 `coreBytes` 限制。放不进剩余字节的章节被跳过，绝不只授予一部分，其后更小的章节仍可放入。
 - `registerManagedTools(names, admit)`：只有 `admit` 接受的智能体才能看到的工具，在工具准入中强制执行。
 
 ### 配置
