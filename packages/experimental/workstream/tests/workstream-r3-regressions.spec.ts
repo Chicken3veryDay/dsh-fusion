@@ -137,8 +137,9 @@ describe('round-3 Workstream review', () => {
     const [, admission] = await Promise.all([reloading, creating.then(ticket => ({ ticket }), (error: unknown) => ({ error }))])
     expect(ctx.workstreams.get(owner, owner.id).coordinatorId).toBe(member.id)
     // An owner-default creation admitted during the load is refused with nothing appended; it never records the owner.
+    // Ticket wraps a refusing coordinator authority and keeps the Workstream refusal as the cause.
     expect(admission, 'reload and direct Ticket creation must not commit different coordinators')
-      .toMatchObject({ error: { code: 'WORKSTREAM_NOT_READY' } })
+      .toMatchObject({ error: { code: 'TICKET_RECOVERY_FAILED', cause: { code: 'WORKSTREAM_NOT_READY' } } })
     expect(ctx.tickets.list(owner.session)).toEqual([])
     const retried = await ctx.agents.withInitiator(owner, () => ctx.tickets.create(owner.session,
       { subject: 'After reload', description: '' }))
@@ -149,6 +150,9 @@ describe('round-3 Workstream review', () => {
     const { ctx, owner, fiber } = await setup()
     const member = await ctx.workstreams.addMember(owner, owner.id, request('coordinator'))
     await fiber.dispose()
+    // Ticket accepts only a live coordinator, so the member is resumed after the Workstream fiber disposed it.
+    await ctx.agents.resume({ resumeSessionId: member.id, parentAgent: owner,
+      agentOptions: { provider: 'mock', model: 'mock' } })
     const reloading = ctx.plugin(WorkstreamService)
     const explicit = await ctx.agents.withInitiator(owner, () => ctx.tickets.create(owner.session,
       { subject: 'Explicit member', description: '', coordinatorId: member.id }))
@@ -166,6 +170,9 @@ describe('round-3 Workstream review', () => {
     expect((await direct()).coordinatorId).toBe(member.id)
     await fiber.dispose()
     expect((await direct()).coordinatorId).toBe(owner.id)
+    // Ticket accepts only a live coordinator, so the member is resumed after the Workstream fiber disposed it.
+    await ctx.agents.resume({ resumeSessionId: member.id, parentAgent: owner,
+      agentOptions: { provider: 'mock', model: 'mock' } })
     await ctx.plugin(WorkstreamService)
     expect((await direct()).coordinatorId).toBe(member.id)
   })
