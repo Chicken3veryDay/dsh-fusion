@@ -439,6 +439,25 @@ describe('section grants', () => {
     expect(textOf(again)).toContain('Already in the conversation')
   })
 
+  it('does not grant a section twice when the first load is still queued or claimed but not yet logged', async () => {
+    const w = await world()
+    await call(w, 'context_load', { paths: ['Instructions/Global'] })
+    const queued = await call(w, 'context_load', { paths: ['Instructions/Global'] })
+    expect(queued.additionalContexts ?? []).toHaveLength(0)
+    expect(textOf(queued)).toContain('Already in the conversation')
+
+    // A step claims the batch; before it logs the messages a third load still sees the grant.
+    const batch = w.queued.splice(0)
+    w.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: batch.length, inserted: [] })
+    const claimed = await call(w, 'context_load', { paths: ['Instructions/Global'] })
+    expect(claimed.additionalContexts ?? []).toHaveLength(0)
+
+    // Once the turn ends without logging them, the grant is gone and a load grants again.
+    w.session.append('turn/end', { turn: 1, reason: 'completed' } as never)
+    const again = await call(w, 'context_load', { paths: ['Instructions/Global'] })
+    expect((again.additionalContexts ?? []).length).toBeGreaterThan(0)
+  })
+
   it('cuts a load at the byte budget and says which sections were left for a separate call', async () => {
     const w = await world({ maxLoadBytes: 120 })
     const result = await call(w, 'context_load', { paths: ['Instructions', 'Sources'] })

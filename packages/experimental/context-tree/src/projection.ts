@@ -14,8 +14,9 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 const seq = z.number().int().nonnegative()
 const names = z.array(z.string().min(1))
 const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1) }).strict()
+const pendingGrant = z.object({ key: z.string().min(1), hash: z.string().min(1) }).strict()
 const logged = z.object({ seq, id: z.string().min(1), tools: names }).strict()
-const queued = z.object({ id: z.string().min(1), tools: names }).strict()
+const queued = z.object({ id: z.string().min(1), tools: names, grants: z.array(pendingGrant) }).strict()
 const catalog = z.object({ seq, digest: z.string().min(1) }).strict()
 
 const stateSchema = z.object({
@@ -23,9 +24,9 @@ const stateSchema = z.object({
   grants: z.array(grant),
   /** Activation messages still in history, in log order. */
   activations: z.array(logged),
-  /** Messages waiting for the next step, in queue order; `tools` is empty for other messages. */
+  /** Messages waiting for the next step, in queue order; `tools` and `grants` are empty for other messages. */
   inbox: z.array(queued),
-  /** Activation messages a step claimed and has not logged yet. */
+  /** Activation and grant messages a step claimed and has not logged yet. */
   claimed: z.array(queued),
   /** The catalog message still in history, if any. */
   catalog: catalog.nullable(),
@@ -39,6 +40,16 @@ export type ContextTreeProjectionState = z.infer<typeof stateSchema>
 const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1) })
 const activationSource = z.object({ kind: z.literal('context-activation'), tools: names })
 const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest: z.string().min(1) })
+
+/**
+ * The section a queued grant message carries.
+ * @param message - any logged or queued message.
+ * @returns the key and hash, empty when the message is not a readable grant.
+ */
+function grantsOf(message: { readonly source: unknown }): { key: string; hash: string }[] {
+  const parsed = grantSource.safeParse(message.source)
+  return parsed.success ? [{ key: parsed.data.key, hash: parsed.data.hash }] : []
+}
 
 /**
  * Tool names an activation message carries.
@@ -60,7 +71,7 @@ export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
  */
 export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
-  stateVersion: 1,
+  stateVersion: 2,
   stateSchema,
   init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, published: false }),
   apply: (state, event) => {
@@ -68,8 +79,8 @@ export const contextTreeProjectionDefinition = {
       if (event.data.target !== 'next-step') return state
       const start = Math.min(Math.max(event.data.start, 0), state.inbox.length)
       const removed = state.inbox.slice(start, start + (event.data.removedCount ?? 0))
-      const inserted = event.data.inserted.map(message => ({ id: message.id, tools: activationTools(message) }))
-      const taken = removed.filter(entry => entry.tools.length > 0)
+      const inserted = event.data.inserted.map(message => ({ id: message.id, tools: activationTools(message), grants: grantsOf(message) }))
+      const taken = removed.filter(entry => entry.tools.length > 0 || entry.grants.length > 0)
       return {
         ...state,
         inbox: state.inbox.toSpliced(start, removed.length, ...inserted),
@@ -81,7 +92,11 @@ export const contextTreeProjectionDefinition = {
       const granted = grantSource.safeParse(source)
       if (granted.success) {
         const entry = { seq: event.seq, key: granted.data.key, hash: granted.data.hash }
-        return { ...state, grants: [...state.grants.filter(existing => existing.key !== entry.key), entry] }
+        return {
+          ...state,
+          grants: [...state.grants.filter(existing => existing.key !== entry.key), entry],
+          claimed: state.claimed.filter(pending => pending.id !== event.data.id),
+        }
       }
       const activated = activationSource.safeParse(source)
       if (activated.success) {
@@ -120,4 +135,17 @@ export function activeToolNames(state: ContextTreeProjectionState): ReadonlySet<
   const active = new Set<string>()
   for (const entry of [...state.activations, ...state.claimed, ...state.inbox]) for (const name of entry.tools) active.add(name)
   return active
+}
+
+/**
+ * Section hashes the conversation holds or is about to hold: logged grants, then grants a step
+ * claimed, then grants still queued. A later entry for a section replaces an earlier one.
+ * @param state - projection state.
+ * @returns the hash of each section's newest grant, keyed by section id.
+ */
+export function grantedHashes(state: ContextTreeProjectionState): ReadonlyMap<string, string> {
+  const hashes = new Map<string, string>()
+  for (const entry of state.grants) hashes.set(entry.key, entry.hash)
+  for (const entry of [...state.claimed, ...state.inbox]) for (const grant of entry.grants) hashes.set(grant.key, grant.hash)
+  return hashes
 }

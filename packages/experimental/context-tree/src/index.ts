@@ -34,6 +34,7 @@ import { formatPath, parsePath, splitPath } from './paths.ts'
 import {
   activeToolNames,
   contextTreeProjectionDefinition,
+  grantedHashes,
   type ContextTreeProjectionState,
 } from './projection.ts'
 import { browseFooter, browseHeader, browseLine, listingBytes } from './render.ts'
@@ -276,11 +277,11 @@ export class ContextTreeService extends Service {
       for (const leaf of leaves.tools) if (!toolOwners.has(leaf.tool)) toolOwners.set(leaf.tool, formatPath(found.segments))
     }
 
+    const held = grantedHashes(state)
     const alreadyLoaded: string[] = []
     const toRead: ContextSectionId[] = []
     for (const [id, leaf] of sectionNodes) {
-      const granted = state.grants.find(entry => entry.key === id)
-      if (granted?.hash === leaf.section.hash) alreadyLoaded.push(formatPath(leaf.node.segments))
+      if (held.get(id) === leaf.section.hash) alreadyLoaded.push(formatPath(leaf.node.segments))
       else toRead.push(id)
     }
     const contexts: UserMessage[] = []
