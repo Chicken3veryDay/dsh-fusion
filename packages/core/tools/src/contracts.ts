@@ -209,6 +209,13 @@ export interface ResolvedToolSet {
   /** Close admission after the step's tool batch settles. */
   dispose(): void
   /**
+   * Re-evaluate conditions and policies against current history without replacing this selection.
+   * Reject with `TOOL_ADMISSION_FAILED` if registrations, definitions, or ordering differ, or the
+   * selection is disposed. Condition and policy failures retain their codes; cancellation wins.
+   * @returns completion when this selection remains the fixed point of admission.
+   */
+  validate(): Promise<void>
+  /**
    * Whether an admission policy set the declaration sequence, which {@link view} then iterates in.
    * Absent or false means registration order, which prompt assembly sorts canonically.
    */

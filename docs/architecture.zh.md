@@ -95,10 +95,11 @@ turn/start
      reject, or a first enter rewritten empty -> close the turn with no step
      step/start
      agent/request -> prepareCall (cancellation commits neither system nor users)
-     collect pending context; readmit tools; compare captured inputs -> reassemble if changed
-     reconcile system/message using the prepared call capability
-     append entered messages as user/message; reconcile retained runtime context
-     log request/header and request/context as needed
+     collect pending context; reconcile system/message using the prepared call capability
+     append entered and pending messages as user/message; reconcile retained runtime context
+     readmit tools; compare captured inputs -> reassemble and reconcile if changed
+     log request/header, tool-registry messages, and request/context as needed
+     validate final-history admission once if reconciliation added messages; fail if unstable
      derive and freeze model history from the log
      stream the bound prepared call -> llm/stream -> agent/assistant-stream start
        agent/assistant-stream chunk*
@@ -116,7 +117,7 @@ turn/end
 
 输入通过同一个 inbox 到达驱动器；注入的上下文等待一条唤醒消息。AgentLoop 的持久 `inbox` 投影使待处理输入在没有活跃 Agent 时仍可读取。
 
-循环在组装前将 Session 模型选择快照到 `AssembleContext.modelSelection` 与 `agent/pre-step.modelSelection`；重试保留该选择，省略推理强度时使用适配器默认值。`agent/pre-step` 监听器接纳、改写或拒绝已领取消息；首次领取被拒绝或为空时，关闭不含步骤的持久轮次。enter 决策可设置 `startsRequestSeries`：循环记录新的 `request/header`（原因为 `series`，或在封装同时变化时为携带 `startsSeries: true` 的 `change`）。包装监听器通过 `{ ...decision, messages }` 保留该声明。组装与 `step/start` 之后，已弃用的 `agent/request` 在不改变提供方、模型或推理强度的前提下调整控制参数。`prepareCall()` 在提交系统提示词与已接纳用户消息之前绑定适配器；在任一异步阶段取消都不会提交这两者。重试不重复 `agent/pre-step`。每次尝试刷新运行时事实，通过 `system-prompt/request-context` 收集待记录上下文并重新准入工具。仅当定义身份、执行器或上下文哈希改变时重新组装。循环协调提示词，仅接纳一次用户消息，恢复被移除的运行时上下文，按需记录 header/context，再冻结请求并发起流式请求。附接后的 surface 替换和图片省略决定开启新请求序列，包括恢复后的首次 pre-step 中发生的替换；未变化的恢复延续序列。系统提示词通过 `system/message` 历史传递：空文本清除提示词，具备能力的路由追加更新，其他路由将其归并到首个系统节点。[Agent-loop](../packages/core/agent-loop/README.zh.md#understand-the-implementation) 说明提示词准入与替换的细节。
+循环在 `agent/pre-step` 前捕获 Session 模型选择；重试保留该选择，不重复领取。监听器接纳、改写或拒绝已领取消息，也可声明 `startsRequestSeries`；首次领取被拒绝或为空时，关闭不含步骤的轮次。包装监听器通过 `{ ...decision, messages }` 保留该声明。组装与 `step/start` 之后，已弃用的 `agent/request` 在不改变模型选择的前提下调整控制参数。`prepareCall()` 在提交提示词或已接纳用户消息之前绑定适配器；准备期间取消不会提交这两者。每次尝试收集 `system-prompt/request-context`，并在重新准入工具之前提交已接受用户消息、上下文新增消息与运行时事实。捕获的输入改变时重新组装并协调；因此新增的历史在冻结前接受一次稳定性验证。surface 替换和图片省略决定开启请求序列，包括恢复后的 pre-step；未变化的恢复延续序列。系统提示词通过日志消息传递：空文本清除提示词，具备能力的路由追加更新，其他路由归并到首个系统节点。[Agent-loop](../packages/core/agent-loop/README.zh.md#understand-the-implementation) 说明准入、协调失败与序列细节。
 
 循环发送不可变请求，同时保持取消有效，仅对完全冻结的对象复用冻结证据；[agent-loop](../packages/core/agent-loop/README.zh.md) 负责请求构建与取消原因。
 

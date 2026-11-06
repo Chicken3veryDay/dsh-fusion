@@ -400,9 +400,9 @@ export class ReactLoopAgent implements Agent {
   }
 
   /**
-   * Resolve once after every preparation, including retries and appended history. An unchanged tuple
+   * Resolve once after preparation and all pending message commits, including retries. An unchanged tuple
    * keeps the accepted prompt and cache prefix; changed definitions, executor, or context reassemble.
-   * Claiming listeners never rerun, and bookkeeping appends cannot drive a reselection loop.
+   * Claiming listeners never rerun; a final validation bounds reconciliation without reselection.
    */
   private async reselectForRequest(decision: Extract<PreparedStep, { kind: 'enter' }>, signal: AbortSignal): Promise<void> {
     const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: decision.selection, signal })
@@ -551,6 +551,52 @@ export class ReactLoopAgent implements Agent {
     return true
   }
 
+  /** Commit prompt, accepted input, and runtime context before final-history admission. */
+  private commitRequestMessages(
+    assembly: PromptAssembly,
+    decision: Extract<PreparedStep, { kind: 'enter' }>,
+    preparedCall: PreparedLlmCall | undefined,
+    requestContext: readonly UserMessage[],
+    firstAttempt: boolean,
+    startsRequestSeries: boolean,
+    position: { turn: number; step: number },
+    signal: AbortSignal,
+  ): void {
+    const { turn, step } = position
+    const renderedPrompt = renderPrompt(assembly)
+    const sections = renderContextSections(assembly)
+    const context = this.runtimeContext.project(joinContextSections(sections), sections)
+    signal.throwIfAborted()
+    const commits = this.systemPrompt.project(renderedPrompt, {
+      inHistory: preparedCall?.systemPromptUpdate === 'in-history',
+      startsSeries: startsRequestSeries
+        || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
+        || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+    })
+    for (const { message, intent } of commits) {
+      this.session.append('system/message', { turn, step, message }, intent)
+    }
+    let contextAdmitted = false
+    if (firstAttempt) {
+      for (const message of decision.messages) {
+        if (message.source.kind === 'runtime-context') {
+          if (context !== undefined && !contextAdmitted) {
+            this.session.append('user/message', context, { surfaceOp: 'append' })
+            contextAdmitted = true
+          }
+        } else {
+          this.session.append('user/message', message, { surfaceOp: 'append' })
+        }
+      }
+    }
+    for (const message of requestContext) {
+      this.session.append('user/message', message, { surfaceOp: 'append' })
+    }
+    if (context !== undefined && !contextAdmitted) {
+      this.session.append('user/message', context, { surfaceOp: 'append' })
+    }
+  }
+
   private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
     /* v8 ignore next -- private callers establish the running phase before executing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": step outside running phase`)
@@ -563,43 +609,38 @@ export class ReactLoopAgent implements Agent {
       const requestContext = await this.loopCtx.systemPrompt.requestContext({
         ...assembleContextFor(this, signal), modelSelection: decision.selection,
       }, firstAttempt ? decision.messages : [])
-      await this.reselectForRequest(decision, signal)
-      const { assembly } = decision.tools
-      const renderedPrompt = renderPrompt(assembly)
-      const sections = renderContextSections(assembly)
-      const context = this.runtimeContext.project(joinContextSections(sections), sections)
-      signal.throwIfAborted()
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
-      const commits = this.systemPrompt.project(renderedPrompt, {
-        inHistory: preparedCall?.systemPromptUpdate === 'in-history',
-        startsSeries: startsRequestSeries
-          || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
-          || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+      const before = this.loopCtx.systemPrompt.refreshContext(decision.tools.assembly, {
+        ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet: decision.tools.toolSet,
       })
-      for (const { message, intent } of commits) {
-        this.session.append('system/message', { turn, step, message }, intent)
-      }
-      let contextAdmitted = false
-      if (firstAttempt) {
-        for (const message of decision.messages) {
-          if (message.source.kind === 'runtime-context') {
-            if (context !== undefined && !contextAdmitted) {
-              this.session.append('user/message', context, { surfaceOp: 'append' })
-              contextAdmitted = true
-            }
-          } else {
-            this.session.append('user/message', message, { surfaceOp: 'append' })
-          }
-        }
-      }
-      for (const message of requestContext) {
-        this.session.append('user/message', message, { surfaceOp: 'append' })
-      }
-      if (context !== undefined && !contextAdmitted) {
-        this.session.append('user/message', context, { surfaceOp: 'append' })
-      }
+      this.commitRequestMessages(before, decision, preparedCall, requestContext, firstAttempt, startsRequestSeries, { turn, step }, signal)
       firstAttempt = false
-      const request = this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal)
+      await this.reselectForRequest(decision, signal)
+      const admittedNodes = [...this.session.surface.nodes]
+      const admittedGeneration = this.session.surface.contentGeneration
+      const { assembly, toolSet } = decision.tools
+      this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal)
+      const request = await this.buildRequest(
+        config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, async () => {
+          const nodes = [...this.session.surface.nodes]
+          const generation = this.session.surface.contentGeneration
+          if (admittedGeneration !== this.session.surface.contentGeneration || nodes.length !== admittedNodes.length
+            || nodes.some((seq, index) => seq !== admittedNodes[index])) {
+            // One reconciliation may publish changed context or tool notices. Verify its fixed point
+            // without another resolution or assembly; an unstable selection must never reach dispatch.
+            await toolSet.validate()
+            const refreshed = this.loopCtx.systemPrompt.refreshContext(assembly, {
+              ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet,
+            })
+            if (!this.sameRequestInputs(decision.tools.inputs, this.requestInputs(toolSet, refreshed))
+              || generation !== this.session.surface.contentGeneration
+              || nodes.length !== this.session.surface.nodes.length
+              || nodes.some((seq, index) => seq !== this.session.surface.nodes[index])) {
+              throw new ToolAdmissionError(new Error('Request context did not settle after admission; retry the turn'))
+            }
+          }
+        },
+      )
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -776,14 +817,15 @@ export class ReactLoopAgent implements Agent {
   }
 
   /** Log the resolved envelope and derive a frozen request from the admitted surface. */
-  private buildRequest(
+  private async buildRequest(
     config: LlmCallConfig,
     preparedCall: PreparedLlmCall | undefined,
     tools: GenerateOptions['tools'] & object,
     position: { turn: number; step: number },
     startsRequestSeries: boolean,
     signal: AbortSignal,
-  ): GenerateOptions {
+    validate: () => Promise<void>,
+  ): Promise<GenerateOptions> {
     const { session } = this
     const surfaceGeneration = session.surface.contentGeneration
     const header = canonicalHeader({
@@ -844,6 +886,9 @@ export class ReactLoopAgent implements Agent {
       || previousContext.systemPromptUpdate !== requestContext.systemPromptUpdate) {
       session.append('request/context', requestContext)
     }
+    signal.throwIfAborted()
+
+    await validate()
     signal.throwIfAborted()
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.

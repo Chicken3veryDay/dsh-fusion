@@ -4233,7 +4233,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>',
-        description: 'Collect pending durable context after request preparation, independently of inbox claiming. Providers must respect cancellation and may return messages with their own source metadata.',
+        description: 'Collect pending durable context after request preparation, independently of inbox claiming. Providers must respect cancellation and may return messages with their own source metadata. The loop commits these additions and accepted input before resolving request-time admission.',
         parameters: [{ name: 'context', description: 'requesting scope and plugin-defined assembly fields; omitted uses global providers.' }, { name: 'pending', description: 'accepted messages awaiting logging; omitted or empty on retries.' }],
         returns: 'additional messages the caller must log before deriving the model request.',
       },
@@ -4707,7 +4707,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: 'registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void',
         description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that returns orderedAdmission also sets the declaration sequence: the last such policy\'s sequence orders the surviving tools, which is the order of declarations and of `definitions()`. Plain returns never reorder, so with no ordering policy the admitted set keeps registration order. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls; while a policy applies to a scope, a call without a step selection executes nothing. With no policy registered, admission is unchanged.',
-        parameters: [{ name: 'policy', description: 'removal-only decision, optionally ordered, evaluated once per step.' }],
+        parameters: [{ name: 'policy', description: 'removal-only decision, optionally ordered, evaluated during resolution and validation.' }],
         returns: 'the exact disposer; later steps see the tools again.',
       },
       {
@@ -6112,7 +6112,7 @@ export const EVENT_API: readonly EventApiEntry[] = [
     mode: 'waterfall',
     signature: '\'system-prompt/request-context\'(this: Scoped<SystemPrompt>, context: AssembleContext, pending: readonly UserMessage[], next: () => Promise<UserMessage[]>): Promise<UserMessage[]>',
     summary: 'Publish pending context messages after request preparation on every attempt.',
-    description: 'Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before sending the request. Return only context absent from the surviving Session history. Retries invoke providers again.',
+    description: 'Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before request-time tool admission. Return only context absent from the surviving Session history. Retries invoke providers again.',
     parameters: [{ name: 'context', description: 'requesting scope, model selection, and cancellation.' }, { name: 'pending', description: 'accepted messages not yet logged on the first attempt; empty on retries.' }],
   },
   {
@@ -9289,7 +9289,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResolvedToolSet',
-    declaration: 'export interface ResolvedToolSet {\n    dispose(): void;\n    readonly ordered?: boolean;\n    view(scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition>;\n}',
+    declaration: 'export interface ResolvedToolSet {\n    dispose(): void;\n    validate(): Promise<void>;\n    readonly ordered?: boolean;\n    view(scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition>;\n}',
   },
   {
     name: 'RestartReason',

@@ -233,7 +233,7 @@ export class ToolsService extends Service {
    * rejected at dispatch, including nested PTC calls; while a policy applies to a scope, a call
    * without a step selection executes nothing. With no policy
    * registered, admission is unchanged.
-   * @param policy - removal-only decision, optionally ordered, evaluated once per step.
+   * @param policy - removal-only decision, optionally ordered, evaluated during resolution and validation.
    * @returns the exact disposer; later steps see the tools again.
    */
   registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void {
@@ -354,24 +354,49 @@ export class ToolsService extends Service {
     const { agent, signal } = context
     signal.throwIfAborted()
     const view = this.view(agent)
-    const admitted = new Map<string, ToolDefinition>()
-    for (const [name, definition] of view.visible) {
-      const registration = view.registrations.get(name)
-      let enabled: boolean
-      try {
-        enabled = registration?.when === undefined || await registration.when(context)
-      } catch (cause: unknown) {
+    const evaluate = async () => {
+      const admitted = new Map<string, ToolDefinition>()
+      for (const [name, definition] of view.visible) {
+        const registration = view.registrations.get(name)
+        let enabled: boolean
+        try {
+          enabled = registration?.when === undefined || await registration.when(context)
+        } catch (cause: unknown) {
+          signal.throwIfAborted()
+          throw new ToolActivationError(name, cause)
+        }
         signal.throwIfAborted()
-        throw new ToolActivationError(name, cause)
+        if (enabled) admitted.set(name, definition)
       }
-      signal.throwIfAborted()
-      if (enabled) admitted.set(name, definition)
+      const ordered = await this.applyAdmissionPolicies(context, admitted)
+      return { admitted, ordered }
     }
-    const ordered = await this.applyAdmissionPolicies(context, admitted)
+    const { admitted, ordered } = await evaluate()
     let closed = false
+    const checkRegistrations = (): void => {
+      signal.throwIfAborted()
+      const current = this.view(agent)
+      if (closed || current.visible.size !== view.visible.size
+        || [...view.registrations].some(([name, entry]) => current.registrations.get(name) !== entry)) {
+        throw new ToolAdmissionError(new Error('Tool registrations changed during request reconciliation; retry the turn'))
+      }
+    }
     return Object.freeze({
       dispose: () => { closed = true },
       ordered,
+      validate: async (): Promise<void> => {
+        checkRegistrations()
+        const checked = await evaluate()
+        checkRegistrations()
+        const entries = [...checked.admitted]
+        if (checked.ordered !== ordered || entries.length !== admitted.size
+          || [...admitted].some(([name, definition], index) => {
+            const entry = entries[index]
+            return entry?.[0] !== name || entry[1] !== definition
+          })) {
+          throw new ToolAdmissionError(new Error('Tool admission did not settle after request reconciliation; retry the turn'))
+        }
+      },
       view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
         const visible = new Map<string, ToolDefinition>()
         if (closed || scope !== agent) return visible
@@ -551,6 +576,8 @@ export class ToolsService extends Service {
     const name = definition.name
     return Object.freeze({
       dispose: (): void => undefined,
+      // Host invocations bypass step admission and recheck registration identity at body start.
+      validate: async (): Promise<void> => {},
       view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
         const own = this.layers.peek(scope)
         const chain = this.layers.chainLayers(scope)

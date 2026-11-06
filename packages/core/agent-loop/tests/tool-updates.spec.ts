@@ -1,6 +1,6 @@
 /** The loop logs tool changes as developer messages and carries session tool history to the runtime. */
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -17,6 +17,7 @@ import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter.ts'
 const contexts: Context[] = []
 afterEach(async () => {
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
+  vi.restoreAllMocks()
 })
 
 async function harness(adapter: MockAdapter) {
@@ -124,6 +125,7 @@ describe('step-time tool activation', () => {
       toolCallResponse('removed', 'conditional', {}), textResponse('done'),
     ])
     const { ctx, agent } = await harness(adapter)
+    const resolutions = vi.spyOn(ctx.tools, 'resolve')
     const selectedModels: string[] = []
     let calls = 0
     agent.model.select({ provider: 'mock', model: 'enabled' })
@@ -143,7 +145,9 @@ describe('step-time tool activation', () => {
     agent.model.select({ provider: 'mock', model: 'disabled' })
     await send(agent, 'try the historical name')
     expect(calls).toBe(1)
-    expect(selectedModels).toEqual(['enabled', 'enabled', 'enabled', 'enabled', 'disabled', 'disabled', 'disabled', 'disabled'])
+    // The removal notice requires one final-history validation, without a new selection.
+    expect(resolutions).toHaveBeenCalledTimes(8)
+    expect(selectedModels).toEqual(['enabled', 'enabled', 'enabled', 'enabled', 'disabled', 'disabled', 'disabled', 'disabled', 'disabled'])
     expect(adapter.requests.map(request => request.model)).toEqual(['enabled', 'enabled', 'disabled', 'disabled'])
     expect(developerEvents(agent).at(-1)?.data.message.content)
       .toEqual([{ type: 'tool-removal', toolName: 'conditional' }])
@@ -176,6 +180,7 @@ describe('step-time tool activation', () => {
     ])
     const { ctx, agent } = await harness(adapter)
     let retried = false
+    const resolutions = vi.spyOn(ctx.tools, 'resolve')
     const counts = { conditions: 0, admissions: 0 }
     ctx.on('agent/pre-step', (_input, next) => { counts.admissions++; return next() })
     agent.model.select({ provider: 'mock', model: 'first' })
@@ -198,7 +203,9 @@ describe('step-time tool activation', () => {
     expect(adapter.requests.map(request => request.tools?.map(tool => tool.name) ?? [])).toEqual([[], ['conditional']])
     expect(adapter.requests.map(request => request.messages.find(message => message.role === 'system')?.content))
       .toEqual([[{ type: 'text', text: 'first:' }], [{ type: 'text', text: 'first:conditional' }]])
-    expect(counts).toEqual({ conditions: 3, admissions: 1 })
+    // The retry prompt and addition notice are validated after their commits.
+    expect(resolutions).toHaveBeenCalledTimes(3)
+    expect(counts).toEqual({ conditions: 4, admissions: 1 })
     expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.source.kind === 'user')).toHaveLength(1)
   })
 

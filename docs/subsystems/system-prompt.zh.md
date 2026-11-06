@@ -191,6 +191,7 @@ variable(name: string, provider: (context: AssembleContext) => string | undefine
 /**
  * Collect pending durable context after request preparation, independently of inbox claiming.
  * Providers must respect cancellation and may return messages with their own source metadata.
+ * The loop commits these additions and accepted input before resolving request-time admission.
  * @param context - requesting scope and plugin-defined assembly fields; omitted uses global providers.
  * @param pending - accepted messages awaiting logging; omitted or empty on retries.
  * @returns additional messages the caller must log before deriving the model request.
@@ -276,12 +277,12 @@ Source: [`packages/core/system-prompt/src/index.ts`](../../packages/core/system-
 
 #### `system-prompt/request-context` — waterfall
 
-Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before sending the request. Return only context absent from the surviving Session history. Retries invoke providers again.
+Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before request-time tool admission. Return only context absent from the surviving Session history. Retries invoke providers again.
 
 ```ts cordis-catalog
 /**
  * Publish pending context messages after request preparation on every attempt. Providers must not
- * claim inbox input or commit these messages; the loop logs them before sending the request.
+ * claim inbox input or commit these messages; the loop logs them before request-time tool admission.
  * Return only context absent from the surviving Session history. Retries invoke providers again.
  * @param context - requesting scope, model selection, and cancellation.
  * @param pending - accepted messages not yet logged on the first attempt; empty on retries.
