@@ -334,10 +334,12 @@ export class ContextMapService extends Service {
    * @param caller - the exact live agent; the holder, or the map owner naming another holder.
    * @param request - target map, holder, and route.
    * @param signal - cancellation.
-   * @returns the committed snapshot.
+   * @returns the committed snapshot and the observed index digest; claiming does not mark it curated.
    * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.
    */
-  async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot> {
+  async claim(
+    caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal,
+  ): Promise<MapSnapshot & { readonly observedIndexDigest: string }> {
     this.live(caller)
     const owner = this.ownerFor(request.rootSessionId ?? this.rootOf(caller).id)
     const holderId = request.holderId ?? caller.id
@@ -351,10 +353,9 @@ export class ContextMapService extends Service {
       ...current,
       curatorId: holderId,
       route: request.route ?? null,
-      indexDigest: facts.digest,
     })
     this.announced.delete(owner.id)
-    return committed
+    return { ...committed, observedIndexDigest: facts.digest }
   }
 
   /**
@@ -373,6 +374,23 @@ export class ContextMapService extends Service {
     }
     if (current.curatorId === null) return current
     return this.commit(owner, caller.id, { kind: 'release', target: current.curatorId }, { ...current, curatorId: null, route: null })
+  }
+
+  /**
+   * Mark the index observed at claim as fully curated after a successful run. The owner may
+   * acknowledge a settled child after its role has been released; another holder excludes it.
+   * @param caller - the exact live curator or map owner.
+   * @param request - target map and the digest returned by the run's claim.
+   * @returns the committed snapshot.
+   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for another caller or holder.
+   */
+  async acknowledgeIndex(caller: Agent, request: MapTarget & { readonly indexDigest: string }): Promise<MapSnapshot> {
+    const owner = this.member(caller, request.rootSessionId)
+    const current = this.snapshotOf(owner)
+    if (current.curatorId === null ? caller !== owner : current.curatorId !== caller.id) {
+      throw new ContextMapError('Only the curator or the owner of an unclaimed map may acknowledge the index', 'CONTEXT_MAP_UNAUTHORIZED')
+    }
+    return this.commit(owner, caller.id, { kind: 'index-ack' }, { ...current, indexDigest: request.indexDigest })
   }
 
   /**
@@ -694,7 +712,15 @@ export class ContextMapService extends Service {
     if (this.disposed) throw new ContextMapError('context map disposed', 'CONTEXT_MAP_DISPOSED')
     const current = this.snapshotOf(owner)
     const snapshot: MapSnapshot = { ...next, ownerSessionId: owner.id, revision: current.revision + 1 }
-    if (byteLength(JSON.stringify(snapshot)) > this.config.maxSnapshotBytes) {
+    // Role metadata must never prevent taking the role needed to shrink content. Measure every
+    // content edit with the same role-free metadata so a note cannot spend released role space.
+    const content = { ...snapshot, curatorId: null, route: null, indexDigest: null }
+    if (op.kind !== 'claim' && op.kind !== 'release' && op.kind !== 'index-ack'
+      && byteLength(JSON.stringify(content)) > this.config.maxSnapshotBytes) {
+      if (op.kind === 'note-pending') {
+        this.notify({ kind: 'note-filed', ownerSessionId: owner.id })
+        throw new ContextMapError(`the map would exceed ${this.config.maxSnapshotBytes} bytes; shorten this note or retry after the curator frees space`, 'CONTEXT_MAP_LIMIT')
+      }
       throw new ContextMapError(`the map would exceed ${this.config.maxSnapshotBytes} bytes; merge or retire groups first`, 'CONTEXT_MAP_LIMIT')
     }
     this.validatePages(snapshot)

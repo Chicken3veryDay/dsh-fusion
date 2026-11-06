@@ -977,10 +977,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['{@link ContextMapError} for an unauthorized caller, unknown group, or an item exceeding the view budget.'],
       },
       {
-        signature: 'async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot>',
+        signature: 'async claim( caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal, ): Promise<MapSnapshot & { readonly observedIndexDigest: string }>',
         description: 'Take the curator role for an agent. The previous holder, live or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool calls it.',
         parameters: [{ name: 'caller', description: 'the exact live agent; the holder, or the map owner naming another holder.' }, { name: 'request', description: 'target map, holder, and route.' }, { name: 'signal', description: 'cancellation.' }],
-        returns: 'the committed snapshot.',
+        returns: 'the committed snapshot and the observed index digest; claiming does not mark it curated.',
         throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.'],
       },
       {
@@ -989,6 +989,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'caller', description: 'the exact live holder or the owner.' }, { name: 'target', description: 'which map.' }],
         returns: 'the committed snapshot, or the current one when nobody held the role.',
         throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.'],
+      },
+      {
+        signature: 'async acknowledgeIndex(caller: Agent, request: MapTarget & { readonly indexDigest: string }): Promise<MapSnapshot>',
+        description: 'Mark the index observed at claim as fully curated after a successful run. The owner may acknowledge a settled child after its role has been released; another holder excludes it.',
+        parameters: [{ name: 'caller', description: 'the exact live curator or map owner.' }, { name: 'request', description: 'target map and the digest returned by the run\'s claim.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for another caller or holder.'],
       },
       {
         signature: 'async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }>',

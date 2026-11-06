@@ -36,7 +36,7 @@ The [format references](persistence-changes/historical-formats/README.md) cover 
 | `event:compaction/prune` | event | `7f7fd5a6b0064f597534b29ff62ef26e786dffccf5e14f654a7d4fcea2c35f04` | [`{ type: "compaction/prune" }`](#persistence-type-sha256-7f7fd5a6b0064f597534b29ff62ef26e786dffccf5e14f654a7d4fcea2c35f04) |
 | `event:compaction/start` | event | `db874d463b0fdec77e9da1c4568f37cb70bd6596781eb93800db44fb8a116965` | [`{ type: "compaction/start" }`](#persistence-type-sha256-db874d463b0fdec77e9da1c4568f37cb70bd6596781eb93800db44fb8a116965) |
 | `event:compaction/summary` | event | `e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602` | [`{ type: "compaction/summary" }`](#persistence-type-sha256-e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602) |
-| `event:context-map/state` | event | `ba50066aeeb804e1c799343f712eda4d03aeeace69a606cffcc967ac9f0c8784` | [`{ type: "context-map/state" }`](#persistence-type-sha256-ba50066aeeb804e1c799343f712eda4d03aeeace69a606cffcc967ac9f0c8784) |
+| `event:context-map/state` | event | `6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d` | [`{ type: "context-map/state" }`](#persistence-type-sha256-6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d) |
 | `event:deliverables/presented` | event | `13d3d180f977bf78081d487ffa0ecb75857349bcab29a5a3fb48189fca2a6176` | [`{ type: "deliverables/presented" }`](#persistence-type-sha256-13d3d180f977bf78081d487ffa0ecb75857349bcab29a5a3fb48189fca2a6176) |
 | `event:developer/message` | event | `d224a9637a3bdc88943d15a9c8f3dbe551a4d320b2965c2521a1f6a113d4d24f` | [`{ type: "developer/message" }`](#persistence-type-sha256-d224a9637a3bdc88943d15a9c8f3dbe551a4d320b2965c2521a1f6a113d4d24f) |
 | `event:feedback/message-delete` | event | `3ee93b06f3a125850337602bcdf155d2538c43a5c944ec55b1b3c365152d6796` | [`{ type: "feedback/message-delete" }`](#persistence-type-sha256-3ee93b06f3a125850337602bcdf155d2538c43a5c944ec55b1b3c365152d6796) |
@@ -2576,6 +2576,14 @@ SHA-256: `227d728cc3c55ccb8a7099c08c24860d2d38ca4a38c6a4354477b7c1afb28230`
 SHA-256: `94c56aeb1564ad735eb773d88636b40761d063efa1610f1308004d32923f5378`
 
 `"in_progress"`
+
+<a id="persistence-type-sha256-07b88f7f8a9505d3558fe357fbbe978983efbf769af89386a6371d56d48b9954"></a>
+
+### `"index-ack"`
+
+SHA-256: `07b88f7f8a9505d3558fe357fbbe978983efbf769af89386a6371d56d48b9954`
+
+`"index-ack"`
 
 <a id="persistence-type-sha256-c6c66ebb8553a5b0f4733ee2f4b6c86bec64d17fd22c474ece05c4454fe06ea2"></a>
 
@@ -5620,7 +5628,7 @@ SHA-256: `b30041e29547970e13d5e16bcaa6ed34bba54564e2846869f4af35a212e1510a`
 
 Array of [`MapNote`](#persistence-type-sha256-c830b5878fb6a8fbb568cf05f4b4208940bc99012b5ecd0a2839096a91f13df1).
 
-<a id="persistence-type-sha256-7761e0ab300c2c17177732dec833e27d85efc37bfbcd7125cd3b8dddb81bd388"></a>
+<a id="persistence-type-sha256-b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54"></a>
 
 <a id="persistence-type-mapop"></a>
 
@@ -5628,17 +5636,17 @@ Array of [`MapNote`](#persistence-type-sha256-c830b5878fb6a8fbb568cf05f4b4208940
 
 ### `MapOp`
 
-SHA-256: `7761e0ab300c2c17177732dec833e27d85efc37bfbcd7125cd3b8dddb81bd388`
+SHA-256: `b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54`
 
-Sources: [`packages/experimental/context-map/src/types.ts:102`](../packages/experimental/context-map/src/types.ts)
+Sources: [`packages/experimental/context-map/src/types.ts:103`](../packages/experimental/context-map/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
 | `actor` | required | `string` |
-| `kind` | required | [`MapOpKind`](#persistence-type-sha256-faef28efa046fd204b02879fe8dcf32309655a2f89fdabcd527d9f1c3d640895) |
+| `kind` | required | [`MapOpKind`](#persistence-type-sha256-ff9c50d74e67676830c0324dfb7e25fc9929cc76d6621e0e5fa23fc9f60a99d0) |
 | `target` | optional | `string` |
 
-<a id="persistence-type-sha256-faef28efa046fd204b02879fe8dcf32309655a2f89fdabcd527d9f1c3d640895"></a>
+<a id="persistence-type-sha256-ff9c50d74e67676830c0324dfb7e25fc9929cc76d6621e0e5fa23fc9f60a99d0"></a>
 
 <a id="persistence-type-mapopkind"></a>
 
@@ -5646,7 +5654,7 @@ Sources: [`packages/experimental/context-map/src/types.ts:102`](../packages/expe
 
 ### `MapOpKind`
 
-SHA-256: `faef28efa046fd204b02879fe8dcf32309655a2f89fdabcd527d9f1c3d640895`
+SHA-256: `ff9c50d74e67676830c0324dfb7e25fc9929cc76d6621e0e5fa23fc9f60a99d0`
 
 Sources: [`packages/experimental/context-map/src/types.ts:87`](../packages/experimental/context-map/src/types.ts)
 
@@ -5654,16 +5662,17 @@ One of:
 
 - `"claim"`
 - `"core-set"`
+- `"note-verify"`
 - `"pending-drop"`
 - `"release"`
 - `"group-merge"`
 - `"group-retire"`
 - `"group-set"`
+- `"index-ack"`
 - `"note-add"`
 - `"note-file"`
 - `"note-pending"`
 - `"note-retire"`
-- `"note-verify"`
 
 <a id="persistence-type-sha256-932c13362cea159325b7ea49080977ab62c055a5806368839e418aa00d83881f"></a>
 
@@ -11007,17 +11016,17 @@ Sources: [`packages/experimental/ticket/src/types.ts:447`](../packages/experimen
 | `provider` | required | `string` |
 | `settings` | required | `string` |
 
-<a id="persistence-type-sha256-f013c0f7480eee616624a4d5bb48fea30ca33904d788df9a00fb4241a1269bf1"></a>
+<a id="persistence-type-sha256-be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083"></a>
 
 ### `{ op, snapshot, version }`
 
-SHA-256: `f013c0f7480eee616624a4d5bb48fea30ca33904d788df9a00fb4241a1269bf1`
+SHA-256: `be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083`
 
 Sources: [`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
 
 | Property | Presence | Type |
 |---|---|---|
-| `op` | required | [`MapOp`](#persistence-type-sha256-7761e0ab300c2c17177732dec833e27d85efc37bfbcd7125cd3b8dddb81bd388) |
+| `op` | required | [`MapOp`](#persistence-type-sha256-b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54) |
 | `snapshot` | required | [`MapSnapshot`](#persistence-type-sha256-63748e6783f808d97b801ce912b747d109f8e520fda65b935b6790e8d2368194) |
 | `version` | required | `1` |
 
@@ -11508,17 +11517,17 @@ SHA-256: `e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602`
 | `time` | required | `number` |
 | `type` | required | `"compaction/summary"` |
 
-<a id="persistence-type-sha256-ba50066aeeb804e1c799343f712eda4d03aeeace69a606cffcc967ac9f0c8784"></a>
+<a id="persistence-type-sha256-6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d"></a>
 
 <a id="persistence-type-eventcontext-mapstate"></a>
 
 ### `{ type: "context-map/state" }`
 
-SHA-256: `ba50066aeeb804e1c799343f712eda4d03aeeace69a606cffcc967ac9f0c8784`
+SHA-256: `6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d`
 
 | Property | Presence | Type |
 |---|---|---|
-| `data` | required | [`{ op, snapshot, version }`](#persistence-type-sha256-f013c0f7480eee616624a4d5bb48fea30ca33904d788df9a00fb4241a1269bf1) |
+| `data` | required | [`{ op, snapshot, version }`](#persistence-type-sha256-be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083) |
 | `ignorable` | optional | `true` |
 | `seq` | required | `number` |
 | `time` | required | `number` |

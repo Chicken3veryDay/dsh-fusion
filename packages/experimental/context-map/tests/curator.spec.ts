@@ -110,7 +110,7 @@ describe('the default curator', () => {
     await expect(prompt + '\n').toMatchFileSnapshot('./expected/curator-prompt.txt')
     const events = await logged(w.ctx, w.owner.id)
     const ops = events.filter(event => event.type === 'context-map/state').map(event => (event.data as { op: { kind: string } }).op.kind)
-    expect(ops).toEqual(['note-pending', 'claim', 'group-set', 'note-file', 'release'])
+    expect(ops).toEqual(['note-pending', 'claim', 'group-set', 'note-file', 'release', 'index-ack'])
     expect(events.filter(event => /^(assistant|user|turn|step|developer)\//.test(event.type))).toEqual([])
     expect(w.ctx.agents.list().map(agent => agent.id)).toEqual([w.owner.id])
   })

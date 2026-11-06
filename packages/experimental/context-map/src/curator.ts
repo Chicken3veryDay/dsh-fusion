@@ -47,6 +47,7 @@ interface Run {
   readonly childId: SessionId
   readonly controller: AbortController
   activation: SubagentActivation | undefined
+  indexDigest: string | undefined
   /** Why the run was asked to stop; undefined while it works. */
   stopping: string | undefined
   readonly settled: Promise<void>
@@ -158,7 +159,7 @@ export class DefaultContextCurator extends Service {
     const controller = new AbortController()
     let finish!: () => void
     const run: Run = {
-      childId, controller, activation: undefined, stopping: undefined,
+      childId, controller, activation: undefined, stopping: undefined, indexDigest: undefined,
       settled: new Promise<void>((resolve) => { finish = resolve }),
     }
     this.runs.set(owner.id, run)
@@ -166,7 +167,10 @@ export class DefaultContextCurator extends Service {
       const choice = await selectCuratorRoute(this.ctx.llm, owner, this.config, controller.signal)
       this.failures.delete(owner.id)
       controller.signal.throwIfAborted()
-      await this.ctx.contextMap.claim(owner, { rootSessionId: owner.id, holderId: childId, route: choice.route }, controller.signal)
+      const claimed = await this.ctx.contextMap.claim(
+        owner, { rootSessionId: owner.id, holderId: childId, route: choice.route }, controller.signal,
+      )
+      run.indexDigest = claimed.observedIndexDigest
       controller.signal.throwIfAborted()
       const effort = choice.route.reasoningEffort
       run.activation = await this.ctx.subagents.startActivation({
@@ -193,11 +197,15 @@ export class DefaultContextCurator extends Service {
       } else if (!controller.signal.aborted) {
         this.ctx.logger.warn(`context curator: start failed for ${owner.id}: ${String(error)}`)
       }
+      run.stopping ??= 'start failed'
       void this.finishRun(owner, run, finish)
       return
     }
-    void run.activation.result.catch((error: unknown) => {
+    void run.activation.result.then((result) => {
+      run.stopping ??= result.stopReason
+    }, (error: unknown) => {
       if (run.stopping === undefined) this.ctx.logger.warn(`context curator: run for ${owner.id} failed: ${String(error)}`)
+      run.stopping ??= 'error'
     }).then(() => this.finishRun(owner, run, finish))
     if (run.stopping !== undefined) this.stop(run, run.stopping)
   }
@@ -214,18 +222,22 @@ export class DefaultContextCurator extends Service {
 
   /** Release the role if the run still holds it, settle the subagent, then maybe start again. */
   private async finishRun(owner: Agent, run: Run, finish: () => void): Promise<void> {
-    run.stopping ??= 'completed'
+    run.stopping ??= 'interrupted'
     try {
       await run.activation?.dispose()
     } catch (error: unknown) {
+      run.stopping = 'cleanup failed'
       this.ctx.logger.warn(`context curator: disposing the run failed: ${String(error)}`)
     }
     try {
       if (this.ctx.agents.get(owner.id) === owner && this.ctx.contextMap.snapshotOf(owner).curatorId === run.childId) {
         await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
       }
+      if (this.ctx.agents.get(owner.id) === owner && run.stopping === 'completed' && run.indexDigest !== undefined) {
+        await this.ctx.contextMap.acknowledgeIndex(owner, { rootSessionId: owner.id, indexDigest: run.indexDigest })
+      }
     } catch (error: unknown) {
-      this.ctx.logger.warn(`context curator: releasing the role failed: ${String(error)}`)
+      this.ctx.logger.warn(`context curator: finalizing the map failed: ${String(error)}`)
     }
     this.runs.delete(owner.id)
     finish()

@@ -50,6 +50,8 @@ kind: "package-reference"
 3. 在工作完成、达到步数上限、或其他持有者声明接管角色时结束（立即让出，仅在该持有者离开后才重新启动）；
 4. 销毁时取消尚未完成的目录读取并观察稍后的失败，在下一次运行或销毁之前释放角色并等待子智能体结束。
 
+领取返回 `observedIndexDigest`，但不会把索引标记为已策展。成功完成后，持有者或角色已释放地图的所有者用该摘要调用 `acknowledgeIndex`；其 `index-ack` 事件记录完成。步骤限制、错误、取消和重启保留原摘要。恢复时，没有 `index-ack` 的旧领取时摘要视为未完成。所有者的后续步骤或笔记可触发新尝试；中断的运行不会立即自行重试。运行期间索引发生变化时，完成后仍可再次策展。
+
 ### 服务 API
 
 ```ts
@@ -92,14 +94,16 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 | `maxTitleBytes` | 80 | 分组标题的字节数 |
 | `maxSummaryBytes` | 160 | 分组摘要的字节数 |
 | `maxCoreSections` | 8 | 核心中的章节数 |
-| `maxSnapshotBytes` | 65536 | 序列化后的地图大小 |
+| `maxSnapshotBytes` | 65536 | 将 `curatorId`、`route` 和 `indexDigest` 设为 null 后序列化的地图大小 |
 | `maxViewBytes` | 8192 | `map_view` 返回的字节数 |
 
 默认策展者另有 `provider`（`spawn`，进程内子智能体提供方）、`maxSteps`（24）、`maxTokens`（4096）、`minContextTokens`（32768）和 `maxRoutesInspected`（16）。这些值是边界，选取依据是让完整地图落在一次视图内、让一次运行落在一次廉价模型调用预算内；它们没有针对特定负载调优。不可用的值会在加载时以 `CONTEXT_MAP_INVALID_CONFIG` 失败。
 
+角色变更和索引确认是元数据操作，不受 `maxSnapshotBytes` 限制。每次内容编辑采用相同的排除元数据后的计量，因此释放角色不会为待处理笔记增加空间。满地图始终可被领取以缩减内容。被拒绝的 `context_note` 会唤醒策展者，并要求工作智能体缩短笔记或在空间释放后重试。
+
 ### 事件
 
-本包新增事件类型 `context-map/state`。每条记录携带操作（`claim`、`release`、`group-set`、`group-merge`、`group-retire`、`note-add`、`note-verify`、`note-retire`、`note-pending`、`note-file`、`pending-drop` 或 `core-set`）、执行操作的智能体，以及带连续修订号的完整地图快照。Session 投影把这些记录折叠回地图，遇到缺口即失败。Session 格式版本不变；见持久化变更记录 `2026-11-06-context-map-state`。
+本包新增事件类型 `context-map/state`。每条记录携带操作（`claim`、`release`、`index-ack`、`group-set`、`group-merge`、`group-retire`、`note-add`、`note-verify`、`note-retire`、`note-pending`、`note-file`、`pending-drop` 或 `core-set`）、执行操作的智能体，以及带连续修订号的完整地图快照。Session 投影把这些记录折叠回地图，遇到缺口即失败。Session 格式版本不变；见持久化变更记录 `2026-11-06-context-map-index-ack`。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现

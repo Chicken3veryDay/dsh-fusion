@@ -75,7 +75,7 @@ export interface MapSnapshot {
   readonly curatorId: SessionId | null
   /** Route of the default curator run that holds the role; null for other holders. */
   readonly route: MapRoute | null
-  /** Digest of the index sections the curator last processed. */
+  /** Digest of the index sections a curator run last completed. */
   readonly indexDigest: string | null
   /** Sections granted up front, in priority order. */
   readonly core: readonly ContextSectionId[]
@@ -87,6 +87,7 @@ export interface MapSnapshot {
 export type MapOpKind =
   | 'claim'
   | 'release'
+  | 'index-ack'
   | 'group-set'
   | 'group-merge'
   | 'group-retire'
@@ -185,7 +186,7 @@ export interface Config {
   maxSummaryBytes?: number
   /** Most sections in the eager core (default 8). */
   maxCoreSections?: number
-  /** UTF-8 bytes of one logged map snapshot (default 65,536). */
+  /** UTF-8 bytes of a map snapshot with role and index metadata cleared (default 65,536). */
   maxSnapshotBytes?: number
   /** UTF-8 bytes of one rendered view; must fit page metadata and a maximum-size note (default 8,192). */
   maxViewBytes?: number

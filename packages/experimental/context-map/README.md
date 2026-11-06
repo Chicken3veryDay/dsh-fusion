@@ -50,6 +50,8 @@ The role is a durable grant recorded in the log, checked against the exact live 
 3. ends when its work is done, the step bound is reached, or another holder claims the role (it yields at once and restarts only after that holder is gone);
 4. cancels a pending catalog read on disposal, observes any late catalog failure, releases the role and settles the subagent before the next run or before disposal.
 
+A claim returns `observedIndexDigest` without marking the index curated. After successful completion, the holder or the owner of the released map calls `acknowledgeIndex` with that digest; its `index-ack` event records completion. Step limits, errors, cancellation, and restart leave the previous digest intact. Recovery treats legacy claim-time digests without an `index-ack` as incomplete. Another owner step or note can trigger a new attempt; an interrupted run does not immediately retry itself. An index change during a run remains eligible after that run completes.
+
 ### Service API
 
 ```ts
@@ -92,14 +94,16 @@ Every field has a default.
 | `maxTitleBytes` | 80 | bytes of a group title |
 | `maxSummaryBytes` | 160 | bytes of a group summary |
 | `maxCoreSections` | 8 | sections in the core |
-| `maxSnapshotBytes` | 65536 | serialized map |
+| `maxSnapshotBytes` | 65536 | serialized map with `curatorId`, `route`, and `indexDigest` set to null |
 | `maxViewBytes` | 8192 | bytes `map_view` returns |
 
 The default curator adds `provider` (`spawn`, the in-process subagent provider), `maxSteps` (24), `maxTokens` (4096), `minContextTokens` (32768), and `maxRoutesInspected` (16). The values are bounds chosen so a full map stays within one view and a run stays within one cheap model call budget; they are not tuned to a workload. An unusable value fails at load with `CONTEXT_MAP_INVALID_CONFIG`.
 
+Role changes and index acknowledgement are metadata operations exempt from `maxSnapshotBytes`. Every content edit uses the same metadata-free measurement, so releasing a role gives pending notes no extra room. A full map can always be claimed for shrinking. A rejected `context_note` wakes the curator and asks the working agent to shorten the note or retry after space is freed.
+
 ### Events
 
-The package adds the event type `context-map/state`. Each record carries the operation (`claim`, `release`, `group-set`, `group-merge`, `group-retire`, `note-add`, `note-verify`, `note-retire`, `note-pending`, `note-file`, `pending-drop`, or `core-set`), the acting agent, and the whole map snapshot with a contiguous revision. A Session projection folds the records back into the map and fails on a gap. The Session format version does not change; see the persistence change record `2026-11-06-context-map-state`.
+The package adds the event type `context-map/state`. Each record carries the operation (`claim`, `release`, `index-ack`, `group-set`, `group-merge`, `group-retire`, `note-add`, `note-verify`, `note-retire`, `note-pending`, `note-file`, `pending-drop`, or `core-set`), the acting agent, and the whole map snapshot with a contiguous revision. A Session projection folds the records back into the map and fails on a gap. The Session format version does not change; see the persistence change record `2026-11-06-context-map-index-ack`.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation

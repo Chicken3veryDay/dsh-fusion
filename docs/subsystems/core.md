@@ -1021,10 +1021,10 @@ async view(caller: Agent, target: MapTarget & { readonly pendingAfter?: MapPendi
  * @param caller - the exact live agent; the holder, or the map owner naming another holder.
  * @param request - target map, holder, and route.
  * @param signal - cancellation.
- * @returns the committed snapshot.
+ * @returns the committed snapshot and the observed index digest; claiming does not mark it curated.
  * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.
  */
-async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot>
+async claim( caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal, ): Promise<MapSnapshot & { readonly observedIndexDigest: string }>
 
 /**
  * Give up the curator role. The holder or the map owner may release it.
@@ -1034,6 +1034,16 @@ async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Pr
  * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.
  */
 async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>
+
+/**
+ * Mark the index observed at claim as fully curated after a successful run. The owner may
+ * acknowledge a settled child after its role has been released; another holder excludes it.
+ * @param caller - the exact live curator or map owner.
+ * @param request - target map and the digest returned by the run's claim.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for another caller or holder.
+ */
+async acknowledgeIndex(caller: Agent, request: MapTarget & { readonly indexDigest: string }): Promise<MapSnapshot>
 
 /**
  * Record a short fact for the curator to verify and file. Any member of the lineage may; the

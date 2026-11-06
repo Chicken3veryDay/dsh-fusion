@@ -1,6 +1,7 @@
 /**
  * Deterministic recovery of the project map from `context-map/state` events. Every edit logs the
- * complete snapshot, so replay keeps the latest one and checks that revisions are contiguous.
+ * complete snapshot; replay keeps its content and the last explicitly acknowledged index digest,
+ * and checks that revisions are contiguous.
  */
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -45,7 +46,7 @@ const snapshotSchema: z.ZodType<MapSnapshot> = z.object({
 
 const opSchema: z.ZodType<MapOp> = z.object({
   kind: z.enum([
-    'claim', 'release', 'group-set', 'group-merge', 'group-retire', 'note-add', 'note-verify',
+    'claim', 'release', 'index-ack', 'group-set', 'group-merge', 'group-retire', 'note-add', 'note-verify',
     'note-retire', 'note-pending', 'note-file', 'pending-drop', 'core-set',
   ]),
   actor: sessionId,
@@ -66,13 +67,16 @@ export const CONTEXT_MAP_PROJECTION_KEY = 'contextMap'
  */
 export const contextMapProjectionDefinition = {
   key: CONTEXT_MAP_PROJECTION_KEY,
-  stateVersion: 1,
+  stateVersion: 2,
   stateSchema,
   init: header => ({ ownerSessionId: header.id, snapshot: null }),
   apply: (state, event) => {
     if (event.type !== 'context-map/state' || event.data.snapshot.ownerSessionId !== state.ownerSessionId) return state
     const data = z.object({ version: z.literal(1), op: opSchema, snapshot: snapshotSchema }).strict().parse(event.data)
     if (data.snapshot.revision !== (state.snapshot?.revision ?? 0) + 1) throw new Error('Context map revision is not contiguous')
-    return { ownerSessionId: state.ownerSessionId, snapshot: data.snapshot }
+    // Older claims stamped their observed digest before curation completed. Only an explicit
+    // acknowledgement establishes completion, including when refolding an older checkpoint.
+    const indexDigest = data.op.kind === 'index-ack' ? data.snapshot.indexDigest : state.snapshot?.indexDigest ?? null
+    return { ownerSessionId: state.ownerSessionId, snapshot: { ...data.snapshot, indexDigest } }
   },
 } satisfies ProjectionDefinition<typeof CONTEXT_MAP_PROJECTION_KEY, ContextMapProjectionState>

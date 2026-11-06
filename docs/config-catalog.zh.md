@@ -1165,7 +1165,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-context-map`
 
 - `inject`: `agents` · `sessions` · `sessionProjections` · `contextIndex` · `contextTree` · `workingDirectory`
-- `source`: [`packages/experimental/context-map/src/types.ts:167`](../packages/experimental/context-map/src/types.ts)
+- `source`: [`packages/experimental/context-map/src/types.ts:168`](../packages/experimental/context-map/src/types.ts)
 
 ```ts config-catalog
 /**
@@ -1193,7 +1193,7 @@ export interface Config {
   maxSummaryBytes?: number
   /** Most sections in the eager core (default 8). */
   maxCoreSections?: number
-  /** UTF-8 bytes of one logged map snapshot (default 65,536). */
+  /** UTF-8 bytes of a map snapshot with role and index metadata cleared (default 65,536). */
   maxSnapshotBytes?: number
   /** UTF-8 bytes of one rendered view; must fit page metadata and a maximum-size note (default 8,192). */
   maxViewBytes?: number
