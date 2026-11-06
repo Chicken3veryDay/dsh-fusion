@@ -18,18 +18,55 @@ it('keeps one draft per root, Ticket, and question, and removes it when its text
   expect(draftId(key('a', 'q1'))).not.toBe(draftId(key('b', 'q1')))
 })
 
-it('tracks a send: a refusal keeps the text, a commit drops it, and unknown drafts are ignored', () => {
+it('tracks a send: a refusal keeps the text, a commit drops it, and unknown drafts start nothing', () => {
   const drafts = createAnswerDrafts()
-  drafts.beginSend(key('a', 'missing'))
-  drafts.endSend(key('a', 'missing'), true)
+  expect(drafts.beginSend(key('a', 'missing'))).toBeNull()
   expect(drafts.getSnapshot().size).toBe(0)
   drafts.edit(key('a', 'q1'), 'text', 'Which?')
-  drafts.beginSend(key('a', 'q1'))
+  const refused = drafts.beginSend(key('a', 'q1'))!
+  expect(refused.text).toBe('text')
   expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))?.sending).toBe(true)
-  drafts.endSend(key('a', 'q1'), false)
+  refused.settle(false)
   expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))).toMatchObject({ text: 'text', sending: false })
-  drafts.endSend(key('a', 'q1'), true)
+  drafts.beginSend(key('a', 'q1'))!.settle(true)
   expect(drafts.getSnapshot().size).toBe(0)
+})
+
+it('starts no second send while one is pending and settles each send once', () => {
+  const drafts = createAnswerDrafts()
+  drafts.edit(key('a', 'q1'), 'text', 'Which?')
+  const first = drafts.beginSend(key('a', 'q1'))!
+  expect(drafts.beginSend(key('a', 'q1'))).toBeNull()
+  first.settle(false)
+  const second = drafts.beginSend(key('a', 'q1'))!
+  first.settle(true)
+  expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))).toMatchObject({ text: 'text', sending: true })
+  second.settle(true)
+  expect(drafts.getSnapshot().size).toBe(0)
+})
+
+it('a committed send removes only the text it sent: newer text stays', () => {
+  const drafts = createAnswerDrafts()
+  drafts.edit(key('a', 'q1'), 'old', 'Which?')
+  const send = drafts.beginSend(key('a', 'q1'))!
+  drafts.edit(key('a', 'q1'), 'old and more', 'Which?')
+  send.settle(true)
+  expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))).toMatchObject({ text: 'old and more', sending: false })
+})
+
+it('a send settled after its draft was discarded or emptied changes nothing', () => {
+  const drafts = createAnswerDrafts()
+  drafts.edit(key('a', 'q1'), 'old', 'Which?')
+  const discarded = drafts.beginSend(key('a', 'q1'))!
+  drafts.discard(key('a', 'q1'))
+  drafts.edit(key('a', 'q1'), 'new', 'Which?')
+  discarded.settle(true)
+  expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))).toMatchObject({ text: 'new', sending: false })
+  const emptied = drafts.beginSend(key('a', 'q1'))!
+  drafts.edit(key('a', 'q1'), '', 'Which?')
+  drafts.edit(key('a', 'q1'), 'newer', 'Which?')
+  emptied.settle(true)
+  expect(drafts.getSnapshot().get(draftId(key('a', 'q1')))).toMatchObject({ text: 'newer', sending: false })
 })
 
 it('notifies subscribers and discards a draft on request', () => {

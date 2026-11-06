@@ -4,14 +4,18 @@ import { useSyncExternalStore } from 'react'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkstreamActionInjected, WorkstreamCommand, WorkstreamFailure } from './WorkstreamAction.tsx'
 import type { NS } from './locales.ts'
 import { failureText } from './views.tsx'
 
-/** Identify the card action a command belongs to, so a command supersedes only its own earlier report. */
-function commandId(command: WorkstreamCommand): string {
+/**
+ * Identify the card action a command belongs to, so a command supersedes only its own earlier report.
+ * Ticket ids are unique only within their root, so the root is part of the identity.
+ */
+function commandId(rootId: SessionId, command: WorkstreamCommand): string {
   const { request } = command
-  return JSON.stringify([command.kind, request.ticketId, 'questionId' in request ? request.questionId : request.attentionId])
+  return JSON.stringify([rootId, command.kind, request.ticketId, 'questionId' in request ? request.questionId : request.attentionId])
 }
 
 /**
@@ -21,8 +25,8 @@ function commandId(command: WorkstreamCommand): string {
 export function createCommandReports() {
   const store = createSnapshotStore<{ seq: number; id: string; failure: WorkstreamFailure } | null>(null)
   let seq = 0
-  const reportFailure: WorkstreamActionInjected['reportFailure'] = (failure, command) => {
-    const id = commandId(command)
+  const reportFailure: WorkstreamActionInjected['reportFailure'] = (failure, command, rootId) => {
+    const id = commandId(rootId, command)
     if (failure !== null) store.set({ seq: ++seq, id, failure })
     else if (store.getSnapshot()?.id === id) store.set(null)
   }

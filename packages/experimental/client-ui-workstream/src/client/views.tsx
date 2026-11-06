@@ -1,6 +1,6 @@
 /** The five Workstream panel views. */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, fileSizeText, StateDot, Tag, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -66,16 +66,20 @@ function QuestionCard({ item, nameOf, rootId, ...props }: NeedsProps & { item: E
   const key = { rootId, ticketId: item.ticket.id, questionId: item.question.id }
   const stored = useSyncExternalStore(drafts.subscribe, drafts.getSnapshot).get(draftId(key))
   const answer = stored?.text ?? ''
-  const { pending, run } = useCommand(props)
+  const command = useCommand(props)
+  // The draft owns the send, so a remounted or second card for the same question stays locked as well.
+  const busy = command.pending || stored?.sending === true
   const target = { ticketId: item.ticket.id, questionId: item.question.id, expectedRevision: item.ticket.revision }
-  const inputId = `workstream-answer-${item.ticket.id}-${item.question.id}`
+  // Several cards for one question may be mounted at once, so the DOM id belongs to this mount, not to the question.
+  const inputId = useId()
   const send = async (): Promise<void> => {
-    drafts.beginSend(key)
+    const sending = drafts.beginSend(key)
+    if (sending === null) return
     let committed = false
     try {
-      committed = await run({ kind: 'answer', request: { ...target, answer } })
+      committed = await command.run({ kind: 'answer', request: { ...target, answer: sending.text } })
     } finally {
-      drafts.endSend(key, committed)
+      sending.settle(committed)
     }
   }
   return (
@@ -100,15 +104,15 @@ function QuestionCard({ item, nameOf, rootId, ...props }: NeedsProps & { item: E
           value={answer}
           rows={2}
           placeholder={t('answer.placeholder')}
-          disabled={pending}
+          disabled={busy}
           onChange={(event) => { drafts.edit(key, event.target.value, item.question.question) }}
         />
         <div className={css.actions}>
-          <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => { void run({ kind: 'closeQuestion', request: target }) }}>
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => { void command.run({ kind: 'closeQuestion', request: target }) }}>
             {t('question.close')}
           </Button>
-          <Button type="submit" variant="primary" size="sm" disabled={pending || answer.trim().length === 0}>
-            {pending ? t('pending') : t('answer.submit')}
+          <Button type="submit" variant="primary" size="sm" disabled={busy || answer.trim().length === 0}>
+            {busy ? t('pending') : t('answer.submit')}
           </Button>
         </div>
       </form>

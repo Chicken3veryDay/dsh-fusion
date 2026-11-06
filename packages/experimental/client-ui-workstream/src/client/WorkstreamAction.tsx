@@ -49,9 +49,10 @@ export interface WorkstreamActionInjected {
   command: (sessionId: SessionId, command: WorkstreamCommand) => Promise<WorkstreamFailure | null>
   /**
    * Report a command refusal outside the panel, or clear that command's earlier report with `null`.
-   * Other commands' reports stay.
+   * A command is identified by its Workstream root, Ticket, and question or attention item; other
+   * commands' reports stay, including the same Ticket and question of another root.
    */
-  reportFailure: (failure: WorkstreamFailure | null, command: WorkstreamCommand) => void
+  reportFailure: (failure: WorkstreamFailure | null, command: WorkstreamCommand, rootId: SessionId) => void
   /** Answer text that outlives question cards, tabs, and the panel; rejected answers stay in it. */
   drafts: AnswerDraftStore
   /** Read the change requests bound by the displayed Session's Workstream. */
@@ -73,17 +74,6 @@ export type WorkstreamView = 'needs' | 'work' | 'team' | 'changes' | 'files'
  */
 export function WorkstreamAction(props: WorkstreamActionProps) {
   const { sessionId, useSession, useSessions, t } = props
-  const command: WorkstreamActionInjected['command'] = async (id, request) => {
-    props.reportFailure(null, request)
-    let failure: WorkstreamFailure | null
-    try {
-      failure = await props.command(id, request)
-    } catch (error) {
-      failure = { code: 'failed', message: String(error) }
-    }
-    if (failure !== null) props.reportFailure(failure, request)
-    return failure
-  }
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<WorkstreamView>('needs')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -95,6 +85,17 @@ export function WorkstreamAction(props: WorkstreamActionProps) {
   const workstream = useSessions(state => state.projectionsBySession[rootId]?.values.workstream)
   const tickets = useSessions(state => state.projectionsBySession[rootId]?.values.ticket)
   const evidence = useSessions(state => state.projectionsBySession[rootId]?.values.workstreamEvidence)
+  const command: WorkstreamActionInjected['command'] = async (id, request) => {
+    props.reportFailure(null, request, rootId)
+    let failure: WorkstreamFailure | null
+    try {
+      failure = await props.command(id, request)
+    } catch (error) {
+      failure = { code: 'failed', message: String(error) }
+    }
+    if (failure !== null) props.reportFailure(failure, request, rootId)
+    return failure
+  }
 
   useEffect(() => {
     setOpen(false)

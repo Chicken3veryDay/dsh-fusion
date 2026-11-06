@@ -16,12 +16,27 @@ export interface AnswerDraft extends AnswerDraftKey {
   readonly text: string
   /** Question text when the draft was typed, shown if the question disappears. */
   readonly question: string
-  /** True from the send until its outcome; a sending draft is neither retained nor discarded. */
+  /** True from the send until its outcome; a sending draft is neither retained nor discarded, and no second send starts. */
   readonly sending: boolean
+  /** Store-unique number of the latest edit; a send removes the draft only while this still equals the sent edit. */
+  readonly revision: number
 }
 
 /** All drafts by {@link draftId}; every change publishes a new map. */
 export type AnswerDrafts = ReadonlyMap<string, AnswerDraft>
+
+/** One started send: the exact text to submit and the single settlement of its outcome. */
+export interface AnswerSend {
+  /** Draft text at the moment the send began; submit this, not a later read of the draft. */
+  readonly text: string
+  /**
+   * Settle the send once; later calls and calls after the draft was discarded or emptied are ignored.
+   * A commit removes the draft only when no edit followed the sent text, so newer text stays; a refusal
+   * keeps the text. Either way the draft stops sending.
+   * @param committed - whether the answer was committed.
+   */
+  settle(committed: boolean): void
+}
 
 /**
  * Derive the map key of a draft.
@@ -49,13 +64,14 @@ export interface AnswerDraftStore {
   readonly subscribe: (listener: () => void) => () => void
   /** Current drafts. */
   readonly getSnapshot: () => AnswerDrafts
-  /** Record the text of a draft; empty text removes it. */
+  /** Record the text of a draft; empty text removes it. A draft that is sending keeps sending. */
   edit(key: AnswerDraftKey, text: string, question: string): void
-  /** Mark a draft as being sent. */
-  beginSend(key: AnswerDraftKey): void
-  /** End a send: a committed answer removes the draft, a refusal keeps its text. */
-  endSend(key: AnswerDraftKey, committed: boolean): void
-  /** Remove a draft the user chose to drop. */
+  /**
+   * Mark a draft as being sent.
+   * @returns the started send, or null when there is no draft or its send is still pending.
+   */
+  beginSend(key: AnswerDraftKey): AnswerSend | null
+  /** Remove a draft the user chose to drop; a pending send of it no longer changes anything. */
   discard(key: AnswerDraftKey): void
 }
 
@@ -65,36 +81,52 @@ export interface AnswerDraftStore {
  */
 export function createAnswerDrafts(): AnswerDraftStore {
   const store = createSnapshotStore<AnswerDrafts>(new Map())
+  /** Token of the send in flight per draft; a send that is no longer current cannot touch the draft. */
+  const sends = new Map<string, symbol>()
+  let revisions = 0
   const update = (change: (next: Map<string, AnswerDraft>) => void): void => {
     const next = new Map(store.getSnapshot())
     change(next)
     store.set(next)
   }
+  const remove = (id: string): void => {
+    sends.delete(id)
+    update((next) => { next.delete(id) })
+  }
   return {
     subscribe: (listener: () => void) => store.subscribe(listener),
     getSnapshot: (): AnswerDrafts => store.getSnapshot(),
     edit(key: AnswerDraftKey, text: string, question: string): void {
-      update((next) => {
-        if (text.length === 0) next.delete(draftId(key))
-        else next.set(draftId(key), { ...key, text, question, sending: false })
-      })
+      const id = draftId(key)
+      if (text.length === 0) {
+        remove(id)
+        return
+      }
+      const sending = store.getSnapshot().get(id)?.sending ?? false
+      update((next) => { next.set(id, { ...key, text, question, sending, revision: ++revisions }) })
     },
-    beginSend(key: AnswerDraftKey): void {
-      update((next) => {
-        const draft = next.get(draftId(key))
-        if (draft !== undefined) next.set(draftId(key), { ...draft, sending: true })
-      })
-    },
-    endSend(key: AnswerDraftKey, committed: boolean): void {
-      update((next) => {
-        const draft = next.get(draftId(key))
-        if (draft === undefined) return
-        if (committed) next.delete(draftId(key))
-        else next.set(draftId(key), { ...draft, sending: false })
-      })
+    beginSend(key: AnswerDraftKey): AnswerSend | null {
+      const id = draftId(key)
+      const draft = store.getSnapshot().get(id)
+      if (draft === undefined || draft.sending) return null
+      const token = Symbol(id)
+      sends.set(id, token)
+      update((next) => { next.set(id, { ...draft, sending: true }) })
+      return {
+        text: draft.text,
+        settle(committed: boolean): void {
+          if (sends.get(id) !== token) return
+          sends.delete(id)
+          const current = store.getSnapshot().get(id)
+          /* v8 ignore next -- a send is current only while its draft exists: discard and emptying drop both together. */
+          if (current === undefined) return
+          if (committed && current.revision === draft.revision) update((next) => { next.delete(id) })
+          else update((next) => { next.set(id, { ...current, sending: false }) })
+        },
+      }
     },
     discard(key: AnswerDraftKey): void {
-      update((next) => { next.delete(draftId(key)) })
+      remove(draftId(key))
     },
   }
 }

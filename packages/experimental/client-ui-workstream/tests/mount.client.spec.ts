@@ -162,7 +162,7 @@ describe('Workstream panel browser plugin', () => {
     const overlay = b.ctx.slots.entries('shell.overlay').find(candidate => candidate.component === CommandNotice)!
     const { reports } = overlay.inject!() as { reports: { getSnapshot(): unknown } }
     const command: WorkstreamCommand = { kind: 'resolve', request: { ticketId: build.id, attentionId: 'n1' as never, expectedRevision: 4 } }
-    b.actions().reportFailure({ code: 'failed', message: 'm' }, command)
+    b.actions().reportFailure({ code: 'failed', message: 'm' }, command, ROOT)
     expect(reports.getSnapshot()).toMatchObject({ failure: { code: 'failed' } })
     expect(b.actions().drafts.getSnapshot().size).toBe(0)
   })
