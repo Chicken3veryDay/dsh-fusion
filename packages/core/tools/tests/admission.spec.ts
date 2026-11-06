@@ -9,7 +9,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime, { defineTool, ToolAdmissionError } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool, orderedAdmission, ToolAdmissionError } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition, ToolExecutionInput, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 
 const TEST_MODEL_SELECTION = { provider: 'test', model: 'test' }
@@ -231,4 +231,76 @@ it('keeps an unfiltered step identical to the pre-policy selection', async () =>
   expect(h.declared(await h.resolve())).toEqual(before)
   dispose()
   expect(before).toEqual(['z', 'a', 'm'])
+})
+
+it('keeps registration order for every plain return, whatever order the policy lists names in', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b', 'c']) h.ctx.tools.register(h.tool(name))
+  expect(h.declared(await h.resolve())).toEqual(['a', 'b', 'c'])
+  h.ctx.tools.registerAdmissionPolicy(() => ['c', 'a', 'b'])
+  expect(h.declared(await h.resolve())).toEqual(['a', 'b', 'c'])
+})
+
+it('declares tools in the sequence an ordering policy returns and exposes it through every view', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b', 'c', 'd']) h.ctx.tools.register(h.tool(name))
+  h.ctx.tools.registerAdmissionPolicy(() => orderedAdmission(['c', 'a', 'd']))
+  const toolSet = await h.resolve()
+  expect(h.declared(toolSet)).toEqual(['c', 'a', 'd'])
+  expect(h.ctx.tools.definitions(h.agent, toolSet).map(definition => definition.name)).toEqual(['c', 'a', 'd'])
+  expect([...toolSet.view(h.agent).keys()]).toEqual(['c', 'a', 'd'])
+  expect((await h.execute('c', { toolSet })).isError).toBe(false)
+  expect(h.ctx.tools.schemas(h.agent).map(schema => schema.name)).toEqual(['a', 'b', 'c', 'd'])
+})
+
+it('lets the last ordering policy decide the sequence and keeps candidates in registration order for every policy', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b', 'c', 'd']) h.ctx.tools.register(h.tool(name))
+  const seen: string[] = []
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => { seen.push([...candidates.keys()].join('')); return orderedAdmission(['d', 'c', 'b']) })
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => { seen.push([...candidates.keys()].join('')); return orderedAdmission(['b', 'd', 'c']) })
+  expect(h.declared(await h.resolve())).toEqual(['b', 'd', 'c'])
+  expect(seen).toEqual(['abcd', 'bcd'])
+})
+
+it('keeps an earlier ordering when a later plain policy only removes, and ignores a plain policy before the ordering one', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b', 'c', 'd']) h.ctx.tools.register(h.tool(name))
+  const removeB = h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'b'))
+  const order = h.ctx.tools.registerAdmissionPolicy(() => orderedAdmission(['d', 'c', 'a']))
+  expect(h.declared(await h.resolve())).toEqual(['d', 'c', 'a'])
+  order()
+  removeB()
+  h.ctx.tools.registerAdmissionPolicy(() => orderedAdmission(['d', 'c', 'b', 'a']))
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'c'))
+  expect(h.declared(await h.resolve())).toEqual(['d', 'b', 'a'])
+})
+
+it('treats a duplicate name in an ordered decision as its first position', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b']) h.ctx.tools.register(h.tool(name))
+  h.ctx.tools.registerAdmissionPolicy(() => orderedAdmission(['b', 'a', 'b']))
+  expect(h.declared(await h.resolve())).toEqual(['b', 'a'])
+})
+
+it('fails step preparation when an ordering policy names a tool it was not given and cannot add or replace definitions', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  h.ctx.tools.register(h.tool('b'), { when: () => false })
+  const dispose = h.ctx.tools.registerAdmissionPolicy(() => orderedAdmission(['b', 'a']))
+  const failure = await h.resolve().then(() => undefined, (error: unknown) => error)
+  expect(failure).toBeInstanceOf(ToolAdmissionError)
+  expect(((failure as ToolAdmissionError).cause as Error).message).toContain('"b"')
+  dispose()
+
+  const original = h.tool('a')
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => {
+    const copy = candidates as Map<string, ToolDefinition>
+    copy.set('forged', h.tool('forged'))
+    copy.set('a', original)
+    return orderedAdmission(['a'])
+  })
+  const toolSet = await h.resolve()
+  expect(h.declared(toolSet)).toEqual(['a'])
+  expect(h.ctx.tools.get('a', h.agent, toolSet)).not.toBe(original)
 })

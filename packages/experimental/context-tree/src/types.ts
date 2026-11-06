@@ -6,6 +6,7 @@
  * @module @deepseek-ai/dsh-experimental-context-tree/types
  */
 import type { ContextSourceKind } from '@deepseek-ai/dsh-experimental-context-index/types'
+import type { ToolOrigin } from '@deepseek-ai/dsh-tools'
 
 /**
  * Where a registration or file comes from. `global` is user-level or harness-level
@@ -98,6 +99,8 @@ export interface ContextLoadResult {
 export interface ToolFacts {
   readonly name: string
   readonly description: string
+  /** Origin the registering producer recorded; `unknown` when it recorded none. */
+  readonly origin: ToolOrigin
 }
 
 /** Where one tool appears in the tree. */

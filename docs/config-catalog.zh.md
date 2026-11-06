@@ -1165,7 +1165,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-context-tree`
 
 - `inject`: `tools` · `compaction` · `contextIndex` · `sessionProjections` · `workingDirectory`
-- `source`: [`packages/experimental/context-tree/src/types.ts:179`](../packages/experimental/context-tree/src/types.ts)
+- `source`: [`packages/experimental/context-tree/src/types.ts:182`](../packages/experimental/context-tree/src/types.ts)
 
 ```ts config-catalog
 /**
@@ -2559,7 +2559,7 @@ export interface LspLocalServerConfig {
 ## `@deepseek-ai/dsh-mcp-client`
 
 - `inject`: `tools`
-- `source`: [`packages/mcp/mcp-client/src/index.ts:104`](../packages/mcp/mcp-client/src/index.ts)
+- `source`: [`packages/mcp/mcp-client/src/index.ts:121`](../packages/mcp/mcp-client/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -2587,6 +2587,13 @@ export interface StdioConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Where this server's configuration comes from: `global` for user or harness configuration
+   * that applies in every workspace (the default for a `cordis.yml` row), `project` for a server
+   * the current workspace contributes. Recorded on every tool registration; a programmatic
+   * config that omits it registers its tools with `unknown` origin.
+   */
+  origin?: McpOrigin
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
@@ -2611,11 +2618,21 @@ export interface StreamableHttpConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Where this server's configuration comes from: `global` for user or harness configuration
+   * that applies in every workspace (the default for a `cordis.yml` row), `project` for a server
+   * the current workspace contributes. Recorded on every tool registration; a programmatic
+   * config that omits it registers its tools with `unknown` origin.
+   */
+  origin?: McpOrigin
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
 }
+
+/** Where an MCP server's configuration comes from, as a producer states it. */
+export type McpOrigin = 'global' | 'project'
 
 /** Automatic reconnect policy for one MCP server connection. */
 export interface ReconnectConfig {

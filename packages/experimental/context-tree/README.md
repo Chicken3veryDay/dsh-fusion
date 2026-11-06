@@ -32,9 +32,9 @@ Mount `@deepseek-ai/dsh-experimental-context-index`, then this package (default 
 |---|---|---|
 | `Instructions` | sections of the user-global instruction files | sections of the project instruction files |
 | `Sources` | empty; no index source is global documentation | Markdown under the project documentation roots |
-| `Tools` | registered tools without a project origin | tools placed under `Project` by a hint or assigner |
+| `Tools` | tools registered with `global` or no recorded origin | tools registered with `project` origin, or placed under `Project` by a hint or assigner |
 
-The origin comes from where a file or registration is from, never from its name. Files take their origin from the context index source. A registered tool carries no recoverable origin, so every tool is placed under `Global` unless a hint or assigner says otherwise; `unresolvedToolOrigins` lists them. Tool groups come from `registerToolGroup` hints, else from the tool name: `mcp__<server>__*` becomes group `mcp-<server>`, a prefix before the first `_` shared by at least two tools becomes that group, and the rest go to `other`.
+The origin comes from where a file or registration is from, never from its name. Files take their origin from the context index source. A registered tool takes its origin from the registration (`ctx.tools.originOf`), which the producer that reads the configuration layer records: an MCP server with `origin: project` or an ACP session server places its tools under `Project`, and `origin: global` places them under `Global`. A hint or assigner overrides it. A tool whose registration recorded no origin reads as `unknown`, stays under `Global`, and is listed by `unresolvedToolOrigins`. Tool groups come from `registerToolGroup` hints, else from the tool name: `mcp__<server>__*` becomes group `mcp-<server>`, a prefix before the first `_` shared by at least two tools becomes that group, and the rest go to `other`.
 
 A path is the node's segments joined by `/`, as `context_browse` prints it, for example `Tools/Global/probe`. A `%` or `/` inside a segment, such as the `/` in `$DSH_HOME/AGENTS.md`, is written `%25` or `%2F`.
 
@@ -89,7 +89,7 @@ The package adds no event type. It uses the existing `user/message` event with t
 - [`src/index.ts`](src/index.ts) is the service: the admission policy, the pre-step catalog hook, revocable sources, browse, and load.
 - [`src/tools.ts`](src/tools.ts) registers the two model tools.
 
-Tool admission removes tools from a request. It keeps `baseTools` and every tool the projection reports active. A hidden tool that a model still calls fails at dispatch as unknown. Admission for a step runs after the step claims its inbox and before the claimed messages are logged, so the projection also follows the durable inbox splice: an activation counts from the moment it is queued, through the claim, until the logged message takes over. This makes the tools callable on the very next request without a change to the agent loop.
+Tool admission removes tools from a request and orders the rest. It keeps `baseTools` in registration order, then every tool the projection reports active in activation order. The activation order is derived from the logged activation messages, so the declarations stay reconstructable from the session log. A hidden tool that a model still calls fails at dispatch as unknown. Admission for a step runs after the step claims its inbox and before the claimed messages are logged, so the projection also follows the durable inbox splice: an activation counts from the moment it is queued, through the claim, until the logged message takes over. This makes the tools callable on the very next request without a change to the agent loop.
 
 Before each step the service renders the catalog and, when its digest differs from the projected one, appends a catalog message. After compaction removed the earlier catalog, the new one says it replaces any earlier listing.
 
@@ -108,7 +108,7 @@ The two schemas add a fixed cost. Every other tool schema is removed until loade
 
 #### KV Cache effect
 
-Tool declarations sit in the request prefix, so removing hidden tools shortens it once. An activation appends one message; the tool then returns to its registration position among the declared tools, so the request prefix changes from that position on, because admission can only remove tools and cannot reorder them. Activations stay until compaction and several loads in one step form one change. Compaction replaces earlier tokens anyway.
+Tool declarations sit in the request prefix, so removing hidden tools shortens it once. An activation appends one message and declares the tool after the base tools and earlier activations, so the declarations before it are unchanged and only the new tail is uncached. Activations stay until compaction and several loads in one step form one change, appended in the order the loads were logged. Compaction replaces earlier tokens anyway.
 
 ### Tree catalog
 
@@ -140,9 +140,8 @@ Append-only growth until compaction, which replaces earlier request tokens as it
 
 ## Known Limitations and Deferred Work
 
-- **No tool origin** — the registry records no package or project for a tool, so every tool without a hint or assigner is placed under `Tools/Global`; `Tools/Project` is empty unless a consumer registers hints.
+- **Tool origin depends on the producer** — only producers that record an origin place tools under `Tools/Project` (`dsh-mcp-client` and the ACP session servers do). Other registrations read as `unknown`, stay under `Tools/Global`, and appear in `unresolvedToolOrigins` until their producer records one.
 - **Skills are not in the tree** — `skill` stays a base tool.
-- **Registration order** — an activated tool is declared at its registration position, so loading a tool can change the cache from that position on. Reordering needs a core change.
 - **Compaction request** — the request that compacts still declares activated tools; declarations drop on the next step. Fixing it needs the tool set to resolve after the compaction pre-step.
 - **Later compactions** — a second compaction summarizes the first checkpoint, so earlier revocation stubs fold into the summary.
 - **Duplicate grants** — a section loaded twice before its first grant is logged is granted twice.

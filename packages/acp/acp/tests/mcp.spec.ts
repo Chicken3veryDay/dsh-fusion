@@ -41,6 +41,7 @@ describe('ACP MCP declaration mapping', () => {
       env: { TOKEN: 'secret' },
       cwd: process.cwd(),
       failOnStartupError: true,
+      origin: 'project',
     })
     expect(configs[0]?.serverName).toMatch(/^Fancy_server_[0-9a-f]{8}$/)
     expect(configs[1]).toMatchObject({
@@ -48,6 +49,7 @@ describe('ACP MCP declaration mapping', () => {
       url: 'https://example.test/mcp',
       headers: { Authorization: 'Bearer token' },
       failOnStartupError: true,
+      origin: 'project',
     })
     expect(configs[1]?.serverName).toMatch(/^server_[0-9a-f]{8}$/)
   })

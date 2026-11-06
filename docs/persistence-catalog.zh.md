@@ -4344,7 +4344,7 @@ SHA-256: `b52f215a6cd691058a3413c12f161fa3b563a2f4895adb3df6f744ec4b0a6ef1`
 
 SHA-256: `a921288d83bbbdcc3411ab6047ea3b9c7f9b20605c4393e097daf2659b895a4d`
 
-来源：[`packages/experimental/context-tree/src/types.ts:150`](../packages/experimental/context-tree/src/types.ts)
+来源：[`packages/experimental/context-tree/src/types.ts:153`](../packages/experimental/context-tree/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -4365,7 +4365,7 @@ SHA-256: `a921288d83bbbdcc3411ab6047ea3b9c7f9b20605c4393e097daf2659b895a4d`
 
 SHA-256: `af40a502e21641afb7330512f767c5e9d9f6b4ab32a4ac152e686480f963a77d`
 
-来源：[`packages/experimental/context-tree/src/types.ts:164`](../packages/experimental/context-tree/src/types.ts)
+来源：[`packages/experimental/context-tree/src/types.ts:167`](../packages/experimental/context-tree/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -4385,7 +4385,7 @@ SHA-256: `af40a502e21641afb7330512f767c5e9d9f6b4ab32a4ac152e686480f963a77d`
 
 SHA-256: `8dfd3fd79b472198b13164bc4eb61b24b52c358b987267e3c386b94e0b95afea`
 
-来源：[`packages/experimental/context-tree/src/types.ts:132`](../packages/experimental/context-tree/src/types.ts)
+来源：[`packages/experimental/context-tree/src/types.ts:135`](../packages/experimental/context-tree/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7174,7 +7174,7 @@ SHA-256: `43e311235aa537df1bacdd92d144df8a952337a76e9ac892cdf670f1a797bad8`
 
 SHA-256: `3cfc3a56502da1f8c6153c2c56657bab4b749056968634dd0991d325ec1c919f`
 
-来源：[`packages/core/tools/src/contracts.ts:409`](../packages/core/tools/src/contracts.ts)
+来源：[`packages/core/tools/src/contracts.ts:446`](../packages/core/tools/src/contracts.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

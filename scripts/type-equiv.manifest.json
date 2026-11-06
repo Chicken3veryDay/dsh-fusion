@@ -878,7 +878,22 @@
     },
     {
       "doc": "docs/subsystems/tools.md",
+      "symbol": "ToolAdmissionDecision",
+      "source": "packages/core/tools/src/contracts.ts"
+    },
+    {
+      "doc": "docs/subsystems/tools.md",
       "symbol": "ToolAdmissionPolicy",
+      "source": "packages/core/tools/src/contracts.ts"
+    },
+    {
+      "doc": "docs/subsystems/tools.md",
+      "symbol": "ToolOrigin",
+      "source": "packages/core/tools/src/contracts.ts"
+    },
+    {
+      "doc": "docs/subsystems/tools.md",
+      "symbol": "OrderedAdmission",
       "source": "packages/core/tools/src/contracts.ts"
     },
     {

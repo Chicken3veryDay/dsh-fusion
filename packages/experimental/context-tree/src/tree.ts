@@ -48,7 +48,7 @@ export interface TreeInput {
 /** The built tree. */
 export interface ContextTree {
   readonly root: TreeNode
-  /** Tools placed under Global only because no assigner knew their origin, in registration order. */
+  /** Tools placed under Global only because neither an assigner nor the registry recorded their origin, in registration order. */
   readonly unresolvedOrigin: readonly string[]
 }
 
@@ -182,16 +182,20 @@ function placeTools(input: TreeInput): { groups: Record<ContextOrigin, Map<strin
     if (placement === undefined) defaults.push(tool)
     else placed.set(tool.name, placement)
   }
-  const defaultKeys = defaults.map(tool => defaultGroupKey(tool.name))
-  const shared = (key: string): boolean => defaultKeys.indexOf(key) !== defaultKeys.lastIndexOf(key)
+  // A recorded registration origin places a tool; `unknown` stays under Global and is reported.
+  const defaultOrigin = (tool: ToolFacts): ContextOrigin => (tool.origin === 'project' ? 'project' : 'global')
+  const defaultKeys: Record<ContextOrigin, string[]> = { global: [], project: [] }
+  for (const tool of defaults) defaultKeys[defaultOrigin(tool)].push(defaultGroupKey(tool.name))
+  const shared = (origin: ContextOrigin, key: string): boolean => defaultKeys[origin].indexOf(key) !== defaultKeys[origin].lastIndexOf(key)
   const unresolved: string[] = []
   for (const tool of input.tools) {
     if (input.baseTools.has(tool.name)) continue
     let placement = placed.get(tool.name)
     if (placement === undefined) {
+      const origin = defaultOrigin(tool)
       const key = defaultGroupKey(tool.name)
-      placement = { origin: 'global', group: shared(key) ? key : 'other' }
-      unresolved.push(tool.name)
+      placement = { origin, group: shared(origin, key) ? key : 'other' }
+      if (tool.origin === 'unknown') unresolved.push(tool.name)
     }
     const byGroup = groups[placement.origin]
     const draft = byGroup.get(placement.group)
@@ -222,7 +226,7 @@ function toolNodes(origin: ContextOrigin, drafts: ReadonlyMap<string, GroupDraft
 /**
  * Build the tree for one agent.
  * @param input - index sections and sources, registered tools, base tools, and assigners.
- * @returns the root node and the tools whose origin no assigner recorded.
+ * @returns the root node and the tools whose origin neither an assigner nor the registry recorded.
  */
 export function buildTree(input: TreeInput): ContextTree {
   const { groups, unresolved } = placeTools(input)

@@ -936,7 +936,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async unresolvedToolOrigins(agent: Agent, signal?: AbortSignal): Promise<readonly string[]>',
-        description: 'Tools shown under Global only because no assigner recorded their origin.',
+        description: 'Tools shown under Global only because neither an assigner nor the registry recorded their origin.',
         parameters: [{ name: 'agent', description: 'the agent whose tool view applies.' }, { name: 'signal', description: 'cancellation.' }],
         returns: 'their names, in registration order.',
       },
@@ -4505,7 +4505,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: 'register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void',
         description: 'Register globally or in the calling agent scope. Scoped tools shadow globals; duplicates within one layer and the reserved `run_code` name fail.',
-        parameters: [{ name: 'definition', description: 'tool schema, execution, and optional finalization/presentation callbacks.' }, { name: 'options', description: 'optional step-time activation condition.' }],
+        parameters: [{ name: 'definition', description: 'tool schema, execution, and optional finalization/presentation callbacks.' }, { name: 'options', description: 'optional step-time activation condition and the producer-recorded origin; a registration without an origin reads back as `unknown`.' }],
         returns: 'the exact disposer that unregisters the tool.',
       },
       {
@@ -4516,8 +4516,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void',
-        description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls. With no policy registered, admission is unchanged.',
-        parameters: [{ name: 'policy', description: 'removal-only decision evaluated once per step.' }],
+        description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that returns orderedAdmission also sets the declaration sequence: the last such policy\'s sequence orders the surviving tools, which is the order of declarations and of `definitions()`. Plain returns never reorder, so with no ordering policy the admitted set keeps registration order. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls. With no policy registered, admission is unchanged.',
+        parameters: [{ name: 'policy', description: 'removal-only decision, optionally ordered, evaluated once per step.' }],
         returns: 'the exact disposer; later steps see the tools again.',
       },
       {
@@ -4525,6 +4525,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Look up a tool as one scope sees it (scoped shadows global; a restricted-away global reads as absent). Presenters pass the calling agent so the rendered card matches the definition that actually executed.',
         parameters: [{ name: 'name', description: 'the tool name as registered.' }, { name: 'scope', description: 'the viewing scope (the agent); omitted = the global view.' }, { name: 'toolSet', description: 'step admission; omit only to inspect registered definitions.' }],
         returns: 'the definition the scope resolves, or undefined when none is visible.',
+      },
+      {
+        signature: 'originOf(name: string, scope?: ScopeKey): ToolOrigin',
+        description: 'Read where a visible registration came from.',
+        parameters: [{ name: 'name', description: 'the tool name as registered.' }, { name: 'scope', description: 'the viewing scope (the agent); omitted = the global view.' }],
+        returns: 'the origin the producer recorded; `unknown` when it recorded none or no registration of that name is visible.',
       },
       {
         signature: 'executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined',
@@ -8313,6 +8319,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type OptionalSessionSeq = SessionSeq | null;',
   },
   {
+    name: 'OrderedAdmission',
+    declaration: 'export interface OrderedAdmission {\n    readonly ordered: readonly string[];\n}',
+  },
+  {
     name: 'OTelEventRecord',
     declaration: 'export interface OTelEventRecord {\n    eventName: string;\n    body: string;\n    timestamp: number;\n    severityNumber?: SeverityNumber;\n    attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>;\n}',
   },
@@ -10733,8 +10743,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolAdmissionContext extends ToolActivationContext {\n    readonly candidates: ReadonlyMap<string, ToolDefinition>;\n}',
   },
   {
+    name: 'ToolAdmissionDecision',
+    declaration: 'export type ToolAdmissionDecision = Iterable<string> | OrderedAdmission;',
+  },
+  {
     name: 'ToolAdmissionPolicy',
-    declaration: 'export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>;',
+    declaration: 'export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => ToolAdmissionDecision | Promise<ToolAdmissionDecision>;',
   },
   {
     name: 'ToolBatchInput',
@@ -10806,7 +10820,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolFacts',
-    declaration: 'export interface ToolFacts {\n    readonly name: string;\n    readonly description: string;\n}',
+    declaration: 'export interface ToolFacts {\n    readonly name: string;\n    readonly description: string;\n    readonly origin: ToolOrigin;\n}',
   },
   {
     name: 'ToolFailure',
@@ -10837,6 +10851,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ToolModelInput = Pick<ToolProviderResult, \'schemas\' | \'knownNames\'>;',
   },
   {
+    name: 'ToolOrigin',
+    declaration: 'export type ToolOrigin = \'global\' | \'project\' | \'unknown\';',
+  },
+  {
     name: 'ToolOutputDefinition',
     declaration: 'export interface ToolOutputDefinition {\n    readonly schema: JsonSchemaNode;\n    render(args: unknown, value: JsonValue): ContentBlock[];\n    presentationMeta?(args: unknown, value: JsonValue): JsonValue;\n}',
   },
@@ -10858,7 +10876,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolRegistrationOptions',
-    declaration: 'export interface ToolRegistrationOptions {\n    readonly when?: (context: ToolActivationContext) => boolean | Promise<boolean>;\n}',
+    declaration: 'export interface ToolRegistrationOptions {\n    readonly origin?: ToolOrigin;\n    readonly when?: (context: ToolActivationContext) => boolean | Promise<boolean>;\n}',
   },
   {
     name: 'ToolRemovalBlock',
@@ -10894,7 +10912,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',

@@ -48,6 +48,9 @@ const activeServerNames = new WeakMap<object, Set<string>>()
 
 // ---- Config ----
 
+/** Where an MCP server's configuration comes from, as a producer states it. */
+export type McpOrigin = 'global' | 'project'
+
 /** Config for connecting to an MCP server via a spawned child process over stdio. */
 export interface StdioConfig {
   /** Selects child-process stdio transport. */
@@ -70,6 +73,13 @@ export interface StdioConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Where this server's configuration comes from: `global` for user or harness configuration
+   * that applies in every workspace (the default for a `cordis.yml` row), `project` for a server
+   * the current workspace contributes. Recorded on every tool registration; a programmatic
+   * config that omits it registers its tools with `unknown` origin.
+   */
+  origin?: McpOrigin
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
@@ -94,6 +104,13 @@ export interface StreamableHttpConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /**
+   * Where this server's configuration comes from: `global` for user or harness configuration
+   * that applies in every workspace (the default for a `cordis.yml` row), `project` for a server
+   * the current workspace contributes. Recorded on every tool registration; a programmatic
+   * config that omits it registers its tools with `unknown` origin.
+   */
+  origin?: McpOrigin
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
@@ -126,6 +143,7 @@ export const Config = z.union([
     cwd: z.string().default(''),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    origin: z.union([z.const('global'), z.const('project')]).default('global'),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
   }),
@@ -136,6 +154,7 @@ export const Config = z.union([
     headers: z.dict(String).default({}),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    origin: z.union([z.const('global'), z.const('project')]).default('global'),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
   }),

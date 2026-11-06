@@ -194,8 +194,23 @@ interface ToolActivationContext {
 ```
 
 ```ts type-equiv
+/**
+ * Where a registration comes from. `global` is user or harness configuration that applies in
+ * every workspace; `project` is configuration the current workspace contributes; `unknown` is a
+ * registration whose producer recorded neither. Consumers must treat `unknown` as unrecorded, not
+ * as a default of either side.
+ */
+type ToolOrigin = 'global' | 'project' | 'unknown'
+```
+
+```ts type-equiv
 /** Lifecycle-owned conditions for a registered tool. */
 interface ToolRegistrationOptions {
+  /**
+   * Where the registration comes from, as known by the producer that reads the configuration
+   * layer. Omission records `unknown`; names are never used to infer an origin.
+   */
+  readonly origin?: ToolOrigin
   /**
    * Decide whether the step's requests may call the tool. Omission enables
    * it. False excludes it from both declarations and dispatch; rejection fails
@@ -223,7 +238,7 @@ interface ResolvedToolSet {
 
 ## 准入策略 — 按步骤隐藏已准入的工具
 
-`ctx.tools.registerAdmissionPolicy(policy)` 通过 `ctx.effect()` 注册只能移除的策略并返回其 disposer。`ctx.tools.resolve()` 在所有 `when` 条件完成后运行策略：先运行全局策略，再运行通过 agent 作用域链从最远祖先开始注册的策略，每层按注册顺序。每个策略接收激活输入以及 `candidates`（前面策略保留下来的已准入名称与定义的副本），返回要保留的名称。结果是交集；准入顺序仍是注册顺序，因此保留不断增长集合的策略可以保持声明前缀。策略抛错、拒绝或返回 `candidates` 之外的名称，会以 `ToolAdmissionError`（`TOOL_ADMISSION_FAILED`）使步骤准备失败；取消优先，且不发布任何内容。dispose 注册后，下一步恢复可见性。没有注册策略时，准入结果恰好是 `when` 的结果。
+`ctx.tools.registerAdmissionPolicy(policy)` 通过 `ctx.effect()` 注册只能移除的策略并返回其 disposer。`ctx.tools.resolve()` 在所有 `when` 条件完成后运行策略：先运行全局策略，再运行通过 agent 作用域链从最远祖先开始注册的策略，每层按注册顺序。每个策略接收激活输入以及 `candidates`（前面策略保留下来的已准入名称与定义的副本），返回要保留的名称。结果是交集。普通返回从不重排，因此准入顺序仍是注册顺序；返回 `orderedAdmission(names)`（`names: Iterable<string>`，返回 `OrderedAdmission`；重复名称保留第一次出现的位置）的策略还会设定声明顺序，按组合顺序最后一个这样的策略决定该顺序，在后续策略之后仍保留的每个名称都沿用其中的位置。没有排序策略时，顺序不变。该顺序决定本步骤声明、`definitions()` 和 `schemas()` 的顺序，因此必须能由已记录事件推导，才能保证进入模型的输入可重建。策略抛错、拒绝或返回 `candidates` 之外的名称，会以 `ToolAdmissionError`（`TOOL_ADMISSION_FAILED`）使步骤准备失败；取消优先，且不发布任何内容。dispose 注册后，下一步恢复可见性。没有注册策略时，准入结果恰好是 `when` 的结果。
 
 策略在 `resolve()` 内部做出决定，所得的 `ResolvedToolSet` 是声明、执行器分区、原生批次和嵌套 PTC 调用唯一的准入来源。因此无论由模型还是 PTC 程序调用，被隐藏的工具都会在策略流水线运行之前以 `UNKNOWN_TOOL` 分发失败。
 
@@ -233,7 +248,8 @@ interface ToolAdmissionContext extends ToolActivationContext {
   /**
    * Tools that remain admitted for this step: every visible registration whose
    * own `when` passed and that earlier policies kept, in stable registration
-   * order. The map is a copy; changing it affects nothing.
+   * order (earlier policies' ordering is applied only after every policy has run).
+   * The map is a copy; changing it affects nothing.
    */
   readonly candidates: ReadonlyMap<string, ToolDefinition>
 }
@@ -241,15 +257,33 @@ interface ToolAdmissionContext extends ToolActivationContext {
 
 ```ts type-equiv
 /**
- * Hide registered tools from one agent step. A policy runs after each tool's own
- * `when` condition and may only remove: it returns the names of
- * {@link ToolAdmissionContext.candidates} to keep, in any order. Returning a name
- * that is not a candidate fails step preparation. Policies must observe
- * cancellation and must not change registrations or start tool work.
- * @param context - preparing agent, captured model selection, cancellation, and candidates.
- * @returns the candidate names to keep for this step.
+ * A policy's kept names together with the sequence the step should declare them in. Build it
+ * with {@link orderedAdmission}; a plain iterable keeps registration order.
  */
-type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>
+interface OrderedAdmission {
+  /** Kept candidate names in declaration order; duplicates keep their first position. */
+  readonly ordered: readonly string[]
+}
+```
+
+```ts type-equiv
+/** What a {@link ToolAdmissionPolicy} returns: kept names, optionally ordered. */
+type ToolAdmissionDecision = Iterable<string> | OrderedAdmission
+```
+
+```ts type-equiv
+/**
+ * Hide registered tools from one agent step, optionally ordering the rest. A policy runs after
+ * each tool's own `when` condition and may only remove: it returns the names of
+ * {@link ToolAdmissionContext.candidates} to keep. A plain iterable keeps the candidates'
+ * registration order whatever order it lists them in; an {@link orderedAdmission} result also
+ * sets the declaration sequence. Returning a name that is not a candidate fails step
+ * preparation. Policies must observe cancellation and must not change registrations or start
+ * tool work.
+ * @param context - preparing agent, captured model selection, cancellation, and candidates.
+ * @returns the candidate names to keep for this step, optionally ordered.
+ */
+type ToolAdmissionPolicy = (context: ToolAdmissionContext) => ToolAdmissionDecision | Promise<ToolAdmissionDecision>
 ```
 
 ## 执行器与原始调用批次
@@ -676,7 +710,8 @@ Concrete tool registry and scoped executor dispatcher.
  * Register globally or in the calling agent scope. Scoped tools shadow
  * globals; duplicates within one layer and the reserved `run_code` name fail.
  * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
- * @param options - optional step-time activation condition.
+ * @param options - optional step-time activation condition and the producer-recorded origin;
+ * a registration without an origin reads back as `unknown`.
  * @returns the exact disposer that unregisters the tool.
  */
 register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void
@@ -695,11 +730,16 @@ restrict(filter: ToolRestriction): () => void
  * agents on each step, after every tool's own `when` condition. Policies only
  * remove tools, compose by intersection (global policies first, then the
  * scope chain from the farthest ancestor, each layer in registration order),
- * and see the candidates earlier policies kept. A policy that throws or names
- * a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden
- * tools are absent from declarations and rejected at dispatch, including
- * nested PTC calls. With no policy registered, admission is unchanged.
- * @param policy - removal-only decision evaluated once per step.
+ * and see the candidates earlier policies kept. A policy that returns
+ * {@link orderedAdmission} also sets the declaration sequence: the last such
+ * policy's sequence orders the surviving tools, which is the order of
+ * declarations and of `definitions()`. Plain returns never reorder, so with no
+ * ordering policy the admitted set keeps registration order. A policy that
+ * throws or names a non-candidate fails step preparation as
+ * `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and
+ * rejected at dispatch, including nested PTC calls. With no policy
+ * registered, admission is unchanged.
+ * @param policy - removal-only decision, optionally ordered, evaluated once per step.
  * @returns the exact disposer; later steps see the tools again.
  */
 registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void
@@ -715,6 +755,14 @@ registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void
  * @returns the definition the scope resolves, or undefined when none is visible.
  */
 get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
+
+/**
+ * Read where a visible registration came from.
+ * @param name - the tool name as registered.
+ * @param scope - the viewing scope (the agent); omitted = the global view.
+ * @returns the origin the producer recorded; `unknown` when it recorded none or no registration of that name is visible.
+ */
+originOf(name: string, scope?: ScopeKey): ToolOrigin
 
 /**
  * Resolve the definition a call may execute. With a step's admitted set, the

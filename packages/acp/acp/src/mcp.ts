@@ -19,6 +19,7 @@ export class AcpMcpConfigError extends Error {
 
 /**
  * Validate and mount one session's complete standard MCP server list before Agent publication.
+ * The client supplies these servers for its workspace, so their tools register with `project` origin.
  * @param agentCtx - unpublished Agent scope that owns the MCP clients and tools.
  * @param servers - stable ACP stdio or HTTP server declarations.
  * @param sessionCwd - canonical primary workspace used by stdio servers.
@@ -54,6 +55,7 @@ function resolveMcpConfigs(servers: readonly McpServer[], sessionCwd: string): M
         env,
         cwd: sessionCwd,
         failOnStartupError: true,
+        origin: 'project',
       }))
       return { ...config, env }
     }
@@ -66,6 +68,7 @@ function resolveMcpConfigs(servers: readonly McpServer[], sessionCwd: string): M
         url: server.url,
         headers,
         failOnStartupError: true,
+        origin: 'project',
       }))
       return { ...config, headers }
     }

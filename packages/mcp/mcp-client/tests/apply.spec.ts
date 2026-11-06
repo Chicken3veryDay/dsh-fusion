@@ -79,6 +79,7 @@ const stdioConfig: Config = {
   cwd: '',
   toolCallTimeoutMs: 60_000,
   failOnStartupError: false,
+  origin: 'global',
 }
 
 // ---- Tests ----
@@ -191,6 +192,27 @@ describe('apply (plugin lifecycle)', () => {
     expect(mockSetNotificationHandler).toHaveBeenCalled()
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
     expect(ctx.tools.get('remote')).toBeUndefined()
+  })
+
+  it('records the configured origin on every registered tool, defaulting a cordis.yml row to global', async () => {
+    const parsed = ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo' })
+    expect(parsed.origin).toBe('global')
+    expect(() => ConfigSchema({ transport: 'stdio', serverName: 'srv', command: 'echo', origin: 'unknown' } as never)).toThrow()
+
+    await apply(ctx, stdioConfig)
+    expect(ctx.tools.originOf('mcp__srv__remote')).toBe('global')
+    await ctx.fiber.dispose()
+
+    ctx = await mountRegistry()
+    await apply(ctx, { ...stdioConfig, origin: 'project' })
+    expect(ctx.tools.originOf('mcp__srv__remote')).toBe('project')
+    await ctx.fiber.dispose()
+
+    ctx = await mountRegistry()
+    await apply(ctx, {
+      transport: 'stdio', serverName: 'srv', command: 'echo', args: [], env: {}, cwd: '', toolCallTimeoutMs: 60_000, failOnStartupError: false,
+    })
+    expect(ctx.tools.originOf('mcp__srv__remote')).toBe('unknown')
   })
 
   it('keeps the Cordis plugin loading until initial discovery publishes its tools', async () => {

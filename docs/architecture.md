@@ -148,7 +148,7 @@ New behavior attaches to a documented extension point. Changing the loop itself 
 | Goal | Mechanism |
 |---|---|
 | Add a model provider | register its adapter on `ctx.llm` |
-| Add or hide a model-facing capability | register on `ctx.tools` (its schema joins prompt assembly); `registerAdmissionPolicy()` hides tools per step |
+| Add or hide a model-facing capability | register on `ctx.tools` (its schema joins prompt assembly); `registerAdmissionPolicy()` hides or orders tools per step |
 | Give one session a different capability set | compose an agent preset; a service row there needs an `isolate` realm |
 | Add shell execution | register a `ctx.shell` backend; the local one spawns through `ctx.subprocess` |
 | Add persistent terminal execution | register a `ctx.terminals` backend plus `dsh-tool-terminal` |

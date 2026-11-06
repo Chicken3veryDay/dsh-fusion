@@ -111,8 +111,21 @@ export interface ToolActivationContext {
   readonly signal: AbortSignal
 }
 
+/**
+ * Where a registration comes from. `global` is user or harness configuration that applies in
+ * every workspace; `project` is configuration the current workspace contributes; `unknown` is a
+ * registration whose producer recorded neither. Consumers must treat `unknown` as unrecorded, not
+ * as a default of either side.
+ */
+export type ToolOrigin = 'global' | 'project' | 'unknown'
+
 /** Lifecycle-owned conditions for a registered tool. */
 export interface ToolRegistrationOptions {
+  /**
+   * Where the registration comes from, as known by the producer that reads the configuration
+   * layer. Omission records `unknown`; names are never used to infer an origin.
+   */
+  readonly origin?: ToolOrigin
   /**
    * Decide whether the step's requests may call the tool. Omission enables
    * it. False excludes it from both declarations and dispatch; rejection fails
@@ -128,21 +141,45 @@ export interface ToolAdmissionContext extends ToolActivationContext {
   /**
    * Tools that remain admitted for this step: every visible registration whose
    * own `when` passed and that earlier policies kept, in stable registration
-   * order. The map is a copy; changing it affects nothing.
+   * order (earlier policies' ordering is applied only after every policy has run).
+   * The map is a copy; changing it affects nothing.
    */
   readonly candidates: ReadonlyMap<string, ToolDefinition>
 }
 
 /**
- * Hide registered tools from one agent step. A policy runs after each tool's own
- * `when` condition and may only remove: it returns the names of
- * {@link ToolAdmissionContext.candidates} to keep, in any order. Returning a name
- * that is not a candidate fails step preparation. Policies must observe
- * cancellation and must not change registrations or start tool work.
- * @param context - preparing agent, captured model selection, cancellation, and candidates.
- * @returns the candidate names to keep for this step.
+ * A policy's kept names together with the sequence the step should declare them in. Build it
+ * with {@link orderedAdmission}; a plain iterable keeps registration order.
  */
-export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>
+export interface OrderedAdmission {
+  /** Kept candidate names in declaration order; duplicates keep their first position. */
+  readonly ordered: readonly string[]
+}
+
+/**
+ * Keep these candidates and declare them in this sequence.
+ * @param names - candidate names to keep, first declared first.
+ * @returns the decision a {@link ToolAdmissionPolicy} returns to order the admitted set.
+ */
+export function orderedAdmission(names: Iterable<string>): OrderedAdmission {
+  return { ordered: [...new Set(names)] }
+}
+
+/** What a {@link ToolAdmissionPolicy} returns: kept names, optionally ordered. */
+export type ToolAdmissionDecision = Iterable<string> | OrderedAdmission
+
+/**
+ * Hide registered tools from one agent step, optionally ordering the rest. A policy runs after
+ * each tool's own `when` condition and may only remove: it returns the names of
+ * {@link ToolAdmissionContext.candidates} to keep. A plain iterable keeps the candidates'
+ * registration order whatever order it lists them in; an {@link orderedAdmission} result also
+ * sets the declaration sequence. Returning a name that is not a candidate fails step
+ * preparation. Policies must observe cancellation and must not change registrations or start
+ * tool work.
+ * @param context - preparing agent, captured model selection, cancellation, and candidates.
+ * @returns the candidate names to keep for this step, optionally ordered.
+ */
+export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => ToolAdmissionDecision | Promise<ToolAdmissionDecision>
 
 /** One step's admitted registrations, also used by nested PTC calls. */
 export interface ResolvedToolSet {

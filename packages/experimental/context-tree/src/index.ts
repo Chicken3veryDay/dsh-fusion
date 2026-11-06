@@ -13,6 +13,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type z from '@deepseek-ai/schemastery'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
+import { orderedAdmission } from '@deepseek-ai/dsh-tools'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type { ContextSectionId, ContextSectionMeta } from '@deepseek-ai/dsh-experimental-context-index/types'
 import '@deepseek-ai/dsh-experimental-context-index'
@@ -104,8 +105,12 @@ export class ContextTreeService extends Service {
     this.ctx.compaction.registerRevocableSource('context-grant', grantStub)
     this.ctx.compaction.registerRevocableSource('context-activation', activationStub)
     this.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) => {
-      const active = activeToolNames(this.projection.stateOf(agent.session))
-      return [...candidates.keys()].filter(name => this.baseTools.has(name) || active.has(name))
+      // Base tools keep registration order and activated tools follow in activation order, so an
+      // activation appends to the declarations instead of shifting the ones before it.
+      const base = [...candidates.keys()].filter(name => this.baseTools.has(name))
+      const activated = [...activeToolNames(this.projection.stateOf(agent.session))]
+        .filter(name => candidates.has(name) && !this.baseTools.has(name))
+      return orderedAdmission([...base, ...activated])
     })
     this.ctx.on('agent/pre-step', async ({ agent, signal, step }, next): Promise<PreStepDecision> => {
       const decision = await next()
@@ -174,7 +179,7 @@ export class ContextTreeService extends Service {
   }
 
   /**
-   * Tools shown under Global only because no assigner recorded their origin.
+   * Tools shown under Global only because neither an assigner nor the registry recorded their origin.
    * @param agent - the agent whose tool view applies.
    * @param signal - cancellation.
    * @returns their names, in registration order.
@@ -329,7 +334,11 @@ export class ContextTreeService extends Service {
     return buildTree({
       sources: snapshot.sources,
       sections: snapshot.sections,
-      tools: this.ctx.tools.definitions(agent).map(definition => ({ name: definition.name, description: definition.description })),
+      tools: this.ctx.tools.definitions(agent).map(definition => ({
+        name: definition.name,
+        description: definition.description,
+        origin: this.ctx.tools.originOf(definition.name, agent),
+      })),
       baseTools: this.baseTools,
       assigners: [...this.assigners],
       maxSummaryBytes: this.config.maxSummaryBytes,

@@ -977,7 +977,7 @@ isBaseTool(name: string): boolean
 activeTools(agent: Agent): ReadonlySet<string>
 
 /**
- * Tools shown under Global only because no assigner recorded their origin.
+ * Tools shown under Global only because neither an assigner nor the registry recorded their origin.
  * @param agent - the agent whose tool view applies.
  * @param signal - cancellation.
  * @returns their names, in registration order.

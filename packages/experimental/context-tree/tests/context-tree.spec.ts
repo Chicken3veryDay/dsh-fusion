@@ -259,6 +259,31 @@ describe('placement from origin', () => {
     expect(await w.tree.unresolvedToolOrigins(w.agent)).toEqual(['mcp__github__list_issues', 'mcp__github__create_issue', 'lonely'])
   })
 
+  it('places tools by the origin their registration recorded and stops listing them as unresolved', async () => {
+    const w = await world()
+    w.ctx.tools.register(probeTool('ws_build', w.calls), { origin: 'project' })
+    w.ctx.tools.register(probeTool('ws_test', w.calls), { origin: 'project' })
+    w.ctx.tools.register(probeTool('user_notes', w.calls), { origin: 'global' })
+    w.ctx.tools.register(probeTool('global_a', w.calls), { origin: 'global' })
+    const project = await w.tree.browse(w.agent, { path: 'Tools/Project', depth: 2 })
+    expect(project.nodes.map(node => node.path)).toEqual(['Tools/Project/ws', 'Tools/Project/ws/ws_build', 'Tools/Project/ws/ws_test'])
+    const global = await w.tree.browse(w.agent, { path: 'Tools/Global', depth: 2 })
+    expect(global.nodes.map(node => node.path)).toContain('Tools/Global/other/user_notes')
+    expect(global.nodes.map(node => node.path)).not.toContain('Tools/Global/ws')
+    expect(await w.tree.unresolvedToolOrigins(w.agent)).toEqual(['mcp__github__list_issues', 'mcp__github__create_issue', 'deploy_run', 'deploy_status', 'lonely'])
+  })
+
+  it('lets a hint override the recorded origin and keeps an unrecorded origin under Global', async () => {
+    const w = await world()
+    w.ctx.tools.register(probeTool('ws_build', w.calls), { origin: 'project' })
+    w.tree.registerToolGroup({ names: ['ws_build'], origin: 'global', group: 'builders' })
+    const global = await w.tree.browse(w.agent, { path: 'Tools/Global/builders', depth: 1 })
+    expect(global.nodes.map(node => node.path)).toEqual(['Tools/Global/builders/ws_build'])
+    expect((await w.tree.browse(w.agent, { path: 'Tools/Project' })).nodes).toEqual([])
+    expect(await w.tree.unresolvedToolOrigins(w.agent)).not.toContain('ws_build')
+    expect(await w.tree.unresolvedToolOrigins(w.agent)).toContain('lonely')
+  })
+
   it('groups unhinted tools deterministically and never lists base tools', async () => {
     const w = await world()
     const all = await w.tree.browse(w.agent, { path: 'Tools', depth: 3 })
@@ -299,12 +324,12 @@ describe('tool admission', () => {
     expect(loaded.isError).toBe(false)
     expect(textOf(loaded)).toContain('Activated from Tools/Global/deploy: deploy_run, deploy_status')
     expect((await call(w, 'deploy_run', {}, first)).error?.info?.code).toBe('UNKNOWN_TOOL')
-    expect(await declared(w)).toEqual(['read', 'bash', 'deploy_run', 'deploy_status', 'context_browse', 'context_load'])
+    expect(await declared(w)).toEqual(['read', 'bash', 'context_browse', 'context_load', 'deploy_run', 'deploy_status'])
     expect((await call(w, 'deploy_run')).isError).toBe(false)
     expect(w.calls).toEqual(['deploy_run'])
   })
 
-  it('treats several loads in one step as one change and keeps registration order', async () => {
+  it('treats several loads in one step as one change and appends them in activation order', async () => {
     const w = await world()
     const first = await w.ctx.tools.resolve({ agent: w.agent, modelSelection: SELECTION, signal: SIGNAL })
     await Promise.all([
@@ -312,8 +337,29 @@ describe('tool admission', () => {
       call(w, 'context_load', { paths: ['Tools/Global/deploy', 'Tools/Global/other'] }, first),
     ])
     const names = await declared(w)
-    expect(names).toEqual(['read', 'bash', 'mcp__github__create_issue', 'deploy_run', 'deploy_status', 'lonely', 'context_browse', 'context_load'])
+    expect(names).toEqual(['read', 'bash', 'context_browse', 'context_load', 'mcp__github__create_issue', 'deploy_run', 'deploy_status', 'lonely'])
     expect([...w.tree.activeTools(w.agent)].sort()).toEqual(['deploy_run', 'deploy_status', 'lonely', 'mcp__github__create_issue'])
+  })
+
+  it('declares activated tools after the base set in activation order and leaves the earlier declarations byte-identical', async () => {
+    const w = await world()
+    const declarations = async (): Promise<string[]> => {
+      const toolSet = await w.ctx.tools.resolve({ agent: w.agent, modelSelection: SELECTION, signal: SIGNAL })
+      return w.ctx.tools.schemas(w.agent, toolSet).map(schema => JSON.stringify(schema))
+    }
+    const base = await declarations()
+    expect(base.map(entry => (JSON.parse(entry) as { name: string }).name)).toEqual(['read', 'bash', 'context_browse', 'context_load'])
+
+    await call(w, 'context_load', { paths: ['Tools/Global/deploy/deploy_status'] })
+    enterStep(w)
+    const first = await declarations()
+    expect(first.slice(0, base.length)).toEqual(base)
+
+    await call(w, 'context_load', { paths: ['Tools/Global/deploy/deploy_run'] })
+    enterStep(w)
+    const second = await declarations()
+    expect(second.slice(0, first.length)).toEqual(first)
+    expect(second.slice(base.length).map(entry => (JSON.parse(entry) as { name: string }).name)).toEqual(['deploy_status', 'deploy_run'])
   })
 
   it('keeps a tool admitted from the queue through the claim until the logged message takes over', async () => {
@@ -582,10 +628,10 @@ describe('tree shaping', () => {
   const shape = async (w: World, edit: (sources: readonly ContextSourceMeta[], sections: readonly ContextSectionMeta[]) => {
     sources: ContextSourceMeta[]
     sections: ContextSectionMeta[]
-  }, tools: { name: string; description: string }[] = []) => {
+  }, tools: { name: string; description: string; origin?: 'global' | 'project' | 'unknown' }[] = []) => {
     const snapshot = await w.ctx.contextIndex.snapshot({ workingDirectory: w.project })
     const shaped = edit(snapshot.sources, snapshot.sections)
-    const tree = buildTree({ ...shaped, tools, baseTools: new Set(), assigners: [], maxSummaryBytes: 160 })
+    const tree = buildTree({ ...shaped, tools: tools.map(tool => ({ ...tool, origin: tool.origin ?? 'unknown' })), baseTools: new Set(), assigners: [], maxSummaryBytes: 160 })
     return (path: string[]) => {
       const found = findNode(tree, path)
       return found === undefined ? undefined : viewOf(found)

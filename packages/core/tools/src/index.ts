@@ -12,7 +12,7 @@ import { assertSupportedJsonSchema } from './json-schema.ts'
 import { RUN_CODE_NAME, ToolActivationError, ToolAdmissionError } from './contracts.ts'
 import type {
   ToolDefinition, ToolRestriction, ToolExecution, ToolGuard,
-  ResolvedToolSet, ToolActivationContext, ToolAdmissionPolicy, ToolRegistrationOptions,
+  ResolvedToolSet, ToolActivationContext, OrderedAdmission, ToolAdmissionDecision, ToolAdmissionPolicy, ToolOrigin, ToolRegistrationOptions,
 } from './contracts.ts'
 
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -45,6 +45,7 @@ interface CompiledToolRestriction {
 interface ToolRegistration {
   readonly definition: ToolDefinition
   readonly when: ToolRegistrationOptions['when']
+  readonly origin: ToolOrigin
 }
 
 /** One scope's complete registry view, derived in a single layer traversal. */
@@ -95,6 +96,11 @@ class GuardLayer {
   isEmpty(): boolean { return this.guards.isEmpty() }
 }
 
+/** Whether a policy decision carries a declaration sequence rather than a plain kept-name iterable. */
+function isOrderedAdmission(decision: ToolAdmissionDecision): decision is OrderedAdmission {
+  return !(Symbol.iterator in decision)
+}
+
 class AdmissionLayer {
   readonly policies = new AnonymousEntries<ToolAdmissionPolicy>()
   isEmpty(): boolean { return this.policies.isEmpty() }
@@ -128,7 +134,8 @@ export class ToolsService extends Service {
    * Register globally or in the calling agent scope. Scoped tools shadow
    * globals; duplicates within one layer and the reserved `run_code` name fail.
    * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
-   * @param options - optional step-time activation condition.
+   * @param options - optional step-time activation condition and the producer-recorded origin;
+   * a registration without an origin reads back as `unknown`.
    * @returns the exact disposer that unregisters the tool.
    */
   register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void {
@@ -153,7 +160,7 @@ export class ToolsService extends Service {
     }
     return this.layers.effect(
       this.ctx,
-      layer => layer.tools.insert(name, { definition, when: options.when }),
+      layer => layer.tools.insert(name, { definition, when: options.when, origin: options.origin ?? 'unknown' }),
       { label: 'tools.register()' },
     )
   }
@@ -199,11 +206,16 @@ export class ToolsService extends Service {
    * agents on each step, after every tool's own `when` condition. Policies only
    * remove tools, compose by intersection (global policies first, then the
    * scope chain from the farthest ancestor, each layer in registration order),
-   * and see the candidates earlier policies kept. A policy that throws or names
-   * a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden
-   * tools are absent from declarations and rejected at dispatch, including
-   * nested PTC calls. With no policy registered, admission is unchanged.
-   * @param policy - removal-only decision evaluated once per step.
+   * and see the candidates earlier policies kept. A policy that returns
+   * {@link orderedAdmission} also sets the declaration sequence: the last such
+   * policy's sequence orders the surviving tools, which is the order of
+   * declarations and of `definitions()`. Plain returns never reorder, so with no
+   * ordering policy the admitted set keeps registration order. A policy that
+   * throws or names a non-candidate fails step preparation as
+   * `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and
+   * rejected at dispatch, including nested PTC calls. With no policy
+   * registered, admission is unchanged.
+   * @param policy - removal-only decision, optionally ordered, evaluated once per step.
    * @returns the exact disposer; later steps see the tools again.
    */
   registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void {
@@ -267,6 +279,16 @@ export class ToolsService extends Service {
   }
 
   /**
+   * Read where a visible registration came from.
+   * @param name - the tool name as registered.
+   * @param scope - the viewing scope (the agent); omitted = the global view.
+   * @returns the origin the producer recorded; `unknown` when it recorded none or no registration of that name is visible.
+   */
+  originOf(name: string, scope?: ScopeKey): ToolOrigin {
+    return this.view(scope).registrations.get(name)?.origin ?? 'unknown'
+  }
+
+  /**
    * Resolve the definition a call may execute. With a step's admitted set, the
    * set decides; without one, conditional registrations are unavailable.
    * @param name - the tool name as registered.
@@ -325,20 +347,26 @@ export class ToolsService extends Service {
   }
 
   /**
-   * Narrow the admitted set by each registered policy in order. Policies are
-   * snapshotted when evaluation starts; a rejection or an unknown name fails
-   * preparation, and cancellation takes precedence over either.
+   * Narrow the admitted set by each registered policy in order, then order it by the
+   * last policy that returned an ordered decision. Policies are snapshotted when
+   * evaluation starts; a rejection or an unknown name fails preparation, and
+   * cancellation takes precedence over either. Every name that survives the
+   * ordering policy is in its sequence, because later policies only remove.
    * @param context - preparing agent, captured model selection, and cancellation.
-   * @param admitted - candidates after `when`; narrowed in place, preserving order.
+   * @param admitted - candidates after `when`; narrowed in place, in registration order unless a policy ordered it.
    */
   private async applyAdmissionPolicies(context: ToolActivationContext, admitted: Map<string, ToolDefinition>): Promise<void> {
     const { signal } = context
     const policies = [this.admission.global, ...this.admission.chainLayers(context.agent)]
       .flatMap(layer => [...layer.policies.values()])
+    let sequence: readonly string[] | undefined
     for (const policy of policies) {
       let kept: Set<string>
       try {
-        kept = new Set(await policy({ ...context, candidates: new Map(admitted) }))
+        const decision = await policy({ ...context, candidates: new Map(admitted) })
+        const ordered = isOrderedAdmission(decision)
+        kept = new Set(ordered ? decision.ordered : decision)
+        if (ordered) sequence = [...kept]
         const unknown = [...kept].filter(name => !admitted.has(name))
         if (unknown.length > 0) {
           throw new TypeError(`policy named ${unknown.map(name => `"${name}"`).join(', ')}, which ${unknown.length > 1 ? 'are' : 'is'} not an admitted candidate; policies may only remove tools`)
@@ -349,6 +377,13 @@ export class ToolsService extends Service {
       }
       signal.throwIfAborted()
       for (const name of [...admitted.keys()]) if (!kept.has(name)) admitted.delete(name)
+    }
+    if (sequence === undefined) return
+    const definitions = new Map(admitted)
+    admitted.clear()
+    for (const name of sequence) {
+      const definition = definitions.get(name)
+      if (definition !== undefined) admitted.set(name, definition)
     }
   }
 

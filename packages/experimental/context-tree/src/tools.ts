@@ -41,7 +41,7 @@ export class ContextTreeTools extends Service {
         }, exec.signal)
         return z.json().parse(result)
       },
-    }))
+    }), { origin: 'global' })
     this.ctx.tools.register(defineTool({
       name: 'context_load',
       description:
@@ -60,7 +60,7 @@ export class ContextTreeTools extends Service {
         for (const context of outcome.contexts) exec.deferContext(context)
         return z.json().parse(outcome.result)
       },
-    }))
+    }), { origin: 'global' })
   }
 }
 
