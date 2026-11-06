@@ -4486,9 +4486,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Committed Ticket with an incremented specification revision.',
       },
       {
-        signature: 'async beginAttempt(session: Session, request: BeginTicketAttemptRequest): Promise<TicketView>',
+        signature: 'async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, \'status\' | \'workspaceReceipt\' | \'runtimeReceipt\' | \'diagnostics\'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest[\'outcome\']): Promise<TicketView> }) => void, ): Promise<TicketView>',
         description: 'Admit one execution attempt before effects; repeated operation identities do not append.',
-        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Attempt identity, placement, actor and CAS revision.' }],
+        parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Attempt identity, placement, actor and CAS revision.' }, { name: 'capture', description: 'Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.' }],
         returns: 'Current Ticket; rejects replacement of unsettled work or changed operation payloads.',
       },
       {

@@ -587,10 +587,7 @@ export class TicketService extends Service {
    */
   async beginAttempt(
     session: Session, request: BeginTicketAttemptRequest,
-    capture?: (controller: {
-      update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>
-      settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView>
-    }) => void,
+    capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView> }) => void,
   ): Promise<TicketView> {
     this.assertCaller(request.actorId)
     const admission = this.admission.then(async () => this.attemptOperation(session, request, 'begin', (ticket) => {
