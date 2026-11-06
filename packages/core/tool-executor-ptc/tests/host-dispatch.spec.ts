@@ -1,4 +1,4 @@
-/** Host-internal dispatch keeps scoped restrictions, guards, and nested PTC admission, and reaches only the tools it names. */
+/** A host invocation keeps scoped restrictions and guards and works under the PTC executor, including from a nested binding. */
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -38,37 +38,50 @@ async function harness(ptc = false) {
   let scope!: Scope
   await ctx.plugin(Object.assign((inner: Context) => { scope = createScope(inner, agent) }, { inject: ['tools'] }))
   const calls: string[] = []
-  ctx.tools.register(defineTool({
+  const { registration } = ctx.tools.register(defineTool({
     name: 'probe', description: 'A harmless control.', parameters: {},
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     execute: async () => { calls.push('probe'); return 'done' },
   }))
   const signal = new AbortController().signal
-  const execute = (host: boolean, toolSet?: ResolvedToolSet) => ctx.tools.execute({
-    agent, signal, ...(host ? { hostInternalDispatch: { tools: ['probe'] } } : {}),
-    ...toolSet === undefined ? {} : { toolSet },
-    calls: [{ type: 'tool-call', id: ToolCallId('control'), name: ptc ? 'run_code' : 'probe', arguments: ptc ? '{"code":"test","description":"Control"}' : '{}' }],
+  /** A model batch: `run_code` under PTC, the tool itself under the native executor. */
+  const execute = (toolSet?: ResolvedToolSet, direct = !ptc) => ctx.tools.execute({
+    agent, signal, ...toolSet === undefined ? {} : { toolSet },
+    calls: [{ type: 'tool-call', id: ToolCallId('control'), name: direct ? 'probe' : 'run_code', arguments: direct ? '{}' : '{"code":"test","description":"Control"}' }],
   })
-  return { ctx, agent, scope, calls, signal, execute, runtime: ctx.ptcRuntime as ScriptRuntime }
+  /** A host component's call to the registration it retained. */
+  const invoke = () => ctx.tools.invoke({ registration, arguments: {}, agent, signal, callId: ToolCallId('host-probe') })
+  return { ctx, agent, scope, calls, signal, probe: registration, execute, invoke, runtime: ctx.ptcRuntime as ScriptRuntime }
 }
 
-it('keeps scoped restrictions and monotonic guards on host-internal native calls', async () => {
-  const h = await harness()
+it.each([false, true])('keeps scoped restrictions and monotonic guards on a host invocation (PTC: %s)', async (ptc) => {
+  const h = await harness(ptc)
   h.ctx.tools.registerAdmissionPolicy(() => [])
-  expect((await h.execute(false)).results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
+  expect((await h.execute(undefined, true)).results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
   const restriction = h.scope.ctx.tools.restrict({ deny: ['probe'] })
-  expect((await h.execute(true)).results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
+  expect((await h.invoke()).error?.info?.code).toBe('UNKNOWN_TOOL')
   restriction()
   const guard = h.scope.ctx.tools.guard(() => 'control denial')
   h.ctx.on('tools/pre-execute', async () => ({ kind: 'allow' }))
-  expect((await h.execute(true)).results[0]?.result.error?.message).toBe('control denial')
+  expect((await h.invoke()).error?.message).toBe('control denial')
   expect(h.calls).toEqual([])
   guard()
-  expect((await h.execute(true)).results[0]?.result.isError).toBe(false)
+  expect(await h.invoke()).toMatchObject({ isError: false, content: [{ type: 'text', text: 'done' }] })
   expect(h.calls).toEqual(['probe'])
 })
 
-it('keeps admitted PTC bindings empty and guards nested host-internal dispatch', async () => {
+it('runs a host invocation under PTC while a model call naming the tool directly stays refused', async () => {
+  const h = await harness(true)
+  const toolSet = await h.ctx.tools.resolve({ agent: h.agent, signal: h.signal, modelSelection: { provider: 'test', model: 'test' } })
+  const direct = await h.execute(toolSet, true)
+  expect(direct.results[0]?.result.error?.message).toContain('only `run_code` is callable directly')
+  toolSet.dispose()
+  expect(h.calls).toEqual([])
+  expect(await h.invoke()).toMatchObject({ isError: false })
+  expect(h.calls).toEqual(['probe'])
+})
+
+it('keeps admitted PTC bindings empty and refuses a selection-less nested call', async () => {
   const h = await harness(true)
   h.ctx.tools.registerAdmissionPolicy(() => [])
   h.runtime.behavior = async (request) => {
@@ -76,20 +89,36 @@ it('keeps admitted PTC bindings empty and guards nested host-internal dispatch',
     return { logs: [] }
   }
   const toolSet = await h.ctx.tools.resolve({ agent: h.agent, signal: h.signal, modelSelection: { provider: 'test', model: 'test' } })
-  expect((await h.execute(false, toolSet)).results[0]?.result).toMatchObject({ isError: false })
+  expect((await h.execute(toolSet)).results[0]?.result).toMatchObject({ isError: false })
   toolSet.dispose()
   h.runtime.behavior = async (request) => {
     await expect(request.bindings[0]!.functions.probe!({})).rejects.toThrow('unknown tool')
     return { logs: [] }
   }
-  expect((await h.execute(false)).results[0]?.result).toMatchObject({ isError: false })
-  const deny = h.scope.ctx.tools.guard(exec => exec.name === 'probe' ? 'nested control denial' : undefined)
+  expect((await h.execute()).results[0]?.result).toMatchObject({ isError: false })
+  expect(h.calls).toEqual([])
+})
+
+it('runs a host invocation that an admitted facade makes from inside a nested PTC binding', async () => {
+  const h = await harness(true)
+  h.ctx.tools.register(defineTool({
+    name: 'facade', description: 'Reach the host operation.', parameters: {},
+    output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: async (_args, exec) => {
+      const result = await h.ctx.tools.invoke({ registration: h.probe, arguments: {}, agent: h.agent, signal: exec.signal, callId: ToolCallId('nested-host') })
+      return { isError: result.isError }
+    },
+  }))
+  h.ctx.tools.registerAdmissionPolicy(() => ['facade'])
+  let observed: unknown
   h.runtime.behavior = async (request) => {
-    expect(Object.keys(request.bindings[0]!.functions)).toEqual(['probe'])
-    await expect(request.bindings[0]!.functions.probe!({})).rejects.toThrow('nested control denial')
+    expect(Object.keys(request.bindings[0]!.functions)).toEqual(['facade'])
+    observed = await request.bindings[0]!.functions.facade!({})
     return { logs: [] }
   }
-  expect((await h.execute(true)).results[0]?.result).toMatchObject({ isError: false })
-  deny()
-  expect(h.calls).toEqual([])
+  const toolSet = await h.ctx.tools.resolve({ agent: h.agent, signal: h.signal, modelSelection: { provider: 'test', model: 'test' } })
+  expect((await h.execute(toolSet)).results[0]?.result).toMatchObject({ isError: false })
+  toolSet.dispose()
+  expect(observed).toEqual({ isError: false })
+  expect(h.calls).toEqual(['probe'])
 })

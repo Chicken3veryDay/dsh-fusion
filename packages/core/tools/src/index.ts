@@ -4,7 +4,9 @@ import z from '@deepseek-ai/schemastery'
 import { AnonymousEntries, NamedEntries, ScopedLayers, scopeOf, scopeChainOf } from '@deepseek-ai/dsh-scope'
 import type { ScopeKey, ScopeLayer } from '@deepseek-ai/dsh-scope'
 import { ToolExecutorUnavailableError } from './executor.ts'
-import type { ToolExecutor, ToolBatchInput, ToolBatchResult } from './executor.ts'
+import type { ToolExecutor, ToolBatchInput, ToolBatchResult, ToolInvocation } from './executor.ts'
+import { executeToolBatch } from './batch.ts'
+import { ToolExecutionPipeline } from './pipeline.ts'
 import './events.ts'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import { projectToolSchema } from './schema.ts'
@@ -13,7 +15,7 @@ import { RUN_CODE_NAME, ToolActivationError, ToolAdmissionError } from './contra
 import type {
   ToolDefinition, ToolRestriction, ToolExecution, ToolGuard,
   ResolvedToolSet, ToolActivationContext, ToolAdmissionDecision, ToolAdmissionPolicy, ToolOrigin, ToolRegistrationOptions,
-  RegisteredTool, ToolRegistrationHandle,
+  RegisteredTool, ToolExecutionResult, ToolRegistrationHandle,
 } from './contracts.ts'
 
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -126,6 +128,8 @@ export class ToolsService extends Service {
   private root: Registration | undefined
   private readonly guards = new ScopedLayers(() => new GuardLayer(), () => {})
   private readonly admission = new ScopedLayers(() => new AdmissionLayer(), () => { this.ctx.emit('tools/change') })
+  /** Pipeline for {@link invoke}, created on first use because it reads this service from the context. */
+  private invocationPipeline: ToolExecutionPipeline | undefined
 
   constructor(ctx: Context) {
     super(ctx, 'tools')
@@ -484,38 +488,62 @@ export class ToolsService extends Service {
   /**
    * Delegate a raw call batch to its Agent's provider or the deployment default.
    * Select at dispatch; accepted batches settle through that provider even if it unloads.
-   * @param input - original calls, optional owning Agent, optional logging step, and either a step
-   * `toolSet` or the explicit `hostInternalDispatch` opt-in.
+   * @param input - original calls, optional owning Agent, optional logging step, and optional step `toolSet`.
    * @returns the selected executor's settled batch; unavailable selections reject.
-   * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.
    */
   async execute(input: ToolBatchInput): Promise<ToolBatchResult> {
-    const { hostInternalDispatch } = input
-    if (hostInternalDispatch !== undefined) {
-      if (input.toolSet !== undefined) {
-        throw new TypeError('ToolBatchInput.hostInternalDispatch cannot be combined with a toolSet: a step selection already decides admission')
-      }
-      if (hostInternalDispatch.tools.length === 0) {
-        throw new TypeError('ToolBatchInput.hostInternalDispatch.tools must name at least one of the component\'s own tools')
-      }
-      const toolSet = this.hostInternalSelection(new Set(hostInternalDispatch.tools))
-      return this.selectExecutor(input.agent).execute({ ...input, toolSet })
-    }
     return this.selectExecutor(input.agent).execute(input)
   }
 
   /**
-   * Build the selection for {@link ToolBatchInput.hostInternalDispatch}: the named tools among
-   * each scope's unconditional registrations as they stand when read, with no admission policy applied.
-   * @param names - the component's own tool names; every other registration stays unavailable.
+   * Run one call to a registration a host component holds (an MCP, browser, or computer-use
+   * bridge running its own provider tool for an interaction). This is not the model's dispatch
+   * route: no name is resolved, so a same-named registration elsewhere, including a scoped shadow,
+   * is never reached; admission policies do not apply, because they decide what a model step may
+   * call; and the selected executor's model-call rules, such as PTC's `run_code`-only direct calls,
+   * do not apply. The call still passes the shared pipeline: the registration must be live and
+   * visible to the agent under its restrictions and must be unconditional, and pre-execute policy,
+   * guards, cancellation, the execute and post-execute wrappers, and result normalization run as for
+   * any call. No `tool/call` or `tool/result` Session event is committed.
+   * @param input - the retained registration, its arguments, correlation id, cancellation, and agent.
+   * @returns the settled result; a registration that is gone, restricted away, or conditional fails as `UNKNOWN_TOOL`.
+   * @throws {ToolBatchExecutionError} when the pipeline fails internally after draining.
+   */
+  async invoke(input: ToolInvocation): Promise<ToolExecutionResult> {
+    const { registration, agent, signal, callId } = input
+    const toolSet = this.invocationSelection(registration)
+    this.invocationPipeline ??= new ToolExecutionPipeline(this.ctx)
+    const batch = await executeToolBatch({
+      calls: [{ type: 'tool-call', id: callId, name: registration.definition.name, arguments: JSON.stringify(input.arguments) }],
+      signal, toolSet, ...agent === undefined ? {} : { agent },
+    }, this.invocationPipeline, () => 1)
+    const settled = batch.results[0]
+    /* v8 ignore next -- executeToolBatch settles exactly one result per call */
+    if (settled === undefined) throw new Error('tool invocation settled no result')
+    return settled.result
+  }
+
+  /**
+   * Build the one-registration selection {@link invoke} runs under. Its view holds the retained
+   * definition only while that exact registration object is still in a layer the scope's chain
+   * reads, every restriction in the chain admits it (the scope's own registrations are exempt, as
+   * in {@link view}), and it has no `when` condition. A same-named entry is never substituted.
+   * @param registration - the identity the host component retained.
    * @returns a selection with nothing to dispose.
    */
-  private hostInternalSelection(names: ReadonlySet<string>): ResolvedToolSet {
+  private invocationSelection(registration: RegisteredTool): ResolvedToolSet {
+    const { definition } = registration
+    const name = definition.name
     return Object.freeze({
       dispose: (): void => undefined,
       view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
-        const current = this.view(scope)
-        return new Map([...current.visible].filter(([name]) => names.has(name) && current.registrations.get(name)?.when === undefined))
+        const own = this.layers.peek(scope)
+        const chain = this.layers.chainLayers(scope)
+        const holder = [this.layers.global, ...chain].find(layer => layer.tools.get(name) === registration)
+        const entry = holder?.tools.get(name)
+        const visible = entry !== undefined && entry.when === undefined
+          && (holder === own || chain.every(layer => layer.admits(name)))
+        return visible ? new Map([[name, definition]]) : new Map()
       },
     })
   }

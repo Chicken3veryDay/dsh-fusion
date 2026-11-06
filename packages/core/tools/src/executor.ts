@@ -4,7 +4,8 @@ import type { ToolCallBlock, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { PromptSection, ToolProviderResult } from '@deepseek-ai/dsh-system-prompt'
-import type { ResolvedToolSet, ToolDefinition, ToolExecutionResult } from './contracts.ts'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { RegisteredTool, ResolvedToolSet, ToolDefinition, ToolExecutionResult } from './contracts.ts'
 
 /** Model-call schemas produced by an executor. */
 export type ToolModelInput = Pick<ToolProviderResult, 'schemas' | 'knownNames'>
@@ -13,19 +14,6 @@ export type ToolModelInput = Pick<ToolProviderResult, 'schemas' | 'knownNames'>
 export interface ToolPromptSection extends Pick<PromptSection, 'name' | 'order' | 'interpolate'> {
   /** Static guidance or text generated from this step's visible capability definitions. */
   readonly text: string | ((tools: readonly ToolDefinition[]) => string)
-}
-
-/**
- * The explicit opt-in of a host component that dispatches its own provider tools outside a model
- * step. It names every tool the component may reach, so a bridge cannot grant itself an
- * unrelated registration that merely resembles one of its operations.
- */
-export interface HostInternalDispatch {
-  /**
-   * Registered names of the component's own tools; at least one. A call to any other name fails as
-   * `UNKNOWN_TOOL`, and a name that is conditional or restricted away stays unavailable.
-   */
-  readonly tools: readonly string[]
 }
 
 /** Raw model calls, with optional Agent ownership and model-step logging. */
@@ -47,17 +35,8 @@ export interface ToolBatchInput {
    * Step admission for every call in the batch, including program subcalls.
    * Undefined admits only unconditional registrations, and nothing at all while an
    * admission policy applies to the scope, because a policy needs a step to run.
-   * Mutually exclusive with {@link ToolBatchInput.hostInternalDispatch}.
    */
   readonly toolSet?: ResolvedToolSet
-  /**
-   * Explicit opt-in for a host component dispatching its own provider tools outside a model
-   * step (an MCP, browser, or computer-use bridge). The calls skip admission policies and
-   * reach only the named tools, and of those only the scope's unconditional registrations,
-   * including nested program calls. Never set it for a call a model requested: the model path
-   * passes its step's `toolSet`. Rejected together with `toolSet`.
-   */
-  readonly hostInternalDispatch?: HostInternalDispatch
   /**
    * Committed model step receiving root call/result events; requires `agent`.
    * Undefined when `agent` is absent or for calls outside a model response, such
@@ -68,6 +47,26 @@ export interface ToolBatchInput {
     readonly turn: number
     readonly step: number
   }
+}
+
+/**
+ * One call a host component (an MCP, browser, or computer-use bridge) makes to a tool it
+ * registered itself, outside any model step. It names the registration by identity, never by name.
+ */
+export interface ToolInvocation {
+  /** The registration to run, as `tools.register()` returned it or MCP discovery produced it. */
+  readonly registration: RegisteredTool
+  /** Tool arguments; they are snapshotted before policy runs. */
+  readonly arguments: JsonValue
+  /** Correlation id for the call's pipeline events and result. */
+  readonly callId: ToolCallId
+  /** Cancellation for the call. */
+  readonly signal: AbortSignal
+  /**
+   * Agent on whose behalf the call runs: its scope chain decides whether the registration is
+   * visible, and its guards and execution context apply. Undefined sees only global registrations.
+   */
+  readonly agent?: Agent
 }
 
 /** One settled result correlated with its original model call. */

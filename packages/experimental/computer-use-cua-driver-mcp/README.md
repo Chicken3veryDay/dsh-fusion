@@ -62,7 +62,7 @@ The model sees tools under the fixed `mcp__cua-driver-mcp__` namespace. Tool nam
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-[`src/index.ts`](src/index.ts) groups the computer-use reservation and owned MCP child into one ordered effect. Child teardown finishes before the reservation disposer runs, including during failed activation. The MCP client owns credential scrubbing, subprocess termination, tool synchronization, cancellation, and durable image projection.
+[`src/index.ts`](src/index.ts) groups the computer-use reservation and owned MCP child into one ordered effect. Child teardown finishes before the reservation disposer runs, including during failed activation. The MCP client owns credential scrubbing, subprocess termination, tool synchronization, cancellation, and durable image projection. A desktop interaction maps its operation to a raw driver tool in the connection's current generation, which the child receives from `McpClient.connect()`, and runs that `RegisteredTool` through `ctx.tools.invoke()`. A same-named registration elsewhere, including an agent-scoped shadow, is never run; admission policies and PTC's direct-call rule do not apply, so the desktop facade works under either executor.
 
 ### Verify an installed driver
 

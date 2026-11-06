@@ -193,6 +193,9 @@ describe('syncTools', () => {
     expect(disposers.size).toBe(2)
     expect(ctx.tools.get('mcp__srv__greet')).toBeDefined()
     expect(ctx.tools.get('mcp__srv__add')).toBeDefined()
+    // The generation is keyed by raw name and carries each live registration's identity.
+    expect([...disposers.keys()]).toEqual(['greet', 'add'])
+    expect(disposers.get('greet')?.registration.definition).toBe(ctx.tools.get('mcp__srv__greet'))
     // Raw names are NOT registered.
     expect(ctx.tools.get('greet')).toBeUndefined()
     expect(ctx.tools.get('add')).toBeUndefined()
@@ -725,7 +728,7 @@ describe('tool execution', () => {
           return { ...result, value: { content: [{ type: 'text', text: 'dispatch replacement' }] } }
         }
         const definition = rich.ctx.tools.get('mcp__srv__img')!
-        registrations.get('mcp__srv__img')!()
+        registrations.get('img')!()
         rich.ctx.tools.register({
           ...definition,
           output: { ...definition.output, render: () => [{ type: 'text', text: 'dispatch replacement' }] },

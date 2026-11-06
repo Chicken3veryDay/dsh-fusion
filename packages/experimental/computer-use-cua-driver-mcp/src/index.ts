@@ -14,16 +14,13 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-computer-use'
-import type {} from '@deepseek-ai/dsh-tools'
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 
 /** Cordis plugin identity for the installed Cua Driver provider. */
 export const name = 'experimental-computer-use-cua-driver-mcp'
 
 /** MCP server namespace of this provider; its tools register as `mcp__cua-driver-mcp__<raw name>`. */
 const SERVER_NAME = 'cua-driver-mcp'
-
-/** Prefix of every public tool name this provider's MCP connection registers. */
-const TOOL_PREFIX = `mcp__${SERVER_NAME}__`
 
 /** The shared reservation and tool registry must exist before connection. */
 export const inject = ['computerUse', 'tools']
@@ -53,14 +50,20 @@ export const Config: z<Partial<Config>, Config> = z.object({
   }),
 })
 
-function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation): { name: string; args: Record<string, JsonValue> } {
+/**
+ * Map a desktop operation to one of this provider's own MCP registrations. Only the connection's
+ * current generation qualifies, so a same-named tool of another provider or scope never does.
+ */
+function desktopTool(
+  server: McpClient.McpServerTools,
+  operation: InteractionOperation,
+): { registration: RegisteredTool; args: Record<string, JsonValue> } {
   if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
-  const names = new Set(ctx.tools.schemas(agent).map(tool => tool.name))
-  // Only this server's namespace qualifies: a same-suffix tool of another provider is never a driver operation.
-  const find = (rawNames: readonly string[]): string => {
-    const name = rawNames.map(raw => `${TOOL_PREFIX}${raw}`).find(candidate => names.has(candidate))
-    if (name === undefined) throw new Error(`Cua Driver MCP does not expose ${rawNames.join(' or ')}`)
-    return name
+  const tools = server.current()
+  const find = (rawNames: readonly string[]): RegisteredTool => {
+    const registration = rawNames.map(raw => tools.get(raw)).find(candidate => candidate !== undefined)
+    if (registration === undefined) throw new Error(`Cua Driver MCP does not expose ${rawNames.join(' or ')}`)
+    return registration
   }
   const target = {
     ...operation.applicationId === undefined ? {} : { application_id: operation.applicationId },
@@ -68,7 +71,7 @@ function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation
   }
   if (operation.method === 'observe' || operation.method === 'screenshot') {
     return {
-      name: find(operation.method === 'screenshot' ? ['screenshot', 'get_window_state', 'get_desktop_state'] : ['get_window_state', 'get_desktop_state']),
+      registration: find(operation.method === 'screenshot' ? ['screenshot', 'get_window_state', 'get_desktop_state'] : ['get_window_state', 'get_desktop_state']),
       args: { ...target, ...operation.method === 'screenshot' ? { include_screenshot: true } : {} },
     }
   }
@@ -77,27 +80,7 @@ function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation
   if (typeof kind !== 'string' || kind.length === 0) throw new Error('desktop_act action.kind must be a non-empty string')
   if (!isDesktopActionKind(kind)) throw new Error(`desktop_act action.kind "${kind}" is not supported by the normalized facade`)
   const { kind: _kind, ...args } = operation.action
-  return { name: find([kind, `desktop_${kind}`]), args: { ...target, ...args } }
-}
-
-async function executeInteractionTool(
-  ctx: Context,
-  agent: Agent,
-  name: string,
-  args: Record<string, JsonValue>,
-  signal: AbortSignal,
-  callId: ToolCallId,
-): Promise<JsonValue> {
-  const encoded = JSON.stringify(args)
-  const batch = await ctx.tools.execute({
-    calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
-    signal,
-    agent,
-    hostInternalDispatch: { tools: [name] },
-  })
-  const settled = batch.results[0]?.result
-  if (settled === undefined) throw new Error(`Cua Driver MCP tool "${name}" returned no result`)
-  return JSON.parse(JSON.stringify(settled)) as JsonValue
+  return { registration: find([kind, `desktop_${kind}`]), args: { ...target, ...args } }
 }
 
 /**
@@ -122,9 +105,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // One effect orders child shutdown before release; separate fiber effects
   // unload concurrently and could otherwise admit another live driver.
   let child!: Fiber
+  let server: McpClient.McpServerTools | undefined
   ctx.effect(function* () {
     yield ctx.computerUse.register(ComputerUseProviderName('cua-driver-mcp'))
-    child = ctx.plugin(McpClient, connection)
+    child = ctx.plugin({
+      name: McpClient.name,
+      inject: McpClient.inject,
+      async apply(inner: Context) { server = await McpClient.connect(inner, connection) },
+    })
     const interaction = ctx.get('interaction')
     if (interaction !== undefined) {
       yield interaction.register({
@@ -133,8 +121,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         open(agent: Agent, _signal: AbortSignal) {
           return Promise.resolve({
             execute: async (operation: InteractionOperation, signal: AbortSignal) => {
-              const selected = desktopTool(ctx, agent, operation)
-              return executeInteractionTool(ctx, agent, selected.name, selected.args, signal, ToolCallId(`interaction-${++interactionCallSequence}`))
+              if (server === undefined) throw new Error('Cua Driver MCP is not connected')
+              const { registration, args } = desktopTool(server, operation)
+              const result = await ctx.tools.invoke({
+                registration, arguments: args, signal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
+              })
+              return JSON.parse(JSON.stringify(result)) as JsonValue
             },
             close: async () => {},
           })

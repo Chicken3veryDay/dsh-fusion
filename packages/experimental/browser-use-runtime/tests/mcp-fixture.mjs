@@ -44,11 +44,17 @@ lines.on('line', line => {
       reply(request.id, { tools: [
         { name: 'visit', description: 'Visit the fixture page.', inputSchema: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false } },
         { name: 'disconnect', description: 'Disconnect the fixture.', inputSchema: { type: 'object', properties: {} } },
+        // The interaction mode adds the raw operation the normalized browser facade maps navigation to.
+        ...mode === 'interaction' ? [{ name: 'browser_navigate', description: 'Navigate the fixture page.', inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } }] : [],
       ] })
       break
     case 'tools/call':
       record('call', { name: request.params.name, cwd: process.cwd() })
       if (request.params.name === 'disconnect') process.exit(0)
+      if (request.params.name === 'browser_navigate') {
+        reply(request.id, { content: [{ type: 'text', text: `Navigated: ${request.params.arguments.url}` }] })
+        break
+      }
       counter += 1
       reply(request.id, { content: [{ type: 'text', text: `Visit ${counter}: ${request.params.arguments.label}` }], structuredContent: { counter, pid: process.pid } })
       break

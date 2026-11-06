@@ -16,7 +16,7 @@ import { z } from 'zod'
 import type { CuaDriver as NativeDriver } from '@trycua/cua-driver'
 import type {} from '@deepseek-ai/dsh-computer-use'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import type {} from '@deepseek-ai/dsh-tools'
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 
 /** Cordis plugin identity for the native Cua Driver provider. */
 export const name = 'experimental-computer-use-cua-driver-native'
@@ -132,6 +132,8 @@ export async function apply(ctx: Context): Promise<void> {
     const catalog = ToolCatalog.parse(JSON.parse(await activeDriver.listToolsJson({ signal: lifetime.signal })))
     lifetime.signal.throwIfAborted()
     let interactionCallSequence = 0
+    /** This runtime's own registrations by upstream catalog name; the interaction session invokes only these. */
+    const registrations = new Map<string, RegisteredTool>()
     const interaction = inner.get('interaction')
     if (interaction !== undefined) {
       const release = interaction.register({
@@ -143,26 +145,21 @@ export async function apply(ctx: Context): Promise<void> {
           availability: process.platform === 'linux' ? 'ready' : 'unavailable',
           ...process.platform === 'linux' ? {} : { detail: 'The first-class desktop adapter currently targets Linux Hosts.' },
         }),
-        open(_agent: Agent, signal: AbortSignal) {
+        open(agent: Agent, signal: AbortSignal) {
           signal.throwIfAborted()
           return Promise.resolve({
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               operationSignal.throwIfAborted()
               const selected = interactionTool(catalog, operation)
-              const encoded = JSON.stringify(selected.args)
-              const batch = await inner.tools.execute({
-                calls: [{
-                  type: 'tool-call',
-                  id: ToolCallId(`interaction-${++interactionCallSequence}`),
-                  name: `cua_driver_native__${selected.name}`,
-                  arguments: encoded,
-                }],
+              const registration = registrations.get(selected.name)
+              if (registration === undefined) throw new Error(`Cua Driver tool "${selected.name}" is not registered`)
+              const settled = await inner.tools.invoke({
+                registration,
+                arguments: selected.args,
                 signal: operationSignal,
-                agent: _agent,
-                hostInternalDispatch: { tools: [`cua_driver_native__${selected.name}`] },
+                agent,
+                callId: ToolCallId(`interaction-${++interactionCallSequence}`),
               })
-              const settled = batch.results[0]?.result
-              if (settled === undefined) throw new Error(`Cua Driver tool "${selected.name}" returned no result`)
               if (!isJsonValue(settled)) throw new Error(`Cua Driver tool "${selected.name}" returned a non-JSON result`)
               operationSignal.throwIfAborted()
               return JSON.parse(JSON.stringify(settled)) as JsonValue
@@ -195,7 +192,7 @@ export async function apply(ctx: Context): Promise<void> {
           return JSON.parse(result.rawJson) as unknown
         },
       })
-      inner.tools.register(definition)
+      registrations.set(tool.name, inner.tools.register(definition).registration)
     }
     inner.on('tools/execute', async (exec, next) => {
       if (!names.has(exec.name)) return next()

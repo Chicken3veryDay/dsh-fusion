@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isImageAdmissionError } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef, ImageMediaType, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { ToolDefinition, ToolExecution, ToolExecutionResult, ToolOrigin } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition, ToolExecution, ToolExecutionResult, ToolOrigin, ToolRegistrationHandle } from '@deepseek-ai/dsh-tools'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -34,8 +34,11 @@ export interface ToolBridgeOptions {
   origin: ToolOrigin
 }
 
-/** State for one sync generation: the current set of disposers keyed by public name. */
-export type ToolDisposers = Map<string, () => void>
+/**
+ * One sync generation's live registrations, keyed by the server's raw tool name. Each handle
+ * unregisters its tool and carries the registration identity a host component invokes.
+ */
+export type ToolRegistrations = Map<string, ToolRegistrationHandle>
 
 /** Canonical MCP result exposed to PTC mode without discarding protocol blocks. */
 export type McpResult<Structured extends JsonValue = JsonValue> = {
@@ -107,19 +110,19 @@ export function publicToolName(serverName: string, rawName: string): string {
  * @param client - Connected MCP Client instance used to list and call tools.
  * @param ctx - Cordis context providing the `tools` service for registration.
  * @param opts - Bridge options: server namespace and per-call timeout.
- * @param previous - Disposer map from the prior sync generation; disposed
+ * @param previous - Registrations from the prior sync generation; disposed
  *   during the swap phase (only after the fetch phase succeeded).
- * @returns A map of registered public tool names to their unregister
- *   disposers — the exact set of live registrations owned by this server.
+ * @returns The server's raw tool names mapped to their registration handles —
+ *   the exact set of live registrations owned by this server.
  */
 export async function syncTools(
   client: Client,
   ctx: Context,
   opts: ToolBridgeOptions,
-  previous: ToolDisposers,
-): Promise<ToolDisposers> {
+  previous: ToolRegistrations,
+): Promise<ToolRegistrations> {
   // Phase 1: fetch and build the next generation without touching the registry.
-  const definitions = new Map<string, ToolDefinition>()
+  const definitions = new Map<string, { rawName: string; definition: ToolDefinition }>()
   const response = client.getServerCapabilities()?.tools === undefined
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh' })
@@ -130,7 +133,7 @@ export async function syncTools(
         `mcp-client(${opts.serverName}): server listed tool "${tool.name}" more than once — invalid tool list`,
       )
     }
-    definitions.set(publicName, createMcpToolDefinition(ctx, {
+    definitions.set(publicName, { rawName: tool.name, definition: createMcpToolDefinition(ctx, {
       name: publicName,
       rawName: tool.name,
       description: tool.description ?? '',
@@ -141,26 +144,26 @@ export async function syncTools(
         { name: tool.name, arguments: args },
         { signal: execution.signal, timeout: opts.toolCallTimeoutMs, toolDefinition: tool },
       ),
-    }))
+    }) })
   }
 
   // Phase 2: swap generations.
   for (const dispose of previous.values()) dispose()
-  const disposers: ToolDisposers = new Map()
+  const registrations: ToolRegistrations = new Map()
   try {
-    for (const [publicName, definition] of definitions) {
-      disposers.set(publicName, ctx.tools.register(definition, { origin: opts.origin }))
+    for (const { rawName, definition } of definitions.values()) {
+      registrations.set(rawName, ctx.tools.register(definition, { origin: opts.origin }))
     }
   } catch (error) {
     // A conflict on an `mcp__<serverName>__`-qualified name means a foreign
     // registration occupies this server's namespace. Roll back so the model
     // sees either the full generation or none of it — never a partial set.
-    for (const dispose of disposers.values()) dispose()
+    for (const dispose of registrations.values()) dispose()
     ctx.logger.error(`mcp-client(${opts.serverName}): tool registration failed, no tools registered: ${String(error)}`)
     if (opts.registrationFailure === 'throw') throw error
     return new Map()
   }
-  return disposers
+  return registrations
 }
 
 /** Fields read from canonical content, including policy-owned value replacements. */

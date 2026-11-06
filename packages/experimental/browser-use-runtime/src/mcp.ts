@@ -16,7 +16,7 @@ import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
 import type {} from '@deepseek-ai/dsh-attachment'
-import type {} from '@deepseek-ai/dsh-tools'
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-working-directory'
 
@@ -93,29 +93,15 @@ export interface SessionMcpOptions {
   toolCallTimeoutMs?: number
 }
 
+/** One Session's browser connection: the registration scope and the MCP server's own registrations. */
+interface BrowserSession {
+  scope: Scope
+  server: McpClient.McpServerTools
+}
+
 interface ClientState {
   status: 'ready' | 'blocked'
   mask?: Scope
-}
-
-async function executeScopedTool(
-  scope: Scope,
-  agent: Agent,
-  name: string,
-  args: Record<string, JsonValue>,
-  signal: AbortSignal,
-  callId: ToolCallId,
-): Promise<JsonValue> {
-  const encoded = JSON.stringify(args)
-  const batch = await scope.ctx.tools.execute({
-    calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
-    signal,
-    agent,
-    hostInternalDispatch: { tools: [name] },
-  })
-  const settled = batch.results[0]?.result
-  if (settled === undefined) throw new Error(`browser provider tool "${name}" returned no result`)
-  return JSON.parse(JSON.stringify(settled)) as JsonValue
 }
 
 /** Replace provider image bytes with durable attachment references before a normalized result is logged.
@@ -161,36 +147,37 @@ export async function projectProviderImages(ctx: Context, result: JsonValue, too
   return { ...result, content }
 }
 
-/** Resolve a raw operation to this provider's own registered tool; another namespace never qualifies. */
-function providerTool(scope: Scope, agent: Agent, toolPrefix: string, rawNames: readonly string[]): string {
-  const names = new Set(scope.ctx.tools.schemas(agent).map(tool => tool.name))
-  const name = rawNames.map(raw => `${toolPrefix}${raw}`).find(candidate => names.has(candidate))
-  if (name === undefined) throw new Error(`browser provider does not expose ${rawNames.join(' or ')}`)
-  return name
+/**
+ * Resolve a raw operation to one of this Session's own MCP registrations. Only the connection's
+ * current generation qualifies, so a same-named tool of another provider or scope never does.
+ */
+function providerTool(server: McpClient.McpServerTools, rawNames: readonly string[]): RegisteredTool {
+  const tools = server.current()
+  const registration = rawNames.map(raw => tools.get(raw)).find(candidate => candidate !== undefined)
+  if (registration === undefined) throw new Error(`browser provider does not expose ${rawNames.join(' or ')}`)
+  return registration
 }
 
 function browserOperation(
-  scope: Scope,
-  agent: Agent,
-  toolPrefix: string,
+  server: McpClient.McpServerTools,
   operation: InteractionOperation,
-): { name: string; args: Record<string, JsonValue> } {
+): { registration: RegisteredTool; args: Record<string, JsonValue> } {
   if (operation.domain !== 'browser') throw new Error('browser provider received a desktop operation')
-  if (operation.method === 'navigate') return { name: providerTool(scope, agent, toolPrefix, ['browser_navigate']), args: { url: operation.url } }
+  if (operation.method === 'navigate') return { registration: providerTool(server, ['browser_navigate']), args: { url: operation.url } }
   if (operation.method === 'observe') {
     return {
-      name: providerTool(scope, agent, toolPrefix, ['browser_snapshot', 'browser_observe']),
+      registration: providerTool(server, ['browser_snapshot', 'browser_observe']),
       args: operation.instruction === undefined ? {} : { target: operation.instruction },
     }
   }
-  if (operation.method === 'screenshot') return { name: providerTool(scope, agent, toolPrefix, ['browser_take_screenshot', 'browser_screenshot']), args: {} }
+  if (operation.method === 'screenshot') return { registration: providerTool(server, ['browser_take_screenshot', 'browser_screenshot']), args: {} }
   if (operation.method === 'tabs') {
     const index = operation.tabId === undefined ? undefined : Number(operation.tabId)
     if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
       throw new Error('browser_tabs tabId must be a non-negative integer for this provider')
     }
     return {
-      name: providerTool(scope, agent, toolPrefix, ['browser_tabs', 'browser_tab_list']),
+      registration: providerTool(server, ['browser_tabs', 'browser_tab_list']),
       args: {
         action: operation.operation,
         ...index === undefined ? {} : { index },
@@ -206,7 +193,7 @@ function browserOperation(
     if (typeof kind !== 'string' || kind.length === 0) throw new Error('browser_act action.kind must be a non-empty string')
     if (!isBrowserActionKind(kind)) throw new Error(`browser_act action.kind "${kind}" is not supported by the normalized facade`)
     const { kind: _kind, ...args } = operation.action
-    return { name: providerTool(scope, agent, toolPrefix, [`browser_${kind}`, kind]), args }
+    return { registration: providerTool(server, [`browser_${kind}`, kind]), args }
   }
   throw new Error(`browser provider does not support normalized ${operation.method} yet`)
 }
@@ -222,7 +209,7 @@ function browserOperation(
 export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void {
   const workingDirectory = ctx.get('workingDirectory')
   if (workingDirectory === undefined) throw new Error(`${options.name}: browser MCP requires a working-directory provider`)
-  let resources!: SessionResources<Scope>
+  let resources!: SessionResources<BrowserSession>
   let interactionCallSequence = 0
   const clients = new Map<Agent, ClientState>()
   const toolPrefix = `mcp__${options.name}__`
@@ -254,11 +241,14 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
         domain: 'browser',
         describe: () => ({ id: interactionProviderId(options.name), domains: ['browser'], methods: ['navigate', 'tabs', 'observe', 'act', 'screenshot'], availability: 'ready' }),
         async open(agent, signal) {
-          const scope = await resources.get(agent, signal)
+          const { scope, server } = await resources.get(agent, signal)
           return {
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
-              const selected = browserOperation(scope, agent, toolPrefix, operation)
-              return executeScopedTool(scope, agent, selected.name, selected.args, operationSignal, ToolCallId(`interaction-${++interactionCallSequence}`))
+              const { registration, args } = browserOperation(server, operation)
+              const result = await scope.ctx.tools.invoke({
+                registration, arguments: args, signal: operationSignal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
+              })
+              return JSON.parse(JSON.stringify(result)) as JsonValue
             },
             close: async () => {},
           }
@@ -283,7 +273,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
             }
             return next()
           })
-          await scope.ctx.plugin(McpClient, McpClient.Config({
+          const config = McpClient.Config({
             transport: 'stdio',
             serverName: options.name,
             command: options.command,
@@ -293,10 +283,18 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
             ...options.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: options.toolCallTimeoutMs },
             failOnStartupError: true,
             reconnect: { enabled: false },
-          }))
+          })
+          let server: McpClient.McpServerTools | undefined
+          await scope.ctx.plugin({
+            name: McpClient.name,
+            inject: McpClient.inject,
+            async apply(inner: Context) { server = await McpClient.connect(inner, config) },
+          })
           signal.throwIfAborted()
+          /* v8 ignore next -- an activated connection plugin has assigned its registrations */
+          if (server === undefined) throw new Error(`${options.name}: browser MCP connection activated without registrations`)
           return {
-            value: scope,
+            value: { scope, server },
             close() {
               clients.delete(agent)
               return scope.dispose()

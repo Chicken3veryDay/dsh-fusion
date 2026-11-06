@@ -17,10 +17,11 @@ vi.mock('@deepseek-ai/dsh-mcp-client', async (importOriginal) => {
   const original = await importOriginal<typeof import('@deepseek-ai/dsh-mcp-client')>()
   return {
     ...original,
-    async apply(ctx: Context, config: unknown) {
+    async connect(ctx: Context, config: unknown) {
       fake.configurations.push(config)
       ctx.effect(() => () => fake.close())
       await fake.start()
+      return { current: () => new Map() }
     },
   }
 })

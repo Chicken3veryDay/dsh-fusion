@@ -4742,9 +4742,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: 'async execute(input: ToolBatchInput): Promise<ToolBatchResult>',
         description: 'Delegate a raw call batch to its Agent\'s provider or the deployment default. Select at dispatch; accepted batches settle through that provider even if it unloads.',
-        parameters: [{ name: 'input', description: 'original calls, optional owning Agent, optional logging step, and either a step `toolSet` or the explicit `hostInternalDispatch` opt-in.' }],
+        parameters: [{ name: 'input', description: 'original calls, optional owning Agent, optional logging step, and optional step `toolSet`.' }],
         returns: 'the selected executor\'s settled batch; unavailable selections reject.',
-        throws: ['{TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.'],
+      },
+      {
+        signature: 'async invoke(input: ToolInvocation): Promise<ToolExecutionResult>',
+        description: 'Run one call to a registration a host component holds (an MCP, browser, or computer-use bridge running its own provider tool for an interaction). This is not the model\'s dispatch route: no name is resolved, so a same-named registration elsewhere, including a scoped shadow, is never reached; admission policies do not apply, because they decide what a model step may call; and the selected executor\'s model-call rules, such as PTC\'s `run_code`-only direct calls, do not apply. The call still passes the shared pipeline: the registration must be live and visible to the agent under its restrictions and must be unconditional, and pre-execute policy, guards, cancellation, the execute and post-execute wrappers, and result normalization run as for any call. No `tool/call` or `tool/result` Session event is committed.',
+        parameters: [{ name: 'input', description: 'the retained registration, its arguments, correlation id, cancellation, and agent.' }],
+        returns: 'the settled result; a registration that is gone, restricted away, or conditional fails as `UNKNOWN_TOOL`.',
+        throws: ['{ToolBatchExecutionError} when the pipeline fails internally after draining.'],
       },
       {
         signature: 'guard(guard: ToolGuard): () => void',
@@ -7787,10 +7793,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'HostConnectionRpc',
     declaration: 'export interface HostConnectionRpc {\n    handle(channel: string, handler: ConnectionRpcHandler): () => Promise<void>;\n    intercept(channel: \'/api\', matches: ConnectionRpcEndpointMatcher, handler: ConnectionRpcHandler): () => Promise<void>;\n}',
-  },
-  {
-    name: 'HostInternalDispatch',
-    declaration: 'export interface HostInternalDispatch {\n    readonly tools: readonly string[];\n}',
   },
   {
     name: 'ImageAttachmentLimits',
@@ -11066,7 +11068,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolBatchInput',
-    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly hostInternalDispatch?: HostInternalDispatch;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
+    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
   },
   {
     name: 'ToolBatchResult',
@@ -11157,6 +11159,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolInfo {\n    name: string;\n    description: string;\n}',
   },
   {
+    name: 'ToolInvocation',
+    declaration: 'export interface ToolInvocation {\n    readonly registration: RegisteredTool;\n    readonly arguments: JsonValue;\n    readonly callId: ToolCallId;\n    readonly signal: AbortSignal;\n    readonly agent?: Agent;\n}',
+  },
+  {
     name: 'ToolMessageSource',
     declaration: 'export interface ToolMessageSource {\n    kind: \'tool\';\n    callId: ToolCallId;\n}',
   },
@@ -11230,7 +11236,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    async invoke(input: ToolInvocation): Promise<ToolExecutionResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',

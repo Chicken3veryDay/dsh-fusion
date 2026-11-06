@@ -18,11 +18,12 @@
 import { Client, type Transport } from '@modelcontextprotocol/client'
 import type { Context } from '@deepseek-ai/cordis'
 import { assertNever, type JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 import type { ServerContext } from './server-context.ts'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { createTransport } from './transport.ts'
 import { syncTools } from './tools.ts'
-import type { ToolBridgeOptions, ToolDisposers } from './tools.ts'
+import type { ToolBridgeOptions, ToolRegistrations } from './tools.ts'
 import type { Config } from './index.ts'
 
 /** Automatic reconnect policy for one MCP server connection. */
@@ -113,6 +114,11 @@ export interface ConnectionHandle extends ServerContext {
    * unregister every tool this server still owns.
    */
   dispose(): Promise<void>
+  /**
+   * Read the current generation's registrations.
+   * @returns the server's raw tool names mapped to their live registrations; empty while no generation is registered.
+   */
+  tools(): ReadonlyMap<string, RegisteredTool>
 }
 
 /**
@@ -148,7 +154,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
   /** Transport-aware close operation paired with {@link client}. */
   let closeClient: (() => Promise<boolean>) | undefined
   /** Live tool registrations owned by this server; only {@link enqueueSync} and dispose swap it. */
-  let disposers: ToolDisposers = new Map()
+  let registrations: ToolRegistrations = new Map()
   let reconnectTimer: NodeJS.Timeout | undefined
   /** Consecutive failed connection attempts within the current outage. */
   let failedAttempts = 0
@@ -170,7 +176,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
   function enqueueSync(generation: Client, syncOpts: ToolBridgeOptions = opts): Promise<void> {
     const run = syncChain.then(async () => {
       if (!isCurrent(generation)) return
-      disposers = await syncTools(generation, ctx, syncOpts, disposers)
+      registrations = await syncTools(generation, ctx, syncOpts, registrations)
     })
     // The chain tail must survive a failed sync; the enqueuing caller owns reporting.
     syncChain = run.catch(() => {})
@@ -227,8 +233,8 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
       // Enqueue the give-up disposal so it cannot race an in-flight sync's
       // phase-2 swap (which checks isCurrent inside the queue).
       syncChain = syncChain.then(() => {
-        for (const dispose of disposers.values()) dispose()
-        disposers = new Map()
+        for (const dispose of registrations.values()) dispose()
+        registrations = new Map()
         serverInstructions = ''
       })
       ctx.logger.error(`${label}: giving up after ${policy.maxAttempts} consecutive failed reconnect attempts — tools unregistered; reload the plugin or restart the Host to reconnect`)
@@ -364,6 +370,7 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
   return {
     ready,
     instructions: () => serverInstructions,
+    tools: () => new Map([...registrations].map(([rawName, handle]) => [rawName, handle.registration])),
     resources: {
       async request(request, exec): Promise<JsonValue> {
         const generation = client
@@ -407,11 +414,11 @@ export function startConnection(ctx: Context, config: Config, policy: ResolvedRe
         ctx.logger.error(incompleteDisposalMessage)
       }
       // Quiesce, don't just request it: the in-flight attempt enqueues its
-      // sync before settling, so awaiting both leaves `disposers` final.
+      // sync before settling, so awaiting both leaves `registrations` final.
       await settling
       await syncChain
-      for (const dispose of disposers.values()) dispose()
-      disposers = new Map()
+      for (const dispose of registrations.values()) dispose()
+      registrations = new Map()
     },
   }
 }

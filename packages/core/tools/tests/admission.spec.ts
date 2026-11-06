@@ -10,7 +10,7 @@ import type { Scope } from '@deepseek-ai/dsh-scope'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool, orderedAdmission, ToolAdmissionError } from '@deepseek-ai/dsh-tools'
-import type { ToolDefinition, ToolExecutionInput, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { RegisteredTool, ToolDefinition, ToolExecutionInput, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 
 const TEST_MODEL_SELECTION = { provider: 'test', model: 'test' }
 const contexts: Context[] = []
@@ -354,35 +354,32 @@ it('accepts an array, a set, an iterator, and an empty array as decisions', asyn
   expect(declared).toEqual([['a'], ['a'], ['a'], []])
 })
 
-it('runs a host-internal batch past admission policies, for global and scoped registrations alike', async () => {
+it('invokes a retained registration past admission policies, for global and scoped registrations alike', async () => {
   const h = await setup()
-  h.ctx.tools.register(h.tool('global'))
-  h.scope.ctx.tools.register(h.tool('scoped'))
+  const global = h.ctx.tools.register(h.tool('global'))
+  const scoped = h.scope.ctx.tools.register(h.tool('scoped'))
   h.ctx.tools.registerAdmissionPolicy(() => [])
   expect(h.declared(await h.resolve())).toEqual([])
-  const batch = (name: string, extra: object = {}) => h.ctx.tools.execute({
-    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: [name] }, ...extra,
-    calls: [{ type: 'tool-call' as const, id: ToolCallId(`host-${name}`), name, arguments: '{}' }],
+  const invoke = (registration: RegisteredTool) => h.ctx.tools.invoke({
+    registration, arguments: {}, agent: h.agent, signal: h.controller.signal, callId: ToolCallId(`host-${registration.definition.name}`),
   })
-  expect((await batch('global')).results[0]?.result.isError).toBe(false)
-  expect((await batch('scoped')).results[0]?.result.isError).toBe(false)
+  expect((await invoke(global.registration)).isError).toBe(false)
+  expect((await invoke(scoped.registration)).isError).toBe(false)
   expect(h.calls).toEqual(['global', 'scoped'])
 })
 
-it('keeps conditional registrations unavailable and refuses a host-internal batch combined with a selection', async () => {
+it('keeps a conditional registration unavailable to an invocation', async () => {
   const h = await setup()
-  h.ctx.tools.register(h.tool('conditional'), { when: () => true })
+  const conditional = h.ctx.tools.register(h.tool('conditional'), { when: () => true })
   h.ctx.tools.registerAdmissionPolicy(() => [])
-  const calls = [{ type: 'tool-call' as const, id: ToolCallId('host-conditional'), name: 'conditional', arguments: '{}' }]
-  const result = await h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: ['conditional'] }, calls })
-  expect(result.results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
-  const toolSet = await h.resolve()
-  await expect(h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: ['conditional'] }, toolSet, calls }))
-    .rejects.toThrow('cannot be combined with a toolSet')
+  const result = await h.ctx.tools.invoke({
+    registration: conditional.registration, arguments: {}, agent: h.agent, signal: h.controller.signal, callId: ToolCallId('host-conditional'),
+  })
+  expect(result.error?.info?.code).toBe('UNKNOWN_TOOL')
   expect(h.calls).toEqual([])
 })
 
-it('still refuses a call without a selection and without the host-internal opt-in', async () => {
+it('still refuses a batch call without a selection while a policy applies', async () => {
   const h = await setup()
   h.ctx.tools.register(h.tool('hidden'))
   h.ctx.tools.registerAdmissionPolicy(() => [])
@@ -394,19 +391,44 @@ it('still refuses a call without a selection and without the host-internal opt-i
   expect(h.calls).toEqual([])
 })
 
-it('lets a host-internal batch reach only the tools it names, even among unconditional registrations', async () => {
+it('runs exactly the retained registration, never a same-named shadow, replacement, or restricted registration', async () => {
   const h = await setup()
-  h.ctx.tools.register(h.tool('own'))
-  h.ctx.tools.register(h.tool('unrelated'))
-  h.scope.ctx.tools.register(h.tool('scoped_unrelated'))
+  const own = h.ctx.tools.register(h.tool('own'))
+  const shadow = h.scope.ctx.tools.register(defineTool({
+    name: 'own', description: 'A scoped impostor.', parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() { h.calls.push('shadow'); return 'shadow' },
+  }))
   h.ctx.tools.registerAdmissionPolicy(() => [])
-  const batch = (names: readonly string[], ...called: string[]) => h.ctx.tools.execute({
-    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: names },
-    calls: called.map(name => ({ type: 'tool-call' as const, id: ToolCallId(`host-${name}`), name, arguments: '{}' })),
+  const invoke = (registration: RegisteredTool, id: string) => h.ctx.tools.invoke({
+    registration, arguments: {}, agent: h.agent, signal: h.controller.signal, callId: ToolCallId(id),
   })
-  const result = await batch(['own'], 'own', 'unrelated', 'scoped_unrelated')
-  expect(result.results.map(entry => entry.result.error?.info?.code)).toEqual([undefined, 'UNKNOWN_TOOL', 'UNKNOWN_TOOL'])
+  const first = await invoke(own.registration, 'retained')
+  expect(first.isError).toBe(false)
+  expect(first.content).toEqual([{ type: 'text', text: 'ran:own' }])
   expect(h.calls).toEqual(['own'])
-  await expect(batch([], 'own')).rejects.toThrow('must name at least one')
+  shadow()
+  const restriction = h.scope.ctx.tools.restrict({ deny: ['own'] })
+  expect((await invoke(own.registration, 'restricted')).error?.info?.code).toBe('UNKNOWN_TOOL')
+  restriction()
+  own()
+  h.ctx.tools.register(h.tool('own'))
+  expect((await invoke(own.registration, 'replaced')).error?.info?.code).toBe('UNKNOWN_TOOL')
   expect(h.calls).toEqual(['own'])
+})
+
+it('applies guards and cancellation to an invocation', async () => {
+  const h = await setup()
+  const own = h.ctx.tools.register(h.tool('own'))
+  const unguard = h.ctx.tools.guard(exec => exec.name === 'own' ? 'host call denied' : undefined)
+  const invoke = (signal: AbortSignal) => h.ctx.tools.invoke({
+    registration: own.registration, arguments: {}, agent: h.agent, signal, callId: ToolCallId('guarded'),
+  })
+  const denied = await invoke(h.controller.signal)
+  expect(denied).toMatchObject({ isError: true, error: { message: 'host call denied' } })
+  unguard()
+  const aborted = new AbortController()
+  aborted.abort()
+  expect((await invoke(aborted.signal)).error?.info?.code).toBe('ABORTED_BEFORE_DISPATCH')
+  expect(h.calls).toEqual([])
 })

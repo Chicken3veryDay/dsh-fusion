@@ -347,17 +347,8 @@ interface ToolBatchInput {
    * Step admission for every call in the batch, including program subcalls.
    * Undefined admits only unconditional registrations, and nothing at all while an
    * admission policy applies to the scope, because a policy needs a step to run.
-   * Mutually exclusive with {@link ToolBatchInput.hostInternalDispatch}.
    */
   readonly toolSet?: ResolvedToolSet
-  /**
-   * Explicit opt-in for a host component dispatching its own provider tools outside a model
-   * step (an MCP, browser, or computer-use bridge). The calls skip admission policies and
-   * reach only the named tools, and of those only the scope's unconditional registrations,
-   * including nested program calls. Never set it for a call a model requested: the model path
-   * passes its step's `toolSet`. Rejected together with `toolSet`.
-   */
-  readonly hostInternalDispatch?: HostInternalDispatch
   /**
    * Committed model step receiving root call/result events; requires `agent`.
    * Undefined when `agent` is absent or for calls outside a model response, such
@@ -368,6 +359,28 @@ interface ToolBatchInput {
     readonly turn: number
     readonly step: number
   }
+}
+```
+
+```ts type-equiv
+/**
+ * One call a host component (an MCP, browser, or computer-use bridge) makes to a tool it
+ * registered itself, outside any model step. It names the registration by identity, never by name.
+ */
+interface ToolInvocation {
+  /** The registration to run, as `tools.register()` returned it or MCP discovery produced it. */
+  readonly registration: RegisteredTool
+  /** Tool arguments; they are snapshotted before policy runs. */
+  readonly arguments: JsonValue
+  /** Correlation id for the call's pipeline events and result. */
+  readonly callId: ToolCallId
+  /** Cancellation for the call. */
+  readonly signal: AbortSignal
+  /**
+   * Agent on whose behalf the call runs: its scope chain decides whether the registration is
+   * visible, and its guards and execution context apply. Undefined sees only global registrations.
+   */
+  readonly agent?: Agent
 }
 ```
 
@@ -856,12 +869,26 @@ setExecutor(executor: ToolExecutor): () => void
 /**
  * Delegate a raw call batch to its Agent's provider or the deployment default.
  * Select at dispatch; accepted batches settle through that provider even if it unloads.
- * @param input - original calls, optional owning Agent, optional logging step, and either a step
- * `toolSet` or the explicit `hostInternalDispatch` opt-in.
+ * @param input - original calls, optional owning Agent, optional logging step, and optional step `toolSet`.
  * @returns the selected executor's settled batch; unavailable selections reject.
- * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.
  */
 async execute(input: ToolBatchInput): Promise<ToolBatchResult>
+
+/**
+ * Run one call to a registration a host component holds (an MCP, browser, or computer-use
+ * bridge running its own provider tool for an interaction). This is not the model's dispatch
+ * route: no name is resolved, so a same-named registration elsewhere, including a scoped shadow,
+ * is never reached; admission policies do not apply, because they decide what a model step may
+ * call; and the selected executor's model-call rules, such as PTC's `run_code`-only direct calls,
+ * do not apply. The call still passes the shared pipeline: the registration must be live and
+ * visible to the agent under its restrictions and must be unconditional, and pre-execute policy,
+ * guards, cancellation, the execute and post-execute wrappers, and result normalization run as for
+ * any call. No `tool/call` or `tool/result` Session event is committed.
+ * @param input - the retained registration, its arguments, correlation id, cancellation, and agent.
+ * @returns the settled result; a registration that is gone, restricted away, or conditional fails as `UNKNOWN_TOOL`.
+ * @throws {ToolBatchExecutionError} when the pipeline fails internally after draining.
+ */
+async invoke(input: ToolInvocation): Promise<ToolExecutionResult>
 
 /**
  * Register a monotonic denial in the calling scope.

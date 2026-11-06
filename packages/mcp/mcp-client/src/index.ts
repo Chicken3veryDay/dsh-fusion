@@ -20,8 +20,8 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { DEFAULT_MAX_INSTRUCTION_BYTES, RECONNECT_DEFAULTS, resolveReconnectPolicy, startConnection } from './connection.ts'
 import type { ReconnectConfig } from './connection.ts'
 import { registerServerContext } from './server-context.ts'
-// Side-effect type import: declaration-merges `ctx.tools` onto Context.
-import type {} from '@deepseek-ai/dsh-tools'
+// The type import also declaration-merges `ctx.tools` onto Context.
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 
 export { createMcpToolDefinition } from './tools.ts'
 export type { McpResult, McpToolDefinitionOptions } from './tools.ts'
@@ -162,6 +162,17 @@ export const Config = z.union([
 
 // ---- Plugin apply ----
 
+/** The registrations one MCP server connection currently holds. */
+export interface McpServerTools {
+  /**
+   * Read the current tool generation.
+   * @returns the server's raw tool names mapped to their live registrations, which
+   * `ctx.tools.invoke()` accepts; a re-sync replaces the generation, and the map is empty
+   * while none is registered.
+   */
+  current(): ReadonlyMap<string, RegisteredTool>
+}
+
 /**
  * Connect one MCP server and publish its initial tool generation before activation.
  * This entry remains explicitly `async`: Cordis treats a prototype-bearing
@@ -171,6 +182,18 @@ export const Config = z.union([
  * @returns startup readiness after connection and initial tool discovery settle.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  await connect(ctx, config)
+}
+
+/**
+ * Do what {@link apply} does and hand the caller the connection's registrations. A host component
+ * that runs this server's tools itself (a computer-use or browser bridge) calls it from its own
+ * child plugin, so the registration identities reach only the component that mounted the server.
+ * @param ctx - the mounting plugin's context, which owns the connection's effects.
+ * @param config - resolved transport and server namespace configuration.
+ * @returns the connection's registrations, once connection and initial tool discovery settle.
+ */
+export async function connect(ctx: Context, config: Config): Promise<McpServerTools> {
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.
@@ -219,4 +242,5 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (outcome.error !== undefined && config.failOnStartupError) {
     throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error })
   }
+  return { current: () => connection.tools() }
 }
