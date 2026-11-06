@@ -60,7 +60,7 @@ it('sends one runtime-context snapshot for the admitted tool set, not a supersed
     h.ctx.tools.get('probe', agent, toolSet) === undefined ? 'probe disabled' : 'probe enabled' })
   await send(h.agent, 'first')
   const snapshots = (h.adapter.requests[0]?.messages ?? [])
-    .filter(message => message.role === 'user' && message.source.kind === 'runtime-context')
+    .filter(message => message.role === 'user' && message.source?.kind === 'runtime-context')
     .map(message => message.content.map(block => block.type === 'text' ? block.text.split('\n').at(-1) : '').join(''))
   expect(snapshots).toEqual(['probe disabled'])
 })
