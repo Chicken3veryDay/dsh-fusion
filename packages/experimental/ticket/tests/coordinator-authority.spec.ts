@@ -20,6 +20,8 @@ describe('Ticket coordinator authority', () => {
   it('names the replacement the authority decides, keeps requests it leaves alone, and stops after disposal', async () => {
     const { ctx, session } = await harness()
     const replacement = SessionId('replacement-coordinator')
+    await ticketActor(ctx, replacement, async () => {})
+    await ticketActor(ctx, SessionId('requested'), async () => {})
     const requests: SessionId[] = []
     const dispose = ctx.tickets.registerCoordinatorAuthority((candidate, requested) => {
       requests.push(requested)
@@ -42,6 +44,8 @@ describe('Ticket coordinator authority', () => {
   it('reads the authority at the append, so a creation queued before an authority change names the new coordinator', async () => {
     const { ctx, session } = await harness()
     // The authority changes its answer as soon as the first creation has consulted it.
+    await ticketActor(ctx, SessionId('before'), async () => {})
+    await ticketActor(ctx, SessionId('after'), async () => {})
     const answers = [SessionId('before'), SessionId('after')]
     ctx.tickets.registerCoordinatorAuthority(() => answers.shift())
     const [first, second] = await ticketActor(ctx, session.id, async () => {
@@ -57,7 +61,7 @@ describe('Ticket coordinator authority', () => {
     const { ctx, session } = await harness()
     ctx.tickets.registerCoordinatorAuthority(() => { throw new Error('authority unavailable') })
     await expect(ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Rejected', description: '' })))
-      .rejects.toThrow('authority unavailable')
+      .rejects.toMatchObject({ message: 'Ticket coordinator authority failed', cause: { message: 'authority unavailable' } })
     expect(ctx.tickets.list(session)).toEqual([])
     expect(session.snapshotEvents().filter(event => event.type === 'ticket/state')).toEqual([])
   })

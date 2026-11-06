@@ -1487,21 +1487,21 @@ async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView
  * @param session - Owning Session.
  * @param request - Attempt identity, placement, actor and CAS revision.
  * @param capture - Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.
- * @returns Current Ticket; rejects replacement of unsettled work or changed operation payloads.
+ * @returns Durably flushed Ticket, including on retry; rejects unsettled replacements or changed operation payloads.
  */
 async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView> }) => void, ): Promise<TicketView>
 
 /** Record runtime receipts, stopping or uncertainty without releasing work.
  * @param session - Owning Session.
  * @param request - Current attempt and stable operation identity.
- * @returns Current Ticket; obsolete attempts and replaced receipts are rejected.
+ * @returns Durably flushed Ticket, including on retry; obsolete attempts and replaced receipts are rejected.
  */
 async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView>
 
 /** Record observed producer settlement; result reports alone never settle attempts.
  * @param session - Owning Session.
  * @param request - Current attempt, observed outcome and retained receipts.
- * @returns Current Ticket with settled work; retrying the same operation is safe.
+ * @returns Durably flushed Ticket with settled work; retries repeat the flush before returning.
  */
 async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView>
 

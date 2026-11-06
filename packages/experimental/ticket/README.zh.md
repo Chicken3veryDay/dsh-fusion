@@ -24,17 +24,17 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 <a id="use-this-package"></a>
 ## 使用本包
 
-将 `@deepseek-ai/dsh-experimental-ticket` 与持久化 Session 和 `@deepseek-ai/dsh-session-projection` 一起挂载。包会注册 `ctx.tickets` 和 `ticket` Session 投影。Session 拥有持久化状态；每个公开修改操作都要求在 `ctx.agents.withInitiator` 中使用已注册的确切 Agent，并在提供 `actorId` 时与之匹配。创建操作要求技术所有者调用；该所有者也可通过 `handoff` 收回协调权。交接目标必须是已注册且存活的 Agent。缺失、过期或冒用的调用者返回 `TICKET_AUTHORITY`。
+将 `@deepseek-ai/dsh-experimental-ticket` 与持久化 Session 和 `@deepseek-ai/dsh-session-projection` 一起挂载。包会注册 `ctx.tickets` 和 `ticket` Session 投影。Session 拥有持久化状态；每个公开修改操作都要求在 `ctx.agents.withInitiator` 中使用已注册的确切 Agent，并在提供 `actorId` 时与之匹配。创建操作要求技术所有者调用；该所有者也可通过 `handoff` 收回协调权。创建和交接都要求协调者是已注册且存活的 Agent。缺失、过期或冒用的调用者返回 `TICKET_AUTHORITY`。
 
 服务提供 `create`、`assign`、`claim`、`release`、`report`、`ask`、`answer`、`closeQuestion`、`attention`、`acknowledgeAttention`、`resolveAttention`、`block`、`handoff`、`complete`、`fail` 和 `cancel`。修改命令携带 `expectedRevision`；过期版本返回 `TICKET_STALE_REVISION`，不会覆盖更新后的状态。Worker 是执行适配器提供的直接 Session 身份。当前协调者可以回答未解决的问题，并确认或解决关注项；问题作者也可关闭自己未解决或已回答的问题。确认关注项不会解除阻塞。Worker 的进度、认领和释放操作会保留未解决的问题及关注项；解除最后一项阻塞后，根据分配状态重新计算就绪状态。已结束或已释放的分配拒绝报告。 规格编辑会重新开放没有尝试历史的已完成贡献，供模型提交新报告，同时保留旧报告历史。有尝试历史的分配需要宿主准入新尝试；旧式认领不能重新开放它们。独占写分配必须使用带工作区身份的尝试，而不能使用旧式认领。候选提交若引用没有当前结果报告的分配，会返回包含分配身份的 `TICKET_ACCEPTANCE`。必需子 Ticket 约束验收；未完成、失败或取消的子 Ticket 不会阻止父 Ticket 取消或失败。
 
-当模型需要通过 `ticket_*` 命令协调时挂载 `TicketTools`。当分配需要共享工作区、隔离 worktree或自有后台任务时，挂载 `TicketExecutionService` 并提供 Jobs 和 Worktree 服务。执行适配器准入持久化尝试，检查直接 Worker 身份，并获得绑定到尝试的记录器，将执行事实与所有 Ticket 命令串行化，无需调用者 CAS。准备操作必须匹配当前发起 Agent（若存在）。记录器在协调员交接或准备 Agent 销毁后仍可使用。启动生产者前，它保持运行时身份不变，并把每个 job id 追加到回执中。调用者取消监听保留到生产者结算或句柄成功清理；失败 Job 优先于已取消 Job，二者均阻止成功。销毁先请求取消，再执行持久化写入，即使 Agent 清理已删除 Job 记录，也等待保留的生产者承诺。等待中或超时的自然结算可升级为销毁；持久化失败后可重试。成功结算释放活动分配并删除内存中的准备预留。重复准备已结算尝试返回 `TICKET_ATTEMPT_STATE`。
+当模型需要通过 `ticket_*` 命令协调时挂载 `TicketTools`。当分配需要共享工作区、隔离 worktree或自有后台任务时，挂载 `TicketExecutionService` 并提供 Jobs 和 Worktree 服务。执行适配器准入持久化尝试，检查直接 Worker 身份，并获得绑定到尝试的记录器，将执行事实与所有 Ticket 命令串行化，无需调用者 CAS。准备操作必须匹配当前发起 Agent（若存在）。记录器在协调员交接或准备 Agent 销毁后仍可使用。启动生产者前，它保持运行时身份不变，并把每个 job id 追加到回执中。调用者取消监听保留到生产者结算或句柄成功清理；失败 Job 优先于已取消 Job，二者均阻止成功。销毁先请求取消，再执行持久化写入，即使 Agent 清理已删除 Job 记录，也等待保留的生产者承诺。等待中或超时的自然结算可升级为销毁；持久化失败后可重试。在生产者启动前取消或关闭会将尝试结算为已取消，并保留已知工作区回执。资源创建结果不确定时仍记为未知。所有者释放回调不会自动重试失败的停止；显式释放和清理可以重试。成功结算释放活动分配并删除内存中的准备预留。重复准备已结算尝试返回 `TICKET_ATTEMPT_STATE`。
 
-为某个 Session 负责协调的包通过 `registerCoordinatorAuthority(authority)` 注册，并获得返回的释放函数。`create` 在该 Session 的命令队列内询问每个授权方，且与读取 Session 状态、追加 Ticket 处于同一个同步步骤。授权方收到请求的协调者（`CreateTicketRequest.coordinatorId`，缺省为 Session id），并可返回替代者；第一个替代者生效，因此协调权变化期间创建的 Ticket 总是记录追加时授权方决定的协调者。授权方抛出错误时创建失败，且不追加任何内容。
+为某个 Session 负责协调的包通过 `registerCoordinatorAuthority(authority)` 注册，并获得返回的释放函数。`create` 在该 Session 的命令队列内询问每个授权方，且与读取 Session 状态、追加 Ticket 处于同一个同步步骤。授权方收到请求的协调者（`CreateTicketRequest.coordinatorId`，缺省为 Session id），并可返回替代者；第一个替代者生效，因此协调权变化期间创建的 Ticket 总是记录追加时授权方决定的协调者。授权方抛出错误时返回带有原始原因的 `TICKET_RECOVERY_FAILED`，且不追加任何内容。
 
-[Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。命令准入和重放共用语义验证；无效命令不会追加事件。提议状态的 Ticket 不能直接完成。持久化刷新可能在追加后失败，重试前应读取当前版本。 旧版 v1 报告投影到合成的初始规格，因此保留的结果可以进入 v2 候选而无需改写旧事件。
+[Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。命令准入和重放共用语义验证；无效命令不会追加事件。提议状态的 Ticket 不能直接完成。持久化刷新可能在追加后失败，重试前应读取当前版本。幂等的尝试操作重试会再次刷新 Session，然后才报告成功。 旧版 v1 报告投影到合成的初始规格，因此保留的结果可以进入 v2 候选而无需改写旧事件。
 
-工作范围规范化以斜杠分隔的相对路径，折叠 `.` 和 `..`，并拒绝工作区逃逸、绝对路径、驱动器前缀和反斜杠。分配范围必须位于声明的 Ticket 范围内，且不能从读权限提升为写权限；未声明范围的 Ticket 不限制分配声明。尝试准入会在同一共享执行环境中原子排斥重叠写范围，只要任一声明为独占。准入在所有存活根 Session 之间串行化，包括恢复的未结算尝试。预留覆盖这些 Session 中的所有 Ticket，并在停止或未知状态下保留到结算。隔离 worktree和不同执行环境相互独立；范围不会限制文件系统访问。
+工作范围规范化以斜杠分隔的相对路径，折叠 `.` 和 `..`，并拒绝工作区逃逸、绝对路径、驱动器前缀和反斜杠。分配范围必须位于声明的 Ticket 范围内，且不能从读权限提升为写权限；未声明范围的 Ticket 不限制分配声明。尝试准入会在同一共享执行环境中原子排斥重叠写范围，只要任一声明为独占。范围检查和追加同步执行；无关根无需等待另一根的刷新。预留在根 Session 关闭后仍保留，并在停止、未知状态或结算刷新失败期间持续持有。激活会在准入前通过 Ticket 投影重建存储根的预留，不恢复生产者。恢复失败仅针对所属根报告并保留其已知范围；无关范围仍可使用。隔离 worktree和不同执行环境相互独立；范围不会限制文件系统访问。
 
 <a id="understand-the-implementation"></a>
 ## 实现原理
@@ -69,7 +69,8 @@ Ticket 状态变化不会修改请求头或模型提示词前缀。
 
 - 执行适配器在内存中负责 Jobs 和 Worktree 生命周期；Ticket 日志保留 Assignment 和槽位状态，具体任务与 checkout 的恢复仍由提供者负责。
 - 此包没有来源接入策略或浏览器监督 UI。消费者决定哪些 Ticket 命令和执行模式需要人工确认。
-- Ticket 快照在准入更多状态前为未知状态、最小结算记录和最小 Ticket 取消摘要预留字节容量。尝试数量使用 `maxReports`；操作数量由快照字节数而非报告数量限制。`ticket-execution:` 操作 id 前缀保留给已准入的执行事实。操作指纹使用 SHA-256；保留的 JSON 指纹仍可读取。报告、问题、关注项和操作历史不会压缩。
+- Ticket 快照在准入更多状态前为未知状态、最小结算记录和最小 Ticket 取消摘要预留字节容量。尝试数量使用 `maxReports`；操作数量由快照字节数而非报告数量限制。`ticket-execution:` 操作 id 前缀保留给已准入的执行事实。操作指纹使用 SHA-256；保留的 JSON 指纹仍可读取。已结算尝试会将带标签的操作记录压缩为一条保留已退役 id 的结算记录；重放保留这些拒绝规则，结算重试保留指纹和持久化检查。历史无标签操作、报告、问题和关注项不会压缩。
+- 损坏根若没有可恢复的 Ticket 执行位置，就无法预留可识别的工作区；恢复警告要求在恢复该根之前修复。已知预留仍被保留。持久化根关闭后，必须先恢复才能持久化结算。
 - Ticket 位于一个 Session 日志中。跨 Session 复制和来源接入由适配器负责。
 
 <a id="dev-note"></a>

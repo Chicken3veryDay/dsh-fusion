@@ -210,6 +210,8 @@ export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = ticketSnapshotV1S
   }).strict()),
   operations: z.array(z.object({
     id: z.string().min(1).transform(value => TicketOperationId(value)), request: z.string().min(1),
+    attemptId: z.string().min(1).transform(value => TicketAttemptId(value)).optional(),
+    retiredIds: z.array(z.string().min(1).transform(value => TicketOperationId(value))).optional(),
   }).strict()),
   missionPlans: z.array(z.object({
     id: z.string().min(1).transform(value => MissionId(value)), revision: positiveInteger,
@@ -381,7 +383,7 @@ export function ticketProjectionView(state: TicketProjectionState): TicketProjec
 /** Session projection for the durable Ticket domain. */
 export const ticketProjectionDefinition = {
   key: 'ticket',
-  stateVersion: 3,
+  stateVersion: 4,
   stateSchema: z.object({
     sessionId: sessionIdSchema,
     tickets: z.array(ticketSnapshotSchema),

@@ -4501,19 +4501,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, \'status\' | \'workspaceReceipt\' | \'runtimeReceipt\' | \'diagnostics\'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest[\'outcome\']): Promise<TicketView> }) => void, ): Promise<TicketView>',
         description: 'Admit one execution attempt before effects; repeated operation identities do not append.',
         parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Attempt identity, placement, actor and CAS revision.' }, { name: 'capture', description: 'Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.' }],
-        returns: 'Current Ticket; rejects replacement of unsettled work or changed operation payloads.',
+        returns: 'Durably flushed Ticket, including on retry; rejects unsettled replacements or changed operation payloads.',
       },
       {
         signature: 'async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView>',
         description: 'Record runtime receipts, stopping or uncertainty without releasing work.',
         parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Current attempt and stable operation identity.' }],
-        returns: 'Current Ticket; obsolete attempts and replaced receipts are rejected.',
+        returns: 'Durably flushed Ticket, including on retry; obsolete attempts and replaced receipts are rejected.',
       },
       {
         signature: 'async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView>',
         description: 'Record observed producer settlement; result reports alone never settle attempts.',
         parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Current attempt, observed outcome and retained receipts.' }],
-        returns: 'Current Ticket with settled work; retrying the same operation is safe.',
+        returns: 'Durably flushed Ticket with settled work; retries repeat the flush before returning.',
       },
       {
         signature: 'async submitCandidate(session: Session, request: SubmitTicketCandidateRequest): Promise<TicketView>',
@@ -10956,7 +10956,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TicketOperationSnapshot',
-    declaration: 'export interface TicketOperationSnapshot {\n    readonly id: TicketOperationId;\n    readonly request: string;\n}',
+    declaration: 'export interface TicketOperationSnapshot {\n    readonly id: TicketOperationId;\n    readonly request: string;\n    readonly attemptId?: TicketAttemptId;\n    readonly retiredIds?: readonly TicketOperationId[];\n}',
   },
   {
     name: 'TicketParent',

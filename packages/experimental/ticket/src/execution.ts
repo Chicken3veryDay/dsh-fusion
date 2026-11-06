@@ -80,6 +80,7 @@ interface LiveHandle {
   queue: Promise<void>
   closing: boolean
   disposal?: Promise<void>
+  stopFailed?: boolean
 }
 
 /** Serializes attempt admission, retains uncertain resources, and waits for producer settlement. */
@@ -98,8 +99,8 @@ export class TicketExecutionService extends Service {
 
   protected [Service.init](): void {
     this.ctx.on('agent/disposed', ({ agent }) => {
-      const handles = [...this.handles].filter(handle =>
-        handle.caller === agent || handle.worker === agent || handle.root === agent.session)
+      const handles = [...this.handles].filter(handle => !handle.stopFailed
+        && (handle.caller === agent || handle.worker === agent || handle.root === agent.session))
       void Promise.all(handles.map(handle => this.disposeHandle(handle))).catch((error: unknown) => {
         this.ctx.logger.warn(`Ticket execution owner disposal did not settle; reservation retained for reconciliation: ${String(error)}`)
       })
@@ -209,13 +210,19 @@ export class TicketExecutionService extends Service {
     let workspace: TicketWorkspaceReceipt | undefined
     let activation: SubagentActivation | undefined
     let retainedHandle: LiveHandle | undefined
+    let effectInFlight = false
     try {
+      signal.throwIfAborted()
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- admission awaited persistence since the preceding shutdown check.
+      if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
       if (request.workspace.kind === 'isolated-worktree') {
+        effectInFlight = true
         const worktree = await this.ctx.worktrees.create(workspaceAgent, {
           name: request.worktreeName ?? request.attemptId,
           ...request.workspace.baseCommit === undefined ? {} : { from: request.workspace.baseCommit },
         }, signal)
         workspace = { directory: worktree.path, baseCommit: worktree.baseCommit, worktree }
+        effectInFlight = false
       } else {
         if (request.workspace.baseCommit === undefined) throw new TicketError('Ticket shared workspace requires a baseCommit receipt', 'TICKET_INVALID_INPUT')
         workspace = { directory: request.workspace.directory, baseCommit: request.workspace.baseCommit }
@@ -225,6 +232,7 @@ export class TicketExecutionService extends Service {
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can set `closing` during the awaited workspace update.
       if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
       if (request.executor.kind !== 'in-process') {
+        effectInFlight = true
         activation = await this.ctx.subagents.startActivation({
           provider: request.executor.provider,
           label: assignment.subject,
@@ -238,6 +246,7 @@ export class TicketExecutionService extends Service {
           delivery: 'caller',
           signal,
         })
+        effectInFlight = false
         // A rejected capture remains observable through the returned result without an unhandled rejection.
         void activation.result.catch(() => {})
       }
@@ -271,6 +280,16 @@ export class TicketExecutionService extends Service {
       if (retainedHandle !== undefined) retainedHandle.closing = true
       if (activation !== undefined) {
         try { await this.bounded(activation.dispose()) } catch (cleanup: unknown) { failures.push(cleanup) }
+      }
+      if (!effectInFlight && activation === undefined) {
+        try {
+          if (workspace !== undefined) await this.update(controller, 'preparation-workspace', { status: 'stopping', workspaceReceipt: workspace })
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can begin during any awaited preparation stage.
+          await controller.settle(signal.aborted || this.closing ? 'cancelled' : 'failed')
+          if (retainedHandle !== undefined) this.handles.delete(retainedHandle)
+          this.reservations.delete(JSON.stringify([root.id, request.ticketId, request.assignmentId]))
+        } catch (recording: unknown) { failures.push(recording) }
+        throw new AggregateError(failures, 'Ticket preparation ended before a producer started; retry persistence if settlement failed')
       }
       try {
         await this.update(controller, 'preparation-unknown', {
@@ -386,9 +405,13 @@ export class TicketExecutionService extends Service {
       void handle.cancellation.catch(() => {})
     }
     if (handle.disposal !== undefined) return handle.disposal
+    handle.stopFailed = false
     const disposal = this.stop(handle)
     handle.disposal = disposal
-    void disposal.catch(() => { if (handle.disposal === disposal) delete handle.disposal })
+    void disposal.catch(() => {
+      handle.stopFailed = true
+      if (handle.disposal === disposal) delete handle.disposal
+    })
     return disposal
   }
 
@@ -412,11 +435,13 @@ export class TicketExecutionService extends Service {
       if (handle.cancelRequested && outcome !== 'failed') outcome = 'cancelled'
       // A dispose may escalate while the natural wait is in progress.
       if (handle.cancellation !== undefined) await this.bounded(handle.cancellation)
-      await controller.settle(outcome)
+      const recorded = this.ctx.tickets.get(root, request.ticketId).attempts.find(attempt => attempt.id === request.attemptId)
+      await controller.settle(recorded?.status === 'settled' ? recorded.outcome : outcome)
       for (const cleanup of handle.listeners) cleanup()
       this.handles.delete(handle)
       this.reservations.delete(JSON.stringify([root.id, request.ticketId, request.assignmentId]))
     } catch (error: unknown) {
+      if (this.ctx.tickets.get(root, request.ticketId).attempts.find(attempt => attempt.id === request.attemptId)?.status === 'settled') throw error
       try {
         await this.update(controller, 'stop-unknown', { status: 'unknown', diagnostics: ['Cancellation did not establish producer settlement; reservation retained'] })
       } catch (recording: unknown) {

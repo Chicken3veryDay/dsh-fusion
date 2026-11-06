@@ -482,7 +482,14 @@ export interface TicketCheckSnapshot {
   readonly createdAt: number
 }
 /** Durable deduplication record; request is canonical JSON or a SHA-256 fingerprint, excluding CAS revision. */
-export interface TicketOperationSnapshot { readonly id: TicketOperationId; readonly request: string }
+export interface TicketOperationSnapshot {
+  readonly id: TicketOperationId
+  readonly request: string
+  /** Attempt owning this operation; absent on historical records and operations unrelated to attempts. */
+  readonly attemptId?: TicketAttemptId
+  /** Retired operation ids retained by the settlement record to refuse reuse without retaining request fingerprints. */
+  readonly retiredIds?: readonly TicketOperationId[]
+}
 /** A Mission milestone references Ticket completion, never a second mutable status. */
 export interface MissionMilestone { readonly title: string; readonly ticketIds: readonly TicketId[] }
 /** Versioned plan; progress is derived from referenced Ticket terminal outcomes. */

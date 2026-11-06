@@ -115,7 +115,14 @@ export function validateCurrentTicketChange(previous: TicketSnapshot | undefined
     retained(previous.reports, ticket.reports, 'report')
     retained(previous.candidates, ticket.candidates, 'candidate')
     retained(previous.checks, ticket.checks, 'check')
-    retained(previous.operations, ticket.operations, 'operation')
+    for (const operation of previous.operations) {
+      if (ticket.operations.some(next => same(operation, next))) continue
+      const settlement = ticket.operations.find(next => next.attemptId === operation.attemptId && next.retiredIds?.includes(operation.id))
+      if (operation.attemptId === undefined || settlement === undefined
+        || !previous.attempts.some(attempt => attempt.id === operation.attemptId && attempt.status !== 'settled')
+        || !ticket.attempts.some(attempt => attempt.id === operation.attemptId && attempt.status === 'settled')
+        || operation.retiredIds?.some(id => !settlement.retiredIds?.includes(id))) reject('operation history requires a settled attempt tombstone')
+    }
     if (ticket.assignments.length < previous.assignments.length || ticket.attempts.length < previous.attempts.length) reject('assignment and attempt history cannot be removed')
     for (const old of previous.assignments) {
       const next = ticket.assignments.find(item => item.id === old.id)
@@ -151,6 +158,11 @@ export function validateCurrentTicketChange(previous: TicketSnapshot | undefined
     ['question', ticket.questions], ['attention', ticket.attentions], ['attempt', ticket.attempts],
     ['candidate', ticket.candidates], ['check', ticket.checks], ['operation', ticket.operations], ['Mission', ticket.missionPlans],
   ] as const) unique(values.map(value => value.id), label)
+  unique(ticket.operations.flatMap(operation => [operation.id, ...operation.retiredIds ?? []]), 'operation and retired operation')
+  for (const operation of ticket.operations) {
+    if (operation.attemptId !== undefined && !ticket.attempts.some(attempt => attempt.id === operation.attemptId)) reject('operation references an unknown attempt')
+    if (operation.retiredIds !== undefined && !ticket.attempts.some(attempt => attempt.id === operation.attemptId && attempt.status === 'settled')) reject('retired operations require a settled attempt')
+  }
   unique(ticket.specification.acceptanceCriteria.map(item => item.id), 'criterion')
   for (const attempt of ticket.attempts) {
     const assignment = ticket.assignments.find(item => item.id === attempt.assignmentId)
