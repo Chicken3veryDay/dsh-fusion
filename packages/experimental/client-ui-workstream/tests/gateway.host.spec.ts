@@ -195,7 +195,7 @@ it.each(['answerQuestion', 'closeQuestion', 'acknowledgeAttention', 'resolveAtte
       agentId: member.id, request: { ticketId: before.id, questionId: before.questions[0]!.id,
         attentionId: before.attentions[0]!.id, expectedRevision: before.revision, answer: 'main' },
     } })
-    await expect(invoke()).rejects.toMatchObject({ code: 'workstreamPanel/denied' })
+    await expect(invoke()).rejects.toMatchObject({ code: 'workstreamPanel/forbidden' })
     expect(current(ctx, before)).toEqual(before)
     rootGranted = true
     await invoke()
@@ -217,7 +217,7 @@ it('Changes checks every active member grant before reading the aggregate', asyn
   const aggregate = vi.spyOn(ctx.workstreamEvidence, 'aggregateChangeRequests')
   const peer = new Peer(ctx, { principal: { kind: 'workstream-review' } })
   const invoke = () => ctx.typertGateway.invoke({ peer, namespace: 'workstreamPanel', method: 'changeRequests', args: { agentId: owner.id } })
-  await expect(invoke()).rejects.toMatchObject({ code: 'workstreamPanel/denied' })
+  await expect(invoke()).rejects.toMatchObject({ code: 'workstreamPanel/forbidden' })
   expect(aggregate).not.toHaveBeenCalled()
   childGranted = true
   await invoke()
@@ -238,6 +238,6 @@ it('Changes checks a stopped member grant because the aggregate still reads its 
   const aggregate = vi.spyOn(ctx.workstreamEvidence, 'aggregateChangeRequests')
   const peer = new Peer(ctx, { principal: { kind: 'workstream-review' } })
   await expect(ctx.typertGateway.invoke({ peer, namespace: 'workstreamPanel', method: 'changeRequests', args: { agentId: owner.id } }))
-    .rejects.toMatchObject({ code: 'workstreamPanel/denied' })
+    .rejects.toMatchObject({ code: 'workstreamPanel/forbidden' })
   expect(aggregate).not.toHaveBeenCalled()
 })

@@ -8,6 +8,8 @@ import { RemoteError, type RemoteResult, type TypertRemoteContribution } from '@
 import type { WorkstreamActionInjected, WorkstreamCommand } from '../src/client/WorkstreamAction.tsx'
 import { WorkstreamAction } from '../src/client/WorkstreamAction.tsx'
 import { failureOf, inject, mountWorkstreamPanel } from '../src/client/mount.ts'
+import { failureText } from '../src/client/views.tsx'
+import { en, zh } from '../src/client/locales.ts'
 import { build, REVIEWER, ROOT, WORKER } from './fixtures.client.ts'
 
 const contribution: TypertRemoteContribution = { package: '@deepseek-ai/dsh-experimental-client-ui-workstream', descriptors: [] }
@@ -103,6 +105,57 @@ describe('Workstream panel browser plugin', () => {
     expect(failure).toEqual({ code: 'stale', message: 'Ticket "build" is at revision 5, expected 4' })
   })
 
+  const stale: RemoteResult<void> = { ok: false, error: new RemoteError('workstreamPanel/stale-revision', 'stale', {}) }
+  const answer = (questionId: string): WorkstreamCommand => ({
+    kind: 'answer', request: { ticketId: build.id, questionId: questionId as never, expectedRevision: 4, answer: 'main' },
+  })
+
+  const close: WorkstreamCommand = {
+    kind: 'closeQuestion', request: { ticketId: build.id, questionId: 'q1' as never, expectedRevision: 4 },
+  }
+
+  it('a reread superseded by a newer forced reread waits for it instead of reporting a failed refresh', async () => {
+    const b = await bench({ addressed: true })
+    const first = Promise.withResolvers<undefined>()
+    const second = Promise.withResolvers<undefined>()
+    b.refreshProjections.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    b.panel.answerQuestion.mockResolvedValue(stale)
+    b.panel.closeQuestion.mockResolvedValue(stale)
+    const one = b.actions().command(WORKER, answer('q1'))
+    const two = b.actions().command(WORKER, close)
+    await vi.waitFor(() => { expect(b.refreshProjections).toHaveBeenCalledTimes(2) })
+    first.reject(new Error('The projection reread was cancelled'))
+    second.resolve(undefined)
+    expect(await one).toEqual({ code: 'stale', message: 'stale' })
+    expect(await two).toEqual({ code: 'stale', message: 'stale' })
+  })
+
+  it('every waiter reports the failed refresh when the newest reread fails too', async () => {
+    const b = await bench({ addressed: true })
+    const first = Promise.withResolvers<undefined>()
+    const second = Promise.withResolvers<undefined>()
+    b.refreshProjections.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    b.panel.answerQuestion.mockResolvedValue(stale)
+    b.panel.closeQuestion.mockResolvedValue(stale)
+    const one = b.actions().command(WORKER, answer('q1'))
+    const two = b.actions().command(WORKER, close)
+    await vi.waitFor(() => { expect(b.refreshProjections).toHaveBeenCalledTimes(2) })
+    first.reject(new Error('The projection reread was cancelled'))
+    second.reject(new Error('offline'))
+    expect(await one).toMatchObject({ code: 'refresh-failed', message: 'Error: offline' })
+    expect(await two).toMatchObject({ code: 'refresh-failed', message: 'Error: offline' })
+  })
+
+  it('shows a Gateway access denial as localized access copy, not the Host diagnostic', () => {
+    const failure = failureOf({ code: 'remote-access/denied', message: 'remote access: workstreamPanel/answerQuestion: access denied (no-allow)' })
+    const t = (dictionary: typeof en | typeof zh) => (key: keyof typeof en, params?: Record<string, string | number>) =>
+      dictionary[key].replace(/\{(\w+)\}/gu, (_, name: string) => String(params?.[name] ?? ''))
+    expect(failureText(failure, t(en) as never)).toBe(en['error.forbidden'])
+    expect(failureText(failure, t(zh) as never)).toBe(zh['error.forbidden'])
+    expect(failureText(failure, t(zh) as never)).not.toContain('remote access')
+    expect(en['error.forbidden']).not.toBe(en['error.denied'])
+  })
+
   it('reports other refusals without rereading', async () => {
     const b = await bench()
     b.panel.resolveAttention.mockResolvedValueOnce({ ok: false, error: new RemoteError('workstreamPanel/denied', 'only the current coordinator', {}) })
@@ -123,6 +176,8 @@ describe('Workstream panel browser plugin', () => {
   it.each([
     ['workstreamPanel/stale-revision', 'stale'],
     ['workstreamPanel/denied', 'denied'],
+    ['workstreamPanel/forbidden', 'forbidden'],
+    ['remote-access/denied', 'forbidden'],
     ['workstreamPanel/unavailable', 'unavailable'],
     ['workstreamPanel/rejected', 'rejected'],
     ['gateway/internal', 'failed'],

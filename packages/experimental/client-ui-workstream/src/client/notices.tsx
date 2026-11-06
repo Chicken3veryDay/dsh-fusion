@@ -4,21 +4,27 @@ import { useSyncExternalStore } from 'react'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { WorkstreamActionInjected, WorkstreamFailure } from './WorkstreamAction.tsx'
+import type { WorkstreamActionInjected, WorkstreamCommand, WorkstreamFailure } from './WorkstreamAction.tsx'
 import type { NS } from './locales.ts'
 import { failureText } from './views.tsx'
+
+/** Identify the card action a command belongs to, so a command supersedes only its own earlier report. */
+function commandId(command: WorkstreamCommand): string {
+  const { request } = command
+  return JSON.stringify([command.kind, request.ticketId, 'questionId' in request ? request.questionId : request.attentionId])
+}
 
 /**
  * Create the plugin-owned command report store.
  * @returns report publication, subscription, and dismissal for the shell overlay.
  */
 export function createCommandReports() {
-  const store = createSnapshotStore<{ seq: number; failure: WorkstreamFailure; draft: string } | null>(null)
+  const store = createSnapshotStore<{ seq: number; id: string; failure: WorkstreamFailure } | null>(null)
   let seq = 0
   const reportFailure: WorkstreamActionInjected['reportFailure'] = (failure, command) => {
-    store.set(failure === null ? null : {
-      seq: ++seq, failure, draft: command.kind === 'answer' ? command.request.answer : '',
-    })
+    const id = commandId(command)
+    if (failure !== null) store.set({ seq: ++seq, id, failure })
+    else if (store.getSnapshot()?.id === id) store.set(null)
   }
   return {
     subscribe: (listener: () => void) => store.subscribe(listener),
@@ -29,13 +35,13 @@ export function createCommandReports() {
 }
 
 /**
- * Render command refusals in the application overlay, including any rejected answer.
+ * Render the latest command refusal in the application overlay. Rejected answer text is not part of
+ * the transient report; the answer draft store keeps it.
  * @param props - plugin-owned reports and localized panel copy.
  * @returns the transient report or no content.
  */
 export function CommandNotice({ reports, t }: { reports: ReturnType<typeof createCommandReports> } & PropsLocale<typeof NS>) {
   const notice = useSyncExternalStore(reports.subscribe, reports.getSnapshot)
   if (notice === null) return null
-  const text = failureText(notice.failure, t) + (notice.draft.length === 0 ? '' : `\n${notice.draft}`)
-  return <Toast key={notice.seq} text={text} onDone={reports.dismiss} />
+  return <Toast key={notice.seq} text={failureText(notice.failure, t)} onDone={reports.dismiss} />
 }

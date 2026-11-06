@@ -27,11 +27,11 @@ kind: "package-reference"
 
 通过 [`@deepseek-ai/dsh-experimental-workstream-profile`](../workstream-profile/README.zh.md) 启用本包。该层同时提供 Ticket、Workstream 与 Workstream Evidence 服务以及本面板。Web Client loader 挂载 `/client` export，Host 将 root export 加载为 `workstreamPanel` Remote。本包没有用户配置字段。
 
-页头 action 只出现在 Workstream 根投影了 Workstream 的会话中：所有者 Session，或作为所有者 continuable 子会话打开的成员。徽标显示待你处理中的事项数。点击 action 打开面板；点击外部或按 Escape 关闭。页头较窄时 action 只显示图标和徽标；手机宽度的面板会隐藏标签页上的各视图数量。
+页头 action 只出现在 Workstream 根投影了 Workstream 的会话中：所有者 Session，或作为所有者 continuable 子会话打开的成员。徽标显示待你处理中的事项数。点击 action 打开面板；点击外部或按 Escape 关闭；用于取消输入法组合的 Escape 不会关闭。页头较窄时 action 只显示图标和徽标；手机宽度的面板会隐藏标签页上的各视图数量。
 
 ### 处理问题与关注事项
 
-待你处理按时间顺序列出尚未结束的工单中打开的问题和未解决的关注事项。问题卡片包含回答输入框、发送回答与关闭问题。关注卡片在确认前提供确认，并始终提供解决。每条命令携带面板显示时的工单 revision。若其他更改先提交，面板会在报告冲突前强制重新读取根投影。重新读取失败时会报告错误，而不声称已显示当前状态。命令失败通过应用级 toast 显示，即使卡片、标签页、面板或会话已关闭；报告包含被拒绝的回答文本，仍存在的回答输入框也会保留该文本。
+待你处理按时间顺序列出尚未结束的工单中打开的问题和未解决的关注事项。问题卡片包含回答输入框、发送回答与关闭问题。关注卡片在确认前提供确认，并始终提供解决。每条命令携带面板显示时的工单 revision。若其他更改先提交，面板会在报告冲突前强制重新读取根投影。重新读取失败时会报告错误，而不声称已显示当前状态。命令失败通过应用级 toast 显示，即使卡片、标签页、面板或会话已关闭；一条命令只会清除它自己先前的报告。回答文本按工单和问题保存在插件拥有的状态中，而不在卡片里：切换标签页、点击外部、关闭面板和发送被拒绝后都会保留。当问题已无法回答（他人已回答或关闭，或其工单已结束）时，文本保留在待你处理顶部的保留行中，其中有问题、可选择的文本框、复制回答与丢弃。该行计入徽标；若问题再次可回答，文本会回到卡片。已提交的回答会清除其草稿。
 
 工单服务决定谁可以执行操作。回答、确认和解决需要工单协调者，因此不协调该工单的成员会话会显示权限提示。问题作者也可以关闭自己的问题。Remote 命令还要求对当前显示的 Session 和推导出的根 Session 都有访问权限。
 
@@ -50,9 +50,9 @@ kind: "package-reference"
 <details>
 <summary>实现内部细节 — 点击展开</summary>
 
-`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`，并以调用者作为发起 Agent。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个保留成员（包括已停止成员）的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；其他失败原样传播。
+`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`，并以调用者作为发起 Agent。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个保留成员（包括已停止成员）的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；根或成员 Session 缺少 Remote 访问授权时为 `workstreamPanel/forbidden`。其他失败原样传播。
 
-Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头 action 和 shell overlay 命令报告；释放时先撤回两个 slot，再撤回 Remote。stale-revision 失败调用 `sessions.refreshProjections(root, true)`，绕过已就绪的缓存并取消较早的读取。带序号的基线保留较新的投影帧。
+Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头 action 和 shell overlay 命令报告；释放时先撤回两个 slot，再撤回 Remote。stale-revision 失败调用 `sessions.refreshProjections(root, true)`，绕过已就绪的缓存并取消较早的读取。带序号的基线保留较新的投影帧。被同一根的较新重新读取中止的读取，会等待较新的读取，而不报告刷新失败。Gateway 的 `remote-access/denied` 与 `workstreamPanel/forbidden` 都显示本地化的无权限文案。
 
 | 文件 | 作用 |
 |---|---|
@@ -60,7 +60,9 @@ Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头
 | [`src/types.ts`](src/types.ts) | 浏览器安全的 Remote 请求与失败码 |
 | [`src/client/mount.ts`](src/client/mount.ts) | Remote、locale、导航与 slot 注册 |
 | [`src/client/WorkstreamAction.tsx`](src/client/WorkstreamAction.tsx) | 页头 action、面板与视图选择 |
-| [`src/client/views.tsx`](src/client/views.tsx) | 五个视图及其命令卡片 |
+| [`src/client/views.tsx`](src/client/views.tsx) | 五个视图、其命令卡片与保留的回答 |
+| [`src/client/drafts.ts`](src/client/drafts.ts) | 按根、工单和问题保存的回答草稿 |
+| [`src/client/notices.tsx`](src/client/notices.tsx) | shell overlay 中的命令拒绝 toast |
 | [`src/client/model.ts`](src/client/model.ts) | 从工单推导的待你处理事项与 Mission 进度 |
 | [`src/client/locales.ts`](src/client/locales.ts) | 八种语言的面板文案 |
 
@@ -96,6 +98,7 @@ Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头
 - **需要所有者在线** — 命令和变更视图需要所有者 Session 已加载；否则面板显示不可用提示。
 - **不管理工单或成员** — 面板不能创建、分派、结束或交接工单，不能添加或停止成员，也不能发送 peer 消息。
 - **文件仅含元数据** — 文件视图列出证据版本，但不打开或下载其内容。
+- **草稿仅存于内存** — 未发送和保留的回答在面板关闭后仍在，但页面刷新后丢失。
 - **按需读取变更请求** — 变更视图不跟随 forge 轮询；点击重新加载可再次读取。
 
 <a id="dev-note"></a>

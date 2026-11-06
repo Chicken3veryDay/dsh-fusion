@@ -29,6 +29,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'workstreamPanel/stale-revision': Record<string, never>
     /** The calling Session is not the Workstream member or Ticket role the command requires. */
     'workstreamPanel/denied': Record<string, never>
+    /** The calling Peer lacks the Remote access grant for the displayed or root Session, or for a member Session that Changes reads. */
+    'workstreamPanel/forbidden': Record<string, never>
     /** The Workstream owner is not live or the Session belongs to no Workstream. */
     'workstreamPanel/unavailable': Record<string, never>
     /** The Ticket service rejected the command; the message carries its diagnostic. */

@@ -1,6 +1,7 @@
 /** Remote contribution and header-action registration of the Workstream panel. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remote-access/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -12,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-experimental-client-ui-workstream/remote'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RemoteErrorCode, RemoteResult, TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { WorkstreamAction, type WorkstreamActionInjected, type WorkstreamCommand, type WorkstreamFailure } from './WorkstreamAction.tsx'
+import { createAnswerDrafts } from './drafts.ts'
 import { CommandNotice, createCommandReports } from './notices.tsx'
 import { de, en, es, fr, ja, NS, pt, ru, zh, type WorkstreamKey } from './locales.ts'
 
@@ -34,6 +36,8 @@ export function failureOf(error: { readonly code: RemoteErrorCode; readonly mess
   switch (error.code) {
     case 'workstreamPanel/stale-revision': return { code: 'stale', message: error.message }
     case 'workstreamPanel/denied': return { code: 'denied', message: error.message }
+    case 'workstreamPanel/forbidden':
+    case 'remote-access/denied': return { code: 'forbidden', message: error.message }
     case 'workstreamPanel/unavailable': return { code: 'unavailable', message: error.message }
     case 'workstreamPanel/rejected': return { code: 'rejected', message: error.message }
     default: return { code: 'failed', message: error.message }
@@ -43,6 +47,7 @@ export function failureOf(error: { readonly code: RemoteErrorCode; readonly mess
 function registerUi(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'client-ui-workstream: dictionaries')
   const reports = createCommandReports()
+  const drafts = createAnswerDrafts()
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'workstream.command-notice', locale: NS, inject: () => ({ reports }),
   }, CommandNotice))
@@ -59,8 +64,26 @@ function registerUi(ctx: Context): void {
     }
   }
 
+  // Forced rereads of one root abort each other, so a superseded caller waits for the read that replaced it.
+  const rereads = new Map<SessionId, Promise<void>>()
+  const awaitReread = async (rootSessionId: SessionId, read: Promise<void>): Promise<void> => {
+    try {
+      await read
+    } catch (error) {
+      const newer = rereads.get(rootSessionId)
+      if (newer !== undefined && newer !== read) return awaitReread(rootSessionId, newer)
+      throw error
+    }
+  }
+  const reread = (rootSessionId: SessionId): Promise<void> => {
+    const read = sessions.refreshProjections(rootSessionId, true)
+    rereads.set(rootSessionId, read)
+    return awaitReread(rootSessionId, read)
+  }
+
   const actions: WorkstreamActionInjected = {
     reportFailure: reports.reportFailure,
+    drafts,
     openMember(sessionId, memberId) {
       if ((sessions.retainInfo(sessionId).getSnapshot().retainedBy.mainView ?? 0) === 0) return
       const parentSessionId = rootOf(sessionId)
@@ -78,7 +101,7 @@ function registerUi(ctx: Context): void {
       // The projection frame may lag the rejected command; reread so the next attempt carries the current revision.
       if (failure.code === 'stale') {
         try {
-          await sessions.refreshProjections(rootSessionId, true)
+          await reread(rootSessionId)
         } catch (error) {
           return { code: 'refresh-failed', message: String(error) }
         }

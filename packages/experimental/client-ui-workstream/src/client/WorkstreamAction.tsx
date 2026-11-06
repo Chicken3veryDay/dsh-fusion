@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import type {} from '@deepseek-ai/dsh-agent/types'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
-  IconChecklistOutlineRegular, SegmentedTabs, StateDot, useAnchoredPosition, useDismissOnOutsidePointer, type SegmentedTab,
+  IconChecklistOutlineRegular, observeComposition, SegmentedTabs, StateDot, useAnchoredPosition, useDismissOnOutsidePointer,
+  type SegmentedTab,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-experimental-ticket/client'
@@ -12,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-experimental-workstream/client'
 import type { AggregatedChangeRequestsResult } from '@deepseek-ai/dsh-experimental-workstream-evidence/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkstreamAttentionTarget, WorkstreamQuestionAnswer, WorkstreamQuestionTarget } from '../types.ts'
+import { draftId, retainedDrafts, type AnswerDraftStore } from './drafts.ts'
 import { needsYou } from './model.ts'
 import { NS } from './locales.ts'
 import { ChangesView, FilesView, NeedsView, TeamView, WorkView } from './views.tsx'
@@ -26,7 +28,7 @@ export type WorkstreamCommand =
 
 /** Typed command or read failure; `message` is the Host diagnostic. */
 export interface WorkstreamFailure {
-  readonly code: 'stale' | 'refresh-failed' | 'denied' | 'unavailable' | 'rejected' | 'failed'
+  readonly code: 'stale' | 'refresh-failed' | 'denied' | 'forbidden' | 'unavailable' | 'rejected' | 'failed'
   readonly message: string
 }
 
@@ -45,8 +47,13 @@ export interface WorkstreamActionInjected {
    * @returns null after the command commits, else the failure.
    */
   command: (sessionId: SessionId, command: WorkstreamCommand) => Promise<WorkstreamFailure | null>
-  /** Report a command refusal outside the panel, retaining rejected answer text. */
+  /**
+   * Report a command refusal outside the panel, or clear that command's earlier report with `null`.
+   * Other commands' reports stay.
+   */
   reportFailure: (failure: WorkstreamFailure | null, command: WorkstreamCommand) => void
+  /** Answer text that outlives question cards, tabs, and the panel; rejected answers stay in it. */
+  drafts: AnswerDraftStore
   /** Read the change requests bound by the displayed Session's Workstream. */
   changeRequests: (sessionId: SessionId) => Promise<ChangeRequestsRead>
 }
@@ -100,25 +107,39 @@ export function WorkstreamAction(props: WorkstreamActionProps) {
 
   useDismissOnOutsidePointer(rootRef, open, setOpen, panelRef)
 
+  const draftMap = useSyncExternalStore(props.drafts.subscribe, props.drafts.getSnapshot)
+
   useEffect(() => {
     if (!open) return
+    // An Escape that cancels an IME composition belongs to the IME, not to the panel.
+    const composition = observeComposition(document)
     const dismiss = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || composition.guards(event)) return
       event.preventDefault()
       setOpen(false)
       /* v8 ignore next -- the panel element mounts in the same commit as the open state that registers this listener. */
       if (panelRef.current?.contains(document.activeElement)) triggerRef.current?.focus()
     }
     document.addEventListener('keydown', dismiss)
-    return () => { document.removeEventListener('keydown', dismiss) }
+    return () => {
+      composition.dispose()
+      document.removeEventListener('keydown', dismiss)
+    }
   }, [open])
 
   if (workstream == null) return null
   const ticketList = tickets?.tickets ?? []
   const needs = needsYou(ticketList)
+  // Before the Ticket projection loads, no card exists yet; that is not a reason to treat drafts as orphaned.
+  const retained = tickets === undefined
+    ? []
+    : retainedDrafts(draftMap, rootId, new Set(needs.flatMap(item => item.kind === 'question'
+      ? [draftId({ rootId, ticketId: item.ticket.id, questionId: item.question.id })]
+      : [])))
+  const waiting = needs.length + retained.length
   const artifacts = evidence?.artifacts ?? []
   const counts: Record<WorkstreamView, number | null> = {
-    needs: needs.length, work: ticketList.length, team: workstream.members.length, changes: null, files: artifacts.length,
+    needs: waiting, work: ticketList.length, team: workstream.members.length, changes: null, files: artifacts.length,
   }
   const tabItem = (value: WorkstreamView): SegmentedTab<WorkstreamView> => ({
     value,
@@ -150,7 +171,7 @@ export function WorkstreamAction(props: WorkstreamActionProps) {
       >
         <IconChecklistOutlineRegular size={14} />
         <span className={css.triggerLabel}>{t('trigger')}</span>
-        {needs.length > 0 && <span className={css.badge}>{needs.length}</span>}
+        {waiting > 0 && <span className={css.badge}>{waiting}</span>}
       </button>
       {open && createPortal(
         <div
@@ -177,7 +198,7 @@ export function WorkstreamAction(props: WorkstreamActionProps) {
             {tickets?.failure !== undefined && (
               <div className={css.error} role="alert"><StateDot state="error" />{t('failure', { message: tickets.failure })}</div>
             )}
-            {view === 'needs' && <NeedsView {...props} command={command} items={needs} nameOf={nameOf} />}
+            {view === 'needs' && <NeedsView {...props} command={command} items={needs} retained={retained} rootId={rootId} nameOf={nameOf} />}
             {view === 'work' && <WorkView tickets={ticketList} nameOf={nameOf} t={t} />}
             {view === 'team' && <TeamView {...props} rootId={rootId} workstream={workstream} />}
             {view === 'changes' && <ChangesView key={sessionId} {...props} nameOf={nameOf} />}

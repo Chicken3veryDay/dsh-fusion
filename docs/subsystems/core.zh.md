@@ -1612,7 +1612,7 @@ Serves the Workstream panel. Every method takes the Agent of the Session the cal
  * Aggregate the change requests that the caller's Workstream members bind.
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @returns aggregated change requests; `complete` is false when a Session or the forge service could not be read.
- * @throws `workstreamPanel/denied` unless every contributing Session is granted for this action.
+ * @throws `workstreamPanel/forbidden` unless every contributing Session is granted for this action.
  * @throws `workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.
  */
 @Remote changeRequests(agent: Agent): AggregatedChangeRequestsResult
@@ -1622,6 +1622,7 @@ Serves the Workstream panel. Every method takes the Agent of the Session the cal
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @param request - question, answer text, and the Ticket revision the panel read.
  * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
  * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
  */
 @Remote async answerQuestion(agent: Agent, request: WorkstreamQuestionAnswer): Promise<void>
@@ -1631,6 +1632,7 @@ Serves the Workstream panel. Every method takes the Agent of the Session the cal
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @param request - question and the Ticket revision the panel read.
  * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
  * @throws `workstreamPanel/denied` unless the caller authored the question or coordinates the Ticket.
  */
 @Remote async closeQuestion(agent: Agent, request: WorkstreamQuestionTarget): Promise<void>
@@ -1640,6 +1642,7 @@ Serves the Workstream panel. Every method takes the Agent of the Session the cal
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @param request - attention item and the Ticket revision the panel read.
  * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
  * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
  */
 @Remote async acknowledgeAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>
@@ -1649,6 +1652,7 @@ Serves the Workstream panel. Every method takes the Agent of the Session the cal
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @param request - attention item and the Ticket revision the panel read.
  * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+ * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
  * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
  */
 @Remote async resolveAttention(agent: Agent, request: WorkstreamAttentionTarget): Promise<void>

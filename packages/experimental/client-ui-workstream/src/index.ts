@@ -71,7 +71,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * Aggregate the change requests that the caller's Workstream members bind.
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @returns aggregated change requests; `complete` is false when a Session or the forge service could not be read.
-   * @throws `workstreamPanel/denied` unless every contributing Session is granted for this action.
+   * @throws `workstreamPanel/forbidden` unless every contributing Session is granted for this action.
    * @throws `workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.
    */
   @Remote
@@ -93,6 +93,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @param request - question, answer text, and the Ticket revision the panel read.
    * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+   * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
    * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
    */
   @Remote
@@ -110,6 +111,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @param request - question and the Ticket revision the panel read.
    * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+   * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
    * @throws `workstreamPanel/denied` unless the caller authored the question or coordinates the Ticket.
    */
   @Remote
@@ -126,6 +128,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @param request - attention item and the Ticket revision the panel read.
    * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+   * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
    * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
    */
   @Remote
@@ -142,6 +145,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @param request - attention item and the Ticket revision the panel read.
    * @throws `workstreamPanel/stale-revision` after a concurrent Ticket change.
+   * @throws `workstreamPanel/forbidden` unless the Peer is granted this action on the root Session.
    * @throws `workstreamPanel/denied` unless the caller coordinates the Ticket.
    */
   @Remote
@@ -156,7 +160,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
   /** Refuse access to a derived Session before reading its data or appending commands. */
   private requireAccess(sessionId: Session['id']): void {
     if (!this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId })) {
-      throw new RemoteError('workstreamPanel/denied', 'Access to the Workstream Session is denied', {})
+      throw new RemoteError('workstreamPanel/forbidden', 'Access to the Workstream Session is denied', {})
     }
   }
 

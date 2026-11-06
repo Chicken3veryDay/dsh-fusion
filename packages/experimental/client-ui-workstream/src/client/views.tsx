@@ -1,6 +1,6 @@
 /** The five Workstream panel views. */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, fileSizeText, StateDot, Tag, type StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -9,6 +9,7 @@ import type {
 import type { WorkstreamMember, WorkstreamSnapshot } from '@deepseek-ai/dsh-experimental-workstream/client'
 import type { WorkstreamEvidenceArtifactRecord } from '@deepseek-ai/dsh-experimental-workstream-evidence/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { draftId, type AnswerDraft, type AnswerDraftStore } from './drafts.ts'
 import { missions, type NeedsItem } from './model.ts'
 import type { NS, WorkstreamKey } from './locales.ts'
 import type { ChangeRequestsRead, WorkstreamActionProps, WorkstreamCommand, WorkstreamFailure } from './WorkstreamAction.tsx'
@@ -28,6 +29,7 @@ export function failureText(failure: WorkstreamFailure, t: T): string {
     case 'stale': return t('error.stale')
     case 'refresh-failed': return t('error.refresh')
     case 'denied': return t('error.denied')
+    case 'forbidden': return t('error.forbidden')
     case 'unavailable': return t('error.unavailable')
     case 'rejected': return t('error.rejected', { message: failure.message })
     case 'failed': return t('error.failed', { message: failure.message })
@@ -57,14 +59,25 @@ function useCommand(props: Pick<WorkstreamActionProps, 'sessionId' | 'command'>)
   return { pending, run }
 }
 
-type NeedsProps = Pick<WorkstreamActionProps, 'sessionId' | 'command' | 't'> & { nameOf: NameOf }
+type NeedsProps = Pick<WorkstreamActionProps, 'sessionId' | 'command' | 'drafts' | 't'> & { nameOf: NameOf; rootId: SessionId }
 
-function QuestionCard({ item, nameOf, ...props }: NeedsProps & { item: Extract<NeedsItem, { kind: 'question' }> }) {
-  const { t } = props
-  const [answer, setAnswer] = useState('')
+function QuestionCard({ item, nameOf, rootId, ...props }: NeedsProps & { item: Extract<NeedsItem, { kind: 'question' }> }) {
+  const { t, drafts } = props
+  const key = { rootId, ticketId: item.ticket.id, questionId: item.question.id }
+  const stored = useSyncExternalStore(drafts.subscribe, drafts.getSnapshot).get(draftId(key))
+  const answer = stored?.text ?? ''
   const { pending, run } = useCommand(props)
   const target = { ticketId: item.ticket.id, questionId: item.question.id, expectedRevision: item.ticket.revision }
   const inputId = `workstream-answer-${item.ticket.id}-${item.question.id}`
+  const send = async (): Promise<void> => {
+    drafts.beginSend(key)
+    let committed = false
+    try {
+      committed = await run({ kind: 'answer', request: { ...target, answer } })
+    } finally {
+      drafts.endSend(key, committed)
+    }
+  }
   return (
     <article className={css.card} data-question={item.question.id}>
       <div className={css.cardTitle}>
@@ -77,7 +90,7 @@ function QuestionCard({ item, nameOf, ...props }: NeedsProps & { item: Extract<N
         className={css.answerForm}
         onSubmit={(event) => {
           event.preventDefault()
-          void run({ kind: 'answer', request: { ...target, answer } }).then((ok) => { if (ok) setAnswer('') })
+          void send()
         }}
       >
         <label htmlFor={inputId} className={css.visuallyHidden}>{t('answer.label')}</label>
@@ -88,7 +101,7 @@ function QuestionCard({ item, nameOf, ...props }: NeedsProps & { item: Extract<N
           rows={2}
           placeholder={t('answer.placeholder')}
           disabled={pending}
-          onChange={(event) => { setAnswer(event.target.value) }}
+          onChange={(event) => { drafts.edit(key, event.target.value, item.question.question) }}
         />
         <div className={css.actions}>
           <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => { void run({ kind: 'closeQuestion', request: target }) }}>
@@ -140,11 +153,50 @@ function AttentionCard({ item, ...props }: NeedsProps & { item: Extract<NeedsIte
   )
 }
 
-/** Open questions and unresolved attention items with their Ticket commands. */
-export function NeedsView({ items, ...props }: NeedsProps & { items: readonly NeedsItem[] }) {
-  if (items.length === 0) return <Empty text={props.t('needs.empty')} />
+/** Write to the system clipboard; rejects where the Clipboard API is unavailable (insecure origins) or refuses. */
+async function copyText(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text)
+}
+
+/**
+ * An answer that can no longer be sent from a card: the question was answered or closed elsewhere, or
+ * the Ticket ended. The text stays selectable until the user copies or discards it.
+ */
+function RetainedDraft({ draft, drafts, t }: { draft: AnswerDraft; drafts: AnswerDraftStore; t: T }) {
+  const box = useRef<HTMLTextAreaElement>(null)
+  return (
+    <article className={css.card} data-retained-draft={draftId(draft)}>
+      <div className={css.cardTitle}>
+        <StateDot state="warning" />
+        <strong>{t('retained.title')}</strong>
+      </div>
+      <p className={css.text}>{t('retained.question', { question: draft.question })}</p>
+      <textarea ref={box} className={css.textarea} value={draft.text} rows={2} readOnly aria-label={t('retained.text')} />
+      <div className={css.actions}>
+        <Button type="button" variant="ghost" size="sm" onClick={() => { drafts.discard(draft) }}>{t('retained.discard')}</Button>
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          onClick={() => {
+            // Selecting first leaves the text ready for a manual copy when the Clipboard API is absent or refuses.
+            box.current?.select()
+            void copyText(draft.text).catch(() => { box.current?.focus() })
+          }}
+        >
+          {t('retained.copy')}
+        </Button>
+      </div>
+    </article>
+  )
+}
+
+/** Open questions and unresolved attention items with their Ticket commands, then unsent answers without a card. */
+export function NeedsView({ items, retained, ...props }: NeedsProps & { items: readonly NeedsItem[]; retained: readonly AnswerDraft[] }) {
+  if (items.length === 0 && retained.length === 0) return <Empty text={props.t('needs.empty')} />
   return (
     <div className={css.list}>
+      {retained.map(draft => <RetainedDraft key={draftId(draft)} draft={draft} drafts={props.drafts} t={props.t} />)}
       {items.map(item => item.kind === 'question'
         ? <QuestionCard key={`${item.ticket.id}:${item.question.id}`} item={item} {...props} />
         : <AttentionCard key={`${item.ticket.id}:${item.attention.id}`} item={item} {...props} />)}

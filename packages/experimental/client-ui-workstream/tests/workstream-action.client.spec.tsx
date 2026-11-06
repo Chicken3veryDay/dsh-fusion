@@ -14,6 +14,7 @@ import {
   WorkstreamAction, type ChangeRequestsRead, type WorkstreamActionInjected, type WorkstreamActionProps, type WorkstreamFailure,
 } from '../src/client/WorkstreamAction.tsx'
 import { en } from '../src/client/locales.ts'
+import { createAnswerDrafts } from '../src/client/drafts.ts'
 import { CommandNotice, createCommandReports } from '../src/client/notices.tsx'
 import { build, docs, evidence, REVIEWER, ROOT, ticket, tickets, WORKER, workstream } from './fixtures.client.ts'
 
@@ -46,6 +47,7 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
   const reports = createCommandReports()
   const injected = {
     reportFailure: reports.reportFailure,
+    drafts: createAnswerDrafts(),
     openMember: vi.fn<WorkstreamActionInjected['openMember']>(),
     command: vi.fn<WorkstreamActionInjected['command']>(async () => null),
     changeRequests: vi.fn<WorkstreamActionInjected['changeRequests']>(async () => ({ ok: true, value: changes })),
@@ -151,7 +153,7 @@ describe('WorkstreamAction', () => {
     // The injected command rereads projections before reporting the conflict.
     b.setValues({ workstream, ticket: { tickets: [{ ...build, revision: 5 }, docs] }, workstreamEvidence: evidence })
     await act(async () => { settle({ code: 'stale', message: 'Ticket "build" is at revision 5, expected 4' }) })
-    expect(screen.getByRole('alert').textContent).toBe(`${en['error.stale']}\nmain`)
+    expect(screen.getByRole('alert').textContent).toBe(en['error.stale'])
     expect(input).toHaveProperty('value', 'main')
 
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Send answer' })) })

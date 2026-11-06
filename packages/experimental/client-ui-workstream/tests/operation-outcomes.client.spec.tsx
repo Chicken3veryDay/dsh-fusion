@@ -13,6 +13,7 @@ import {
   WorkstreamAction, type WorkstreamActionInjected, type WorkstreamActionProps, type WorkstreamFailure,
 } from '../src/client/WorkstreamAction.tsx'
 import { en } from '../src/client/locales.ts'
+import { createAnswerDrafts } from '../src/client/drafts.ts'
 import { CommandNotice, createCommandReports } from '../src/client/notices.tsx'
 import { build, evidence, ROOT, tickets, workstream } from './fixtures.client.ts'
 
@@ -45,6 +46,7 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
   const reports = createCommandReports()
   const injected = {
     reportFailure: reports.reportFailure,
+    drafts: createAnswerDrafts(),
     openMember: vi.fn<WorkstreamActionInjected['openMember']>(),
     command: vi.fn<WorkstreamActionInjected['command']>(async () => null),
     changeRequests: vi.fn<WorkstreamActionInjected['changeRequests']>(async () => ({ ok: true, value: changes })),
@@ -94,7 +96,9 @@ it('a conflict remains visible when refreshing removes the affected question', a
   }] }, workstreamEvidence: evidence })
   await act(async () => { response.resolve({ code: 'stale', message: 'revision 5, expected 4' }) })
   expect(screen.queryByRole('alert')?.textContent,
-    'the CAS failure must survive removal of the question card').toBe(`${en['error.stale']}\nrelease/2.0`)
+    'the CAS failure must survive removal of the question card').toBe(en['error.stale'])
+  expect(within(screen.getByRole('dialog', { name: 'Release 2.0' })).getByRole('textbox', { name: 'Unsent answer text' }),
+    'the rejected answer must stay selectable once its card is gone').toHaveProperty('value', 'release/2.0')
 })
 
 it('a failed reload retains the previously visible change requests', async () => {
@@ -132,7 +136,9 @@ it.each(['tab', 'panel', 'conversation'] as const)('a rejected answer remains re
     case 'conversation': view.rerender(tree(false)); break
   }
   await act(async () => { response.resolve({ code: 'stale', message: 'changed' }) })
-  expect(screen.getByRole('alert').textContent).toBe(`${en['error.stale']}\nkeep this draft`)
+  expect(screen.getByRole('alert').textContent).toBe(en['error.stale'])
+  expect([...b.injected.drafts.getSnapshot().values()].map(draft => draft.text),
+    'the draft outlives the closed surface').toEqual(['keep this draft'])
 })
 
 it('Changes retains its list while the reload is pending', async () => {
