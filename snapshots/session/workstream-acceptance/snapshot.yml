@@ -1,0 +1,10 @@
+version: 1
+scenario: workstream-acceptance
+profile: headless
+composition: workstream-acceptance
+recording: authored
+header:
+  class: workstream-acceptance
+  pin: true
+workspace:
+  final: true

@@ -84,16 +84,16 @@ async function harness() {
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(TicketService)
+  const tickets = await ctx.plugin(TicketService)
   await ctx.plugin(LocalJobRegistry)
   ctx.jobs.attachController('ticket-test-controller')
   await ctx.plugin(StubWorktreeService)
   await ctx.plugin(StubWorkingDirectory)
   await ctx.plugin(StubSubagents)
-  await ctx.plugin(TicketExecutionService, { settlementTimeoutMs: 1000 })
+  const execution = await ctx.plugin(TicketExecutionService, { settlementTimeoutMs: 1000 })
   const rootAgent = agent(ctx, 'ticket-root')
   await ctx.agents.register(rootAgent)
-  return { ctx, root: rootAgent.session, worker: agent(ctx, 'ticket-worker') }
+  return { ctx, root: rootAgent.session, worker: agent(ctx, 'ticket-worker'), tickets, execution }
 }
 
 afterEach(() => {
@@ -190,5 +190,39 @@ describe('Ticket execution adapter', () => {
 
     await expect(ctx.ticketExecution.prepare(worker, { ...request, operationId: TicketOperationId('operation-retry') }))
       .rejects.toThrow()
+  })
+
+  it('keeps an unknown attempt through host-driven service replacement and never dispatches it again', async () => {
+    const { ctx, root, worker, tickets, execution } = await harness()
+    await ctx.agents.register(worker)
+    const ticket = await ctx.tickets.create(root, {
+      id: TicketId('restart-ticket'), subject: 'Restart during an attempt', description: 'unknown stays unknown',
+    })
+    const assigned = await ctx.tickets.assign(root, {
+      ticketId: ticket.id, expectedRevision: ticket.revision, actorId: root.id, ownerId: worker.id,
+      subject: 'Isolated task', executionMode: 'isolated-worktree',
+    })
+    StubWorktreeService.failure = new Error('connection lost')
+    const request = {
+      rootSessionId: root.id, ticketId: ticket.id, assignmentId: assigned.assignments[0]!.id,
+      expectedRevision: assigned.revision, attemptId: TicketAttemptId('attempt-restart'),
+      operationId: TicketOperationId('operation-restart'),
+      workspace: { kind: 'isolated-worktree' as const, directory: '/tmp/ticket-workspace', baseCommit: 'c'.repeat(40) },
+      executor: { kind: 'in-process' as const }, worktreeName: 'restart-branch',
+    }
+    await expect(ctx.ticketExecution.prepare(worker, request)).rejects.toThrow(AggregateError)
+    expect(StubWorktreeService.calls).toHaveLength(1)
+
+    await execution.dispose()
+    await tickets.dispose()
+    await ctx.plugin(TicketService)
+    await ctx.plugin(TicketExecutionService, { settlementTimeoutMs: 1000 })
+    const replayed = ctx.tickets.get(root, ticket.id)
+    expect(replayed.attempts[0]).toMatchObject({ id: 'attempt-restart', status: 'unknown' })
+    expect(replayed.assignments[0]).toMatchObject({ status: 'running', activeAttemptId: 'attempt-restart' })
+
+    await expect(ctx.ticketExecution.prepare(worker, request)).rejects.toThrow()
+    expect(StubWorktreeService.calls).toHaveLength(1)
+    expect(ctx.tickets.get(root, ticket.id).attempts).toHaveLength(1)
   })
 })

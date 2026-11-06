@@ -51,7 +51,7 @@ The service is deliberately independent of Fusion, Agent Teams, Worktree, Jobs, 
 
 #### What the model sees
 
-The core service and `ticket/state` event stay outside model context. `TicketTools` is opt-in and registers direct-worker commands that return JSON Ticket views; it does not create workers or bypass the CAS revision check. Creation is restricted to the caller’s Session and coordinator identity; use handoff to transfer coordination. Cross-Session reads expose only Tickets where the caller coordinates or owns an assignment. There is no automatic event trigger.
+The core service and `ticket/state` event stay outside model context. `TicketTools` is opt-in and registers direct-worker commands that return JSON Ticket views; it does not create workers or bypass the CAS revision check. Specification revision, candidate submission, and criterion checks use `ticket_revise`, `ticket_submit_candidate`, and `ticket_check_candidate`; attempts stay host-owned, and `ticket_report` takes the active `attempt_id`. Creation is restricted to the caller’s Session and coordinator identity; use handoff to transfer coordination. Cross-Session reads expose only Tickets where the caller coordinates or owns an assignment. There is no automatic event trigger.
 
 #### Token effect
 

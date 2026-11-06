@@ -119,9 +119,11 @@ export class WorkstreamTools extends Service {
     register(defineTool({
       name: 'workstream_create_ticket', description: 'Propose a Ticket in the Workstream root. All work is tracked as Tickets.',
       parameters: { root_session_id: root, subject: { type: 'string', required: true, description: 'Ticket subject.' },
-        description: { type: 'string', required: true, description: 'Requirements and acceptance criteria.' } }, output,
+        description: { type: 'string', required: true, description: 'Requirements and acceptance criteria.' },
+        ticket_id: { type: 'string', description: 'Optional stable Ticket id; a duplicate is rejected. Omit to generate one.' } }, output,
       execute: async (args, exec) => z.json().parse(await this.ctx.workstreams.createTicket(caller(exec.agent),
-        SessionId(args.root_session_id), { subject: args.subject, description: args.description })),
+        SessionId(args.root_session_id), { ...args.ticket_id === undefined ? {} : { id: TicketId(args.ticket_id) },
+          subject: args.subject, description: args.description })),
     }))
     register(defineTool({
       name: 'workstream_assign_ticket', description:

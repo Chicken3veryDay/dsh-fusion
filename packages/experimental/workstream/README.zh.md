@@ -61,7 +61,7 @@ Workstream 是一个根 Session 的持久化团队记录。它把完整的 Works
 
 #### 模型看到的内容
 
-`WorkstreamTools` 注册 13 个工具：`workstream_open`、`workstream_get`、`workstream_list`、`workstream_add_member`、`workstream_send`、`workstream_acknowledge`、`workstream_handoff`、`workstream_wait`、`workstream_interrupt`、`workstream_stop`、`workstream_create_ticket`、`workstream_assign_ticket` 和 `workstream_end_ticket`。多数工具接收 `root_session_id`，可重试的修改操作还接收 `operation_id`。结果是服务返回值的 JSON，渲染为一个文本块。`workstream_interrupt` 返回 `{ "interrupted": true }`。`workstream_send` 接收可选的 `context` 上下文包，包含 `requirements`、`decisions`、`cursor`、`changes` 和 `artifacts`（`ref` 与 `digest`）；包内每个字段都必填，多余字段会被拒绝，完整消息过大时在写入任何日志前返回 `WORKSTREAM_LIMIT`。这些工具不在生成的工具目录中，因为没有任何已发布的 profile 注册它们。
+`WorkstreamTools` 注册 13 个工具：`workstream_open`、`workstream_get`、`workstream_list`、`workstream_add_member`、`workstream_send`、`workstream_acknowledge`、`workstream_handoff`、`workstream_wait`、`workstream_interrupt`、`workstream_stop`、`workstream_create_ticket`、`workstream_assign_ticket` 和 `workstream_end_ticket`。多数工具接收 `root_session_id`，可重试的修改操作还接收 `operation_id`。结果是服务返回值的 JSON，渲染为一个文本块。`workstream_interrupt` 返回 `{ "interrupted": true }`。`workstream_create_ticket` 接收可选的 `ticket_id`，重复的 id 会被拒绝。`workstream_send` 接收可选的 `context` 上下文包，包含 `requirements`、`decisions`、`cursor`、`changes` 和 `artifacts`（`ref` 与 `digest`）；包内每个字段都必填，多余字段会被拒绝，完整消息过大时在写入任何日志前返回 `WORKSTREAM_LIMIT`。这些工具不在生成的工具目录中，因为没有任何已发布的 profile 注册它们。
 
 #### Token 影响
 

@@ -52,7 +52,7 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 
 #### 模型看到的内容
 
-核心服务和 `ticket/state` 事件不会进入模型上下文。`TicketTools` 是可选的，它注册返回 JSON Ticket 视图的直接 Worker 命令，不会创建 Worker，也不会绕过 CAS 版本检查。创建操作仅允许使用调用者自己的 Session 和协调者身份；转移协调权应使用交接命令。跨 Session 读取只公开调用者担任协调者或拥有分配的 Ticket。此包没有自动事件触发器。
+核心服务和 `ticket/state` 事件不会进入模型上下文。`TicketTools` 是可选的，它注册返回 JSON Ticket 视图的直接 Worker 命令，不会创建 Worker，也不会绕过 CAS 版本检查。规格修订、候选提交和标准检查使用 `ticket_revise`、`ticket_submit_candidate` 和 `ticket_check_candidate`；尝试保持由宿主所有，`ticket_report` 接收当前活动的 `attempt_id`。创建操作仅允许使用调用者自己的 Session 和协调者身份；转移协调权应使用交接命令。跨 Session 读取只公开调用者担任协调者或拥有分配的 Ticket。此包没有自动事件触发器。
 
 #### Token 影响
 

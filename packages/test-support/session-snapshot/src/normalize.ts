@@ -40,6 +40,8 @@ const CWD_ROOTED_PATH_RE = /\{\{cwd\}\}(?:[\\/][^\s<>"'`]+)+/g
 const PATH_TAG_RE = /(<path>)([^<]*)(<\/path>)/g
 const ADDITIONAL_INSTRUCTIONS_PATH_RE = /(Additional instructions from: )([^\r\n]+)/g
 const EMBEDDED_EVENT_TIME_RE = /^(  "time": )\d+(?=,\r?$)/gm
+/** Epoch-millisecond Ticket clocks inside JSON text that a Ticket tool returned to the model. */
+const EMBEDDED_TICKET_CLOCK_RE = /("(?:createdAt|updatedAt|at)":)\d{12,}/g
 const EVENT_READ_OMITTED_BYTES_RE = /(\r?\n\r?\n\(Omitted )\d+( bytes\.)/g
 const EVENT_READ_TARGET_REGION_RE
   = /^Session [^\r\n]+ — [^\r\n]+\r?\nTarget event seq \d+:\r?\n```json\r?\n\{\r?\n[\s\S]*?(?=\r?\n```(?:\r?\n|$)|\r?\n\r?\n\(Omitted )/
@@ -413,6 +415,7 @@ export function normalizeSessionLog(
       if ('durationMs' in data) data.durationMs = 0
     }
     normalizeFeedbackClocks(record)
+    normalizeTicketClocks(record)
     if ((record.type === 'job/registered' || record.type === 'job/settled')
       && record.data !== null && typeof record.data === 'object') {
       const data = record.data as Record<string, unknown>
@@ -607,6 +610,35 @@ export function scrubSessionSnapshot(rawLog: string): string {
     normalizeFeedbackClocks(record)
     return JSON.stringify(record)
   }).join('\n')
+}
+
+/** Zero every numeric clock in a persisted Ticket snapshot. */
+function zeroTicketClocks(value: unknown): void {
+  if (Array.isArray(value)) { for (const item of value) zeroTicketClocks(item); return }
+  if (value === null || typeof value !== 'object') return
+  const fields = value as Record<string, unknown>
+  for (const [key, item] of Object.entries(fields)) {
+    if ((key === 'createdAt' || key === 'updatedAt' || key === 'at') && typeof item === 'number') fields[key] = 0
+    else zeroTicketClocks(item)
+  }
+}
+
+/** Normalize Ticket wall-clock values in `ticket/state` events and in JSON text of Ticket tool results. */
+function normalizeTicketClocks(record: Record<string, unknown>): void {
+  if (record.data === null || typeof record.data !== 'object') return
+  const data = record.data as Record<string, unknown>
+  if (record.type === 'ticket/state') {
+    zeroTicketClocks(data.ticket)
+    return
+  }
+  if (record.type !== 'tool/result' || data.message === null || typeof data.message !== 'object') return
+  const content = (data.message as { content?: unknown }).content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const text = (block as { text?: unknown }).text
+    if (typeof text === 'string') (block as { text: string }).text = text.replace(EMBEDDED_TICKET_CLOCK_RE, '$10')
+  }
 }
 
 /** Normalize service-owned feedback clocks without touching user-authored payloads. */

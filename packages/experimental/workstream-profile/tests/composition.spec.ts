@@ -21,6 +21,7 @@ const TICKET_TOOLS = [
   'ticket_acknowledge_attention', 'ticket_answer', 'ticket_ask', 'ticket_assign', 'ticket_attention', 'ticket_block',
   'ticket_cancel', 'ticket_claim', 'ticket_close_question', 'ticket_complete', 'ticket_create', 'ticket_fail',
   'ticket_get', 'ticket_handoff', 'ticket_list', 'ticket_release', 'ticket_report', 'ticket_resolve_attention',
+  'ticket_revise', 'ticket_submit_candidate', 'ticket_check_candidate',
 ]
 const WORKSTREAM_TOOLS = [
   'workstream_acknowledge', 'workstream_add_member', 'workstream_assign_ticket', 'workstream_create_ticket',

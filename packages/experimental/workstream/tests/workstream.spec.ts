@@ -268,6 +268,16 @@ describe('durable Workstream authority and delivery', () => {
     await rejection
   })
 
+  it('creates a Ticket under a model-chosen id and rejects its reuse', async () => {
+    const { ctx, owner } = await setup()
+    await ctx.plugin(WorkstreamTools)
+    const exec = { agent: owner, signal } as ToolRunContext
+    const create = (ticketId: string) => ctx.tools.get('workstream_create_ticket')!.execute({ root_session_id: owner.id,
+      ticket_id: ticketId, subject: 'Chosen', description: 'Stable id' }, exec)
+    await expect(create('accept-ticket')).resolves.toMatchObject({ id: 'accept-ticket', revision: 1 })
+    await expect(create('accept-ticket')).rejects.toMatchObject({ code: 'TICKET_INVALID_INPUT' })
+  })
+
   it('rejects unsupported providers before appending a launch intent', async () => {
     const { ctx, owner } = await setup()
     const before = ctx.workstreams.get(owner, owner.id)

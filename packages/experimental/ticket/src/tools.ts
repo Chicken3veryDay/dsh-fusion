@@ -11,9 +11,15 @@ import { TicketError } from './errors.ts'
 import type { TicketSnapshot } from './types.ts'
 import {
   AssignmentId,
+  TicketAttemptId,
+  TicketCandidateId,
+  TicketCheckId,
+  TicketCriterionId,
   TicketId,
   TicketQuestionId,
   TicketAttentionId,
+  type TicketAcceptanceCriterion,
+  type TicketCandidateContent,
   type WorkScope,
 } from './types.ts'
 
@@ -65,6 +71,26 @@ function workScopes(value: readonly Record<string, JsonValue>[] | undefined): Wo
     }
     return { path, access, ...exclusive === undefined ? {} : { exclusive } }
   })
+}
+
+function criteria(value: readonly Record<string, JsonValue>[]): TicketAcceptanceCriterion[] {
+  return value.map((row) => {
+    const { id, description, required, independent } = row
+    if (typeof id !== 'string' || typeof description !== 'string' || typeof required !== 'boolean' || typeof independent !== 'boolean') {
+      throw new TicketError('acceptance_criteria rows need id, description, required, and independent', 'TICKET_INVALID_INPUT')
+    }
+    return { id: TicketCriterionId(id), description, required, independent }
+  })
+}
+
+function candidateContent(value: Record<string, JsonValue>): TicketCandidateContent {
+  if (value.kind === 'commit' && typeof value.repository === 'string' && typeof value.commit === 'string') {
+    return { kind: 'commit', repository: value.repository, commit: value.commit }
+  }
+  if (value.kind === 'artifact' && typeof value.reference === 'string' && typeof value.digest === 'string') {
+    return { kind: 'artifact', reference: value.reference, digest: value.digest }
+  }
+  throw new TicketError('content must be a commit {repository, commit} or an artifact {reference, digest}', 'TICKET_INVALID_INPUT')
 }
 
 /** Register the direct-worker Ticket tools. */
@@ -223,6 +249,7 @@ export class TicketTools extends Service {
         ticket_id: { type: 'string', required: true },
         assignment_id: { type: 'string', required: true },
         expected_revision: { type: 'integer', required: true },
+        attempt_id: { type: 'string', description: 'Active attempt id; required once the assignment has an active attempt.' },
         kind: { type: 'string', required: true, enum: ['progress', 'result', 'failure'] },
         summary: { type: 'string', required: true },
         evidence: { type: 'array', items: { type: 'string' } },
@@ -238,6 +265,7 @@ export class TicketTools extends Service {
           actorId: agent.id,
           kind: args.kind,
           summary: args.summary,
+          ...args.attempt_id === undefined ? {} : { attemptId: TicketAttemptId(args.attempt_id) },
           ...args.evidence === undefined ? {} : { evidence: args.evidence },
           ...args.next_steps === undefined ? {} : { nextSteps: args.next_steps },
         }))
@@ -385,6 +413,84 @@ export class TicketTools extends Service {
           expectedRevision: args.expected_revision,
           actorId: agent.id,
           newCoordinatorId: SessionId(args.new_coordinator_id),
+        }))
+      },
+    }))
+    register(defineTool({
+      name: 'ticket_revise',
+      description: 'Replace the acceptance criteria as coordinator. This starts a new specification revision: the current candidate is '
+        + 'withdrawn and earlier checks and contributions no longer count toward acceptance.',
+      parameters: {
+        root_session_id: { type: 'string', required: true },
+        ticket_id: { type: 'string', required: true },
+        expected_revision: { type: 'integer', required: true },
+        acceptance_criteria: {
+          type: 'array', required: true, items: { type: 'object', additionalProperties: true },
+          description: 'Complete replacement rows {id, description, required, independent}; independent criteria need a check author who did not contribute.',
+        },
+      },
+      output: jsonOutput(),
+      execute: async (args, exec) => {
+        const agent = agentOf(exec.agent, 'ticket_revise')
+        const session = sessionOf(this.ctx, args.root_session_id, agent)
+        const ticket = this.ctx.tickets.get(session, TicketId(args.ticket_id))
+        return asJson(await this.ctx.tickets.revise(session, {
+          ticketId: ticket.id, expectedRevision: args.expected_revision, actorId: agent.id,
+          acceptanceCriteria: criteria(args.acceptance_criteria),
+          dependencies: ticket.specification.dependencies,
+          ...ticket.specification.parent === undefined ? {} : { parent: ticket.specification.parent },
+        }))
+      },
+    }))
+    register(defineTool({
+      name: 'ticket_submit_candidate',
+      description: 'Pin immutable content and the contributing Assignments as the candidate for the current specification. '
+        + 'Submitting does not accept the Ticket; each required criterion still needs a passing check.',
+      parameters: {
+        root_session_id: { type: 'string', required: true },
+        ticket_id: { type: 'string', required: true },
+        expected_revision: { type: 'integer', required: true },
+        candidate_id: { type: 'string', required: true, description: 'New candidate id; never reused.' },
+        spec_revision: { type: 'integer', required: true, description: 'specification.revision read from ticket_get.' },
+        assignment_ids: { type: 'array', required: true, items: { type: 'string' }, description: 'Assignments whose latest result the candidate contains.' },
+        content: {
+          type: 'object', required: true, additionalProperties: true,
+          description: 'Either {kind:"commit", repository, commit} or {kind:"artifact", reference, digest}.',
+        },
+      },
+      output: jsonOutput(),
+      execute: async (args, exec) => {
+        const agent = agentOf(exec.agent, 'ticket_submit_candidate')
+        return asJson(await this.ctx.tickets.submitCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
+          ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
+          candidateId: TicketCandidateId(args.candidate_id), specRevision: args.spec_revision,
+          content: candidateContent(args.content), assignmentIds: args.assignment_ids.map(AssignmentId),
+        }))
+      },
+    }))
+    register(defineTool({
+      name: 'ticket_check_candidate',
+      description: 'Record a pass or fail result with evidence for one criterion of the current candidate. '
+        + 'A criterion marked independent rejects an author who contributed to the candidate.',
+      parameters: {
+        root_session_id: { type: 'string', required: true },
+        ticket_id: { type: 'string', required: true },
+        expected_revision: { type: 'integer', required: true },
+        check_id: { type: 'string', required: true, description: 'New check id; never reused.' },
+        candidate_id: { type: 'string', required: true, description: 'The current candidate.' },
+        criterion_id: { type: 'string', required: true },
+        spec_revision: { type: 'integer', required: true, description: 'specification.revision read from ticket_get.' },
+        outcome: { type: 'string', required: true, enum: ['pass', 'fail'] },
+        evidence: { type: 'array', required: true, items: { type: 'string' }, description: 'Readable evidence for the outcome.' },
+      },
+      output: jsonOutput(),
+      execute: async (args, exec) => {
+        const agent = agentOf(exec.agent, 'ticket_check_candidate')
+        return asJson(await this.ctx.tickets.checkCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
+          ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
+          checkId: TicketCheckId(args.check_id), candidateId: TicketCandidateId(args.candidate_id),
+          criterionId: TicketCriterionId(args.criterion_id), specRevision: args.spec_revision,
+          outcome: args.outcome, evidence: args.evidence,
         }))
       },
     }))

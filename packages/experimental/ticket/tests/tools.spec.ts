@@ -7,7 +7,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Tools from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import TicketService, { TicketTools } from '../src/index.ts'
+import TicketService, { TicketAttemptId, TicketOperationId, TicketTools } from '../src/index.ts'
 
 function agent(ctx: Context, id: string): Agent {
   const session = ctx.sessions.create(SessionId(id))
@@ -58,6 +58,7 @@ it('registers direct-worker tools and preserves actor identity plus CAS failures
     'ticket_create', 'ticket_fail', 'ticket_get', 'ticket_handoff', 'ticket_list', 'ticket_release',
     'ticket_report', 'ticket_attention', 'ticket_answer', 'ticket_close_question',
     'ticket_acknowledge_attention', 'ticket_resolve_attention',
+    'ticket_revise', 'ticket_submit_candidate', 'ticket_check_candidate',
   ].sort())
 
   const created = await call(ctx, 'ticket_create', {
@@ -149,4 +150,80 @@ it('restricts cross-root reads to participants and creation to the calling Sessi
   expect(listed.tickets.map(item => item.id)).toEqual([ticket.id])
   expect(root.session.snapshotEvents()).toEqual(events)
   expect(ctx.tickets.list(stranger.session)).toEqual([])
+})
+
+it('drives specification, candidate, and independent check tools with caller authority and stale rejection', async () => {
+  const ctx = await harness()
+  const root = agent(ctx, 'accept-coordinator')
+  const worker = agent(ctx, 'accept-worker')
+  const created = await ctx.tickets.create(root.session, { subject: 'Accept', description: '' })
+  const common = { root_session_id: root.id, ticket_id: created.id }
+  const criteria = [
+    { id: 'built', description: 'Work is built', required: true, independent: false },
+    { id: 'validated', description: 'Independently validated', required: true, independent: true },
+  ]
+  await expect(call(ctx, 'ticket_revise', { ...common, expected_revision: 1, acceptance_criteria: criteria }, worker)).rejects.toMatchObject({ code: 'TICKET_AUTHORITY' })
+  const revised = await call(ctx, 'ticket_revise', { ...common, expected_revision: 1, acceptance_criteria: criteria }, root) as {
+    revision: number
+    specification: { revision: number, acceptanceCriteria: { id: string }[] }
+  }
+  expect(revised.specification).toMatchObject({ revision: 2, acceptanceCriteria: [{ id: 'built' }, { id: 'validated' }] })
+  const assigned = await ctx.tickets.assign(root.session, {
+    ticketId: created.id, expectedRevision: revised.revision, actorId: root.id, ownerId: worker.id, subject: 'Build',
+  })
+  const assignmentId = assigned.assignments[0]!.id
+  const claimed = await ctx.tickets.claim(root.session, { ticketId: created.id, assignmentId, expectedRevision: assigned.revision, actorId: worker.id })
+  const reported = await call(ctx, 'ticket_report', { ...common, assignment_id: assignmentId, expected_revision: claimed.revision, kind: 'result', summary: 'Built' }, worker) as { revision: number }
+  const submitted = await call(ctx, 'ticket_submit_candidate', {
+    ...common, expected_revision: reported.revision, candidate_id: 'cand-1', spec_revision: 2, assignment_ids: [assignmentId],
+    content: { kind: 'artifact', reference: 'artifact://build/1', digest: 'sha256:' + 'a'.repeat(64) },
+  }, worker) as { revision: number; currentCandidateId: string; candidates: { id: string; authorId: string; content: { kind: string } }[] }
+  expect(submitted).toMatchObject({ currentCandidateId: 'cand-1', candidates: [{ id: 'cand-1', authorId: worker.id, content: { kind: 'artifact' } }] })
+  const check = { ...common, candidate_id: 'cand-1', spec_revision: 2, outcome: 'pass', evidence: ['ran suite'] }
+  await expect(call(ctx, 'ticket_check_candidate', { ...check, check_id: 'self', criterion_id: 'validated', expected_revision: submitted.revision }, worker)).rejects.toMatchObject({ code: 'TICKET_AUTHORITY' })
+  const built = await call(ctx, 'ticket_check_candidate', { ...check, check_id: 'c-built', criterion_id: 'built', expected_revision: submitted.revision }, root) as { revision: number }
+  await expect(call(ctx, 'ticket_check_candidate', { ...check, check_id: 'stale', criterion_id: 'validated', spec_revision: 1, expected_revision: built.revision }, root)).rejects.toMatchObject({ code: 'TICKET_STALE_REVISION' })
+  const validated = await call(ctx, 'ticket_check_candidate', { ...check, check_id: 'c-valid', criterion_id: 'validated', expected_revision: built.revision }, root) as { checks: { id: string; authorId: string }[] }
+  expect(validated.checks.map(item => item.id)).toEqual(['c-built', 'c-valid'])
+  expect(ctx.tickets.get(root.session, created.id).checks.at(-1)?.authorId).toBe(root.id)
+})
+
+it('names the active attempt when a worker reports through ticket_report', async () => {
+  const ctx = await harness()
+  const root = agent(ctx, 'attempt-coordinator')
+  const worker = agent(ctx, 'attempt-worker')
+  const created = await ctx.tickets.create(root.session, { subject: 'Attempt', description: '' })
+  const assigned = await ctx.tickets.assign(root.session, { ticketId: created.id, expectedRevision: 1, actorId: root.id, ownerId: worker.id, subject: 'Build' })
+  const assignmentId = assigned.assignments[0]!.id
+  const begun = await ctx.tickets.beginAttempt(root.session, {
+    ticketId: created.id, expectedRevision: assigned.revision, actorId: root.id, assignmentId, attemptId: TicketAttemptId('attempt-1'),
+    operationId: TicketOperationId('begin-1'), workspace: { kind: 'shared-workspace', directory: '/tmp/work' }, executor: { kind: 'in-process' },
+  })
+  const common = { root_session_id: root.id, ticket_id: created.id, assignment_id: assignmentId, kind: 'progress', summary: 'Working' }
+  await expect(call(ctx, 'ticket_report', { ...common, expected_revision: begun.revision }, worker)).rejects.toMatchObject({ code: 'TICKET_STALE_ATTEMPT' })
+  await expect(call(ctx, 'ticket_report', { ...common, expected_revision: begun.revision, attempt_id: 'attempt-superseded' }, worker)).rejects.toMatchObject({ code: 'TICKET_STALE_ATTEMPT' })
+  const reported = await call(ctx, 'ticket_report', { ...common, expected_revision: begun.revision, attempt_id: 'attempt-1' }, worker) as { reports: { attemptId?: string }[] }
+  expect(reported.reports.at(-1)?.attemptId).toBe('attempt-1')
+})
+
+it('refuses a terminal outcome while an attempt is unsettled and accepts cancellation once it settles', async () => {
+  const ctx = await harness()
+  const root = agent(ctx, 'unsettled-coordinator')
+  const worker = agent(ctx, 'unsettled-worker')
+  const created = await ctx.tickets.create(root.session, { subject: 'Unsettled', description: '' })
+  const assigned = await ctx.tickets.assign(root.session, { ticketId: created.id, expectedRevision: 1, actorId: root.id, ownerId: worker.id, subject: 'Build' })
+  const begun = await ctx.tickets.beginAttempt(root.session, {
+    ticketId: created.id, expectedRevision: assigned.revision, actorId: root.id, assignmentId: assigned.assignments[0]!.id,
+    attemptId: TicketAttemptId('attempt-unsettled'), operationId: TicketOperationId('begin-unsettled'),
+    workspace: { kind: 'shared-workspace', directory: '/tmp/work' }, executor: { kind: 'in-process' },
+  })
+  const end = { ticketId: created.id, actorId: root.id, summary: 'Stop' }
+  const before = ctx.tickets.get(root.session, created.id)
+  await expect(ctx.tickets.cancel(root.session, { ...end, expectedRevision: begun.revision })).rejects.toMatchObject({ code: 'TICKET_ATTEMPT_STATE' })
+  expect(ctx.tickets.get(root.session, created.id)).toEqual(before)
+  const settled = await ctx.tickets.settleAttempt(root.session, {
+    ticketId: created.id, expectedRevision: begun.revision, actorId: root.id, attemptId: TicketAttemptId('attempt-unsettled'),
+    operationId: TicketOperationId('settle-unsettled'), outcome: 'cancelled',
+  })
+  await expect(ctx.tickets.cancel(root.session, { ...end, expectedRevision: settled.revision })).resolves.toMatchObject({ status: 'cancelled' })
 })

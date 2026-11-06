@@ -552,6 +552,27 @@ describe('normalizeSessionLog', () => {
     expect(out).toContain('"operation":"resume"')
   })
 
+  interface TicketClockData {
+    readonly ticket: unknown
+    readonly message: { readonly content: readonly { readonly text: string }[] }
+  }
+
+  it('normalizes Ticket clocks in ticket/state events and epoch-millisecond JSON keys in tool results', () => {
+    const state = { type: 'ticket/state', data: { version: 2, ticket: { id: 't', createdAt: 1793922585363, updatedAt: 1793922585364,
+      reports: [{ createdAt: 1793922585365 }], terminalOutcome: { at: 1793922585366, kind: 'completed' } } } }
+    const result = { type: 'tool/result', data: { message: { content: [
+      { type: 'text', text: '{"id":"t","createdAt":1793922585363,"updatedAt":1793922585364,"revision":1,"short":{"at":12}}' },
+      { type: 'image' }] } } }
+    const bare = [{ type: 'ticket/state', data: null }, { type: 'tool/result', data: { message: null } },
+      { type: 'tool/result', data: { message: { content: 'x' } } }]
+    const out = normalizeSessionLog([header({}), state, result, ...bare].map(v => typeof v === 'string' ? v : JSON.stringify(v)).join('\n') + '\n', ctx)
+      .trim().split('\n').map(line => JSON.parse(line) as { data: TicketClockData })
+    expect(out[1]?.data.ticket).toEqual({ id: 't', createdAt: 0, updatedAt: 0, reports: [{ createdAt: 0 }],
+      terminalOutcome: { at: 0, kind: 'completed' } })
+    expect(out[2]?.data.message.content[0]?.text).toBe('{"id":"t","createdAt":0,"updatedAt":0,"revision":1,"short":{"at":12}}')
+    expect(out[3]?.data).toBeNull()
+  })
+
   it('normalizes job lifecycle clocks while preserving user timestamps and uncertainty', () => {
     const input = [
       header({}),

@@ -89,7 +89,7 @@ Agent Teams 保持未挂载。`WorkstreamService` 通过 `ctx.subagents` 的收�
 
 #### 模型看到什么
 
-35 个 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 工具 schema，以及 `TicketTools` 注册的 `ticket-tools:policy` 系统提示段。本层自身不添加文本。
+38 个 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 工具 schema，以及 `TicketTools` 注册的 `ticket-tools:policy` 系统提示段。本层自身不添加文本。
 
 #### Token 影响
 
