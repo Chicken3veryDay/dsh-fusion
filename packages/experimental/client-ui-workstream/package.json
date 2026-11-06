@@ -58,11 +58,11 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-experimental-ticket": "workspace:*",
-    "@deepseek-ai/dsh-experimental-workstream": "workspace:*",
-    "@deepseek-ai/dsh-experimental-workstream-evidence": "workspace:*"
+    "@deepseek-ai/dsh-experimental-workstream": "workspace:*"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-typert-protocol": "workspace:*"
+    "@deepseek-ai/dsh-typert-protocol": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
