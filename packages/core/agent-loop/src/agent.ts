@@ -583,7 +583,7 @@ export class ReactLoopAgent implements Agent {
       ...unsent?.system === undefined ? {} : { unsent: unsent.system },
       startsSeries: startsRequestSeries
         || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
-        || (unsent !== undefined && preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+        || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
     })
     for (const { message, intent } of commits) {
       system = this.session.append('system/message', { turn, step, message }, intent).seq
@@ -595,9 +595,15 @@ export class ReactLoopAgent implements Agent {
           ? { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] }
           : { surfaceOp: 'append' }).seq
     }
+    let contextAdmitted = false
     if (firstAttempt) {
       for (const message of decision.messages) {
-        if (message.source.kind !== 'runtime-context') {
+        if (message.source.kind === 'runtime-context') {
+          if (requestContext.length === 0 && context !== undefined && !contextAdmitted) {
+            commitContext(context)
+            contextAdmitted = true
+          }
+        } else {
           this.session.append('user/message', message, { surfaceOp: 'append' })
         }
       }
@@ -605,7 +611,7 @@ export class ReactLoopAgent implements Agent {
     for (const message of requestContext) {
       this.session.append('user/message', message, { surfaceOp: 'append' })
     }
-    if (context !== undefined) commitContext(context)
+    if (context !== undefined && !contextAdmitted) commitContext(context)
     return { ...system === undefined ? {} : { system }, ...runtime === undefined ? {} : { context: runtime } }
   }
 
