@@ -815,7 +815,8 @@ export class TicketService extends Service {
         writes.push(this.writeSettlement(settlement))
       }
     }
-    const failures = (await Promise.allSettled(writes)).flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
+    const failures = (await Promise.allSettled(writes))
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
     if (failures.length > 0) throw new AggregateError(failures, 'Ticket attempt recovery did not persist')
   }
 
