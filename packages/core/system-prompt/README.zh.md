@@ -81,7 +81,7 @@ ctx.systemPrompt.variable('response_language', () => 'English')
 
 ### 贡献工具 schema
 
-工具 schema 提供方在每次组装时求值，并贡献模型可见的 `ToolSchema` 集合；`ToolRuntime` 会自动注册自身，因此大多数工具在此无需手动接线。提供方返回限制后的可见集合，外加 `toolOrder` 使用的限制前名称全集。
+工具 schema 提供方在每次组装时求值，并贡献模型可见的 `ToolSchema` 集合；`ToolRuntime` 会自动注册自身，因此大多数工具在此无需手动接线。提供方返回限制后的可见集合，外加 `toolOrder` 使用的限制前名称全集。若提供方的 schema 已按请求必须声明的顺序排列（例如由策略排序的准入结果），则设置 `ordered: true`：组装会为 `toolOrder` 留给其余项条目的每个工具保留该顺序而不按名称排序，使只追加的顺序原样进入模型请求，提示词缓存前缀保持稳定。未设置 `ordered` 时使用规范的名称顺序。
 
 ### 抑制运行时上下文
 

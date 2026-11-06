@@ -189,6 +189,11 @@ export interface ResolvedToolSet {
   /** Close admission after the step's tool batch settles. */
   dispose(): void
   /**
+   * Whether an admission policy set the declaration sequence, which {@link view} then iterates in.
+   * Absent or false means registration order, which prompt assembly sorts canonically.
+   */
+  readonly ordered?: boolean
+  /**
    * Read admitted registrations that remain visible in their original scope.
    * @param scope - exact requesting agent; another scope is never admitted.
    * @returns original definitions excluding removed or restricted registrations.

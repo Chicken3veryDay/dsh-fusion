@@ -60,6 +60,9 @@ type Phase =
   }
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
+/** One step's admitted tools with the prompt assembled from exactly that selection. */
+type PreparedTools = { toolSet: ResolvedToolSet; assembly: PromptAssembly }
+
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
 
 type PreparedStep =
@@ -309,29 +312,48 @@ export class ReactLoopAgent implements Agent {
     if (selection === undefined) {
       throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`)
     }
-    const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal })
+    // Tools resolve and the prompt assembles inside the pre-step chain's final handler, after every
+    // listener has finished changing history (automatic compaction revokes activations there), so the
+    // declarations and the dispatch selection reflect one post-listener state.
+    const step: { prepared?: PreparedTools | undefined } = {}
+    const prepareTools = async (): Promise<PreparedTools> => {
+      step.prepared?.toolSet.dispose()
+      step.prepared = undefined
+      const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal })
+      try {
+        const assembly = await this.loopCtx.systemPrompt.assemble({
+          ...assembleContextFor(this, signal), modelSelection: selection, toolSet,
+        })
+        signal.throwIfAborted()
+        return step.prepared = { toolSet, assembly }
+      } catch (error: unknown) {
+        toolSet.dispose()
+        throw error
+      }
+    }
     try {
-      const assembly = await this.loopCtx.systemPrompt.assemble({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet })
-      signal.throwIfAborted()
       const decision = await this.dispatch.waterfall(
         'agent/pre-step', { messages: claimed, ...position, signal, modelSelection: selection },
-        (): Promise<PreStepDecision> => {
+        async (): Promise<PreStepDecision> => {
+          const { assembly } = await prepareTools()
           const sections = renderContextSections(assembly)
           const context = this.runtimeContext.project(joinContextSections(sections), sections)
-          return Promise.resolve<PreStepDecision>({
+          return {
             kind: 'enter',
             messages: context === undefined ? claimed : [...claimed, context],
-          })
+          }
         },
       )
       signal.throwIfAborted()
       if (decision.kind === 'reject') {
-        toolSet.dispose()
+        step.prepared?.toolSet.dispose()
         return decision
       }
+      // A listener that answered without delegating skipped the final handler; select tools now.
+      const { toolSet, assembly } = step.prepared ?? await prepareTools()
       return { ...decision, assembly, selection, toolSet }
     } catch (error: unknown) {
-      toolSet.dispose()
+      step.prepared?.toolSet.dispose()
       throw error
     }
   }

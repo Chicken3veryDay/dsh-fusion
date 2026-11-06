@@ -115,6 +115,13 @@ export interface ToolProviderResult {
   readonly schemas: readonly ToolSchema[]
   /** The pre-restriction name universe for config validation (defaults to `schemas`' names). */
   readonly knownNames?: readonly string[]
+  /**
+   * Whether `schemas` already follow the sequence the model request must declare, such as a
+   * policy-ordered admission that keeps earlier declarations as a stable prefix. Assembly then
+   * keeps the contributed sequence for every tool the configured `toolOrder` leaves to its rest
+   * entry instead of sorting those by name. Absent or false keeps the canonical name order.
+   */
+  readonly ordered?: boolean
 }
 
 /**
@@ -226,22 +233,28 @@ function validateToolOrder(toolOrder: string[] | undefined): string[] | undefine
 }
 
 /**
- * Apply configured tool order, inserting unlisted tools lexicographically at
- * {@link TOOL_ORDER_REST}. Unknown configured names fail; known but restricted
- * names may be absent.
+ * Apply configured tool order, inserting unlisted tools at {@link TOOL_ORDER_REST}:
+ * lexicographically, or in the contributed sequence when a provider declared one. Unknown
+ * configured names fail; known but restricted names may be absent.
  */
-function orderTools(tools: ToolSchema[], toolOrder: string[] | undefined, knownNames: ReadonlySet<string>): ToolSchema[] {
+function orderTools(
+  tools: ToolSchema[],
+  toolOrder: string[] | undefined,
+  knownNames: ReadonlySet<string>,
+  keepSequence: boolean,
+): ToolSchema[] {
   const reserved = tools.find(tool => tool.name === TOOL_ORDER_REST)
   if (reserved !== undefined) {
     throw new Error(`tool provider returned reserved tool name "${TOOL_ORDER_REST}" (reserved for toolOrder's rest entry)`)
   }
-  if (toolOrder === undefined) return tools.sort(compareToolNames)
+  if (toolOrder === undefined) return keepSequence ? tools : tools.sort(compareToolNames)
   const unknown = toolOrder.filter(name => name !== TOOL_ORDER_REST && !knownNames.has(name))
   if (unknown.length > 0) {
     throw new Error(`toolOrder lists unregistered tool${unknown.length > 1 ? 's' : ''} ${unknown.map(name => `"${name}"`).join(', ')}; known tools: ${[...knownNames].sort().join(', ') || '(none)'}`)
   }
   const listed = new Set(toolOrder)
-  const rest = tools.filter(tool => !listed.has(tool.name)).sort(compareToolNames)
+  const unlisted = tools.filter(tool => !listed.has(tool.name))
+  const rest = keepSequence ? unlisted : unlisted.sort(compareToolNames)
   return toolOrder.flatMap(name =>
     name === TOOL_ORDER_REST ? rest : tools.filter(tool => tool.name === name))
 }
@@ -644,8 +657,10 @@ export class SystemPrompt extends Service {
     ]
     const collected: ToolSchema[] = []
     const knownNames = new Set<string>()
+    let keepSequence = false
     for (const provider of providers) {
       const result = provider(context)
+      if (result.ordered === true) keepSequence = true
       const schemas = result.schemas.map(({ name, description, parameters, deferLoading }): ToolSchema => ({
         name,
         description,
@@ -672,7 +687,7 @@ export class SystemPrompt extends Service {
         if (section.complete === true) completeSection = { ...assembled }
         return assembled
       })
-    const tools = orderTools(collected, this.toolOrder, knownNames)
+    const tools = orderTools(collected, this.toolOrder, knownNames, keepSequence)
     const assembly: PromptPresentation = {
       sections,
       contexts: [...contextByName.values()]

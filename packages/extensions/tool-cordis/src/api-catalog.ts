@@ -4732,7 +4732,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Delegate a raw call batch to its Agent\'s provider or the deployment default. Select at dispatch; accepted batches settle through that provider even if it unloads.',
         parameters: [{ name: 'input', description: 'original calls, optional owning Agent, optional logging step, and either a step `toolSet` or the explicit `hostInternalDispatch` opt-in.' }],
         returns: 'the selected executor\'s settled batch; unavailable selections reject.',
-        throws: ['{TypeError} when `hostInternalDispatch` is combined with a `toolSet`.'],
+        throws: ['{TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.'],
       },
       {
         signature: 'guard(guard: ToolGuard): () => void',
@@ -7777,6 +7777,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface HostConnectionRpc {\n    handle(channel: string, handler: ConnectionRpcHandler): () => Promise<void>;\n    intercept(channel: \'/api\', matches: ConnectionRpcEndpointMatcher, handler: ConnectionRpcHandler): () => Promise<void>;\n}',
   },
   {
+    name: 'HostInternalDispatch',
+    declaration: 'export interface HostInternalDispatch {\n    readonly tools: readonly string[];\n}',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -9230,7 +9234,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResolvedToolSet',
-    declaration: 'export interface ResolvedToolSet {\n    dispose(): void;\n    view(scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition>;\n}',
+    declaration: 'export interface ResolvedToolSet {\n    dispose(): void;\n    readonly ordered?: boolean;\n    view(scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition>;\n}',
   },
   {
     name: 'RestartReason',
@@ -11046,7 +11050,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolBatchInput',
-    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly hostInternalDispatch?: true;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
+    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly hostInternalDispatch?: HostInternalDispatch;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
   },
   {
     name: 'ToolBatchResult',
@@ -11166,7 +11170,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolProviderResult',
-    declaration: 'export interface ToolProviderResult {\n    readonly schemas: readonly ToolSchema[];\n    readonly knownNames?: readonly string[];\n}',
+    declaration: 'export interface ToolProviderResult {\n    readonly schemas: readonly ToolSchema[];\n    readonly knownNames?: readonly string[];\n    readonly ordered?: boolean;\n}',
   },
   {
     name: 'ToolRegistrationOptions',

@@ -132,7 +132,11 @@ export class ToolsService extends Service {
     ctx.systemPrompt.tools(({ scope, toolSet }) => {
       const executor = this.selectExecutor(scope)
       const description = executor.describe(this.definitions(scope, toolSet))
-      return { ...description, knownNames: description.knownNames ?? [...this.view(scope).knownNames] }
+      return {
+        ...description,
+        knownNames: description.knownNames ?? [...this.view(scope).knownNames],
+        ...toolSet?.ordered === true ? { ordered: true } : {},
+      }
     })
   }
 
@@ -342,10 +346,11 @@ export class ToolsService extends Service {
       signal.throwIfAborted()
       if (enabled) admitted.set(name, definition)
     }
-    await this.applyAdmissionPolicies(context, admitted)
+    const ordered = await this.applyAdmissionPolicies(context, admitted)
     let closed = false
     return Object.freeze({
       dispose: () => { closed = true },
+      ordered,
       view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
         const visible = new Map<string, ToolDefinition>()
         if (closed || scope !== agent) return visible
@@ -369,8 +374,9 @@ export class ToolsService extends Service {
    * ordering policy is in its sequence, because later policies only remove.
    * @param context - preparing agent, captured model selection, and cancellation.
    * @param admitted - candidates after `when`; narrowed in place, in registration order unless a policy ordered it.
+   * @returns whether a policy ordered the survivors.
    */
-  private async applyAdmissionPolicies(context: ToolActivationContext, admitted: Map<string, ToolDefinition>): Promise<void> {
+  private async applyAdmissionPolicies(context: ToolActivationContext, admitted: Map<string, ToolDefinition>): Promise<boolean> {
     const { signal } = context
     const policies = [this.admission.global, ...this.admission.chainLayers(context.agent)]
       .flatMap(layer => [...layer.policies.values()])
@@ -393,13 +399,14 @@ export class ToolsService extends Service {
       signal.throwIfAborted()
       for (const name of [...admitted.keys()]) if (!kept.has(name)) admitted.delete(name)
     }
-    if (sequence === undefined) return
+    if (sequence === undefined) return false
     const definitions = new Map(admitted)
     admitted.clear()
     for (const name of sequence) {
       const definition = definitions.get(name)
       if (definition !== undefined) admitted.set(name, definition)
     }
+    return true
   }
 
   /**
@@ -478,29 +485,35 @@ export class ToolsService extends Service {
    * @param input - original calls, optional owning Agent, optional logging step, and either a step
    * `toolSet` or the explicit `hostInternalDispatch` opt-in.
    * @returns the selected executor's settled batch; unavailable selections reject.
-   * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet`.
+   * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.
    */
   async execute(input: ToolBatchInput): Promise<ToolBatchResult> {
-    if (input.hostInternalDispatch === true) {
+    const { hostInternalDispatch } = input
+    if (hostInternalDispatch !== undefined) {
       if (input.toolSet !== undefined) {
         throw new TypeError('ToolBatchInput.hostInternalDispatch cannot be combined with a toolSet: a step selection already decides admission')
       }
-      return this.selectExecutor(input.agent).execute({ ...input, toolSet: this.hostInternalSelection() })
+      if (hostInternalDispatch.tools.length === 0) {
+        throw new TypeError('ToolBatchInput.hostInternalDispatch.tools must name at least one of the component\'s own tools')
+      }
+      const toolSet = this.hostInternalSelection(new Set(hostInternalDispatch.tools))
+      return this.selectExecutor(input.agent).execute({ ...input, toolSet })
     }
     return this.selectExecutor(input.agent).execute(input)
   }
 
   /**
-   * Build the selection for {@link ToolBatchInput.hostInternalDispatch}: each scope's
-   * unconditional registrations as they stand when read, with no admission policy applied.
+   * Build the selection for {@link ToolBatchInput.hostInternalDispatch}: the named tools among
+   * each scope's unconditional registrations as they stand when read, with no admission policy applied.
+   * @param names - the component's own tool names; every other registration stays unavailable.
    * @returns a selection with nothing to dispose.
    */
-  private hostInternalSelection(): ResolvedToolSet {
+  private hostInternalSelection(names: ReadonlySet<string>): ResolvedToolSet {
     return Object.freeze({
       dispose: (): void => undefined,
       view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
         const current = this.view(scope)
-        return new Map([...current.visible].filter(([name]) => current.registrations.get(name)?.when === undefined))
+        return new Map([...current.visible].filter(([name]) => names.has(name) && current.registrations.get(name)?.when === undefined))
       },
     })
   }

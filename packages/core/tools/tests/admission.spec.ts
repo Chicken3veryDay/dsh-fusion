@@ -361,7 +361,7 @@ it('runs a host-internal batch past admission policies, for global and scoped re
   h.ctx.tools.registerAdmissionPolicy(() => [])
   expect(h.declared(await h.resolve())).toEqual([])
   const batch = (name: string, extra: object = {}) => h.ctx.tools.execute({
-    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, ...extra,
+    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: [name] }, ...extra,
     calls: [{ type: 'tool-call' as const, id: ToolCallId(`host-${name}`), name, arguments: '{}' }],
   })
   expect((await batch('global')).results[0]?.result.isError).toBe(false)
@@ -374,10 +374,10 @@ it('keeps conditional registrations unavailable and refuses a host-internal batc
   h.ctx.tools.register(h.tool('conditional'), { when: () => true })
   h.ctx.tools.registerAdmissionPolicy(() => [])
   const calls = [{ type: 'tool-call' as const, id: ToolCallId('host-conditional'), name: 'conditional', arguments: '{}' }]
-  const result = await h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, calls })
+  const result = await h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: ['conditional'] }, calls })
   expect(result.results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
   const toolSet = await h.resolve()
-  await expect(h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, toolSet, calls }))
+  await expect(h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: ['conditional'] }, toolSet, calls }))
     .rejects.toThrow('cannot be combined with a toolSet')
   expect(h.calls).toEqual([])
 })
@@ -392,4 +392,21 @@ it('still refuses a call without a selection and without the host-internal opt-i
   })
   expect(result.results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
   expect(h.calls).toEqual([])
+})
+
+it('lets a host-internal batch reach only the tools it names, even among unconditional registrations', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('own'))
+  h.ctx.tools.register(h.tool('unrelated'))
+  h.scope.ctx.tools.register(h.tool('scoped_unrelated'))
+  h.ctx.tools.registerAdmissionPolicy(() => [])
+  const batch = (names: readonly string[], ...called: string[]) => h.ctx.tools.execute({
+    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: { tools: names },
+    calls: called.map(name => ({ type: 'tool-call' as const, id: ToolCallId(`host-${name}`), name, arguments: '{}' })),
+  })
+  const result = await batch(['own'], 'own', 'unrelated', 'scoped_unrelated')
+  expect(result.results.map(entry => entry.result.error?.info?.code)).toEqual([undefined, 'UNKNOWN_TOOL', 'UNKNOWN_TOOL'])
+  expect(h.calls).toEqual(['own'])
+  await expect(batch([], 'own')).rejects.toThrow('must name at least one')
+  expect(h.calls).toEqual(['own'])
 })

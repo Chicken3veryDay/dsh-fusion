@@ -81,7 +81,7 @@ Custom persona templates must not depend on a built-in `{{cwd}}` variable: the l
 
 ### Contribute tool schemas
 
-Tool-schema providers are evaluated per assembly and contribute the model-visible `ToolSchema` set; `ToolRuntime` registers itself automatically, so most tools need no manual wiring here. A provider returns the post-restriction visible set plus the pre-restriction name universe used by `toolOrder`.
+Tool-schema providers are evaluated per assembly and contribute the model-visible `ToolSchema` set; `ToolRuntime` registers itself automatically, so most tools need no manual wiring here. A provider returns the post-restriction visible set plus the pre-restriction name universe used by `toolOrder`. A provider whose schemas already follow the sequence the request must declare, such as a policy-ordered admission, sets `ordered: true`: assembly then keeps that sequence for every tool `toolOrder` leaves to its rest entry instead of sorting those by name, so an append-only sequence reaches the model request unchanged and the prompt-cache prefix stays stable. Without `ordered`, the canonical name order applies.
 
 ### Suppress runtime context
 

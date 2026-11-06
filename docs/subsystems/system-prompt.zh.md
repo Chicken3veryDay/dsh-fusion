@@ -36,6 +36,13 @@ interface ToolProviderResult {
   readonly schemas: readonly ToolSchema[]
   /** The pre-restriction name universe for config validation (defaults to `schemas`' names). */
   readonly knownNames?: readonly string[]
+  /**
+   * Whether `schemas` already follow the sequence the model request must declare, such as a
+   * policy-ordered admission that keeps earlier declarations as a stable prefix. Assembly then
+   * keeps the contributed sequence for every tool the configured `toolOrder` leaves to its rest
+   * entry instead of sorting those by name. Absent or false keeps the canonical name order.
+   */
+  readonly ordered?: boolean
 }
 ```
 

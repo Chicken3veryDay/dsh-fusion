@@ -19,6 +19,12 @@ import type {} from '@deepseek-ai/dsh-tools'
 /** Cordis plugin identity for the installed Cua Driver provider. */
 export const name = 'experimental-computer-use-cua-driver-mcp'
 
+/** MCP server namespace of this provider; its tools register as `mcp__cua-driver-mcp__<raw name>`. */
+const SERVER_NAME = 'cua-driver-mcp'
+
+/** Prefix of every public tool name this provider's MCP connection registers. */
+const TOOL_PREFIX = `mcp__${SERVER_NAME}__`
+
 /** The shared reservation and tool registry must exist before connection. */
 export const inject = ['computerUse', 'tools']
 
@@ -49,10 +55,11 @@ export const Config: z<Partial<Config>, Config> = z.object({
 
 function desktopTool(ctx: Context, agent: Agent, operation: InteractionOperation): { name: string; args: Record<string, JsonValue> } {
   if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
-  const names = ctx.tools.schemas(agent).map(tool => tool.name)
-  const find = (suffixes: readonly string[]): string => {
-    const name = names.find(candidate => suffixes.some(suffix => candidate.endsWith(`__${suffix}`)))
-    if (name === undefined) throw new Error(`Cua Driver MCP does not expose ${suffixes.join(' or ')}`)
+  const names = new Set(ctx.tools.schemas(agent).map(tool => tool.name))
+  // Only this server's namespace qualifies: a same-suffix tool of another provider is never a driver operation.
+  const find = (rawNames: readonly string[]): string => {
+    const name = rawNames.map(raw => `${TOOL_PREFIX}${raw}`).find(candidate => names.has(candidate))
+    if (name === undefined) throw new Error(`Cua Driver MCP does not expose ${rawNames.join(' or ')}`)
     return name
   }
   const target = {
@@ -86,7 +93,7 @@ async function executeInteractionTool(
     calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
     agent,
-    hostInternalDispatch: true,
+    hostInternalDispatch: { tools: [name] },
   })
   const settled = batch.results[0]?.result
   if (settled === undefined) throw new Error(`Cua Driver MCP tool "${name}" returned no result`)
@@ -109,7 +116,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ...config.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: config.toolCallTimeoutMs },
     reconnect: config.reconnect,
     transport: 'stdio',
-    serverName: 'cua-driver-mcp',
+    serverName: SERVER_NAME,
     failOnStartupError: true,
   })
   // One effect orders child shutdown before release; separate fiber effects

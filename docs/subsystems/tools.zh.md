@@ -228,6 +228,11 @@ interface ResolvedToolSet {
   /** Close admission after the step's tool batch settles. */
   dispose(): void
   /**
+   * Whether an admission policy set the declaration sequence, which {@link view} then iterates in.
+   * Absent or false means registration order, which prompt assembly sorts canonically.
+   */
+  readonly ordered?: boolean
+  /**
    * Read admitted registrations that remain visible in their original scope.
    * @param scope - exact requesting agent; another scope is never admitted.
    * @returns original definitions excluding removed or restricted registrations.
@@ -324,11 +329,11 @@ interface ToolBatchInput {
   /**
    * Explicit opt-in for a host component dispatching its own provider tools outside a model
    * step (an MCP, browser, or computer-use bridge). The calls skip admission policies and
-   * still reach only the scope's unconditional registrations, including nested program
-   * calls. Never set it for a call a model requested: the model path passes its step's
-   * `toolSet`. Rejected together with `toolSet`.
+   * reach only the named tools, and of those only the scope's unconditional registrations,
+   * including nested program calls. Never set it for a call a model requested: the model path
+   * passes its step's `toolSet`. Rejected together with `toolSet`.
    */
-  readonly hostInternalDispatch?: true
+  readonly hostInternalDispatch?: HostInternalDispatch
   /**
    * Committed model step receiving root call/result events; requires `agent`.
    * Undefined when `agent` is absent or for calls outside a model response, such
@@ -830,7 +835,7 @@ setExecutor(executor: ToolExecutor): () => void
  * @param input - original calls, optional owning Agent, optional logging step, and either a step
  * `toolSet` or the explicit `hostInternalDispatch` opt-in.
  * @returns the selected executor's settled batch; unavailable selections reject.
- * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet`.
+ * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet` or names no tool.
  */
 async execute(input: ToolBatchInput): Promise<ToolBatchResult>
 

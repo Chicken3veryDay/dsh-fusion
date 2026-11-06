@@ -89,8 +89,8 @@ AgentLoop 初始化 Agent，失败则回滚，并在启动已排队工作前等�
 ```text
 turn/start
   claim next-step input plus one queued message
-  snapshot Session model selection; assemble prompt sections + step-admitted tool schemas
-  -> agent/pre-step; project runtime context at fallback
+  snapshot Session model selection
+  -> agent/pre-step; at fallback: admit tools, assemble prompt + tool schemas, project runtime context
                                      reject | enter(messages, startsRequestSeries?)
      reject, or a first enter rewritten empty -> close the turn with no step
      step/start
