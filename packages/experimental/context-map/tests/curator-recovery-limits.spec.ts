@@ -5,29 +5,11 @@ import { textResponse, toolCallResponse } from '../../../core/agent-loop/tests/m
 import { contextMapProjectionDefinition, type ContextMapProjectionState } from '../src/projection.ts'
 import DefaultContextCurator from '../src/curator.ts'
 import { ContextMapError } from '../src/error.ts'
-import { disposeWorlds, preStep, world, type World } from './fixture.ts'
+import { disposeWorlds, preStep, requestsOf, world, type World } from './fixture.ts'
 
 afterEach(async () => {
   try { await disposeWorlds() } finally { vi.restoreAllMocks() }
 })
-
-/** Observe provider entry without imposing a shorter deadline than the test lane. */
-function requestsOf(w: World): (count: number) => Promise<void> {
-  const pending = new Map<number, PromiseWithResolvers<undefined>>()
-  const stream = w.adapter.stream.bind(w.adapter)
-  vi.spyOn(w.adapter, 'stream').mockImplementation(async function* (options) {
-    for await (const chunk of stream(options)) {
-      for (const [count, barrier] of pending) if (w.adapter.requests.length >= count) barrier.resolve(undefined)
-      yield chunk
-    }
-  })
-  return (count) => {
-    if (w.adapter.requests.length >= count) return Promise.resolve()
-    const barrier = pending.get(count) ?? Promise.withResolvers<undefined>()
-    pending.set(count, barrier)
-    return barrier.promise
-  }
-}
 
 it.each(['step bound', 'model error', 'restart'] as const)('an interrupted partial map remains eligible for curation after %s', async (mode) => {
   const ref: { w?: World; section: string | undefined } = { section: undefined }

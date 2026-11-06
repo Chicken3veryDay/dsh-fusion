@@ -9,6 +9,7 @@
  * when the queue drops them, and claimed entries when their turn ends without logging them.
  */
 import { z } from 'zod'
+import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const seq = z.number().int().nonnegative()
@@ -54,7 +55,9 @@ const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest
  * @param message - any logged or queued message.
  * @returns the key and hash, empty when the message is not a readable grant.
  */
-function grantsOf(message: { readonly source: unknown }): { key: string; hash: string; truncated: boolean; coreBytes: number | null }[] {
+export function grantsOf(
+  message: { readonly source: unknown },
+): { key: string; hash: string; truncated: boolean; coreBytes: number | null }[] {
   const parsed = grantSource.safeParse(message.source)
   return parsed.success ? [{
     key: parsed.data.key, hash: parsed.data.hash, truncated: parsed.data.truncated === true, coreBytes: parsed.data.coreBytes ?? null,
@@ -162,6 +165,18 @@ export const contextTreeProjectionDefinition = {
     return state
   },
 } satisfies ProjectionDefinition<typeof CONTEXT_TREE_PROJECTION_KEY, ContextTreeProjectionState>
+
+/**
+ * Treat accepted messages the loop has not logged yet as claimed, so grants among them keep their
+ * budget charge and held hash.
+ * @param state - projection state.
+ * @param pending - messages accepted for the coming request.
+ * @returns the state with their grants counted as claimed.
+ */
+export function withPendingGrants(state: ContextTreeProjectionState, pending: readonly UserMessage[]): ContextTreeProjectionState {
+  const grants = pending.map(message => ({ id: message.id, tools: [], grants: grantsOf(message) })).filter(entry => entry.grants.length > 0)
+  return grants.length === 0 ? state : { ...state, claimed: [...state.claimed, ...grants] }
+}
 
 /**
  * Tool names the conversation has activated, deduplicated, in the order their messages were

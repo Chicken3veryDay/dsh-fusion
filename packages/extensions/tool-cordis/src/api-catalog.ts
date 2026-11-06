@@ -1062,6 +1062,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the committed snapshot.',
         throws: ['{@link ContextMapError} `CONTEXT_MAP_LIMIT` for more than `maxCoreSections` sections.'],
       },
+      {
+        signature: 'curationWork(owner: Agent, signal?: AbortSignal): Promise<CurationWork | null>',
+        description: 'The curation work waiting for an owner\'s map, whoever holds the role.',
+        parameters: [{ name: 'owner', description: 'the map owner.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the work, or `null` when nothing waits.',
+      },
     ],
   },
   {
@@ -6757,7 +6763,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ClaimRequest',
-    declaration: 'export interface ClaimRequest extends MapTarget {\n    readonly holderId?: SessionId;\n    readonly route?: MapRoute;\n}',
+    declaration: 'export interface ClaimRequest extends MapTarget {\n    readonly holderId?: SessionId;\n    readonly route?: MapRoute;\n    readonly work?: string;\n}',
   },
   {
     name: 'ClientArtifactBaseline',
@@ -7238,6 +7244,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CurateRequest',
     declaration: 'export interface CurateRequest extends MapTarget {\n    readonly expectedRevision: number;\n}',
+  },
+  {
+    name: 'CurationWork',
+    declaration: 'export interface CurationWork {\n    readonly reasons: readonly (\'index\' | \'pending\' | \'stale\' | \'space\')[];\n    readonly signature: string;\n    readonly attempts: number;\n}',
   },
   {
     name: 'DailyInput',
@@ -8245,7 +8255,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MapChange',
-    declaration: 'export interface MapChange {\n    readonly kind: \'committed\' | \'index-changed\' | \'note-filed\' | \'holder-gone\';\n    readonly ownerSessionId: SessionId;\n    readonly holderId?: SessionId;\n}',
+    declaration: 'export interface MapChange {\n    readonly kind: \'committed\' | \'work-waiting\' | \'note-filed\' | \'holder-gone\';\n    readonly ownerSessionId: SessionId;\n    readonly holderId?: SessionId;\n}',
   },
   {
     name: 'MapCite',
@@ -8301,7 +8311,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MapView',
-    declaration: 'export interface MapView {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroupView[];\n    readonly omittedGroups: number;\n    readonly pending: readonly MapPendingNote[];\n    readonly nextPendingAfter: MapPendingId | null;\n    readonly nextGroupAfter: MapGroupId | \'\' | null;\n    readonly omittedPending: number;\n    readonly staleNotes: number;\n    readonly indexChanged: boolean;\n}',
+    declaration: 'export interface MapView {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroupView[];\n    readonly omittedGroups: number;\n    readonly pending: readonly MapPendingNote[];\n    readonly nextPendingAfter: MapPendingId | null;\n    readonly nextGroupAfter: MapGroupId | \'\' | null;\n    readonly omittedPending: number;\n    readonly staleNotes: number;\n    readonly indexChanged: boolean;\n    readonly needsSpace?: true;\n}',
   },
   {
     name: 'MarketCompatibility',

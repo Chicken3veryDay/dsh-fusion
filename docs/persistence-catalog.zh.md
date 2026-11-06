@@ -38,7 +38,7 @@
 | `event:compaction/prune` | event | `7f7fd5a6b0064f597534b29ff62ef26e786dffccf5e14f654a7d4fcea2c35f04` | [`{ type: "compaction/prune" }`](#persistence-type-sha256-7f7fd5a6b0064f597534b29ff62ef26e786dffccf5e14f654a7d4fcea2c35f04) |
 | `event:compaction/start` | event | `db874d463b0fdec77e9da1c4568f37cb70bd6596781eb93800db44fb8a116965` | [`{ type: "compaction/start" }`](#persistence-type-sha256-db874d463b0fdec77e9da1c4568f37cb70bd6596781eb93800db44fb8a116965) |
 | `event:compaction/summary` | event | `e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602` | [`{ type: "compaction/summary" }`](#persistence-type-sha256-e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602) |
-| `event:context-map/state` | event | `6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d` | [`{ type: "context-map/state" }`](#persistence-type-sha256-6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d) |
+| `event:context-map/state` | event | `2c6d8e2433f44afffea786a0cc337c9d4af94de63680d567914cdea867d4646d` | [`{ type: "context-map/state" }`](#persistence-type-sha256-2c6d8e2433f44afffea786a0cc337c9d4af94de63680d567914cdea867d4646d) |
 | `event:deliverables/presented` | event | `13d3d180f977bf78081d487ffa0ecb75857349bcab29a5a3fb48189fca2a6176` | [`{ type: "deliverables/presented" }`](#persistence-type-sha256-13d3d180f977bf78081d487ffa0ecb75857349bcab29a5a3fb48189fca2a6176) |
 | `event:developer/message` | event | `d224a9637a3bdc88943d15a9c8f3dbe551a4d320b2965c2521a1f6a113d4d24f` | [`{ type: "developer/message" }`](#persistence-type-sha256-d224a9637a3bdc88943d15a9c8f3dbe551a4d320b2965c2521a1f6a113d4d24f) |
 | `event:feedback/message-delete` | event | `3ee93b06f3a125850337602bcdf155d2538c43a5c944ec55b1b3c365152d6796` | [`{ type: "feedback/message-delete" }`](#persistence-type-sha256-3ee93b06f3a125850337602bcdf155d2538c43a5c944ec55b1b3c365152d6796) |
@@ -5630,7 +5630,7 @@ SHA-256: `b30041e29547970e13d5e16bcaa6ed34bba54564e2846869f4af35a212e1510a`
 
 [`MapNote`](#persistence-type-sha256-c830b5878fb6a8fbb568cf05f4b4208940bc99012b5ecd0a2839096a91f13df1) 的数组。
 
-<a id="persistence-type-sha256-b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54"></a>
+<a id="persistence-type-sha256-32b55419739114f05a4f472b4a97a6fcae1469e82bc299b6de148e25d1ca6fdc"></a>
 
 <a id="persistence-type-mapop"></a>
 
@@ -5638,7 +5638,7 @@ SHA-256: `b30041e29547970e13d5e16bcaa6ed34bba54564e2846869f4af35a212e1510a`
 
 ### `MapOp`
 
-SHA-256: `b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54`
+SHA-256: `32b55419739114f05a4f472b4a97a6fcae1469e82bc299b6de148e25d1ca6fdc`
 
 来源：[`packages/experimental/context-map/src/types.ts:103`](../packages/experimental/context-map/src/types.ts)
 
@@ -5647,6 +5647,7 @@ SHA-256: `b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54`
 | `actor` | 必需 | `string` |
 | `kind` | 必需 | [`MapOpKind`](#persistence-type-sha256-ff9c50d74e67676830c0324dfb7e25fc9929cc76d6621e0e5fa23fc9f60a99d0) |
 | `target` | 可选 | `string` |
+| `work` | 可选 | `string` |
 
 <a id="persistence-type-sha256-ff9c50d74e67676830c0324dfb7e25fc9929cc76d6621e0e5fa23fc9f60a99d0"></a>
 
@@ -11019,17 +11020,17 @@ SHA-256: `8e56cefa6cd4dd5e1683af2f714816519f79e3f1bb296d5765265a6e4cfb15e9`
 | `provider` | 必需 | `string` |
 | `settings` | 必需 | `string` |
 
-<a id="persistence-type-sha256-be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083"></a>
+<a id="persistence-type-sha256-9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c"></a>
 
 ### `{ op, snapshot, version }`
 
-SHA-256: `be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083`
+SHA-256: `9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c`
 
 来源：[`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `op` | 必需 | [`MapOp`](#persistence-type-sha256-b5cab4298b8ec6a14e01c22fc2fee27ebba302f013900d156789ffe358e34f54) |
+| `op` | 必需 | [`MapOp`](#persistence-type-sha256-32b55419739114f05a4f472b4a97a6fcae1469e82bc299b6de148e25d1ca6fdc) |
 | `snapshot` | 必需 | [`MapSnapshot`](#persistence-type-sha256-63748e6783f808d97b801ce912b747d109f8e520fda65b935b6790e8d2368194) |
 | `version` | 必需 | `1` |
 
@@ -11520,17 +11521,17 @@ SHA-256: `e2f9a41e0989f54ed8cee80f8db2bcf9d60a5c810dc9d45b83fa050b9dce7602`
 | `time` | 必需 | `number` |
 | `type` | 必需 | `"compaction/summary"` |
 
-<a id="persistence-type-sha256-6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d"></a>
+<a id="persistence-type-sha256-2c6d8e2433f44afffea786a0cc337c9d4af94de63680d567914cdea867d4646d"></a>
 
 <a id="persistence-type-eventcontext-mapstate"></a>
 
 ### `{ type: "context-map/state" }`
 
-SHA-256: `6b52d5e9ddcd9dead0af596aac53170fba801bc1d174473837d8436f6f2cfc0d`
+SHA-256: `2c6d8e2433f44afffea786a0cc337c9d4af94de63680d567914cdea867d4646d`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `data` | 必需 | [`{ op, snapshot, version }`](#persistence-type-sha256-be674a24523cd14ddadf13391ab83e1cc0b0dcff45e215a1a6573ad00fac5083) |
+| `data` | 必需 | [`{ op, snapshot, version }`](#persistence-type-sha256-9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c) |
 | `ignorable` | 可选 | `true` |
 | `seq` | 必需 | `number` |
 | `time` | 必需 | `number` |

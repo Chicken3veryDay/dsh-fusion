@@ -54,6 +54,7 @@ const CURATOR_DEFAULTS = {
   maxTokens: 4096,
   minContextTokens: 32_768,
   maxRoutesInspected: 16,
+  maxAttempts: 2,
 } as const satisfies Required<CuratorConfig>
 
 const positive = (minimum: number, fallback: number): z<number> => z.number().step(1).min(minimum).default(fallback)
@@ -81,6 +82,7 @@ export const CuratorConfigSchema: z<CuratorConfig> = z.object({
   maxTokens: positive(256, CURATOR_DEFAULTS.maxTokens),
   minContextTokens: positive(1024, CURATOR_DEFAULTS.minContextTokens),
   maxRoutesInspected: positive(1, CURATOR_DEFAULTS.maxRoutesInspected),
+  maxAttempts: positive(1, CURATOR_DEFAULTS.maxAttempts),
 })
 
 function withoutUndefined<T extends object>(value: T): Partial<T> {
@@ -121,7 +123,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
  */
 export function resolveCuratorConfig(config: CuratorConfig): ResolvedCuratorConfig {
   const merged = { ...CURATOR_DEFAULTS, ...withoutUndefined(config) } as ResolvedCuratorConfig
-  const minimums = { maxSteps: 1, maxTokens: 256, minContextTokens: 1024, maxRoutesInspected: 1 } as const
+  const minimums = { maxSteps: 1, maxTokens: 256, minContextTokens: 1024, maxRoutesInspected: 1, maxAttempts: 1 } as const
   for (const [key, minimum] of Object.entries(minimums) as [keyof typeof minimums, number][]) {
     if (!Number.isSafeInteger(merged[key]) || merged[key] < minimum) {
       throw new ContextMapError(`${key} must be a safe integer of at least ${minimum}, got ${String(merged[key])}`, 'CONTEXT_MAP_INVALID_CONFIG')

@@ -36,6 +36,7 @@ import {
   activeToolNames,
   contextTreeProjectionDefinition,
   grantedHashes,
+  withPendingGrants,
   type ContextTreeProjectionState,
 } from './projection.ts'
 import { browseFooter, browseHeader, browseLine, listingBytes } from './render.ts'
@@ -127,21 +128,25 @@ export class ContextTreeService extends Service {
       if (decision.kind === 'reject' || (step === 1 && decision.messages.length === 0)) return decision
       if (decision.messages.some(message => message.source.kind === 'context-tree-catalog')) return decision
       if (this.ctx.tools.get('context_browse', agent) === undefined) return decision
-      const catalog = await this.pendingCatalog(agent, signal)
-      const core = await this.pendingCore(agent, signal)
-      const added = [...catalog === undefined ? [] : [catalog], ...core]
+      const added = await this.pendingContext(agent, signal, decision.messages)
       return added.length === 0 ? decision : { ...decision, messages: [...decision.messages, ...added] }
     })
     this.ctx.on('system-prompt/request-context', async ({ agent, signal }, pending, next): Promise<UserMessage[]> => {
       const messages = await next()
       if (agent === undefined || signal === undefined) return messages
       if (this.ctx.tools.get('context_browse', agent) === undefined) return messages
-      const catalog = await this.pendingCatalog(agent, signal)
-      const core = await this.pendingCore(agent, signal)
-      const added = [...catalog === undefined ? [] : [catalog], ...core]
-      return [...messages, ...added.filter(message => ![...pending, ...messages].some(existing =>
-        existing.source.kind === message.source.kind && JSON.stringify(existing.content) === JSON.stringify(message.content)))]
+      // The step's catalog already stands for this tree; compaction since then only moved entries
+      // into the dropped list, which the stubs compaction left in the history name for this request.
+      if (pending.some(message => message.source.kind === 'context-tree-catalog')) return messages
+      return [...messages, ...await this.pendingContext(agent, signal, pending)]
     })
+  }
+
+  /** The catalog when it changed, then the core grants, for messages that are about to be logged. */
+  private async pendingContext(agent: Agent, signal: AbortSignal, pending: readonly UserMessage[]): Promise<UserMessage[]> {
+    const core = await this.pendingCore(agent, signal, pending)
+    const catalog = await this.pendingCatalog(agent, signal, new Set(core.keys))
+    return [...catalog === undefined ? [] : [catalog], ...core.messages]
   }
 
   /**
@@ -460,17 +465,20 @@ export class ContextTreeService extends Service {
     return false
   }
 
-  /** Grants for core sections the conversation does not hold, within `coreBytes`. */
-  private async pendingCore(agent: Agent, signal: AbortSignal): Promise<UserMessage[]> {
+  /** Grants for core sections neither the conversation nor `pending` holds, within `coreBytes` after the charges of both. */
+  private async pendingCore(
+    agent: Agent, signal: AbortSignal, pending: readonly UserMessage[],
+  ): Promise<{ messages: UserMessage[]; keys: string[] }> {
+    const none = { messages: [], keys: [] }
     const wanted = [...new Set([...this.coreProviders].flatMap(provider => provider(agent)))]
-    if (wanted.length === 0) return []
+    if (wanted.length === 0) return none
     const tree = await this.treeFor(agent, signal)
-    const state = this.stateFor(agent)
+    const state = withPendingGrants(this.stateFor(agent), pending)
     const held = grantedHashes(state)
     const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
     const heldGrants = [...state.grants, ...[...state.claimed, ...state.inbox].flatMap(entry => entry.grants)]
     // Earlier writers did not distinguish explicit loads from eager grants.
-    if (heldGrants.some(grant => grant.coreBytes === null)) return []
+    if (heldGrants.some(grant => grant.coreBytes === null)) return none
     const heldCore = heldGrants.reduce((sum, grant) => sum + (grant.coreBytes ?? 0), 0)
     const selectedHeld = wanted.reduce((sum, id) => {
       const leaf = leaves.get(id)
@@ -487,7 +495,7 @@ export class ContextTreeService extends Service {
       room -= leaf.section.bytes
       return true
     })
-    if (missing.length === 0) return []
+    if (missing.length === 0) return none
     const read = await this.ctx.contextIndex.read(
       { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
       missing,
@@ -495,16 +503,21 @@ export class ContextTreeService extends Service {
       signal,
     )
     // A section cut by the budget is not granted: its hash would count it as held without its full text.
-    return read.sections.flatMap((body) => {
+    const granted = read.sections.flatMap((body) => {
       const leaf = leaves.get(body.id)
-      return leaf === undefined || body.truncated ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind, body.bytes)]
+      if (leaf === undefined || body.truncated) return []
+      return [{ key: body.id, message: grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind, body.bytes) }]
     })
+    return { messages: granted.map(entry => entry.message), keys: granted.map(entry => entry.key) }
   }
 
-  /** Newest dropped paths that fit `maxDroppedBytes`, oldest first, with a count of the ones left out. */
-  private droppedPaths(state: ContextTreeProjectionState): string[] {
+  /**
+   * Newest dropped paths that fit `maxDroppedBytes`, oldest first, with a count of the ones left out.
+   * Sections this request grants again are not dropped.
+   */
+  private droppedPaths(state: ContextTreeProjectionState, regranted: ReadonlySet<string>): string[] {
     const active = activeToolNames(state)
-    const paths = [...new Set(state.dropped.flatMap(entry => entry.tools.length > 0
+    const paths = [...new Set(state.dropped.filter(entry => !regranted.has(entry.key)).flatMap(entry => entry.tools.length > 0
       ? entry.tools.filter(name => !active.has(name)).map(name => `Tools/@/${encodeURIComponent(name)}`) : entry.paths))]
     const shown: string[] = []
     let used = 0
@@ -517,7 +530,7 @@ export class ContextTreeService extends Service {
     return left > 0 ? [...shown, `and ${left} more`] : shown
   }
 
-  private async pendingCatalog(agent: Agent, signal: AbortSignal): Promise<UserMessage | undefined> {
+  private async pendingCatalog(agent: Agent, signal: AbortSignal, regranted: ReadonlySet<string>): Promise<UserMessage | undefined> {
     const tree = await this.treeFor(agent, signal)
     const branches: CatalogBranch[] = []
     for (const root of tree.root.children) {
@@ -530,7 +543,7 @@ export class ContextTreeService extends Service {
     if (branches.length === 0) return undefined
     const state = this.stateFor(agent)
     if (state.catalog?.digest === catalogDigest(branches)) return undefined
-    return catalogMessage(branches, state.published, this.droppedPaths(state))
+    return catalogMessage(branches, state.published, this.droppedPaths(state, regranted))
   }
 }
 

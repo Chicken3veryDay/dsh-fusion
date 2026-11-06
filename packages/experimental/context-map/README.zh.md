@@ -43,14 +43,14 @@ kind: "package-reference"
 
 ### 默认策展者
 
-`DefaultContextCurator` 在上下文索引变化或有笔记提交时启动一次运行，而不是每一步都运行。一次运行：
+`DefaultContextCurator` 在有策展工作等待且没有其他智能体持有角色时启动一次运行，而不是每一步都运行。工作指上一次完成的运行尚未确认的上下文索引、待处理笔记、过期笔记，或工作智能体提交后因地图已满被拒绝的笔记。所有者的每一步都会检查是否有工作，因此即使索引已确认，重启后也会接手待处理笔记和过期分组。一次运行：
 
 1. 从工作智能体的提供方中选择路线：窗口不小于 `minContextTokens` 的最小模型，使用其最低推理强度。模型目录不含价格，因此以此作为“便宜”的代理。该路线必须比工作智能体自己的路线更低（窗口更小，或窗口相同而工作智能体运行在高于其最低的强度）；否则记录 `CONTEXT_MAP_NO_CHEAP_ROUTE` 且策展者不运行，因为昂贵的策展者比没有策展者更糟；
 2. 为预留的子 id 声明角色，并通过现有的子智能体服务启动子智能体，受 `maxSteps` 和 `maxTokens` 限制；
 3. 在工作完成、达到步数上限、或其他持有者声明接管角色时结束（立即让出，仅在该持有者离开后才重新启动）；
 4. 销毁时取消尚未完成的目录读取并观察稍后的失败，在下一次运行或销毁之前释放角色并等待子智能体结束。
 
-领取返回 `observedIndexDigest`，但不会把索引标记为已策展。成功完成后，持有者或角色已释放地图的所有者用该摘要调用 `acknowledgeIndex`；其 `index-ack` 事件记录完成。步骤限制、错误、取消和重启保留原摘要。恢复时，没有 `index-ack` 的旧领取时摘要视为未完成。所有者的后续步骤或笔记可触发新尝试；中断的运行不会立即自行重试。运行期间索引发生变化时，完成后仍可再次策展。
+领取返回 `observedIndexDigest`，但不会把索引标记为已策展。成功完成后，持有者或角色已释放地图的所有者用该摘要调用 `acknowledgeIndex`；其 `index-ack` 事件记录完成。步骤限制、错误、取消和重启保留原摘要。恢复时，没有 `index-ack` 的旧领取时摘要视为未完成。所有者的后续步骤或笔记可触发新尝试；中断的运行不会立即自行重试。运行期间索引发生变化时，完成后仍可再次策展。每次领取都会记录其所服务工作的指纹，回放时统计相同指纹的领取次数。对未变化的工作运行 `maxAttempts`（默认 2）次后，所有者的后续步骤和笔记不再启动运行，直到工作改变（新的索引摘要、新增待处理或过期笔记、已满地图的大小变化）。该计数保存在会话日志中，重启不会重置。助手持有角色期间为该工作发起的领取同样计数。
 
 ### 服务 API
 
@@ -69,7 +69,7 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 }
 ```
 
-服务还提供 `watch`、`curatedRoots`、`isCurator`、`curatorOf`、`snapshotOf`、`note`、`mergeGroups`、`retireGroup`、`addNote`、`verifyNote`、`retireNote`、`filePending`、`dropPending` 和 `setCore`。
+服务还提供 `watch`、`curatedRoots`、`isCurator`、`curatorOf`、`snapshotOf`、`note`、`mergeGroups`、`retireGroup`、`addNote`、`verifyNote`、`retireNote`、`filePending`、`dropPending`、`setCore` 和 `curationWork`（等待中的 `CurationWork`：原因、指纹以及已为其记录的领取次数）。
 
 ### 工具
 
@@ -97,9 +97,9 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 | `maxSnapshotBytes` | 65536 | 将 `curatorId`、`route` 和 `indexDigest` 设为 null 后序列化的地图大小 |
 | `maxViewBytes` | 8192 | `map_view` 返回的字节数 |
 
-默认策展者另有 `provider`（`spawn`，进程内子智能体提供方）、`maxSteps`（24）、`maxTokens`（4096）、`minContextTokens`（32768）和 `maxRoutesInspected`（16）。这些值是边界，选取依据是让完整地图落在一次视图内、让一次运行落在一次廉价模型调用预算内；它们没有针对特定负载调优。不可用的值会在加载时以 `CONTEXT_MAP_INVALID_CONFIG` 失败。
+默认策展者另有 `provider`（`spawn`，进程内子智能体提供方）、`maxSteps`（24）、`maxTokens`（4096）、`minContextTokens`（32768）`maxRoutesInspected`（16）和 `maxAttempts`（2）。这些值是边界，选取依据是让完整地图落在一次视图内、让一次运行落在一次廉价模型调用预算内；它们没有针对特定负载调优。不可用的值会在加载时以 `CONTEXT_MAP_INVALID_CONFIG` 失败。
 
-角色变更和索引确认是元数据操作，不受 `maxSnapshotBytes` 限制。每次内容编辑采用相同的排除元数据后的计量，因此释放角色不会为待处理笔记增加空间。满地图始终可被领取以缩减内容。被拒绝的 `context_note` 会唤醒策展者，并要求工作智能体缩短笔记或在空间释放后重试。
+角色变更和索引确认是元数据操作，不受 `maxSnapshotBytes` 限制。每次内容编辑采用相同的排除元数据后的计量，因此释放角色不会为待处理笔记增加空间。满地图始终可被领取以缩减内容。因空间不足被拒绝的 `context_note` 会把地图标记为需要空间，直到下一次角色持有结束：`map_view` 此时带有 `needsSpace: true`，默认策展者启动一次运行，其提示要求它合并并清理直到有空间。该标记只在进程内存中；重启后工作智能体的重试会再次设置。拒绝信息要求工作智能体缩短笔记或在空间释放后重试。
 
 ### 事件
 

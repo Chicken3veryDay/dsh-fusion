@@ -2,8 +2,9 @@
  * Default curator: a background subagent that holds the curator role while it works, so map
  * building, regrouping, and note verification never enter the working agent's context.
  *
- * One run exists per map owner at a time. A run starts when the index changes or a note is filed
- * and nothing else holds the role, ends when its work is done, its step bound is reached, the
+ * One run exists per map owner at a time. A run starts when curation work waits (a changed index, a
+ * pending or stale note, or a note refused for lack of room) and nothing else holds the role, at most
+ * `maxAttempts` times for the same work, ends when its work is done, its step bound is reached, the
  * role moves to another holder, or the service disposes, and always releases the role and
  * settles its subagent before the next run or disposal. Only the child's logged map edits reach
  * the owner's Session; its transcript stays in the child Session.
@@ -34,6 +35,7 @@ const PROMPT = [
   '',
   'Work through these in order, then stop with one short sentence:',
   '1. Call map_view. Note its revision; pass it as expected_revision, and use the new revision each edit returns.',
+  '1b. If needsSpace is true, the map is full and a note was refused: merge groups and retire groups or notes that no longer earn their place until there is room, before anything else.',
   '2. If indexChanged is true or the map has no groups, call context_browse and read what you need with context_load. Group related sections under Instructions, Sources, or Tools with map_group (set). Titles are short; the summary is one line saying when to use the group. Merge or retire groups that no longer fit.',
   '3. Follow every nextPendingAfter with map_view pending_after, every nextGroupAfter with group_after, and each group nextNoteAfter with group_id and note_after, including after edits. For each pending note: read the cited sources, then map_note file it under the best group with citations to sections you read, or drop it when it is wrong, duplicated, or already in an instruction.',
   '4. For each stale note: read its sources again; map_note verify it if it still holds (correct the text if needed), otherwise retire it.',
@@ -150,11 +152,15 @@ export class DefaultContextCurator extends Service {
     this.dirty.delete(owner.id)
     const view = await this.ctx.contextMap.view(owner, { rootSessionId: owner.id })
     if (this.isStopping() || this.runs.has(owner.id) || this.ctx.contextMap.snapshotOf(owner).curatorId !== null) return
-    if (view.pending.length === 0 && !view.indexChanged && view.staleNotes === 0) return
-    await this.start(owner)
+    if (view.pending.length === 0 && !view.indexChanged && view.staleNotes === 0 && view.needsSpace !== true) return
+    const work = await this.ctx.contextMap.curationWork(owner)
+    if (work === null || this.isStopping() || this.runs.has(owner.id)) return
+    // Failed runs are counted in the Session log, so a restart does not reset the bound; new work resets it.
+    if (work.attempts >= this.config.maxAttempts) return
+    await this.start(owner, work.signature)
   }
 
-  private async start(owner: Agent): Promise<void> {
+  private async start(owner: Agent, work: string): Promise<void> {
     const childId = SessionId(randomUUID())
     const controller = new AbortController()
     let finish!: () => void
@@ -168,7 +174,7 @@ export class DefaultContextCurator extends Service {
       this.failures.delete(owner.id)
       controller.signal.throwIfAborted()
       const claimed = await this.ctx.contextMap.claim(
-        owner, { rootSessionId: owner.id, holderId: childId, route: choice.route }, controller.signal,
+        owner, { rootSessionId: owner.id, holderId: childId, route: choice.route, work }, controller.signal,
       )
       run.indexDigest = claimed.observedIndexDigest
       controller.signal.throwIfAborted()

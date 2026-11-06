@@ -104,6 +104,8 @@ export interface MapOp {
   readonly kind: MapOpKind
   readonly actor: SessionId
   readonly target?: string
+  /** For `claim`: fingerprint of the curation work the run was started for; equal fingerprints count as one retried job. */
+  readonly work?: string
 }
 
 /** A note as the model sees it. */
@@ -140,11 +142,13 @@ export interface MapView {
   readonly staleNotes: number
   /** True when the index has changed since the curator last processed it. */
   readonly indexChanged: boolean
+  /** Present and true when the working agent's last note was refused because the map is full; free room before anything else. */
+  readonly needsSpace?: true
 }
 
 /** What a watcher is told. */
 export interface MapChange {
-  readonly kind: 'committed' | 'index-changed' | 'note-filed' | 'holder-gone'
+  readonly kind: 'committed' | 'work-waiting' | 'note-filed' | 'holder-gone'
   readonly ownerSessionId: SessionId
   /** The agent that vanished while holding the role; set for `holder-gone`. */
   readonly holderId?: SessionId
@@ -204,4 +208,6 @@ export interface CuratorConfig {
   minContextTokens?: number
   /** Most catalog models of the parent's provider that route selection inspects (default 16). */
   maxRoutesInspected?: number
+  /** Most runs started for one unchanged body of work, counted in the Session log so a restart does not reset it (default 2). */
+  maxAttempts?: number
 }

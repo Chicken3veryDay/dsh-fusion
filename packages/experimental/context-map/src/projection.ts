@@ -1,7 +1,7 @@
 /**
  * Deterministic recovery of the project map from `context-map/state` events. Every edit logs the
  * complete snapshot; replay keeps its content and the last explicitly acknowledged index digest,
- * and checks that revisions are contiguous.
+ * counts the claims made for the same curation work, and checks that revisions are contiguous.
  */
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -51,9 +51,15 @@ const opSchema: z.ZodType<MapOp> = z.object({
   ]),
   actor: sessionId,
   target: z.string().min(1).optional(),
+  work: z.string().min(1).optional(),
 }).strict() as z.ZodType<MapOp>
 
-const stateSchema = z.object({ ownerSessionId: sessionId, snapshot: snapshotSchema.nullable() }).strict()
+const stateSchema = z.object({
+  ownerSessionId: sessionId,
+  snapshot: snapshotSchema.nullable(),
+  /** Claims made for the newest curation work, so retries stay bounded across restarts. */
+  attempts: z.object({ work: z.string().min(1), count: z.number().int().positive() }).strict().nullable(),
+}).strict()
 
 /** Private checkpoint state; consumers read through `ContextMapService`. */
 export type ContextMapProjectionState = z.infer<typeof stateSchema>
@@ -67,9 +73,9 @@ export const CONTEXT_MAP_PROJECTION_KEY = 'contextMap'
  */
 export const contextMapProjectionDefinition = {
   key: CONTEXT_MAP_PROJECTION_KEY,
-  stateVersion: 2,
+  stateVersion: 3,
   stateSchema,
-  init: header => ({ ownerSessionId: header.id, snapshot: null }),
+  init: header => ({ ownerSessionId: header.id, snapshot: null, attempts: null }),
   apply: (state, event) => {
     if (event.type !== 'context-map/state' || event.data.snapshot.ownerSessionId !== state.ownerSessionId) return state
     const data = z.object({ version: z.literal(1), op: opSchema, snapshot: snapshotSchema }).strict().parse(event.data)
@@ -77,6 +83,10 @@ export const contextMapProjectionDefinition = {
     // Older claims stamped their observed digest before curation completed. Only an explicit
     // acknowledgement establishes completion, including when refolding an older checkpoint.
     const indexDigest = data.op.kind === 'index-ack' ? data.snapshot.indexDigest : state.snapshot?.indexDigest ?? null
-    return { ownerSessionId: state.ownerSessionId, snapshot: { ...data.snapshot, indexDigest } }
+    // A claim names the work it serves; the same work claimed again is a retry, anything else starts a count.
+    const work = data.op.kind === 'claim' ? data.op.work : undefined
+    const attempts = work === undefined ? state.attempts
+      : { work, count: state.attempts?.work === work ? state.attempts.count + 1 : 1 }
+    return { ownerSessionId: state.ownerSessionId, snapshot: { ...data.snapshot, indexDigest }, attempts }
   },
 } satisfies ProjectionDefinition<typeof CONTEXT_MAP_PROJECTION_KEY, ContextMapProjectionState>

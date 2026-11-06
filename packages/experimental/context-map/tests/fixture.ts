@@ -216,3 +216,27 @@ export async function logged(ctx: Context, id: SessionId): Promise<{ type: strin
   const handle = await ctx.sessionPersistence.open(id, 'read')
   try { return [...(await handle.read(0)).events] } finally { await handle.close() }
 }
+
+/** Observe provider entry without imposing a shorter deadline than the test lane. */
+export function requestsOf(w: World): (count: number) => Promise<void> {
+  const pending = new Map<number, PromiseWithResolvers<undefined>>()
+  const stream = w.adapter.stream.bind(w.adapter)
+  const settle = (): void => {
+    for (const [count, barrier] of pending) if (w.adapter.requests.length >= count) barrier.resolve(undefined)
+  }
+  vi.spyOn(w.adapter, 'stream').mockImplementation(async function* (options) {
+    // A failing model never yields a chunk; the request still reached the provider.
+    try {
+      for await (const chunk of stream(options)) {
+        settle()
+        yield chunk
+      }
+    } finally { settle() }
+  })
+  return (count) => {
+    if (w.adapter.requests.length >= count) return Promise.resolve()
+    const barrier = pending.get(count) ?? Promise.withResolvers<undefined>()
+    pending.set(count, barrier)
+    return barrier.promise
+  }
+}

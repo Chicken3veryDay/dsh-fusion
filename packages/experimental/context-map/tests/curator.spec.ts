@@ -53,7 +53,7 @@ describe('cheap route selection', () => {
 
 describe('configuration', () => {
   it('has a working default and refuses unusable values', () => {
-    expect(resolveCuratorConfig({})).toEqual({ provider: 'spawn', maxSteps: 24, maxTokens: 4096, minContextTokens: 32_768, maxRoutesInspected: 16 })
+    expect(resolveCuratorConfig({})).toEqual({ provider: 'spawn', maxSteps: 24, maxTokens: 4096, minContextTokens: 32_768, maxRoutesInspected: 16, maxAttempts: 2 })
     expect(() => resolveCuratorConfig({ maxSteps: 0 })).toThrow(/maxSteps/)
     expect(() => resolveCuratorConfig({ provider: '' })).toThrow(/provider/)
   })

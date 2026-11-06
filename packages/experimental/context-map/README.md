@@ -43,14 +43,14 @@ The role is a durable grant recorded in the log, checked against the exact live 
 
 ### The default curator
 
-`DefaultContextCurator` starts a run when the context index changed or a note was filed, and not on every step. A run:
+`DefaultContextCurator` starts a run when curation work waits and no other agent holds the role, and not on every step. Work is a context index the last completed run did not acknowledge, a pending note, a stale note, or a note the working agent filed that was refused because the map is full. Each owner step checks for work, so a restart picks up pending notes and stale groups even when the index was already acknowledged. A run:
 
 1. picks a route from the working agent's provider: the smallest model with at least `minContextTokens` of window, at its least reasoning effort. The catalog carries no price, so this is the proxy for "cheap". The route must undercut the working agent's own route (smaller window, or the same window while the working agent runs above its least effort); otherwise `CONTEXT_MAP_NO_CHEAP_ROUTE` is logged and the curator does not run, because an expensive curator is worse than none;
 2. claims the role for a reserved child id and starts a subagent through the existing subagent service, bounded by `maxSteps` and `maxTokens`;
 3. ends when its work is done, the step bound is reached, or another holder claims the role (it yields at once and restarts only after that holder is gone);
 4. cancels a pending catalog read on disposal, observes any late catalog failure, releases the role and settles the subagent before the next run or before disposal.
 
-A claim returns `observedIndexDigest` without marking the index curated. After successful completion, the holder or the owner of the released map calls `acknowledgeIndex` with that digest; its `index-ack` event records completion. Step limits, errors, cancellation, and restart leave the previous digest intact. Recovery treats legacy claim-time digests without an `index-ack` as incomplete. Another owner step or note can trigger a new attempt; an interrupted run does not immediately retry itself. An index change during a run remains eligible after that run completes.
+A claim returns `observedIndexDigest` without marking the index curated. After successful completion, the holder or the owner of the released map calls `acknowledgeIndex` with that digest; its `index-ack` event records completion. Step limits, errors, cancellation, and restart leave the previous digest intact. Recovery treats legacy claim-time digests without an `index-ack` as incomplete. Another owner step or note can trigger a new attempt; an interrupted run does not immediately retry itself. An index change during a run remains eligible after that run completes. Each claim logs a fingerprint of the work it serves, and replay counts claims for the same fingerprint. After `maxAttempts` (default 2) runs for unchanged work, further owner steps and notes start none until the work changes (a new index digest, another pending or stale note, a map of a different size when full). The count lives in the Session log, so a restart does not reset it. A claim made for work during which an assistant held the role also counts.
 
 ### Service API
 
@@ -69,7 +69,7 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 }
 ```
 
-The service also exposes `watch`, `curatedRoots`, `isCurator`, `curatorOf`, `snapshotOf`, `note`, `mergeGroups`, `retireGroup`, `addNote`, `verifyNote`, `retireNote`, `filePending`, `dropPending`, and `setCore`.
+The service also exposes `watch`, `curatedRoots`, `isCurator`, `curatorOf`, `snapshotOf`, `note`, `mergeGroups`, `retireGroup`, `addNote`, `verifyNote`, `retireNote`, `filePending`, `dropPending`, `setCore`, and `curationWork` (the waiting `CurationWork`: reasons, a fingerprint, and the claims already logged for it).
 
 ### Tools
 
@@ -97,9 +97,9 @@ Every field has a default.
 | `maxSnapshotBytes` | 65536 | serialized map with `curatorId`, `route`, and `indexDigest` set to null |
 | `maxViewBytes` | 8192 | bytes `map_view` returns |
 
-The default curator adds `provider` (`spawn`, the in-process subagent provider), `maxSteps` (24), `maxTokens` (4096), `minContextTokens` (32768), and `maxRoutesInspected` (16). The values are bounds chosen so a full map stays within one view and a run stays within one cheap model call budget; they are not tuned to a workload. An unusable value fails at load with `CONTEXT_MAP_INVALID_CONFIG`.
+The default curator adds `provider` (`spawn`, the in-process subagent provider), `maxSteps` (24), `maxTokens` (4096), `minContextTokens` (32768), `maxRoutesInspected` (16), and `maxAttempts` (2). The values are bounds chosen so a full map stays within one view and a run stays within one cheap model call budget; they are not tuned to a workload. An unusable value fails at load with `CONTEXT_MAP_INVALID_CONFIG`.
 
-Role changes and index acknowledgement are metadata operations exempt from `maxSnapshotBytes`. Every content edit uses the same metadata-free measurement, so releasing a role gives pending notes no extra room. A full map can always be claimed for shrinking. A rejected `context_note` wakes the curator and asks the working agent to shorten the note or retry after space is freed.
+Role changes and index acknowledgement are metadata operations exempt from `maxSnapshotBytes`. Every content edit uses the same metadata-free measurement, so releasing a role gives pending notes no extra room. A full map can always be claimed for shrinking. A `context_note` refused for lack of room marks the map as needing space until the next finished role hold: `map_view` then carries `needsSpace: true`, the default curator starts a run, and its prompt tells it to merge and retire until there is room. The mark is process memory; the working agent's retry sets it again after a restart. The refusal asks the working agent to shorten the note or retry after space is freed.
 
 ### Events
 

@@ -10,7 +10,7 @@
  *
  * @module @deepseek-ai/dsh-experimental-context-map
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -126,12 +126,24 @@ export interface NoteRequest extends MapTarget {
   readonly cites?: readonly string[]
 }
 
+/** Curation work waiting for a curator. */
+export interface CurationWork {
+  /** What is waiting: an unprocessed index, pending notes, stale notes, or a note refused for lack of room. */
+  readonly reasons: readonly ('index' | 'pending' | 'stale' | 'space')[]
+  /** Fingerprint of the waiting work; it changes when the work does. */
+  readonly signature: string
+  /** Claims already logged for this exact work, including those before a restart. */
+  readonly attempts: number
+}
+
 /** Request to take or hand over the curator role. */
 export interface ClaimRequest extends MapTarget {
   /** Agent that becomes the holder; defaults to the caller, and only the map owner may name another agent. */
   readonly holderId?: SessionId
   /** Route a default curator run uses; recorded in the claim. */
   readonly route?: MapRoute
+  /** Signature of the {@link CurationWork} this claim serves; logged so retries of the same work can be counted. */
+  readonly work?: string
 }
 
 const groupIdOf = (): MapGroupId => brandString<MapGroupId>(`grp_${randomUUID().slice(0, 8)}`)
@@ -153,6 +165,10 @@ export class ContextMapService extends Service {
   /** Section hashes the index had at each owner's last read, for the stale flag the tree shows. */
   private readonly hashes = new Map<SessionId, ReadonlyMap<ContextSectionId, string>>()
   private readonly announced = new Map<SessionId, string>()
+  /** Notes refused for lack of room per owner, and how many of them a finished role hold had seen. */
+  private readonly spaceRefusals = new Map<SessionId, number>()
+  private readonly spaceSeen = new Map<SessionId, number>()
+  private readonly spaceAtClaim = new Map<SessionId, number>()
   private readonly heldOwners = new Map<SessionId, Set<SessionId>>()
   private disposed = false
 
@@ -287,7 +303,7 @@ export class ContextMapService extends Service {
       : [this.group(snapshot, target.groupId)]
     let view = this.viewFrame(snapshot,
       snapshot.groups.reduce((sum, group) => sum + group.notes.filter(note => isStale(note.cites, facts)).length, 0),
-      snapshot.indexDigest !== facts.digest)
+      snapshot.indexDigest !== facts.digest, this.needsSpace(owner))
     view = { ...view, omittedPending: pending.length, omittedGroups: groups.length }
     const fits = (candidate: MapView): boolean => byteLength(JSON.stringify(candidate)) <= this.config.maxViewBytes
     if (!fits(view)) throw new ContextMapError('Map metadata exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
@@ -349,7 +365,10 @@ export class ContextMapService extends Service {
     const facts = await this.facts(owner, signal)
     this.live(caller)
     const current = this.snapshotOf(owner)
-    const committed = await this.commit(owner, caller.id, { kind: 'claim', target: holderId }, {
+    this.spaceAtClaim.set(owner.id, this.spaceRefusals.get(owner.id) ?? 0)
+    const committed = await this.commit(owner, caller.id, {
+      kind: 'claim', target: holderId, ...request.work === undefined ? {} : { work: request.work },
+    }, {
       ...current,
       curatorId: holderId,
       route: request.route ?? null,
@@ -680,17 +699,18 @@ export class ContextMapService extends Service {
   }
 
   /** Empty page with the same metadata and counters used by reads and admission. */
-  private viewFrame(snapshot: MapSnapshot, staleNotes: number, indexChanged: boolean): MapView {
+  private viewFrame(snapshot: MapSnapshot, staleNotes: number, indexChanged: boolean, needsSpace: boolean): MapView {
     return {
       ownerSessionId: snapshot.ownerSessionId, revision: snapshot.revision, curatorId: snapshot.curatorId,
       core: snapshot.core, pending: [], nextPendingAfter: null, omittedPending: snapshot.pending.length,
       groups: [], nextGroupAfter: null, omittedGroups: snapshot.groups.length, staleNotes, indexChanged,
+      ...needsSpace ? { needsSpace: true as const } : {},
     }
   }
 
   /** Every accepted item must remain reachable on a page, including its metadata and cursors. */
   private validatePages(snapshot: MapSnapshot): void {
-    const frame = this.viewFrame(snapshot, snapshot.groups.reduce((sum, group) => sum + group.notes.length, 0), false)
+    const frame = this.viewFrame(snapshot, snapshot.groups.reduce((sum, group) => sum + group.notes.length, 0), false, true)
     const check = (page: MapView): void => {
       if (byteLength(JSON.stringify(page)) > this.config.maxViewBytes) {
         throw new ContextMapError('The edit would make a map item exceed maxViewBytes; shorten the item or increase the view budget', 'CONTEXT_MAP_LIMIT')
@@ -718,6 +738,7 @@ export class ContextMapService extends Service {
     if (op.kind !== 'claim' && op.kind !== 'release' && op.kind !== 'index-ack'
       && byteLength(JSON.stringify(content)) > this.config.maxSnapshotBytes) {
       if (op.kind === 'note-pending') {
+        this.spaceRefusals.set(owner.id, (this.spaceRefusals.get(owner.id) ?? 0) + 1)
         this.notify({ kind: 'note-filed', ownerSessionId: owner.id })
         throw new ContextMapError(`the map would exceed ${this.config.maxSnapshotBytes} bytes; shorten this note or retry after the curator frees space`, 'CONTEXT_MAP_LIMIT')
       }
@@ -726,6 +747,8 @@ export class ContextMapService extends Service {
     this.validatePages(snapshot)
     owner.session.append('context-map/state', { version: 1, op: { ...op, actor }, snapshot })
     this.indexHolder(owner)
+    // A finished hold has seen every refusal made before it started; later ones still wait.
+    if (op.kind === 'release') this.spaceSeen.set(owner.id, this.spaceAtClaim.get(owner.id) ?? this.spaceRefusals.get(owner.id) ?? 0)
     await this.ctx.sessions.flush(owner.session)
     this.notify({ kind: op.kind === 'note-pending' ? 'note-filed' : 'committed', ownerSessionId: owner.id })
     return structuredClone(snapshot)
@@ -811,12 +834,47 @@ export class ContextMapService extends Service {
     return { sections, digest: digestOf(snapshot.sections) }
   }
 
+  /**
+   * The curation work waiting for an owner's map, whoever holds the role.
+   * @param owner - the map owner.
+   * @param signal - cancellation.
+   * @returns the work, or `null` when nothing waits.
+   */
+  curationWork(owner: Agent, signal?: AbortSignal): Promise<CurationWork | null> {
+    return this.facts(owner, signal).then(facts => this.workOf(owner, facts))
+  }
+
+  private needsSpace(owner: Agent): boolean {
+    return (this.spaceRefusals.get(owner.id) ?? 0) > (this.spaceSeen.get(owner.id) ?? 0)
+  }
+
+  /** Durable work (index, pending, stale) comes from the Session log, so it survives restarts; a refused note does not. */
+  private workOf(owner: Agent, facts: IndexFacts): CurationWork | null {
+    const snapshot = this.snapshotOf(owner)
+    const reasons: CurationWork['reasons'][number][] = []
+    if (facts.sections.size > 0 && snapshot.indexDigest !== facts.digest) reasons.push('index')
+    if (snapshot.pending.length > 0) reasons.push('pending')
+    const stale = snapshot.groups.flatMap(group => group.notes.filter(note => isStale(note.cites, facts)).map(note => note.id))
+    if (stale.length > 0) reasons.push('stale')
+    const space = this.needsSpace(owner)
+    if (space) reasons.push('space')
+    if (reasons.length === 0) return null
+    const content = { ...snapshot, revision: 0, curatorId: null, route: null, indexDigest: null }
+    const signature = createHash('sha256').update(JSON.stringify([
+      reasons.includes('index') ? facts.digest : null,
+      snapshot.pending.map(note => note.id).toSorted(),
+      stale.toSorted(),
+      space ? byteLength(JSON.stringify(content)) : null,
+    ])).digest('hex').slice(0, 16)
+    const attempts = this.projection.stateOf(owner.session).attempts
+    return { reasons, signature, attempts: attempts?.work === signature ? attempts.count : 0 }
+  }
+
   private async observe(agent: Agent, signal: AbortSignal): Promise<void> {
-    const facts = await this.facts(agent, signal)
-    if (facts.sections.size === 0 || this.snapshotOf(agent).indexDigest === facts.digest) return
-    if (this.announced.get(agent.id) === facts.digest) return
-    this.announced.set(agent.id, facts.digest)
-    this.notify({ kind: 'index-changed', ownerSessionId: agent.id })
+    const work = this.workOf(agent, await this.facts(agent, signal))
+    if (work === null || this.announced.get(agent.id) === work.signature) return
+    this.announced.set(agent.id, work.signature)
+    this.notify({ kind: 'work-waiting', ownerSessionId: agent.id })
   }
 
   private async releaseGone(ownerId: SessionId, holderId: SessionId): Promise<void> {

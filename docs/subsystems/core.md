@@ -1143,6 +1143,14 @@ dropPending(caller: Agent, request: DropPendingRequest, signal?: AbortSignal): P
  * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` for more than `maxCoreSections` sections.
  */
 setCore(caller: Agent, request: SetCoreRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * The curation work waiting for an owner's map, whoever holds the role.
+ * @param owner - the map owner.
+ * @param signal - cancellation.
+ * @returns the work, or `null` when nothing waits.
+ */
+curationWork(owner: Agent, signal?: AbortSignal): Promise<CurationWork | null>
 ```
 
 Source: [`packages/experimental/context-map/src/index.ts`](../../packages/experimental/context-map/src/index.ts)
