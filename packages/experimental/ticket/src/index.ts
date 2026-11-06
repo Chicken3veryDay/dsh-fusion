@@ -140,9 +140,6 @@ function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
 
-/** Synchronous decision on the coordinator a new Ticket names; `undefined` keeps the requested one. */
-export type CoordinatorAuthority = (session: Session, requested: SessionId) => SessionId | undefined
-
 /** Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent. */
 export class TicketService extends Service {
   static inject = ['sessions', 'sessionProjections', 'agents']
@@ -161,7 +158,7 @@ export class TicketService extends Service {
   private projection: ProjectionHandle<TicketProjectionState> | undefined
   private admission: Promise<void> = Promise.resolve()
   private readonly tails = new Map<SessionId, Promise<void>>()
-  private readonly coordinatorAuthorities = new Set<CoordinatorAuthority>()
+  private readonly coordinatorAuthorities = new Set<(session: Session, requested: SessionId) => SessionId | undefined>()
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'tickets')
@@ -190,7 +187,7 @@ export class TicketService extends Service {
    * @param authority - synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.
    * @returns disposer that removes the authority.
    */
-  registerCoordinatorAuthority(authority: CoordinatorAuthority): () => void {
+  registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void {
     this.coordinatorAuthorities.add(authority)
     return () => { this.coordinatorAuthorities.delete(authority) }
   }

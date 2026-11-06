@@ -4366,6 +4366,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent.',
     methods: [
       {
+        signature: 'registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void',
+        description: 'Register an owner of coordination that may replace the coordinator a new Ticket would name.\n\n`create` consults every authority inside the Session\'s command queue, in the same synchronous step that reads the Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment. The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that returns an id replaces it. An authority that throws fails the creation with nothing appended.',
+        parameters: [{ name: 'authority', description: 'synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.' }],
+        returns: 'disposer that removes the authority.',
+      },
+      {
         signature: 'recover(session: Session): TicketView[]',
         description: 'Read all Tickets recovered from one Session\'s durable log.',
         parameters: [{ name: 'session', description: 'Session whose log is replayed.' }],
@@ -5414,7 +5420,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.\n\nTickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the Tickets have not yet followed. Each move is authenticated by the immutable technical owner after Workstream verifies the caller\'s authority.',
         parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit technical owner.' }, { name: 'request', description: 'CAS revision and active new coordinator.' }],
         returns: 'committed next snapshot.',
-        throws: ['WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.'],
+        throws: ['WorkstreamPartialHandoffError when some Tickets could not move, were handed back by a competing writer, or the service began stopping after some moved; the coordinator is unchanged and the same call may be retried.'],
       },
       {
         signature: 'async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstreamMessageRequest): Promise<WorkstreamMessage>',
@@ -10974,7 +10980,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TicketService',
-    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>;\n    async block(session: Session, request: BlockTicketRequest): Promise<TicketView>;\n    async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<Tick /* …truncated — full shape in source */',
+    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void;\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async resolveAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView>;\n    async block(session: Session, request: Blo /* …truncated — full shape in source */',
   },
   {
     name: 'TicketSnapshot',

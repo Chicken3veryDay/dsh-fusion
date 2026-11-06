@@ -1327,6 +1327,17 @@ Source: [`packages/experimental/ticket/src/execution.ts`](../../packages/experim
 Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent.
 
 ```ts cordis-catalog
+/** Register an owner of coordination that may replace the coordinator a new Ticket would name.
+ *
+ * `create` consults every authority inside the Session's command queue, in the same synchronous step that reads the
+ * Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment.
+ * The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that
+ * returns an id replaces it. An authority that throws fails the creation with nothing appended.
+ * @param authority - synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.
+ * @returns disposer that removes the authority.
+ */
+registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void
+
 /** Read all Tickets recovered from one Session's durable log.
  * @param session - Session whose log is replayed.
  * @returns recovered Ticket views.
@@ -1712,7 +1723,8 @@ async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamM
  * @param rootSessionId - explicit technical owner.
  * @param request - CAS revision and active new coordinator.
  * @returns committed next snapshot.
- * @throws WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.
+ * @throws WorkstreamPartialHandoffError when some Tickets could not move, were handed back by a competing writer, or the
+ * service began stopping after some moved; the coordinator is unchanged and the same call may be retried.
  */
 async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>
 
