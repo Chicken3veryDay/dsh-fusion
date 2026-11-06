@@ -182,6 +182,22 @@ describe('R4 regressions', () => {
     expect((await competing(ctx, 'abandoned')).outcome).toBe('admitted')
   })
 
+  it('R4-2 a settlement whose flush failed is made durable by the next Ticket write on its live root', async () => {
+    const ctx = await harness()
+    const root = await live(ctx, 'reflush-root')
+    const worker = await live(ctx, 'reflush-worker')
+    const ticket = await assigned(ctx, root, worker, exclusive)
+    const handle = await prepare(ctx, worker, root, ticket, 'reflush')
+    const flush = vi.spyOn(ctx.sessions, 'flush').mockRejectedValueOnce(new Error('disk unavailable'))
+    await expect(handle.dispose()).rejects.toThrow('disk unavailable')
+    flush.mockRestore()
+    expect(ctx.tickets.get(root.session, ticket.id).attempts[0]?.status).toBe('settled')
+    // The settled snapshot is in memory but not known durable, so its reservation is still held.
+    expect((await competing(ctx, 'reflush-held')).outcome).toBe('TICKET_ATTEMPT_STATE')
+    await ctx.agents.withInitiator(root, () => ctx.tickets.create(root.session, { subject: 'Unrelated', description: '' }))
+    expect((await competing(ctx, 'reflush-released')).outcome).toBe('admitted')
+  })
+
   it('R4-m3 activation reads no stored log, and a listing failure refuses shared admission with a retryable report', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ticket-r4-scan-'))
     onTestFinished(() => rm(dir, { recursive: true, force: true }))

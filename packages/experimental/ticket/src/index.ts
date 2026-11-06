@@ -100,6 +100,11 @@ function executionOperationId(attemptId: TicketAttemptId, stage: string): Ticket
   return TicketOperationId('ticket-execution:' + JSON.stringify([attemptId, stage]))
 }
 
+/** Prefix shared by every reserved execution stage operation of one attempt. */
+function executionOperationPrefix(attemptId: TicketAttemptId): string {
+  return 'ticket-execution:' + JSON.stringify([attemptId]).slice(0, -1) + ','
+}
+
 function textBytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
@@ -801,7 +806,7 @@ export class TicketService extends Service {
         if (this.settlements.has(key) || attempt.executor.kind !== 'in-process'
           || !['preparing', 'running', 'stopping'].includes(attempt.status)
           // Only the execution owner writes reserved stage facts, so they mark an attempt whose producer this host family ran.
-          || !ticket.operations.some(item => item.id.startsWith(executionOperationId(attempt.id, '').slice(0, -3)))) continue
+          || !ticket.operations.some(item => item.id.startsWith(executionOperationPrefix(attempt.id)))) continue
         const settlement: Settlement = {
           rootId: session.id, ticketId: ticket.id, attemptId: attempt.id, assignmentId: attempt.assignmentId, actorId: session.id,
           outcome: 'cancelled', diagnostics: ['The in-process producer ended with the host that admitted it; recovered as cancelled'],
@@ -1204,7 +1209,14 @@ export class TicketService extends Service {
       if (this.ctx.sessions.get(root) !== undefined || await persistence.stat(root) !== undefined) continue
       this.unreadableRoots.delete(root)
       for (const [key, reservation] of this.scopeReservations) if (reservation.root === root) this.scopeReservations.delete(key)
-      for (const [key, settlement] of this.settlements) if (settlement.rootId === root) this.settlements.delete(key)
+      for (const [key, settlement] of this.settlements) {
+        if (settlement.rootId !== root) continue
+        this.settlements.delete(key)
+        if (settlement.outcome !== undefined) {
+          this.ctx.logger.warn(`Ticket attempt "${settlement.attemptId}" ended ${settlement.outcome}, but its root Session "${root}" `
+            + 'was deleted before the settlement could be persisted; the outcome is discarded with that Session')
+        }
+      }
     }
     for (const root of [...this.unreadableRoots.keys()]) await this.scanStoredRoot(persistence, root)
     if (this.unreadableRoots.size > 0) {

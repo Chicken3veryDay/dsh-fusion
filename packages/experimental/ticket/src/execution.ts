@@ -233,7 +233,7 @@ export class TicketExecutionService extends Service {
     if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
     let recorder: TicketAttemptController | undefined
     try {
-      await this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.beginAttempt(root, {
+      await this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.beginAttempt(this.liveRoot(request.rootSessionId), {
         ticketId: request.ticketId, expectedRevision: request.expectedRevision, actorId: caller.id,
         assignmentId: request.assignmentId, attemptId: request.attemptId, operationId: request.operationId,
         workspace: request.workspace, executor: request.executor,
