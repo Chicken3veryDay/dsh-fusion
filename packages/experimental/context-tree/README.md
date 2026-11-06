@@ -101,6 +101,8 @@ The package adds no event type. It uses the existing `user/message` event with t
 
 Tool admission removes tools from a request and orders the rest. It keeps `baseTools` in registration order, then every tool the projection reports active in activation order. The activation order is derived from the logged activation messages, so the declarations stay reconstructable from the session log. A hidden tool that a model still calls fails at dispatch as unknown. Admission for a step runs after the step claims its inbox and before the claimed messages are logged, so the projection also follows the durable inbox splice: an activation counts from the moment it is queued, through the claim, until the logged message takes over. This makes the tools callable on the very next request without a change to the agent loop.
 
+Curator-managed tools append after already activated tools, so gaining the role preserves the existing declaration prefix. A republished catalog omits active tools from its dropped list even when they were reloaded separately from their original group.
+
 Before each step the service renders the catalog and, when its digest differs from the projected one, appends a catalog message. After compaction removed the earlier catalog, the new one says it replaces any earlier listing.
 
 <a id="model-experience"></a>

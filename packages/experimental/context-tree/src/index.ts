@@ -113,13 +113,13 @@ export class ContextTreeService extends Service {
     this.ctx.compaction.registerRevocableSource('context-grant', grantStub)
     this.ctx.compaction.registerRevocableSource('context-activation', activationStub)
     this.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) => {
-      // Base tools keep registration order; curator-role tools and then activated tools follow, in activation
-      // order, so an activation appends to the declarations instead of shifting the ones before it.
+      // Base tools keep registration order; activations follow in logged order. Role tools append
+      // after activations so gaining a role preserves the existing declaration prefix.
       const base = [...candidates.keys()].filter(name => this.baseTools.has(name))
       const managed = [...candidates.keys()].filter(name => !this.baseTools.has(name) && this.managedAdmits(name, agent))
       const activated = [...activeToolNames(this.stateFor(agent))]
         .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
-      return orderedAdmission([...base, ...managed, ...activated])
+      return orderedAdmission([...base, ...activated, ...managed])
     })
     this.ctx.on('agent/pre-step', async ({ agent, signal, step }, next): Promise<PreStepDecision> => {
       const decision = await next()
@@ -493,7 +493,9 @@ export class ContextTreeService extends Service {
 
   /** Newest dropped paths that fit `maxDroppedBytes`, oldest first, with a count of the ones left out. */
   private droppedPaths(state: ContextTreeProjectionState): string[] {
-    const paths = [...new Set(state.dropped.flatMap(entry => entry.tools.length > 0 ? entry.tools.map(name => `Tools/@/${encodeURIComponent(name)}`) : entry.paths))]
+    const active = activeToolNames(state)
+    const paths = [...new Set(state.dropped.flatMap(entry => entry.tools.length > 0
+      ? entry.tools.filter(name => !active.has(name)).map(name => `Tools/@/${encodeURIComponent(name)}`) : entry.paths))]
     const shown: string[] = []
     let used = 0
     for (const path of paths.toReversed()) {

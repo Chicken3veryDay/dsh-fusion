@@ -1,0 +1,14 @@
+<system-reminder>
+This context tree listing replaces any earlier one in this conversation.
+
+<context_tree>
+- Instructions/Project: Use for rules specific to this workspace: its instruction files from the project root down.
+- Tools/Global: Use for tools available everywhere: harness plugins, user-level servers, and tools whose origin is not recorded.
+</context_tree>
+
+Dropped by compaction (load again with context_load if you still need them): Tools/@/deploy_status
+
+Call `context_browse` (a path and a depth) to see titles and when to use each node; call `context_load` with paths to load them.
+Loading an instruction or source node adds its text to the conversation. Loading a tool node makes those tools callable from your next step; tools you have not loaded cannot be called.
+Loaded text and tools are dropped when the conversation is compacted, and a one-line note records what was dropped. Load again if you still need it.
+</system-reminder>
