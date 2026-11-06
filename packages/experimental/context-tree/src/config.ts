@@ -25,9 +25,13 @@ export const DEFAULT_BASE_TOOLS: readonly string[] = [
   'skill',
   'context_browse',
   'context_load',
+  'context_note',
 ]
 
-/** Names the two tree tools; they are always exposed whatever `baseTools` says. */
+/**
+ * Names the two tree tools; they are always exposed whatever `baseTools` says. `context_note` is
+ * a base tool only when a plugin registers it.
+ */
 export const CONTEXT_TOOL_NAMES: readonly string[] = ['context_browse', 'context_load']
 
 /**
@@ -35,7 +39,8 @@ export const CONTEXT_TOOL_NAMES: readonly string[] = ['context_browse', 'context
  * 10 KB of lines, so 8 KB of rendered text keeps one browse under a quarter of the
  * agent-instructions chain budget; a load injects at most half of the 64 KiB read ceiling of
  * the context index; the dropped list gets half of the 2,048-byte stub budget compaction-basic
- * gives one checkpoint; 32 activations cover the largest default tool group (21 `ticket_*` tools).
+ * gives one checkpoint; the eager core gets the 4,096 bytes the profile already gives agent-instructions;
+ * 32 activations cover the largest default tool group (21 `ticket_*` tools).
  */
 const DEFAULTS = {
   baseTools: DEFAULT_BASE_TOOLS as string[],
@@ -47,6 +52,7 @@ const DEFAULTS = {
   maxActivatedTools: 32,
   maxSummaryBytes: 160,
   maxDroppedBytes: 1024,
+  coreBytes: 4096,
 } as const satisfies Required<Config>
 
 const MINIMUMS = {
@@ -58,6 +64,7 @@ const MINIMUMS = {
   maxActivatedTools: 1,
   maxSummaryBytes: 32,
   maxDroppedBytes: 64,
+  coreBytes: 1,
 } as const
 
 /** Schemastery schema for the service; every field defaults, so no configuration is required. */
@@ -71,6 +78,7 @@ export const ConfigSchema: z<Config> = z.object({
   maxActivatedTools: z.number().step(1).min(MINIMUMS.maxActivatedTools).default(DEFAULTS.maxActivatedTools),
   maxSummaryBytes: z.number().step(1).min(MINIMUMS.maxSummaryBytes).default(DEFAULTS.maxSummaryBytes),
   maxDroppedBytes: z.number().step(1).min(MINIMUMS.maxDroppedBytes).default(DEFAULTS.maxDroppedBytes),
+  coreBytes: z.number().step(1).min(MINIMUMS.coreBytes).default(DEFAULTS.coreBytes),
 })
 
 function invalid(message: string): never {

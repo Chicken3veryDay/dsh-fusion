@@ -5,7 +5,8 @@
  *
  * @module @deepseek-ai/dsh-experimental-context-tree/types
  */
-import type { ContextSourceKind } from '@deepseek-ai/dsh-experimental-context-index/types'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { ContextSectionId, ContextSourceKind } from '@deepseek-ai/dsh-experimental-context-index/types'
 import type { ToolOrigin } from '@deepseek-ai/dsh-tools'
 
 /**
@@ -131,6 +132,42 @@ export interface ToolGroupHint extends ToolPlacement {
   readonly prefix?: string
 }
 
+/**
+ * A curated group: a named folder of sections or tools that a curator placed in the tree. A group
+ * under `Instructions` or `Sources` holds sections and replaces the file nodes for them; a group
+ * under `Tools` holds tool names and acts as a placement for them.
+ */
+export interface CuratedGroup {
+  /** Top-level branch the group sits under. */
+  readonly root: ContextRoot
+  /** Origin folder the group sits under. */
+  readonly origin: ContextOrigin
+  /** Group name, a single path segment without `/`. */
+  readonly name: string
+  /** Title shown by browse. */
+  readonly title: string
+  /** One line saying when to use the group. */
+  readonly summary: string
+  /** Member sections; used only under `Instructions` and `Sources`. */
+  readonly sections: readonly ContextSectionId[]
+  /** Member tool names; used only under `Tools`. */
+  readonly tools: readonly string[]
+}
+
+/**
+ * Supply the curated groups that apply to one agent.
+ * @param agent - the agent whose tree is built.
+ * @returns the groups; ones that name a missing section, tool, or a mismatched origin are skipped.
+ */
+export type CuratedGroupProvider = (agent: Agent) => readonly CuratedGroup[]
+
+/**
+ * Supply the sections that stay loaded up front for one agent.
+ * @param agent - the agent about to take a step.
+ * @returns section ids in priority order.
+ */
+export type EagerCoreProvider = (agent: Agent) => readonly ContextSectionId[]
+
 /** Section grant message source; revocable at compaction. */
 export interface ContextGrantSource {
   readonly kind: 'context-grant'
@@ -198,4 +235,6 @@ export interface Config {
   maxSummaryBytes?: number
   /** UTF-8 bytes of the dropped-by-compaction list a republished catalog carries (default 1,024). */
   maxDroppedBytes?: number
+  /** UTF-8 bytes of eager-core section text granted before the first step and after each compaction (default 4,096). */
+  coreBytes?: number
 }

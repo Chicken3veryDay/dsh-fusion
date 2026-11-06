@@ -5,6 +5,7 @@
  */
 import type {
   ContextSectionMeta,
+  ContextSourceKind,
   ContextSourceMeta,
 } from '@deepseek-ai/dsh-experimental-context-index/types'
 import { clip, firstSentence, oneLine } from './text.ts'
@@ -17,6 +18,7 @@ import type {
   ToolFacts,
   ToolPlacement,
   ToolPlacementAssigner,
+  CuratedGroup,
 } from './types.ts'
 
 /** One node of the built tree. */
@@ -43,6 +45,8 @@ export interface TreeInput {
   /** Placement assigners in registration order; the first opinion wins. */
   readonly assigners: readonly ToolPlacementAssigner[]
   readonly maxSummaryBytes: number
+  /** Curated section groups; a section in a valid group leaves its file node. */
+  readonly groups?: readonly CuratedGroup[]
 }
 
 /** The built tree. */
@@ -130,18 +134,43 @@ function sourceNodes(
   origin: ContextOrigin,
   root: ContextRoot,
   input: TreeInput,
-  accepts: (source: ContextSourceMeta) => boolean,
+  accepts: (kind: ContextSourceKind) => boolean,
 ): TreeNode[] {
   const nodes: TreeNode[] = []
+  const originName = origin === 'global' ? 'Global' : 'Project'
+  const grouped = new Set<string>()
+  const groupedFrom = new Set<string>()
+  for (const group of input.groups ?? []) {
+    if (group.root !== root || group.origin !== origin) continue
+    const members = group.sections
+      .map(id => input.sections.find(section => section.id === id))
+      .filter((section): section is ContextSectionMeta => section !== undefined && accepts(section.kind) && !grouped.has(section.id))
+    if (members.length === 0) continue
+    for (const section of members) {
+      grouped.add(section.id)
+      groupedFrom.add(section.sourceId)
+    }
+    const base = [root, originName, group.name]
+    nodes.push(node(base, 'folder', group.title, clip(group.summary, input.maxSummaryBytes), members.map(section => node(
+      [...base, section.id],
+      'section',
+      sectionTitle(section),
+      clip(`Use when you need "${sectionTitle(section)}" (${section.bytes} bytes) from ${section.path}.`, input.maxSummaryBytes),
+      [],
+      { section },
+    ))))
+  }
   const bySource = new Map<string, ContextSectionMeta[]>()
   for (const section of input.sections) {
+    if (grouped.has(section.id)) continue
     const list = bySource.get(section.sourceId)
     if (list === undefined) bySource.set(section.sourceId, [section])
     else list.push(section)
   }
   for (const source of input.sources) {
-    if (!accepts(source)) continue
+    if (!accepts(source.kind)) continue
     const sections = bySource.get(source.id) ?? []
+    if (sections.length === 0 && groupedFrom.has(source.id)) continue
     const base = [root, origin === 'global' ? 'Global' : 'Project', source.path]
     const children = sections.map(section => node(
       [...base, section.id],
@@ -234,11 +263,11 @@ export function buildTree(input: TreeInput): ContextTree {
     const originNodes = ORIGINS.map(([origin, originName]) => {
       let children: TreeNode[]
       if (rootName === 'Instructions') {
-        children = sourceNodes(origin, rootName, input, source => (
-          origin === 'global' ? source.kind === 'user-instructions' : source.kind === 'project-instructions'
+        children = sourceNodes(origin, rootName, input, kind => (
+          origin === 'global' ? kind === 'user-instructions' : kind === 'project-instructions'
         ))
       } else if (rootName === 'Sources') {
-        children = sourceNodes(origin, rootName, input, source => origin === 'project' && source.kind === 'doc')
+        children = sourceNodes(origin, rootName, input, kind => origin === 'project' && kind === 'doc')
       } else {
         children = toolNodes(origin, groups[origin], input)
       }

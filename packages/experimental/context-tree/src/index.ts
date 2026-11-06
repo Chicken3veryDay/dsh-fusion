@@ -46,6 +46,9 @@ import type {
   ContextBrowseResult,
   ContextGrantedSection,
   ContextLoadResult,
+  CuratedGroupProvider,
+  EagerCoreProvider,
+  ToolFacts,
   ToolGroupHint,
   ToolPlacementAssigner,
 } from './types.ts'
@@ -92,6 +95,9 @@ export class ContextTreeService extends Service {
   private readonly config: ResolvedConfig
   private readonly baseTools: ReadonlySet<string>
   private readonly assigners = new Set<ToolPlacementAssigner>()
+  private readonly groupProviders = new Set<CuratedGroupProvider>()
+  private readonly coreProviders = new Set<EagerCoreProvider>()
+  private readonly managed = new Set<{ readonly names: ReadonlySet<string>; readonly admit: (agent: Agent) => boolean }>()
   private projection!: ProjectionHandle<ContextTreeProjectionState>
   private disposed = false
 
@@ -107,12 +113,13 @@ export class ContextTreeService extends Service {
     this.ctx.compaction.registerRevocableSource('context-grant', grantStub)
     this.ctx.compaction.registerRevocableSource('context-activation', activationStub)
     this.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) => {
-      // Base tools keep registration order and activated tools follow in activation order, so an
-      // activation appends to the declarations instead of shifting the ones before it.
+      // Base tools keep registration order; curator-role tools and then activated tools follow, in activation
+      // order, so an activation appends to the declarations instead of shifting the ones before it.
       const base = [...candidates.keys()].filter(name => this.baseTools.has(name))
+      const managed = [...candidates.keys()].filter(name => !this.baseTools.has(name) && this.managedAdmits(name, agent))
       const activated = [...activeToolNames(this.projection.stateOf(agent.session))]
-        .filter(name => candidates.has(name) && !this.baseTools.has(name))
-      return orderedAdmission([...base, ...activated])
+        .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
+      return orderedAdmission([...base, ...managed, ...activated])
     })
     this.ctx.on('agent/pre-step', async ({ agent, signal, step }, next): Promise<PreStepDecision> => {
       const decision = await next()
@@ -121,7 +128,9 @@ export class ContextTreeService extends Service {
       if (decision.messages.some(message => message.source.kind === 'context-tree-catalog')) return decision
       if (this.ctx.tools.get('context_browse', agent) === undefined) return decision
       const catalog = await this.pendingCatalog(agent, signal)
-      return catalog === undefined ? decision : { ...decision, messages: [...decision.messages, catalog] }
+      const core = await this.pendingCore(agent, signal)
+      const added = [...catalog === undefined ? [] : [catalog], ...core]
+      return added.length === 0 ? decision : { ...decision, messages: [...decision.messages, ...added] }
     })
   }
 
@@ -160,6 +169,49 @@ export class ContextTreeService extends Service {
       this.assigners.add(assigner)
       return () => { this.assigners.delete(assigner) }
     }, 'contextTree.registerToolPlacement()')
+  }
+
+  /**
+   * Let a curator place sections and tools in the tree. Groups apply to the agent the provider is
+   * asked about; sections in a group leave their file node and tools in a group are placed by the
+   * same first-opinion-wins rule as {@link registerToolPlacement}, ahead of the other assigners.
+   * @param provider - the groups for one agent; must be pure and cheap, because it runs on every browse and step.
+   * @returns the disposer.
+   */
+  registerCuratedGroups(provider: CuratedGroupProvider): () => Promise<void> {
+    return this.ctx.effect(() => {
+      this.groupProviders.add(provider)
+      return () => { this.groupProviders.delete(provider) }
+    }, 'contextTree.registerCuratedGroups()')
+  }
+
+  /**
+   * Name sections that are granted before a step and again after each compaction, within the
+   * `coreBytes` budget. Sections the conversation already holds are not granted twice.
+   * @param provider - the section ids for one agent, in priority order.
+   * @returns the disposer.
+   */
+  registerEagerCore(provider: EagerCoreProvider): () => Promise<void> {
+    return this.ctx.effect(() => {
+      this.coreProviders.add(provider)
+      return () => { this.coreProviders.delete(provider) }
+    }, 'contextTree.registerEagerCore()')
+  }
+
+  /**
+   * Take tools out of the tree and admit them by a role check instead of by loading. The named
+   * tools never appear as nodes, and the admission policy keeps them for agents `admit` accepts.
+   * The registrant stays responsible for refusing other callers when the tool runs.
+   * @param names - tool names the registrant owns.
+   * @param admit - whether the agent may see the tools on this step.
+   * @returns the disposer.
+   */
+  registerManagedTools(names: Iterable<string>, admit: (agent: Agent) => boolean): () => Promise<void> {
+    const entry = { names: new Set(names), admit }
+    return this.ctx.effect(() => {
+      this.managed.add(entry)
+      return () => { this.managed.delete(entry) }
+    }, 'contextTree.registerManagedTools()')
   }
 
   /**
@@ -333,17 +385,62 @@ export class ContextTreeService extends Service {
       { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
       signal,
     )
+    const groups = [...this.groupProviders].flatMap(provider => provider(agent))
+    const toolGroups = groups.filter(group => group.root === 'Tools')
+    const groupAssigner: ToolPlacementAssigner = (tool: ToolFacts) => {
+      const found = toolGroups.find(group => group.tools.includes(tool.name))
+      return found === undefined
+        ? undefined
+        : { origin: found.origin, group: found.name, title: found.title, summary: found.summary }
+    }
     return buildTree({
       sources: snapshot.sources,
       sections: snapshot.sections,
-      tools: this.ctx.tools.definitions(agent).map(definition => ({
-        name: definition.name,
-        description: definition.description,
-        origin: this.ctx.tools.originOf(definition.name, agent),
-      })),
+      tools: this.ctx.tools.definitions(agent)
+        .filter(definition => !this.isManaged(definition.name))
+        .map(definition => ({
+          name: definition.name,
+          description: definition.description,
+          origin: this.ctx.tools.originOf(definition.name, agent),
+        })),
       baseTools: this.baseTools,
-      assigners: [...this.assigners],
+      assigners: [groupAssigner, ...this.assigners],
       maxSummaryBytes: this.config.maxSummaryBytes,
+      groups: groups.filter(group => group.root !== 'Tools'),
+    })
+  }
+
+  private isManaged(name: string): boolean {
+    for (const entry of this.managed) if (entry.names.has(name)) return true
+    return false
+  }
+
+  private managedAdmits(name: string, agent: Agent): boolean {
+    for (const entry of this.managed) if (entry.names.has(name) && entry.admit(agent)) return true
+    return false
+  }
+
+  /** Grants for core sections the conversation does not hold, within `coreBytes`. */
+  private async pendingCore(agent: Agent, signal: AbortSignal): Promise<UserMessage[]> {
+    const wanted = [...new Set([...this.coreProviders].flatMap(provider => provider(agent)))]
+    if (wanted.length === 0) return []
+    const tree = await this.treeFor(agent, signal)
+    const held = grantedHashes(this.projection.stateOf(agent.session))
+    const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
+    const missing = wanted.filter((id) => {
+      const leaf = leaves.get(id)
+      return leaf !== undefined && held.get(id) !== leaf.section.hash
+    })
+    if (missing.length === 0) return []
+    const read = await this.ctx.contextIndex.read(
+      { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
+      missing,
+      { maxBytes: this.config.coreBytes },
+      signal,
+    )
+    return read.sections.flatMap((body) => {
+      const leaf = leaves.get(body.id)
+      return leaf === undefined ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind)]
     })
   }
 

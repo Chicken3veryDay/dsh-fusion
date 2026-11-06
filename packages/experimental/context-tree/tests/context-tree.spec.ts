@@ -877,3 +877,109 @@ describe('projection edge cases', () => {
     expect(decision.kind === 'enter' ? decision.messages : ['x']).toHaveLength(0)
   })
 })
+
+describe('curator seams', () => {
+  const projectSections = async (w: World) => (await w.ctx.contextIndex.snapshot({ workingDirectory: w.project }))
+    .sections.filter(section => section.kind === 'project-instructions').map(section => section.id)
+
+  const stepMessages = async (w: World, turn: number): Promise<UserMessage[]> => {
+    const decision = await agentEvents(w.ctx, w.agent).waterfall(
+      'agent/pre-step', { modelSelection: SELECTION, messages: [], turn, step: 2, signal: SIGNAL },
+      () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
+    )
+    return decision.kind === 'enter' ? decision.messages : []
+  }
+  const grants = (messages: readonly UserMessage[]) => messages.filter(message => message.source.kind === 'context-grant')
+
+  it('shows curated section groups in place of the file node and loads them as a folder', async () => {
+    const w = await world()
+    const sections = await projectSections(w)
+    const release = w.tree.registerCuratedGroups(() => [{
+      root: 'Instructions', origin: 'project', name: 'rules', title: 'Project rules', summary: 'Use before changing code.', sections, tools: [],
+    }])
+    const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project' })
+    expect(listing.nodes.map(node => node.path)).toEqual(['Instructions/Project/rules'])
+    expect(listing.nodes[0]).toMatchObject({ title: 'Project rules' })
+    expect(listing.nodes[0]!.summary).toContain('Use before changing code.')
+    const inside = await w.tree.browse(w.agent, { path: 'Instructions/Project/rules' })
+    expect(inside.nodes.map(node => node.path)).toEqual(sections.map(id => `Instructions/Project/rules/${id}`))
+    const loaded = await w.tree.load(w.agent, { paths: ['Instructions/Project/rules'] })
+    expect(loaded.result.granted.map(entry => entry.path)).toEqual(sections.map(id => `Instructions/Project/rules/${id}`))
+
+    await release()
+    const restored = await w.tree.browse(w.agent, { path: 'Instructions/Project' })
+    expect(restored.nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])
+  })
+
+  it('places tools by a curated group ahead of the other assigners', async () => {
+    const w = await world()
+    w.tree.registerToolGroup({ names: ['deploy_run'], origin: 'project', group: 'hinted' })
+    w.tree.registerCuratedGroups(() => [{
+      root: 'Tools', origin: 'project', name: 'ship', title: 'Shipping', summary: 'Use to ship.', sections: [], tools: ['deploy_run'],
+    }])
+    const ship = await w.tree.browse(w.agent, { path: 'Tools/Project/ship' })
+    expect(ship.nodes.map(node => node.title)).toEqual(['deploy_run'])
+    const hinted = await w.tree.browse(w.agent, { path: 'Tools/Project', depth: 2 })
+    expect(hinted.nodes.map(node => node.path)).not.toContain('Tools/Project/hinted/deploy_run')
+  })
+
+  it('keeps managed tools out of the tree and admits them only to agents the owner accepts', async () => {
+    const w = await world()
+    w.ctx.tools.register(probeTool('map_edit', w.calls))
+    let admitted = false
+    w.tree.registerManagedTools(['map_edit'], () => admitted)
+    expect(await declared(w)).not.toContain('map_edit')
+    admitted = true
+    expect(await declared(w)).toContain('map_edit')
+    const paths = (await w.tree.browse(w.agent, { path: 'Tools', depth: 3 })).nodes.map(node => node.path)
+    expect(paths.some(path => path.endsWith('map_edit'))).toBe(false)
+    expect((await call(w, 'map_edit')).isError).toBe(false)
+    admitted = false
+    expect((await call(w, 'map_edit')).error?.info?.code).toBe('UNKNOWN_TOOL')
+  })
+
+  it('exposes context_note as a base tool without loading', async () => {
+    const w = await world()
+    w.ctx.tools.register(probeTool('context_note', w.calls))
+    expect(DEFAULT_BASE_TOOLS).toContain('context_note')
+    expect(await declared(w)).toContain('context_note')
+  })
+
+  it('grants the eager core once, within the byte budget, and again after compaction', async () => {
+    const w = await world()
+    const sections = await projectSections(w)
+    w.tree.registerEagerCore(() => sections)
+    const first = grants(await stepMessages(w, 1))
+    expect(first).toHaveLength(sections.length)
+    expect(texts(first)).toContain('Run vitest.')
+    for (const message of first) w.session.append('user/message', message, { surfaceOp: 'append' })
+    expect(grants(await stepMessages(w, 2))).toHaveLength(0)
+
+    const { start, end } = conversation(w.session, {})
+    await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+    expect(texts(w.session.deriveMessages())).not.toContain('Run vitest.')
+    expect(grants(await stepMessages(w, 9))).toHaveLength(sections.length)
+  })
+
+  it('grants nothing from the core when no section fits the budget', async () => {
+    const w = await world({ coreBytes: 1 })
+    w.tree.registerEagerCore(async () => projectSections(w))
+    expect(grants(await stepMessages(w, 1))).toHaveLength(0)
+  })
+
+  it('removes the group, core, and managed registrations with their disposers', async () => {
+    const w = await world()
+    w.ctx.tools.register(probeTool('map_edit', w.calls))
+    const sections = await projectSections(w)
+    const releases = [
+      w.tree.registerCuratedGroups(() => [{ root: 'Instructions', origin: 'project', name: 'rules', title: 't', summary: 's', sections, tools: [] }]),
+      w.tree.registerEagerCore(() => sections),
+      w.tree.registerManagedTools(['map_edit'], () => true),
+    ]
+    expect(await declared(w)).toContain('map_edit')
+    for (const release of releases) await release()
+    expect(await declared(w)).not.toContain('map_edit')
+    expect(grants(await stepMessages(w, 1))).toHaveLength(0)
+    expect((await w.tree.browse(w.agent, { path: 'Instructions/Project' })).nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])
+  })
+})
