@@ -109,6 +109,7 @@ describe('Workstream panel Remote', () => {
     await expect(ctx.workstreamPanel.closeQuestion(owner, {
       ticketId: ticket.id, questionId: TicketQuestionId('missing'), expectedRevision: ticket.revision,
     })).rejects.toMatchObject({ code: 'workstreamPanel/rejected' })
+    await ticketActor(ctx, SessionId('elsewhere'), async () => {})
     const foreign = await ticketActor(ctx, owner.id, () => ctx.tickets.create(owner.session, {
       subject: 'Foreign', description: 'Coordinated elsewhere', coordinatorId: SessionId('elsewhere'),
     }))
