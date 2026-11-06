@@ -18,6 +18,8 @@ import type {
   Config,
   PrepareContextRequest,
   PublishEvidenceRequest,
+  WorkstreamEvidenceArtifactId as ArtifactIdBrand,
+  WorkstreamEvidenceOperationId as OperationIdBrand,
   WorkstreamEvidenceArtifactRecord,
   WorkstreamEvidenceSnapshot,
   WorkstreamEvidenceVersionRecord,
@@ -43,6 +45,14 @@ const defaults: Required<Config> = {
   maxTotalBytes: 100 * 1024 * 1024,
   maxContextPacketBytes: 65_536,
   maxToolTextBytes: 65_536,
+  maxSnapshotBytes: 1_048_576,
+}
+
+function normalizedArtifactId(value: string): ArtifactIdBrand {
+  try { return WorkstreamEvidenceArtifactId(value) } catch (error) {
+    throw new WorkstreamEvidenceError(`Invalid artifact id: ${error instanceof Error ? error.message : String(error)}`,
+      'WORKSTREAM_EVIDENCE_INVALID_INPUT', { cause: error })
+  }
 }
 
 function computeDigest(data: Uint8Array): string {
@@ -59,6 +69,7 @@ export class WorkstreamEvidenceService extends Service {
     maxTotalBytes: z.number().step(1).min(1).default(defaults.maxTotalBytes),
     maxContextPacketBytes: z.number().step(1).min(1).default(defaults.maxContextPacketBytes),
     maxToolTextBytes: z.number().step(1).min(1).default(defaults.maxToolTextBytes),
+    maxSnapshotBytes: z.number().step(1).min(1).default(defaults.maxSnapshotBytes),
   })
 
   private readonly config: Required<Config>
@@ -99,8 +110,11 @@ export class WorkstreamEvidenceService extends Service {
     const bytes = typeof request.content === 'string' ? Buffer.from(request.content, 'utf8') : Uint8Array.from(request.content)
     this.live(caller)
     this.ctx.workstreams.requireMembership(caller, rootSessionId)
+    request.signal?.throwIfAborted()
 
     return this.enqueue(rootSessionId, async () => {
+      // A cancelled tool call must not commit evidence; the earlier queued publishes may have outlived the caller.
+      request.signal?.throwIfAborted()
       this.live(caller)
       // Membership can be revoked while this publish waits behind earlier ones.
       const { owner } = this.ctx.workstreams.requireMembership(caller, rootSessionId)
@@ -179,50 +193,24 @@ export class WorkstreamEvidenceService extends Service {
       }
 
       const displayName = request.name?.trim() || artifactId
+      // Reject before saving when the record cannot fit even with an empty Attachment reference, so a publish that is
+      // certain to be refused leaves no Attachment behind. The exact check follows the save.
+      this.fitRecord(this.nextSnapshot(owner, snapshot, existingArtifact, this.versionRecord(artifactId, request, displayName,
+        '', digest, bytes, caller, operationId)))
       const fileRef = await this.ctx.attachments.saveFile({
         data: bytes,
         name: displayName,
       })
 
-      // A stop that began during attachment I/O must not authorize this late write.
+      // A stop that began during attachment I/O, or a cancellation that arrived during it, must not authorize this late write.
+      request.signal?.throwIfAborted()
       this.live(caller)
       this.ctx.workstreams.requireMembership(caller, rootSessionId)
 
-      const newVersion: WorkstreamEvidenceVersionRecord = {
-        artifactId,
-        version: request.expectedVersion,
-        // The provider may normalize the display name; reads rebuild the reference from the canonical one.
-        name: fileRef.name,
-        ref: String(fileRef.attachmentId),
-        digest,
-        bytes: bytes.byteLength,
-        authorSessionId: caller.id,
-        operationId,
-        createdAt: new Date().toISOString(),
-      }
-
-      let newArtifacts: WorkstreamEvidenceArtifactRecord[]
-      if (existingArtifact === undefined) {
-        const newArtifactRecord: WorkstreamEvidenceArtifactRecord = {
-          artifactId,
-          latestVersion: 1,
-          versions: [newVersion],
-        }
-        newArtifacts = [...snapshot.artifacts, newArtifactRecord]
-      } else {
-        const updatedArtifactRecord: WorkstreamEvidenceArtifactRecord = {
-          ...existingArtifact,
-          latestVersion: newVersion.version,
-          versions: [...existingArtifact.versions, newVersion],
-        }
-        newArtifacts = snapshot.artifacts.map(a => (a.artifactId === artifactId ? updatedArtifactRecord : a))
-      }
-
-      const updatedSnapshot: WorkstreamEvidenceSnapshot = {
-        ownerSessionId: owner.id,
-        revision: snapshot.revision + 1,
-        artifacts: newArtifacts,
-      }
+      const newVersion = this.versionRecord(artifactId, request, fileRef.name, String(fileRef.attachmentId), digest, bytes, caller,
+        operationId)
+      const updatedSnapshot = this.nextSnapshot(owner, snapshot, existingArtifact, newVersion)
+      this.fitRecord(updatedSnapshot)
 
       appendPluginRecord(owner.session, WORKSTREAM_EVIDENCE_RECORD, { version: 1, snapshot: structuredClone(updatedSnapshot) })
       await this.ctx.sessions.flush(owner.session)
@@ -252,7 +240,9 @@ export class WorkstreamEvidenceService extends Service {
       throw new WorkstreamEvidenceError(`Artifact ${artifactId} not found`, 'WORKSTREAM_EVIDENCE_NOT_FOUND')
     }
 
-    const artifact = snapshot.artifacts.find(a => a.artifactId === artifactId)
+    // Publish stores the trimmed id, so a read names the artifact the same way.
+    const wanted = normalizedArtifactId(artifactId)
+    const artifact = snapshot.artifacts.find(a => a.artifactId === wanted)
     if (artifact === undefined) {
       throw new WorkstreamEvidenceError(`Artifact ${artifactId} not found`, 'WORKSTREAM_EVIDENCE_NOT_FOUND')
     }
@@ -452,6 +442,38 @@ export class WorkstreamEvidenceService extends Service {
     rootSessionId: SessionId,
   ): AggregatedChangeRequestsResult {
     return aggregateChangeRequests(this.ctx, caller, rootSessionId)
+  }
+
+  /** The retained record of one published version; the provider may normalize the display name, and reads rebuild the reference from it. */
+  private versionRecord(artifactId: ArtifactIdBrand, request: PublishEvidenceRequest, name: string, ref: string,
+    digest: string, content: Uint8Array, caller: Agent, operationId: OperationIdBrand): WorkstreamEvidenceVersionRecord {
+    return { artifactId, version: request.expectedVersion, name, ref, digest, bytes: content.byteLength, authorSessionId: caller.id,
+      operationId, createdAt: new Date().toISOString() }
+  }
+
+  /** The complete snapshot after adding `version` to its artifact. */
+  private nextSnapshot(owner: Agent, snapshot: WorkstreamEvidenceSnapshot, existing: WorkstreamEvidenceArtifactRecord | undefined,
+    version: WorkstreamEvidenceVersionRecord): WorkstreamEvidenceSnapshot {
+    const artifact: WorkstreamEvidenceArtifactRecord = {
+      artifactId: version.artifactId,
+      latestVersion: version.version,
+      versions: [...existing?.versions ?? [], version],
+    }
+    return {
+      ownerSessionId: owner.id,
+      revision: snapshot.revision + 1,
+      artifacts: existing === undefined ? [...snapshot.artifacts, artifact]
+        : snapshot.artifacts.map(candidate => (candidate.artifactId === version.artifactId ? artifact : candidate)),
+    }
+  }
+
+  /** Every publish appends the complete snapshot, so the retained record and each projection update are bounded together. */
+  private fitRecord(snapshot: WorkstreamEvidenceSnapshot): void {
+    const size = Buffer.byteLength(JSON.stringify({ version: 1, snapshot }), 'utf8')
+    if (size > this.config.maxSnapshotBytes) {
+      throw new WorkstreamEvidenceError(`Complete Workstream Evidence state exceeds maxSnapshotBytes (${size} > ${this.config.maxSnapshotBytes})`,
+        'WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED')
+    }
   }
 
   private live(agent: Agent): void {

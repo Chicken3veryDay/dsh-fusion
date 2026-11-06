@@ -7,6 +7,7 @@ import type {
   AggregatedChangeRequest,
   ChangeRequestContribution,
   AggregatedChangeRequestsResult,
+  ChangeRequestGap,
 } from './types.ts'
 
 /**
@@ -26,20 +27,20 @@ export function aggregateChangeRequests(
   const { snapshot } = ctx.workstreams.requireMembership(caller, rootSessionId)
   const forge: ForgeSessionService | undefined = ctx.get('forgeSession')
   if (forge === undefined) {
-    return { complete: false, changeRequests: [], diagnostics: ['Forge session service is not mounted'] }
+    return { complete: false, changeRequests: [], diagnostics: ['Forge session service is not mounted'], gaps: [{ kind: 'forge-unavailable' }] }
   }
 
   const sessionIds = [...new Set<SessionId>([
     snapshot.ownerSessionId,
     ...snapshot.members.map(member => member.id),
   ])]
-  const diagnostics: string[] = []
+  const unloaded: SessionId[] = []
   const byUrl = new Map<string, { ref: AggregatedChangeRequest['ref']; contributions: ChangeRequestContribution[] }>()
 
   for (const sessionId of sessionIds) {
     const session = ctx.agents.get(sessionId)?.session ?? ctx.sessions.get(sessionId)
     if (session === undefined) {
-      diagnostics.push(`Session ${sessionId} is not loaded; its change requests are not included`)
+      unloaded.push(sessionId)
       continue
     }
     for (const binding of forge.changeRequests(session)) {
@@ -50,9 +51,11 @@ export function aggregateChangeRequests(
     }
   }
 
+  const gaps: ChangeRequestGap[] = unloaded.map(sessionId => ({ kind: 'session-not-loaded', sessionId }))
   return {
-    complete: diagnostics.length === 0,
+    complete: gaps.length === 0,
     changeRequests: [...byUrl].map(([url, entry]) => ({ url, ref: entry.ref, contributions: entry.contributions })),
-    diagnostics,
+    diagnostics: unloaded.map(sessionId => `Session ${sessionId} is not loaded; its change requests are not included`),
+    gaps,
   }
 }

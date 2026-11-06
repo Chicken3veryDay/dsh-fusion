@@ -49,6 +49,8 @@ export interface Config {
   readonly maxContextPacketBytes?: number
   /** Maximum byte size of one evidence version returned as text to a model tool (default: 65,536). */
   readonly maxToolTextBytes?: number
+  /** Maximum byte size of the complete serialized evidence record that each publish appends (default: 1 MiB). */
+  readonly maxSnapshotBytes?: number
 }
 
 /** Request to publish an immutable version of an evidence artifact. */
@@ -86,12 +88,20 @@ export interface AggregatedChangeRequest {
   readonly contributions: readonly ChangeRequestContribution[]
 }
 
+/** One reason an aggregated change request list may be incomplete; clients localize it. */
+export type ChangeRequestGap =
+  | { readonly kind: 'forge-unavailable' }
+  | { readonly kind: 'session-not-loaded'; readonly sessionId: SessionId }
+
 /** Result of aggregating member forge bindings. */
 export interface AggregatedChangeRequestsResult {
   /** False when the forge service is absent or any Session could not be read. */
   readonly complete: boolean
   readonly changeRequests: readonly AggregatedChangeRequest[]
+  /** English description of each gap, for model-facing output. */
   readonly diagnostics: readonly string[]
+  /** The same gaps as typed values; `complete` is false exactly when this list is not empty. */
+  readonly gaps: readonly ChangeRequestGap[]
 }
 
 declare module '@deepseek-ai/dsh-session/types' {

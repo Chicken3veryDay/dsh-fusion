@@ -34,9 +34,9 @@ The service exposes `publish`, `get`, `list`, `read`, `readText`, `prepareContex
 
 `prepareContext` builds a `WorkstreamContextPacket` for `ctx.workstreams.sendMessage`. Each requested artifact needs an exact `version`, and the packet carries the stored `ref` and `digest` rather than a path. Artifact ids containing `/`, `\`, `..`, or a `file:` prefix are rejected as mutable or foreign links. A serialized packet above `maxContextPacketBytes` returns `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`. The method does not send the packet.
 
-`aggregateChangeRequests` reads `forgeSession.changeRequests` for the root and every retained member, including stopped ones, and groups bindings by URL. Each entry lists one contribution per Session with its origin and latest polling update, root first. It never writes to a forge. `complete` is `false`, with a message in `diagnostics`, when the forge service is not mounted or a Session is not loaded.
+`aggregateChangeRequests` reads `forgeSession.changeRequests` for the root and every retained member, including stopped ones, and groups bindings by URL. Each entry lists one contribution per Session with its origin and latest polling update, root first. It never writes to a forge. `complete` is `false` when the forge service is not mounted or a Session is not loaded. Each cause is a typed entry in `gaps` (`forge-unavailable` or `session-not-loaded` with the Session id), which a client localizes; `diagnostics` carries the same causes as English text for the model tools.
 
-Config fields, all positive safe integers: `maxBytesPerArtifact` (10 MiB), `maxArtifacts` (256), `maxVersionsPerArtifact` (64), `maxTotalBytes` (100 MiB), `maxContextPacketBytes` (65536), and `maxToolTextBytes` (65536). Exceeding a publish bound returns `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`.
+Config fields, all positive safe integers: `maxBytesPerArtifact` (10 MiB), `maxArtifacts` (256), `maxVersionsPerArtifact` (64), `maxTotalBytes` (100 MiB), `maxContextPacketBytes` (65536), `maxToolTextBytes` (65536), and `maxSnapshotBytes` (1 MiB). `maxSnapshotBytes` bounds the complete `{version, snapshot}` record that each publish appends to the root Session log, wrapper included. The released record is a complete snapshot with no delta form, so each publish still appends the whole record; the bound keeps that record, and so the log growth per publish, from exceeding the limit. A publish that cannot fit is refused before its Attachment is saved. Exceeding a publish bound returns `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`.
 
 Errors are `WorkstreamEvidenceError` values with code `WORKSTREAM_EVIDENCE_NOT_FOUND`, `WORKSTREAM_EVIDENCE_UNAUTHORIZED`, `WORKSTREAM_EVIDENCE_STALE_VERSION`, `WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`, `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`, `WORKSTREAM_EVIDENCE_CORRUPT`, `WORKSTREAM_EVIDENCE_INVALID_INPUT`, or `WORKSTREAM_EVIDENCE_DISPOSED`.
 
@@ -75,7 +75,7 @@ Registering or removing the tools changes the tool list, which can replace the c
 
 - The package has no browser UI. The `workstreamEvidence` projection is the only browser-facing surface.
 - Evidence enters only through `publish`. The package does not capture files from the host workspace, and the tool accepts UTF-8 text only; binary content needs the service method.
-- Forge aggregation is read-only. It reports only bindings already recorded in loaded Sessions, sets `complete: false` with a diagnostic for Sessions that are not loaded, and returns an empty result when the forge service is not mounted.
+- Forge aggregation is read-only. It reports only bindings already recorded in loaded Sessions, sets `complete: false` with a typed gap for Sessions that are not loaded, and returns an empty result when the forge service is not mounted.
 - Versions are never deleted or compacted, so a Workstream reaches `maxArtifacts`, `maxVersionsPerArtifact`, or `maxTotalBytes` and then rejects further publishes.
 - Evidence belongs to the root Session of one Workstream. The package does not copy evidence between Workstreams.
 - A failed append after a successful Attachment save can leave an unreferenced Attachment; the package does not reclaim it.

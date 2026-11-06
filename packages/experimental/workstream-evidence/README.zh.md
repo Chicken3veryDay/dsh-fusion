@@ -34,9 +34,9 @@ Workstream Evidence 为一个 Workstream 保存具名证据产物的不可变、
 
 `prepareContext` 构建供 `ctx.workstreams.sendMessage` 使用的 `WorkstreamContextPacket`。每个请求的产物都需要确切的 `version`，上下文包携带已存储的 `ref` 和 `digest`，而不是路径。产物 id 含 `/`、`\`、`..` 或以 `file:` 开头时，会作为可变或外部链接被拒绝。序列化后的上下文包超过 `maxContextPacketBytes` 时返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`。该方法不发送上下文包。
 
-`aggregateChangeRequests` 读取根 Session 和每个保留的成员（包括已停止的成员）的 `forgeSession.changeRequests`，并按 URL 对绑定分组。每个条目为每个 Session 列出一项贡献，包含其来源和最近一次轮询更新，根 Session 在先。它从不写入 forge。当 forge 服务未挂载，或某个 Session 未加载时，`complete` 为 `false`，并在 `diagnostics` 中给出说明。
+`aggregateChangeRequests` 读取根 Session 和每个保留的成员（包括已停止的成员）的 `forgeSession.changeRequests`，并按 URL 对绑定分组。每个条目为每个 Session 列出一项贡献，包含其来源和最近一次轮询更新，根 Session 在先。它从不写入 forge。当 forge 服务未挂载，或某个 Session 未加载时，`complete` 为 `false`。每个原因都是 `gaps` 中的类型化条目（`forge-unavailable`，或带 Session id 的 `session-not-loaded`），由客户端本地化；`diagnostics` 以英文文本给出相同原因，供模型工具使用。
 
-配置字段均为正的安全整数：`maxBytesPerArtifact`（10 MiB）、`maxArtifacts`（256）、`maxVersionsPerArtifact`（64）、`maxTotalBytes`（100 MiB）、`maxContextPacketBytes`（65536）和 `maxToolTextBytes`（65536）。超出发布限制时返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`。
+配置字段均为正的安全整数：`maxBytesPerArtifact`（10 MiB）、`maxArtifacts`（256）、`maxVersionsPerArtifact`（64）、`maxTotalBytes`（100 MiB）、`maxContextPacketBytes`（65536）`maxToolTextBytes`（65536）和 `maxSnapshotBytes`（1 MiB）。`maxSnapshotBytes` 限制每次发布追加到根 Session 日志的完整 `{version, snapshot}` 记录（含外层包装）。已发布的记录是完整快照，没有增量形式，因此每次发布仍追加整条记录；该限制使这条记录以及每次发布造成的日志增长不会超过上限。无法容纳的发布在保存 Attachment 之前即被拒绝。超出发布限制时返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`。
 
 错误是 `WorkstreamEvidenceError`，其 code 为 `WORKSTREAM_EVIDENCE_NOT_FOUND`、`WORKSTREAM_EVIDENCE_UNAUTHORIZED`、`WORKSTREAM_EVIDENCE_STALE_VERSION`、`WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`、`WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`、`WORKSTREAM_EVIDENCE_CORRUPT`、`WORKSTREAM_EVIDENCE_INVALID_INPUT` 或 `WORKSTREAM_EVIDENCE_DISPOSED`。
 
