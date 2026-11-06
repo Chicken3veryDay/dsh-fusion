@@ -81,6 +81,7 @@ describe('release families', () => {
       '@deepseek-ai/dsh-experimental-forge-github',
       '@deepseek-ai/dsh-experimental-forge-session',
       '@deepseek-ai/dsh-experimental-forge',
+      '@deepseek-ai/dsh-experimental-fusion-participants',
       '@deepseek-ai/dsh-hook-protocol',
       '@deepseek-ai/dsh-hooks-claude-code',
       '@deepseek-ai/dsh-hooks-codex',
@@ -102,6 +103,7 @@ describe('release families', () => {
       '@deepseek-ai/dsh-experimental-speech-to-text',
       '@deepseek-ai/dsh-experimental-subagent-oar',
       '@deepseek-ai/dsh-experimental-terminal-bundle',
+      '@deepseek-ai/dsh-experimental-ticket',
       '@deepseek-ai/dsh-experimental-tool-agent-team',
       '@deepseek-ai/dsh-tool-ralph',
       '@deepseek-ai/dsh-tool-session-query',
@@ -114,6 +116,9 @@ describe('release families', () => {
       '@deepseek-ai/dsh-webhook',
       '@deepseek-ai/dsh-experimental-webworker-packer',
       '@deepseek-ai/dsh-experimental-webworker-runtime',
+      '@deepseek-ai/dsh-experimental-workstream-evidence',
+      '@deepseek-ai/dsh-experimental-workstream-profile',
+      '@deepseek-ai/dsh-experimental-workstream',
       '@deepseek-ai/dsh-experimental-worktree',
     ])
   })

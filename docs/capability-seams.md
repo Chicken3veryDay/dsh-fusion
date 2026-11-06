@@ -199,7 +199,13 @@ flowchart LR
   svc_fusionConfig["ctx.fusionConfig<br/>Opt-in Fusion configuration"]
   pkg_experimental_fusion_participants["experimental-fusion-participants"]
   svc_fusionParticipants["ctx.fusionParticipants<br/>Retained Fusion participant contexts"]
+  pkg_experimental_client_ui_workstream["experimental-client-ui-workstream"]
+  svc_workstreamPanel["ctx.workstreamPanel<br/>Workstream panel Remote"]
   svc_tickets["ctx.tickets<br/>Durable Ticket coordination domain"]
+  pkg_experimental_workstream["experimental-workstream"]
+  svc_workstreams["ctx.workstreams<br/>Durable Workstream membership"]
+  pkg_experimental_workstream_evidence["experimental-workstream-evidence"]
+  svc_workstreamEvidence["ctx.workstreamEvidence<br/>Immutable Workstream evidence"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
   pkg_commands["commands"]
@@ -380,6 +386,7 @@ flowchart LR
   pkg_experimental_claude_code_mods --> svc_claudeCodeMods
   pkg_experimental_client_ui_cot_translation --> svc_cotTranslation
   pkg_experimental_client_ui_forge --> svc_forgePanel
+  pkg_experimental_client_ui_workstream --> svc_workstreamPanel
   pkg_experimental_computer_use_cua_driver_mcp --> svc_computerUse
   pkg_experimental_computer_use_cua_driver_mcp --> svc_interaction
   pkg_experimental_computer_use_cua_driver_native --> svc_computerUse
@@ -394,6 +401,8 @@ flowchart LR
   pkg_experimental_ticket --> svc_ticketExecution
   pkg_experimental_ticket --> svc_tickets
   pkg_experimental_translator --> svc_translator
+  pkg_experimental_workstream --> svc_workstreams
+  pkg_experimental_workstream_evidence --> svc_workstreamEvidence
   pkg_experimental_worktree --> svc_worktrees
   pkg_file_reference --> svc_fileReferences
   pkg_file_reference_local --> svc_fileReferences
@@ -742,7 +751,10 @@ flowchart LR
 | `ctx.planMode` | `core` | [`plan-mode`](../packages/plan/plan-mode) | - | - | - | Folds logged plan/mode state, flushes user selections at turn boundaries, renders deployment-owned guidance, registers /plan, and keeps the plan-exit schema stable across transitions. |
 | `ctx.fusionConfig` | `core` | [`fusion-config`](../packages/preset/fusion-config) | - | - | - | Captures immutable role selections and exposes non-inference readiness through an explicitly composed human command. |
 | `ctx.fusionParticipants` | `service` | [`experimental-fusion-participants`](../packages/experimental/fusion-participants) | - | - | - | Retains root and participant Sessions for parked Agent adoption without task activation. |
+| `ctx.workstreamPanel` | `service` | [`experimental-client-ui-workstream`](../packages/experimental/client-ui-workstream) | - | - | - | Runs Ticket question and attention commands as the displayed live Session on its Workstream root and reads aggregated member change requests for the Web panel. |
 | `ctx.tickets` | `core` | [`experimental-ticket`](../packages/experimental/ticket) | - | - | - | Owns durable direct-worker assignments, execution declarations, reports, questions, attention items, coordinator handoff, and terminal outcomes in Session event logs. |
+| `ctx.workstreams` | `core` | [`experimental-workstream`](../packages/experimental/workstream) | - | - | - | Owns Workstream membership, coordinator handoff that moves Ticket coordination, acknowledged peer messages with optional context packets, and Ticket operations on the root Session. |
+| `ctx.workstreamEvidence` | `core` | [`experimental-workstream-evidence`](../packages/experimental/workstream-evidence) | - | - | - | Owns content-addressed evidence versions with digest-verified reads, context packets built from retained versions, and read-only aggregation of member change requests. |
 | `ctx.agentPresets` | `core` | [`agent-preset-registry`](../packages/preset/agent-preset-registry) | - | - | - | Eagerly mounts YAML-declared preset revisions, binds Agents and cold readers to scoped contributions, and retains retired revisions until their last user releases them. |
 | `ctx.commands` | `core` | [`commands`](../packages/interaction/commands) | - | - | - | Plugins register direct human commands without sending invocations to the model. |
 | `ctx.sessionProjections` | `core` | [`session-projection`](../packages/session/session-projection) | - | [`api-session-controller`](../packages/api/session-controller), [`tool-todo`](../packages/todo/tool-todo), [`session-title`](../packages/session/session-title) | - | Domains register state-driven fold units; the eager drive keeps per-session watermark states and the Session controller serves baselines and pushes changed values. |

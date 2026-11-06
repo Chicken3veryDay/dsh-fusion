@@ -687,6 +687,20 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns durable direct-worker assignments, execution declarations, reports, questions, attention items, coordinator handoff, and terminal outcomes in Session event logs.',
   },
   {
+    key: 'workstreams',
+    pkg: 'experimental-workstream',
+    title: 'Durable Workstream membership',
+    mode: 'core',
+    note: 'Owns Workstream membership, coordinator handoff that moves Ticket coordination, acknowledged peer messages with optional context packets, and Ticket operations on the root Session.',
+  },
+  {
+    key: 'workstreamEvidence',
+    pkg: 'experimental-workstream-evidence',
+    title: 'Immutable Workstream evidence',
+    mode: 'core',
+    note: 'Owns content-addressed evidence versions with digest-verified reads, context packets built from retained versions, and read-only aggregation of member change requests.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

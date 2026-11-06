@@ -6,6 +6,7 @@ import type { WorkstreamEvidenceArtifactId as ArtifactId, WorkstreamEvidenceOper
  * Validate and brand an artifact logical identifier.
  * Artifact IDs must be 1–200 characters and cannot contain path separators or path traversal.
  * @param value - logical artifact name or id.
+ * @returns The trimmed, branded artifact id.
  */
 export function WorkstreamEvidenceArtifactId(value: string): ArtifactId {
   const trimmed = value.trim()
@@ -21,6 +22,7 @@ export function WorkstreamEvidenceArtifactId(value: string): ArtifactId {
 /**
  * Validate and brand a stable operation identifier.
  * @param value - caller-supplied idempotency key.
+ * @returns The trimmed, branded operation id.
  */
 export function WorkstreamEvidenceOperationId(value: string): OperationId {
   const trimmed = value.trim()
