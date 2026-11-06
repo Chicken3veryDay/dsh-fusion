@@ -137,7 +137,10 @@ export class ContextTreeService extends Service {
       if (this.ctx.tools.get('context_browse', agent) === undefined) return messages
       // The step's catalog already stands for this tree; compaction since then only moved entries
       // into the dropped list, which the stubs compaction left in the history name for this request.
-      if (pending.some(message => message.source.kind === 'context-tree-catalog')) return messages
+      // Core grants that compaction removed are still restored here.
+      if (pending.some(message => message.source.kind === 'context-tree-catalog')) {
+        return [...messages, ...(await this.pendingCore(agent, signal, pending)).messages]
+      }
       return [...messages, ...await this.pendingContext(agent, signal, pending)]
     })
   }
