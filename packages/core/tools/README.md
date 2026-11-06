@@ -72,6 +72,13 @@ The unified schema DSL supports `string`, `number`, `integer`, `boolean`, `null`
 
 `get(name, scope, toolSet)`, `definitions(scope, toolSet)`, and `schemas(scope, toolSet)` inspect an admitted set; omitting `toolSet` inspects registered definitions without evaluating conditions. `executable(name, scope, toolSet)` is the execution lookup: it applies the set, and without one it excludes conditional registrations. Executor descriptions and sections receive the same selection as `AssembleContext.toolSet`. A presentation transform cannot add or remove callable tools.
 
+<a id="admission-policies"></a>
+### Admission policies
+
+`ctx.tools.registerAdmissionPolicy(policy)` lets a plugin hide registered tools from an agent's steps after each tool's own `when` condition. During `resolve()`, a policy receives `{ agent, modelSelection, signal, candidates }`, where `candidates` is a copy of the admitted names and definitions, and returns the names to keep. A policy only removes: a returned name that is not a candidate fails preparation. Policies compose by intersection: global policies run first, then those registered through the agent scope chain, each in registration order, and each sees only what earlier policies kept. The admitted order is the registration order, whatever order a policy returns, so a policy that keeps a growing set preserves the declaration prefix. A policy that throws or rejects fails step preparation as `TOOL_ADMISSION_FAILED` (`ToolAdmissionError`); cancellation takes precedence and publishes nothing. The registration returns a disposer and is owned by its effect: once disposed, the next step admits the tools again. With no policy registered, admission is exactly the `when` result.
+
+A hidden tool is absent from declarations and executor sections, and the step's `ResolvedToolSet` rejects it at dispatch as `UNKNOWN_TOOL` for model calls and nested PTC program calls alike; omitting a schema is never the only enforcement. Policies must observe cancellation and must not change registrations or perform tool work.
+
 ### Select an executor
 
 Mount one executor in the deployment, preset, or Agent scope. The nearest scope selects the provider; duplicate providers in one scope fail. Native exposes visible capabilities directly; PTC exposes `run_code` and a generated SDK. Executor registration and disposal do not emit `tools/change`; prompt assemblies and batches resolve the current executor when they run.
@@ -134,7 +141,7 @@ The [PTC executor](../tool-executor-ptc/README.md) owns program transport, SDK g
 <a id="extension-points"></a>
 ### Extension points
 
-Tool plugins call `ctx.tools.register()` and their schemas flow into prompt assembly automatically. `tools/pre-execute` is the reorderable allow/deny/ask gate; `ctx.tools.guard()` adds monotonic owner policy after it; `tools/execute` wraps normalized canonical dispatch for timeout, retry, or metrics; `tools/post-execute` may replace content or value, block with feedback, or attach ordered contexts; `tools/result` observes the immutable final outcome. MCP servers discover tools and register them with the server's schemas.
+Tool plugins call `ctx.tools.register()` and their schemas flow into prompt assembly automatically. `ctx.tools.registerAdmissionPolicy()` hides registered tools per step after their `when` conditions. `tools/pre-execute` is the reorderable allow/deny/ask gate; `ctx.tools.guard()` adds monotonic owner policy after it; `tools/execute` wraps normalized canonical dispatch for timeout, retry, or metrics; `tools/post-execute` may replace content or value, block with feedback, or attach ordered contexts; `tools/result` observes the immutable final outcome. MCP servers discover tools and register them with the server's schemas.
 
 </details>
 
@@ -170,7 +177,7 @@ Fixed per-request cost proportional to the visible definitions. Restrictions tha
 
 #### KV Cache effect
 
-Prefix-stable while visible definitions and their order are unchanged. Registration, disposal, or scoped restriction may invalidate reuse from the first changed schema token.
+Prefix-stable while visible definitions and their order are unchanged. Registration, disposal, scoped restriction, or an admission policy that changes the admitted set may invalidate reuse from the first changed schema token; a policy that keeps a stable or growing set in registration order leaves the earlier prefix intact.
 
 ### Tool-call history and results
 

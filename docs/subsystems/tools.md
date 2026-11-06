@@ -221,6 +221,37 @@ interface ResolvedToolSet {
 }
 ```
 
+## Admission policies — hiding admitted tools per step
+
+`ctx.tools.registerAdmissionPolicy(policy)` registers a removal-only policy through `ctx.effect()` and returns its disposer. `ctx.tools.resolve()` runs the policies after every `when` condition has settled: global policies first, then policies registered through the agent's scope chain from the farthest ancestor, each layer in registration order. Each policy receives the activation inputs plus `candidates`, a copy of the admitted names and definitions that earlier policies kept, and returns the names to keep. The result is the intersection; admitted order stays the registration order, so a policy that keeps a growing set preserves the declaration prefix. A policy that throws, rejects, or returns a name outside `candidates` fails preparation as `ToolAdmissionError` (`TOOL_ADMISSION_FAILED`); cancellation takes precedence and publishes nothing. Disposing the registration restores visibility on the next step. Without a registered policy, admission is exactly the `when` result.
+
+The policy decides inside `resolve()`, and the resulting `ResolvedToolSet` is the only admission source for declarations, executor sections, native batches, and nested PTC calls. A hidden tool therefore fails dispatch as `UNKNOWN_TOOL` before the policy pipeline runs, whether the model or a PTC program calls it.
+
+```ts type-equiv
+/** Inputs for a tool admission policy: the step's activation inputs plus the surviving candidates. */
+interface ToolAdmissionContext extends ToolActivationContext {
+  /**
+   * Tools that remain admitted for this step: every visible registration whose
+   * own `when` passed and that earlier policies kept, in stable registration
+   * order. The map is a copy; changing it affects nothing.
+   */
+  readonly candidates: ReadonlyMap<string, ToolDefinition>
+}
+```
+
+```ts type-equiv
+/**
+ * Hide registered tools from one agent step. A policy runs after each tool's own
+ * `when` condition and may only remove: it returns the names of
+ * {@link ToolAdmissionContext.candidates} to keep, in any order. Returning a name
+ * that is not a candidate fails step preparation. Policies must observe
+ * cancellation and must not change registrations or start tool work.
+ * @param context - preparing agent, captured model selection, cancellation, and candidates.
+ * @returns the candidate names to keep for this step.
+ */
+type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>
+```
+
 ## Executors and raw call batches
 
 `ctx.tools.execute()` delegates a complete raw model-call batch to the nearest scoped executor. The service selects the current provider when each batch starts; prompt assembly returns only model input. `agent` is absent for standalone service calls; `log` is absent for programmatic calls outside a model step, such as initialization hooks. An Agent without `log` still scopes tool access but produces no root call/result events. Tool-owned events may still use its Session.
@@ -660,6 +691,20 @@ register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () 
 restrict(filter: ToolRestriction): () => void
 
 /**
+ * Register a policy that may hide admitted tools from the calling scope's
+ * agents on each step, after every tool's own `when` condition. Policies only
+ * remove tools, compose by intersection (global policies first, then the
+ * scope chain from the farthest ancestor, each layer in registration order),
+ * and see the candidates earlier policies kept. A policy that throws or names
+ * a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden
+ * tools are absent from declarations and rejected at dispatch, including
+ * nested PTC calls. With no policy registered, admission is unchanged.
+ * @param policy - removal-only decision evaluated once per step.
+ * @returns the exact disposer; later steps see the tools again.
+ */
+registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void
+
+/**
  * Look up a tool as one scope sees it (scoped
  * shadows global; a restricted-away global reads as absent). Presenters pass
  * the calling agent so the rendered card matches the definition that
@@ -682,9 +727,10 @@ get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition |
 executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
 
 /**
- * Resolve conditions once for this step without changing shared registrations.
- * Cancellation or a rejected condition publishes no partial selection. Removed
- * registrations cannot be restored by a late condition result.
+ * Resolve conditions once for this step without changing shared registrations,
+ * then narrow the result by the registered admission policies.
+ * Cancellation, a rejected condition, or a failing policy publishes no partial
+ * selection. Removed registrations cannot be restored by a late condition result.
  * @param context - preparing agent, captured model selection, and cancellation.
  * @returns the complete selection; the caller disposes it after its tool batch settles.
  */
@@ -750,11 +796,11 @@ Source: [`packages/core/tools/src/index.ts`](../../packages/core/tools/src/index
 
 #### `tools/change` — emit
 
-A tool was registered or unregistered, or a scoped restriction changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent's next assembly.
+A tool was registered or unregistered, or a scoped restriction or admission policy changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent's next assembly.
 
 ```ts cordis-catalog
 /**
- * A tool was registered or unregistered, or a scoped restriction changed.
+ * A tool was registered or unregistered, or a scoped restriction or admission policy changed.
  * Unfiltered registry notification: scoped listeners receive changes from every
  * scope because a global contribution can affect every agent's next assembly.
  * @mode emit

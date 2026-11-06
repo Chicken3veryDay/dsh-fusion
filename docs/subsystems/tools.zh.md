@@ -221,6 +221,37 @@ interface ResolvedToolSet {
 }
 ```
 
+## 准入策略 — 按步骤隐藏已准入的工具
+
+`ctx.tools.registerAdmissionPolicy(policy)` 通过 `ctx.effect()` 注册只能移除的策略并返回其 disposer。`ctx.tools.resolve()` 在所有 `when` 条件完成后运行策略：先运行全局策略，再运行通过 agent 作用域链从最远祖先开始注册的策略，每层按注册顺序。每个策略接收激活输入以及 `candidates`（前面策略保留下来的已准入名称与定义的副本），返回要保留的名称。结果是交集；准入顺序仍是注册顺序，因此保留不断增长集合的策略可以保持声明前缀。策略抛错、拒绝或返回 `candidates` 之外的名称，会以 `ToolAdmissionError`（`TOOL_ADMISSION_FAILED`）使步骤准备失败；取消优先，且不发布任何内容。dispose 注册后，下一步恢复可见性。没有注册策略时，准入结果恰好是 `when` 的结果。
+
+策略在 `resolve()` 内部做出决定，所得的 `ResolvedToolSet` 是声明、执行器分区、原生批次和嵌套 PTC 调用唯一的准入来源。因此无论由模型还是 PTC 程序调用，被隐藏的工具都会在策略流水线运行之前以 `UNKNOWN_TOOL` 分发失败。
+
+```ts type-equiv
+/** Inputs for a tool admission policy: the step's activation inputs plus the surviving candidates. */
+interface ToolAdmissionContext extends ToolActivationContext {
+  /**
+   * Tools that remain admitted for this step: every visible registration whose
+   * own `when` passed and that earlier policies kept, in stable registration
+   * order. The map is a copy; changing it affects nothing.
+   */
+  readonly candidates: ReadonlyMap<string, ToolDefinition>
+}
+```
+
+```ts type-equiv
+/**
+ * Hide registered tools from one agent step. A policy runs after each tool's own
+ * `when` condition and may only remove: it returns the names of
+ * {@link ToolAdmissionContext.candidates} to keep, in any order. Returning a name
+ * that is not a candidate fails step preparation. Policies must observe
+ * cancellation and must not change registrations or start tool work.
+ * @param context - preparing agent, captured model selection, cancellation, and candidates.
+ * @returns the candidate names to keep for this step.
+ */
+type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>
+```
+
 ## 执行器与原始调用批次
 
 `ctx.tools.execute()` 把完整的原始模型调用批次委托给最近作用域的执行器。服务在每个批次开始时选择当前提供者；提示词组装仅返回模型输入。`agent` 在独立服务调用中不存在；`log` 在模型步骤之外的程序调用（例如初始化钩子）中不存在。有 Agent 而没有 `log` 时，调用仍受该 Agent 的工具作用域约束，但不记录根调用／结果事件。工具自身的事件仍可使用 Agent 的 Session。
@@ -660,6 +691,20 @@ register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () 
 restrict(filter: ToolRestriction): () => void
 
 /**
+ * Register a policy that may hide admitted tools from the calling scope's
+ * agents on each step, after every tool's own `when` condition. Policies only
+ * remove tools, compose by intersection (global policies first, then the
+ * scope chain from the farthest ancestor, each layer in registration order),
+ * and see the candidates earlier policies kept. A policy that throws or names
+ * a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden
+ * tools are absent from declarations and rejected at dispatch, including
+ * nested PTC calls. With no policy registered, admission is unchanged.
+ * @param policy - removal-only decision evaluated once per step.
+ * @returns the exact disposer; later steps see the tools again.
+ */
+registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void
+
+/**
  * Look up a tool as one scope sees it (scoped
  * shadows global; a restricted-away global reads as absent). Presenters pass
  * the calling agent so the rendered card matches the definition that
@@ -682,9 +727,10 @@ get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition |
 executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
 
 /**
- * Resolve conditions once for this step without changing shared registrations.
- * Cancellation or a rejected condition publishes no partial selection. Removed
- * registrations cannot be restored by a late condition result.
+ * Resolve conditions once for this step without changing shared registrations,
+ * then narrow the result by the registered admission policies.
+ * Cancellation, a rejected condition, or a failing policy publishes no partial
+ * selection. Removed registrations cannot be restored by a late condition result.
  * @param context - preparing agent, captured model selection, and cancellation.
  * @returns the complete selection; the caller disposes it after its tool batch settles.
  */
@@ -750,11 +796,11 @@ Source: [`packages/core/tools/src/index.ts`](../../packages/core/tools/src/index
 
 #### `tools/change` — emit
 
-A tool was registered or unregistered, or a scoped restriction changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent's next assembly.
+A tool was registered or unregistered, or a scoped restriction or admission policy changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent's next assembly.
 
 ```ts cordis-catalog
 /**
- * A tool was registered or unregistered, or a scoped restriction changed.
+ * A tool was registered or unregistered, or a scoped restriction or admission policy changed.
  * Unfiltered registry notification: scoped listeners receive changes from every
  * scope because a global contribution can affect every agent's next assembly.
  * @mode emit

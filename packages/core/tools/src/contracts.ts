@@ -123,6 +123,27 @@ export interface ToolRegistrationOptions {
   readonly when?: (context: ToolActivationContext) => boolean | Promise<boolean>
 }
 
+/** Inputs for a tool admission policy: the step's activation inputs plus the surviving candidates. */
+export interface ToolAdmissionContext extends ToolActivationContext {
+  /**
+   * Tools that remain admitted for this step: every visible registration whose
+   * own `when` passed and that earlier policies kept, in stable registration
+   * order. The map is a copy; changing it affects nothing.
+   */
+  readonly candidates: ReadonlyMap<string, ToolDefinition>
+}
+
+/**
+ * Hide registered tools from one agent step. A policy runs after each tool's own
+ * `when` condition and may only remove: it returns the names of
+ * {@link ToolAdmissionContext.candidates} to keep, in any order. Returning a name
+ * that is not a candidate fails step preparation. Policies must observe
+ * cancellation and must not change registrations or start tool work.
+ * @param context - preparing agent, captured model selection, cancellation, and candidates.
+ * @returns the candidate names to keep for this step.
+ */
+export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>
+
 /** One step's admitted registrations, also used by nested PTC calls. */
 export interface ResolvedToolSet {
   /** Close admission after the step's tool batch settles. */
@@ -145,6 +166,18 @@ export class ToolActivationError extends HarnessError {
   constructor(name: string, cause: unknown) {
     super(`cannot resolve availability of tool "${name}"`, 'TOOL_ACTIVATION_FAILED', { cause })
     this.name = 'ToolActivationError'
+  }
+}
+
+/** Failure to apply a tool admission policy; the step has no trustworthy tool selection. */
+export class ToolAdmissionError extends HarnessError {
+  /**
+   * Preserve a policy failure without treating it as an empty selection.
+   * @param cause - the policy's rejection or its invalid result.
+   */
+  constructor(cause: unknown) {
+    super('cannot apply tool admission policy', 'TOOL_ADMISSION_FAILED', { cause })
+    this.name = 'ToolAdmissionError'
   }
 }
 

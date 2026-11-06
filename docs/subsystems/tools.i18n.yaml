@@ -17,6 +17,9 @@
 /tools/conditional-activation-step-owned-admission:
   en: 472eefe8fab01e57
   zh: 0b98e74f87a6c9c0
+/tools/admission-policies-hiding-admitted-tools-per-step:
+  en: d1ff2a1497e8840b
+  zh: 92d537f3a460fa97
 /tools/executors-and-raw-call-batches:
   en: 14522295539ea2fb
   zh: 572c462f2c6b70ad

@@ -873,6 +873,16 @@
     },
     {
       "doc": "docs/subsystems/tools.md",
+      "symbol": "ToolAdmissionContext",
+      "source": "packages/core/tools/src/contracts.ts"
+    },
+    {
+      "doc": "docs/subsystems/tools.md",
+      "symbol": "ToolAdmissionPolicy",
+      "source": "packages/core/tools/src/contracts.ts"
+    },
+    {
+      "doc": "docs/subsystems/tools.md",
       "symbol": "ToolRegistrationOptions",
       "source": "packages/core/tools/src/contracts.ts"
     },

@@ -9,10 +9,10 @@ import './events.ts'
 import type { ToolSchema } from '@deepseek-ai/dsh-llm'
 import { projectToolSchema } from './schema.ts'
 import { assertSupportedJsonSchema } from './json-schema.ts'
-import { RUN_CODE_NAME, ToolActivationError } from './contracts.ts'
+import { RUN_CODE_NAME, ToolActivationError, ToolAdmissionError } from './contracts.ts'
 import type {
   ToolDefinition, ToolRestriction, ToolExecution, ToolGuard,
-  ResolvedToolSet, ToolActivationContext, ToolRegistrationOptions,
+  ResolvedToolSet, ToolActivationContext, ToolAdmissionPolicy, ToolRegistrationOptions,
 } from './contracts.ts'
 
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -95,6 +95,11 @@ class GuardLayer {
   isEmpty(): boolean { return this.guards.isEmpty() }
 }
 
+class AdmissionLayer {
+  readonly policies = new AnonymousEntries<ToolAdmissionPolicy>()
+  isEmpty(): boolean { return this.policies.isEmpty() }
+}
+
 /** Concrete tool registry and scoped executor dispatcher. */
 export class ToolsService extends Service {
   static inject = ['systemPrompt']
@@ -107,6 +112,7 @@ export class ToolsService extends Service {
   private readonly scoped = new WeakMap<ScopeKey, Registration>()
   private root: Registration | undefined
   private readonly guards = new ScopedLayers(() => new GuardLayer(), () => {})
+  private readonly admission = new ScopedLayers(() => new AdmissionLayer(), () => { this.ctx.emit('tools/change') })
 
   constructor(ctx: Context) {
     super(ctx, 'tools')
@@ -189,6 +195,26 @@ export class ToolsService extends Service {
   }
 
   /**
+   * Register a policy that may hide admitted tools from the calling scope's
+   * agents on each step, after every tool's own `when` condition. Policies only
+   * remove tools, compose by intersection (global policies first, then the
+   * scope chain from the farthest ancestor, each layer in registration order),
+   * and see the candidates earlier policies kept. A policy that throws or names
+   * a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden
+   * tools are absent from declarations and rejected at dispatch, including
+   * nested PTC calls. With no policy registered, admission is unchanged.
+   * @param policy - removal-only decision evaluated once per step.
+   * @returns the exact disposer; later steps see the tools again.
+   */
+  registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void {
+    return this.admission.effect(
+      this.ctx,
+      layer => layer.policies.append(policy),
+      { label: 'tools.registerAdmissionPolicy()' },
+    )
+  }
+
+  /**
    * Resolve visible tools and pre-restriction names. Restrictions across the
    * scope chain intersect over inherited global and ancestor tools; the viewing
    * scope's own registrations remain exempt. Nearer registrations shadow
@@ -255,9 +281,10 @@ export class ToolsService extends Service {
   }
 
   /**
-   * Resolve conditions once for this step without changing shared registrations.
-   * Cancellation or a rejected condition publishes no partial selection. Removed
-   * registrations cannot be restored by a late condition result.
+   * Resolve conditions once for this step without changing shared registrations,
+   * then narrow the result by the registered admission policies.
+   * Cancellation, a rejected condition, or a failing policy publishes no partial
+   * selection. Removed registrations cannot be restored by a late condition result.
    * @param context - preparing agent, captured model selection, and cancellation.
    * @returns the complete selection; the caller disposes it after its tool batch settles.
    */
@@ -278,6 +305,7 @@ export class ToolsService extends Service {
       signal.throwIfAborted()
       if (enabled) admitted.set(name, definition)
     }
+    await this.applyAdmissionPolicies(context, admitted)
     let closed = false
     return Object.freeze({
       dispose: () => { closed = true },
@@ -294,6 +322,34 @@ export class ToolsService extends Service {
         return visible
       },
     })
+  }
+
+  /**
+   * Narrow the admitted set by each registered policy in order. Policies are
+   * snapshotted when evaluation starts; a rejection or an unknown name fails
+   * preparation, and cancellation takes precedence over either.
+   * @param context - preparing agent, captured model selection, and cancellation.
+   * @param admitted - candidates after `when`; narrowed in place, preserving order.
+   */
+  private async applyAdmissionPolicies(context: ToolActivationContext, admitted: Map<string, ToolDefinition>): Promise<void> {
+    const { signal } = context
+    const policies = [this.admission.global, ...this.admission.chainLayers(context.agent)]
+      .flatMap(layer => [...layer.policies.values()])
+    for (const policy of policies) {
+      let kept: Set<string>
+      try {
+        kept = new Set(await policy({ ...context, candidates: new Map(admitted) }))
+        const unknown = [...kept].filter(name => !admitted.has(name))
+        if (unknown.length > 0) {
+          throw new TypeError(`policy named ${unknown.map(name => `"${name}"`).join(', ')}, which ${unknown.length > 1 ? 'are' : 'is'} not an admitted candidate; policies may only remove tools`)
+        }
+      } catch (cause: unknown) {
+        signal.throwIfAborted()
+        throw new ToolAdmissionError(cause)
+      }
+      signal.throwIfAborted()
+      for (const name of [...admitted.keys()]) if (!kept.has(name)) admitted.delete(name)
+    }
   }
 
   /**

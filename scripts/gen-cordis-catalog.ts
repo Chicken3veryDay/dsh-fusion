@@ -867,6 +867,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   ToolBatchResult: 'tools.md',
   ToolRestriction: 'tools.md',
   ToolActivationContext: 'tools.md',
+  ToolAdmissionPolicy: 'tools.md',
   ToolRegistrationOptions: 'tools.md',
   ResolvedToolSet: 'tools.md',
   ToolSchema: 'tools.md',

@@ -72,6 +72,13 @@ ctx.tools.register(defineTool({
 
 `get(name, scope, toolSet)`、`definitions(scope, toolSet)` 和 `schemas(scope, toolSet)` 读取已准入集合；省略 `toolSet` 时只查看已注册定义，不计算条件。`executable(name, scope, toolSet)` 是执行时的查找：它应用集合，没有集合时排除条件注册。执行器的描述与分区通过 `AssembleContext.toolSet` 接收同一集合。展示变换不能增删可调用工具。
 
+<a id="admission-policies"></a>
+### 准入策略
+
+`ctx.tools.registerAdmissionPolicy(policy)` 让插件在每个工具自身的 `when` 条件之后，按步骤对 agent 隐藏已注册的工具。`resolve()` 期间，策略接收 `{ agent, modelSelection, signal, candidates }`，其中 `candidates` 是已准入名称与定义的副本，策略返回要保留的名称。策略只能移除：返回非候选名称会使步骤准备失败。策略按交集组合：先运行全局策略，再运行通过 agent 作用域链注册的策略，各自按注册顺序，且每个策略只看到前面策略保留下来的工具。无论策略以何种顺序返回，准入顺序都是注册顺序，因此保留不断增长集合的策略可以保持声明前缀。策略抛错或拒绝会以 `TOOL_ADMISSION_FAILED`（`ToolAdmissionError`）使步骤准备失败；取消优先，且不发布任何内容。注册返回 disposer 并由其 effect 持有：dispose 之后，下一步重新准入这些工具。没有注册策略时，准入结果恰好是 `when` 的结果。
+
+被隐藏的工具不会出现在声明和执行器分区中，步骤的 `ResolvedToolSet` 在分发时对模型调用和嵌套的 PTC 程序调用同样以 `UNKNOWN_TOOL` 拒绝；仅省略 schema 绝不是唯一的强制手段。策略必须响应取消，不得改变注册或执行工具操作。
+
 ### 选择执行器
 
 在部署、预设或 Agent 作用域中挂载一个执行器。最近的作用域决定提供者，同一作用域的重复提供者会报错。原生执行器直接公开可见能力；PTC 执行器公开 `run_code` 和生成的 SDK。执行器注册和卸载不触发 `tools/change`；提示词组装和批次执行在运行时解析当前执行器。
@@ -134,7 +141,7 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 <a id="extension-points"></a>
 ### 扩展点
 
-工具插件调用 `ctx.tools.register()`，其 schema 会自动流入提示词组装。`tools/pre-execute` 是可重排的允许／拒绝／询问门禁；`ctx.tools.guard()` 在其后添加单调的拥有方策略；`tools/execute` 为超时、重试或指标包装规范化后的规范分发；`tools/post-execute` 可以替换内容或值、通过反馈阻止，或附加有序上下文；`tools/result` 观测不可变的最终结果。MCP 服务器发现工具后，用服务器的 schema 调用 `ctx.tools.register()`。
+工具插件调用 `ctx.tools.register()`，其 schema 会自动流入提示词组装。`ctx.tools.registerAdmissionPolicy()` 在 `when` 条件之后按步骤隐藏已注册的工具。`tools/pre-execute` 是可重排的允许／拒绝／询问门禁；`ctx.tools.guard()` 在其后添加单调的拥有方策略；`tools/execute` 为超时、重试或指标包装规范化后的规范分发；`tools/post-execute` 可以替换内容或值、通过反馈阻止，或附加有序上下文；`tools/result` 观测不可变的最终结果。MCP 服务器发现工具后，用服务器的 schema 调用 `ctx.tools.register()`。
 
 </details>
 
@@ -170,7 +177,7 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 
 #### KV Cache 影响
 
-只要可见定义及其顺序不变，前缀就保持稳定。注册、dispose 或作用域限制可能从第一个改变的 schema token 起使复用失效。
+只要可见定义及其顺序不变，前缀就保持稳定。注册、dispose、作用域限制或改变准入集合的准入策略可能从第一个改变的 schema token 起使复用失效；按注册顺序保持稳定或不断增长集合的策略不会破坏更早的前缀。
 
 ### 工具调用历史与结果
 

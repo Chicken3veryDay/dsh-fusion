@@ -4463,6 +4463,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the exact disposer that lifts this restriction.',
       },
       {
+        signature: 'registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void',
+        description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls. With no policy registered, admission is unchanged.',
+        parameters: [{ name: 'policy', description: 'removal-only decision evaluated once per step.' }],
+        returns: 'the exact disposer; later steps see the tools again.',
+      },
+      {
         signature: 'get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined',
         description: 'Look up a tool as one scope sees it (scoped shadows global; a restricted-away global reads as absent). Presenters pass the calling agent so the rendered card matches the definition that actually executed.',
         parameters: [{ name: 'name', description: 'the tool name as registered.' }, { name: 'scope', description: 'the viewing scope (the agent); omitted = the global view.' }, { name: 'toolSet', description: 'step admission; omit only to inspect registered definitions.' }],
@@ -4476,7 +4482,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>',
-        description: 'Resolve conditions once for this step without changing shared registrations. Cancellation or a rejected condition publishes no partial selection. Removed registrations cannot be restored by a late condition result.',
+        description: 'Resolve conditions once for this step without changing shared registrations, then narrow the result by the registered admission policies. Cancellation, a rejected condition, or a failing policy publishes no partial selection. Removed registrations cannot be restored by a late condition result.',
         parameters: [{ name: 'context', description: 'preparing agent, captured model selection, and cancellation.' }],
         returns: 'the complete selection; the caller disposes it after its tool batch settles.',
       },
@@ -5838,8 +5844,8 @@ export const EVENT_API: readonly EventApiEntry[] = [
     name: 'tools/change',
     mode: 'emit',
     signature: '\'tools/change\'(): void',
-    summary: 'A tool was registered or unregistered, or a scoped restriction changed.',
-    description: 'A tool was registered or unregistered, or a scoped restriction changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent\'s next assembly.',
+    summary: 'A tool was registered or unregistered, or a scoped restriction or admission policy changed.',
+    description: 'A tool was registered or unregistered, or a scoped restriction or admission policy changed. Unfiltered registry notification: scoped listeners receive changes from every scope because a global contribution can affect every agent\'s next assembly.',
     parameters: [],
   },
   {
@@ -10631,6 +10637,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolAdditionBlock {\n    type: \'tool-addition\';\n    toolName: string;\n    tool?: never;\n}',
   },
   {
+    name: 'ToolAdmissionContext',
+    declaration: 'export interface ToolAdmissionContext extends ToolActivationContext {\n    readonly candidates: ReadonlyMap<string, ToolDefinition>;\n}',
+  },
+  {
+    name: 'ToolAdmissionPolicy',
+    declaration: 'export type ToolAdmissionPolicy = (context: ToolAdmissionContext) => Iterable<string> | Promise<Iterable<string>>;',
+  },
+  {
     name: 'ToolBatchInput',
     declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
   },
@@ -10772,7 +10786,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',

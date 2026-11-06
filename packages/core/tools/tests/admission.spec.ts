@@ -1,0 +1,234 @@
+/** Admission policies hide tools from a step's declarations and from every dispatch path. */
+import { executeModelToolFixture, executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
+import { afterEach, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createScope } from '@deepseek-ai/dsh-scope'
+import type { Scope } from '@deepseek-ai/dsh-scope'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime, { defineTool, ToolAdmissionError } from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition, ToolExecutionInput, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+
+const TEST_MODEL_SELECTION = { provider: 'test', model: 'test' }
+const contexts: Context[] = []
+afterEach(async () => {
+  for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
+})
+
+async function setup() {
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
+  const agent = { id: SessionId('admission') } as Agent
+  let scope!: Scope
+  await ctx.plugin(Object.assign((inner: Context) => { scope = createScope(inner, agent) }, { inject: ['tools'] }))
+  const controller = new AbortController()
+  const calls: string[] = []
+  const tool = (name: string): ToolDefinition => defineTool({
+    name, description: `Operation ${name}.`, parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() { calls.push(name); return `ran:${name}` },
+  })
+  const input = (name: string) => ({
+    agent, name, arguments: {}, callId: ToolCallId(`call-${name}`), signal: controller.signal,
+  })
+  const execute = (name: string, overrides: Partial<ToolExecutionInput> = {}): Promise<ToolExecutionResult> =>
+    executeToolFixture(ctx, { ...input(name), ...overrides })
+  const resolve = () => ctx.tools.resolve({ agent, modelSelection: TEST_MODEL_SELECTION, signal: controller.signal })
+  const declared = (toolSet: Awaited<ReturnType<typeof resolve>>) => ctx.tools.schemas(agent, toolSet).map(schema => schema.name)
+  return { ctx, agent, scope, controller, tool, input, execute, resolve, declared, calls }
+}
+
+it('rejects a model call to a hidden tool through the executor with a typed result', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('alpha'))
+  h.ctx.tools.register(h.tool('beta'))
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'beta'))
+  const toolSet = await h.resolve()
+  const hidden = await executeModelToolFixture(h.ctx, { ...h.input('beta'), toolSet })
+  expect(hidden.isError).toBe(true)
+  expect(hidden.error?.info?.code).toBe('UNKNOWN_TOOL')
+  expect(h.calls).toEqual([])
+  expect((await executeModelToolFixture(h.ctx, { ...h.input('alpha'), toolSet })).isError).toBe(false)
+  expect(h.calls).toEqual(['alpha'])
+})
+
+it('hides a tool from the step declarations and definitions', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('alpha'))
+  h.ctx.tools.register(h.tool('beta'))
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'beta'))
+  const toolSet = await h.resolve()
+  expect(h.declared(toolSet)).toEqual(['alpha'])
+  expect(h.ctx.tools.get('beta', h.agent, toolSet)).toBeUndefined()
+  expect(h.ctx.tools.executable('beta', h.agent, toolSet)).toBeUndefined()
+  // Registered-definition inspection is not step admission.
+  expect(h.ctx.tools.schemas(h.agent).map(schema => schema.name)).toEqual(['alpha', 'beta'])
+})
+
+it('rejects a nested transport dispatch to a hidden tool', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('alpha'))
+  h.ctx.tools.register(h.tool('beta'))
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'beta'))
+  const toolSet = await h.resolve()
+  const parent = Symbol('outer') as ToolExecutionToken
+  const nested = await h.execute('beta', { toolSet, parent })
+  expect(nested.error?.info?.code).toBe('UNKNOWN_TOOL')
+  expect((await h.execute('alpha', { toolSet, parent })).isError).toBe(false)
+  expect(h.calls).toEqual(['alpha'])
+})
+
+it('hides only tools whose own condition passed and lets a policy see just those candidates', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('on'), { when: () => true })
+  h.ctx.tools.register(h.tool('off'), { when: () => false })
+  h.ctx.tools.register(h.tool('plain'))
+  const seen: string[][] = []
+  h.ctx.tools.registerAdmissionPolicy(({ candidates, agent, modelSelection, signal }) => {
+    expect(agent).toBe(h.agent)
+    expect(modelSelection).toBe(TEST_MODEL_SELECTION)
+    expect(signal).toBe(h.controller.signal)
+    seen.push([...candidates.keys()])
+    expect(candidates.get('on')?.name).toBe('on')
+    return candidates.keys()
+  })
+  expect(h.declared(await h.resolve())).toEqual(['on', 'plain'])
+  expect(seen).toEqual([['on', 'plain']])
+})
+
+it('composes policies by intersection in registration order and preserves candidate order', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b', 'c', 'd']) h.ctx.tools.register(h.tool(name))
+  const order: string[] = []
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => {
+    order.push(`first:${[...candidates.keys()].join('')}`)
+    return ['d', 'c', 'b']
+  })
+  h.ctx.tools.registerAdmissionPolicy(async ({ candidates }) => {
+    order.push(`second:${[...candidates.keys()].join('')}`)
+    return new Set(['c', 'b'])
+  })
+  expect(h.declared(await h.resolve())).toEqual(['b', 'c'])
+  expect(order).toEqual(['first:abcd', 'second:bcd'])
+})
+
+it('applies global policies before policies registered through the agent scope', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b']) h.ctx.tools.register(h.tool(name))
+  const order: string[] = []
+  h.scope.ctx.tools.registerAdmissionPolicy(({ candidates }) => { order.push('scoped'); return candidates.keys() })
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => { order.push('global'); return [...candidates.keys()].slice(1) })
+  expect(h.declared(await h.resolve())).toEqual(['b'])
+  expect(order).toEqual(['global', 'scoped'])
+})
+
+it('does not apply an agent-scoped policy to another agent', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  h.scope.ctx.tools.registerAdmissionPolicy(() => [])
+  expect(h.declared(await h.resolve())).toEqual([])
+  const other = { id: SessionId('other') } as Agent
+  const toolSet = await h.ctx.tools.resolve({ agent: other, modelSelection: TEST_MODEL_SELECTION, signal: h.controller.signal })
+  expect(h.ctx.tools.schemas(other, toolSet).map(schema => schema.name)).toEqual(['a'])
+})
+
+it('fails step preparation with the typed error when a policy throws or rejects', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  const cause = new Error('grant store unavailable')
+  const dispose = h.ctx.tools.registerAdmissionPolicy(() => { throw cause })
+  await expect(h.resolve()).rejects.toMatchObject({ name: ToolAdmissionError.name, code: 'TOOL_ADMISSION_FAILED', cause })
+  dispose()
+  h.ctx.tools.registerAdmissionPolicy(() => Promise.reject(cause))
+  await expect(h.resolve()).rejects.toBeInstanceOf(ToolAdmissionError)
+  expect(h.calls).toEqual([])
+})
+
+it('fails step preparation when a policy names a tool it was not given', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  h.ctx.tools.register(h.tool('b'), { when: () => false })
+  h.ctx.tools.registerAdmissionPolicy(() => ['a', 'b'])
+  const failure = await h.resolve().then(() => undefined, (error: unknown) => error)
+  expect(failure).toBeInstanceOf(ToolAdmissionError)
+  expect(((failure as ToolAdmissionError).cause as Error).message).toContain('"b"')
+})
+
+it('cannot add or replace definitions by changing the candidates it receives', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  const original = h.tool('a')
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => {
+    const copy = candidates as Map<string, ToolDefinition>
+    copy.set('forged', h.tool('forged'))
+    copy.set('a', original)
+    return ['a']
+  })
+  const seen: ToolDefinition[] = []
+  h.ctx.tools.registerAdmissionPolicy(({ candidates }) => { seen.push(...candidates.values()); return candidates.keys() })
+  const toolSet = await h.resolve()
+  expect(h.declared(toolSet)).toEqual(['a'])
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).not.toBe(original)
+  expect(h.ctx.tools.get('a', h.agent, toolSet)).toBe(seen[0])
+})
+
+it('reports cancellation instead of publishing a selection when a policy settles late', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  const entered = Promise.withResolvers<undefined>()
+  const decision = Promise.withResolvers<string[]>()
+  h.ctx.tools.registerAdmissionPolicy(() => { entered.resolve(undefined); return decision.promise })
+  const pending = h.resolve()
+  const rejection = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await entered.promise
+  h.controller.abort()
+  decision.resolve(['a'])
+  await rejection
+})
+
+it('reports cancellation, not the typed error, when a policy throws after cancellation', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  h.ctx.tools.registerAdmissionPolicy(() => { h.controller.abort(); throw new Error('late') })
+  await expect(h.resolve()).rejects.toMatchObject({ name: 'AbortError' })
+})
+
+it('restores visibility on the next step after the policy is disposed', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  h.ctx.tools.register(h.tool('b'))
+  const dispose = h.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => name !== 'b'))
+  const hiding = await h.resolve()
+  expect(h.declared(hiding)).toEqual(['a'])
+  dispose()
+  dispose()
+  expect(h.declared(await h.resolve())).toEqual(['a', 'b'])
+  expect((await h.execute('b', { toolSet: hiding })).error?.info?.code).toBe('UNKNOWN_TOOL')
+})
+
+it('removes a policy registered by a plugin when that plugin unloads', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  const fiber = h.ctx.plugin(Object.assign((inner: Context) => { inner.tools.registerAdmissionPolicy(() => []) }, { inject: ['tools'] }))
+  const plugin = await fiber
+  expect(h.declared(await h.resolve())).toEqual([])
+  await plugin.dispose()
+  expect(h.declared(await h.resolve())).toEqual(['a'])
+})
+
+it('keeps an unfiltered step identical to the pre-policy selection', async () => {
+  const h = await setup()
+  for (const name of ['z', 'a', 'm']) h.ctx.tools.register(h.tool(name))
+  const before = h.declared(await h.resolve())
+  const dispose = h.ctx.tools.registerAdmissionPolicy(({ candidates }) => candidates.keys())
+  expect(h.declared(await h.resolve())).toEqual(before)
+  dispose()
+  expect(before).toEqual(['z', 'a', 'm'])
+})
