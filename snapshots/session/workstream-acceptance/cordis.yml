@@ -2,7 +2,8 @@
 # board, Workstream owns membership, coordinator handoff and acknowledged peer messaging,
 # and Workstream Evidence owns immutable shared artifacts. Agent Team is not mounted:
 # Workstream delivers messages through the Subagent inbox and its Ticket tools replace
-# the Team task board. Base delegation and Subagent tools stay as they are.
+# the Team task board. Base delegation and Subagent tools stay as they are. The Web
+# Workstream panel reads the three projections and sends Ticket commands as the caller.
 
 - insert:
     - id: tickets
@@ -43,3 +44,6 @@
 
     - id: tool-workstream-evidence
       name: '@deepseek-ai/dsh-experimental-workstream-profile/workstream-evidence-tools'
+
+    - id: ui-workstream
+      name: '@deepseek-ai/dsh-experimental-client-ui-workstream'

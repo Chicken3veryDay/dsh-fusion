@@ -40,8 +40,10 @@ const CWD_ROOTED_PATH_RE = /\{\{cwd\}\}(?:[\\/][^\s<>"'`]+)+/g
 const PATH_TAG_RE = /(<path>)([^<]*)(<\/path>)/g
 const ADDITIONAL_INSTRUCTIONS_PATH_RE = /(Additional instructions from: )([^\r\n]+)/g
 const EMBEDDED_EVENT_TIME_RE = /^(  "time": )\d+(?=,\r?$)/gm
-/** Epoch-millisecond Ticket clocks inside JSON text that a Ticket tool returned to the model. */
-const EMBEDDED_TICKET_CLOCK_RE = /("(?:createdAt|updatedAt|at)":)\d{12,}/g
+/** Epoch-millisecond Ticket clocks inside JSON text that a Ticket or Workstream tool returned to the model. */
+const EMBEDDED_TICKET_CLOCK_RE = /(?<key>"(?:createdAt|updatedAt|at)":)\d{12,}/g
+/** Tools whose JSON results embed service-owned Ticket clocks; other tool text is never rewritten. */
+const TICKET_CLOCK_TOOL_RE = /^(?:ticket|workstream)_/
 const EVENT_READ_OMITTED_BYTES_RE = /(\r?\n\r?\n\(Omitted )\d+( bytes\.)/g
 const EVENT_READ_TARGET_REGION_RE
   = /^Session [^\r\n]+ — [^\r\n]+\r?\nTarget event seq \d+:\r?\n```json\r?\n\{\r?\n[\s\S]*?(?=\r?\n```(?:\r?\n|$)|\r?\n\r?\n\(Omitted )/
@@ -384,6 +386,12 @@ export function normalizeSessionLog(
     }
     return value
   }
+  const ticketCallIds = new Set<string>()
+  for (const record of parsed) {
+    if (record.type !== 'tool/call' || record.data === null || typeof record.data !== 'object') continue
+    const { callId, name } = record.data as { callId?: unknown; name?: unknown }
+    if (typeof callId === 'string' && typeof name === 'string' && TICKET_CLOCK_TOOL_RE.test(name)) ticketCallIds.add(callId)
+  }
   const records = parsed.map((raw) => {
     const record = jobTokens.size === 0 ? raw : replaceJobs(raw) as Record<string, unknown>
     if (record.type === 'session') {
@@ -415,7 +423,7 @@ export function normalizeSessionLog(
       if ('durationMs' in data) data.durationMs = 0
     }
     normalizeFeedbackClocks(record)
-    normalizeTicketClocks(record)
+    normalizeTicketClocks(record, ticketCallIds)
     if ((record.type === 'job/registered' || record.type === 'job/settled')
       && record.data !== null && typeof record.data === 'object') {
       const data = record.data as Record<string, unknown>
@@ -623,8 +631,11 @@ function zeroTicketClocks(value: unknown): void {
   }
 }
 
-/** Normalize Ticket wall-clock values in `ticket/state` events and in JSON text of Ticket tool results. */
-function normalizeTicketClocks(record: Record<string, unknown>): void {
+/**
+ * Normalize Ticket wall-clock values in `ticket/state` events and in the JSON text of results for the calls in `ticketCallIds`.
+ * Ticket stamps `Date.now()` and has no injectable clock, so these values are zeroed like the feedback and job clocks.
+ */
+function normalizeTicketClocks(record: Record<string, unknown>, ticketCallIds: ReadonlySet<string>): void {
   if (record.data === null || typeof record.data !== 'object') return
   const data = record.data as Record<string, unknown>
   if (record.type === 'ticket/state') {
@@ -632,12 +643,12 @@ function normalizeTicketClocks(record: Record<string, unknown>): void {
     return
   }
   if (record.type !== 'tool/result' || data.message === null || typeof data.message !== 'object') return
-  const content = (data.message as { content?: unknown }).content
-  if (!Array.isArray(content)) return
+  const { content, toolCallId } = data.message as { content?: unknown; toolCallId?: unknown }
+  if (!Array.isArray(content) || typeof toolCallId !== 'string' || !ticketCallIds.has(toolCallId)) return
   for (const block of content) {
     if (block === null || typeof block !== 'object') continue
     const text = (block as { text?: unknown }).text
-    if (typeof text === 'string') (block as { text: string }).text = text.replace(EMBEDDED_TICKET_CLOCK_RE, '$10')
+    if (typeof text === 'string') (block as { text: string }).text = text.replace(EMBEDDED_TICKET_CLOCK_RE, '$<key>0')
   }
 }
 

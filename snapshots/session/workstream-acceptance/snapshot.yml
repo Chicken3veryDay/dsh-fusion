@@ -6,5 +6,6 @@ recording: authored
 header:
   class: workstream-acceptance
   pin: true
+processTimeoutMs: 120000
 workspace:
   final: true

@@ -165,15 +165,17 @@ it('drives specification, candidate, and independent check tools with caller aut
   await expect(call(ctx, 'ticket_revise', { ...common, expected_revision: 1, acceptance_criteria: criteria }, worker)).rejects.toMatchObject({ code: 'TICKET_AUTHORITY' })
   const revised = await call(ctx, 'ticket_revise', { ...common, expected_revision: 1, acceptance_criteria: criteria }, root) as {
     revision: number
-    specification: { revision: number, acceptanceCriteria: { id: string }[] }
+    specification: { revision: number; acceptanceCriteria: { id: string }[] }
   }
   expect(revised.specification).toMatchObject({ revision: 2, acceptanceCriteria: [{ id: 'built' }, { id: 'validated' }] })
   const assigned = await ctx.tickets.assign(root.session, {
     ticketId: created.id, expectedRevision: revised.revision, actorId: root.id, ownerId: worker.id, subject: 'Build',
   })
   const assignmentId = assigned.assignments[0]!.id
-  const claimed = await ctx.tickets.claim(root.session, { ticketId: created.id, assignmentId, expectedRevision: assigned.revision, actorId: worker.id })
-  const reported = await call(ctx, 'ticket_report', { ...common, assignment_id: assignmentId, expected_revision: claimed.revision, kind: 'result', summary: 'Built' }, worker) as { revision: number }
+  const claim = { ticketId: created.id, assignmentId, expectedRevision: assigned.revision, actorId: worker.id }
+  const claimed = await ctx.tickets.claim(root.session, claim)
+  const result = { ...common, assignment_id: assignmentId, expected_revision: claimed.revision, kind: 'result', summary: 'Built' }
+  const reported = await call(ctx, 'ticket_report', result, worker) as { revision: number }
   const submitted = await call(ctx, 'ticket_submit_candidate', {
     ...common, expected_revision: reported.revision, candidate_id: 'cand-1', spec_revision: 2, assignment_ids: [assignmentId],
     content: { kind: 'artifact', reference: 'artifact://build/1', digest: 'sha256:' + 'a'.repeat(64) },

@@ -114,6 +114,8 @@ export interface SnapshotManifest {
   permission?: SnapshotPermission
   /** Test-only string environment additions needed by the declared composition. */
   environment?: Record<string, string>
+  /** Headless process deadline in milliseconds for a scenario whose scripted turns outlast the 30 s default. */
+  processTimeoutMs?: number
   /** Workspace setup and external final-state ownership. */
   workspace?: SnapshotWorkspaceManifest
   /** Exceptional controller input absent for ordinary log-driven scenarios. */
@@ -219,6 +221,7 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       'platform',
       'permission',
       'environment',
+      'processTimeoutMs',
       'workspace',
       'input',
       'session',
@@ -315,6 +318,10 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       environment = value as Record<string, string>
     }
 
+    if (root.processTimeoutMs !== undefined
+      && (!Number.isInteger(root.processTimeoutMs) || Number(root.processTimeoutMs) < 30_000 || Number(root.processTimeoutMs) > 300_000)) {
+      throw new Error('manifest.processTimeoutMs must be an integer from 30000 to 300000')
+    }
     let workspace: SnapshotWorkspaceManifest | undefined
     if (root.workspace !== undefined) {
       const value = record(root.workspace, 'manifest.workspace')
@@ -420,6 +427,7 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       ...(platform === undefined ? {} : { platform }),
       ...(permission === undefined ? {} : { permission }),
       ...(environment === undefined ? {} : { environment }),
+      ...(root.processTimeoutMs === undefined ? {} : { processTimeoutMs: Number(root.processTimeoutMs) }),
       ...(workspace === undefined ? {} : { workspace }),
       ...(input === undefined ? {} : { input }),
       ...(session === undefined ? {} : { session }),

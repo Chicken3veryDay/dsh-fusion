@@ -9,7 +9,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execa } from 'execa'
 import { describe, expect, it } from 'vitest'
 import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
@@ -21,6 +21,7 @@ const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const scenarioDir = join(repoRoot, 'snapshots/session/workstream-acceptance')
 const defaultComposition = join(repoRoot, 'snapshots/session/text-turn')
 const replayHead = fileURLToPath(new URL('./fixtures/replay-head.cordis.yml', import.meta.url))
+const restartPlugin = pathToFileURL(fileURLToPath(new URL('./fixtures/restart-script-llm.mjs', import.meta.url))).href
 const profilePatch = fileURLToPath(new URL('../cordis.patch.yml', import.meta.url))
 const PROFILE = '@deepseek-ai/dsh-experimental-workstream-profile'
 const TICKET = 'accept-ticket'
@@ -28,6 +29,8 @@ const TICKET = 'accept-ticket'
 interface LogEvent { readonly type: string; readonly data?: unknown; readonly parentSession?: string; readonly id?: string }
 interface Session { readonly id: string; readonly parent: string | undefined; readonly events: LogEvent[] }
 interface TicketRecord {
+  readonly id: string
+  readonly revision: number
   readonly status: string
   readonly coordinatorId: string
   readonly currentCandidateId?: string
@@ -114,7 +117,7 @@ async function runScenario(): Promise<{ sessions: Session[]; stdout: string; hom
     },
   })
   const result = await execa(launch.command, launch.args, {
-    cwd, env: launch.env, input: '', timeout: 90_000, killSignal: 'SIGKILL', reject: false,
+    cwd, env: launch.env, input: '', timeout: 180_000, killSignal: 'SIGKILL', reject: false,
   })
   expect(result.exitCode, `dsh exited unexpectedly.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0)
   return { sessions: await readSessions(home), stdout: result.stdout, home, cwd }
@@ -127,6 +130,54 @@ function latest<T>(events: readonly LogEvent[], type: string, pick: (data: never
 function toolErrors(events: readonly LogEvent[]): string[] {
   return latest(events, 'tool/result', (data: { message: { isError: boolean; content: { text: string }[] } }) => data.message)
     .filter(message => message.isError).map(message => message.content[0]!.text)
+}
+
+/** Reopen the lead Session in a second `dsh` process whose scripted model issues `script`, and return its tool results. */
+async function reopenLead(
+  cwd: string, home: string, leadId: string, script: readonly { name: string; arguments: Record<string, unknown> }[],
+): Promise<{ results: { id: string; isError: boolean; text: string }[]; stdout: string }> {
+  await writeFile(join(home, 'profiles', 'headless', 'cordis.patch.yml'), [
+    '- id: llm-deepseek',
+    '  disabled: true',
+    '- id: session-persistence-jsonl',
+    '  config:',
+    `    root: '${join(home, 'sessions')}'`,
+    '    compression: none',
+    '- insert:',
+    '    - id: workstream-restart-script-llm',
+    `      name: '${restartPlugin}'`,
+    '',
+  ].join('\n'))
+  const output = join(cwd, 'restart-results.json')
+  const launch = resolveExampleLaunch({
+    srcBin: dshBinScript,
+    configArgs: ['--profile', 'headless', '--session-id', leadId, 'Reopen the Workstream and read its state.'],
+    tsconfigPath,
+    env: {
+      DSH_HOME: home,
+      DSH_AGENTS_HOME: join(cwd, '.agents'),
+      DSH_TELEMETRY_DISABLED: '1',
+      DEEPSEEK_API_KEY: 'restart-replay-key',
+      WORKSTREAM_RESTART_SCRIPT: JSON.stringify(script),
+      WORKSTREAM_RESTART_OUT: output,
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS,
+        '--disable-warning=ExperimentalWarning',
+        '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON',
+      ].filter(Boolean).join(' '),
+    },
+  })
+  const result = await execa(launch.command, launch.args, {
+    cwd, env: launch.env, input: '', timeout: 180_000, killSignal: 'SIGKILL', reject: false,
+  })
+  expect(result.exitCode, `restart dsh exited unexpectedly.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0)
+  return { results: JSON.parse(await readFile(output, 'utf8')) as never, stdout: result.stdout }
+}
+
+async function sessionLogs(home: string): Promise<Map<string, string>> {
+  const logs = new Map<string, string>()
+  for (const file of await sessionFiles(join(home, 'sessions'))) logs.set(file, await readFile(file, 'utf8'))
+  return logs
 }
 
 describe('Workstream first acceptance scenario through the opt-in profile', () => {
@@ -195,7 +246,41 @@ describe('Workstream first acceptance scenario through the opt-in profile', () =
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }
-  }, 150_000)
+  }, 300_000)
+
+  it('reopens the lead Session in a second process: the accepted Ticket and coordinator replay, and stale commands append nothing', async () => {
+    const { sessions, cwd, home } = await runScenario()
+    try {
+      const lead = sessions.find(session => session.parent === undefined)!
+      const before = await sessionLogs(home)
+      const finalState = latest(lead.events, 'ticket/state', (data: { ticket: TicketRecord }) => data.ticket).filter(ticket => ticket.id === TICKET).at(-1)!
+      const common = { root_session_id: lead.id }
+      const { results, stdout } = await reopenLead(cwd, home, lead.id, [
+        { name: 'ticket_get', arguments: { ...common, ticket_id: TICKET } },
+        { name: 'workstream_get', arguments: common },
+        { name: 'ticket_complete', arguments: { ...common, ticket_id: TICKET, expected_revision: finalState.revision, summary: 'Accept again' } },
+        { name: 'ticket_complete', arguments: { ...common, ticket_id: TICKET, expected_revision: 1, summary: 'Accept from a stale read' } },
+      ])
+      expect(stdout).toContain('WORKSTREAM_RESTART_OK')
+      expect(results.map(result => result.isError)).toEqual([false, false, true, true])
+      const restored = JSON.parse(results[0]!.text) as TicketRecord
+      expect(restored).toMatchObject({ status: 'completed', currentCandidateId: 'cand-2', coordinatorId: finalState.coordinatorId, revision: finalState.revision })
+      expect(restored.candidates.map(candidate => candidate.id)).toEqual(['cand-1', 'cand-2'])
+      expect(JSON.parse(results[1]!.text)).toMatchObject({ ownerSessionId: lead.id, coordinatorId: finalState.coordinatorId })
+
+      // The reopened Session only appended its own turn; the rejected commands wrote no Ticket or Workstream state.
+      const after = await sessionLogs(home)
+      expect([...after.keys()].sort()).toEqual([...before.keys()].sort())
+      const leadFile = [...before.keys()].find(file => before.get(file)!.includes(`"id":"${lead.id}"`) && !before.get(file)!.includes('"parentSession"'))!
+      expect(after.get(leadFile)!.startsWith(before.get(leadFile)!)).toBe(true)
+      const appended = after.get(leadFile)!.slice(before.get(leadFile)!.length).split('\n').filter(line => line.length > 0).map(line => JSON.parse(line) as LogEvent)
+      expect(appended.some(event => event.type === 'turn/start')).toBe(true)
+      expect(appended.filter(event => event.type === 'ticket/state' || event.type === 'workstream/state')).toEqual([])
+      for (const file of before.keys()) if (file !== leadFile) expect(after.get(file), `${file} was rewritten by the reopened process`).toBe(before.get(file))
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  }, 420_000)
 })
 
 describe('Workstream acceptance negative cases are covered by named tests', () => {
