@@ -77,6 +77,12 @@ export class WorkstreamService extends Service {
   protected async [Service.init](): Promise<void> {
     this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
     this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')
+    // A direct `tickets.create` that defaults to the owner names the sitting coordinator, so it cannot disagree with the snapshot.
+    // An explicit other coordinator stays the caller's choice; `handoff` moves Tickets held by any member.
+    this.ctx.effect(() => this.ctx.tickets.registerCoordinatorAuthority((session, requested) => {
+      const snapshot = this.projection.stateOf(session).snapshot
+      return snapshot !== null && requested === snapshot.ownerSessionId ? snapshot.coordinatorId : undefined
+    }), 'workstreams.ticketCoordinator()')
   }
 
   /** Open one root-owned Workstream, idempotently for the same creation key.
@@ -92,7 +98,7 @@ export class WorkstreamService extends Service {
       if (prior !== null) {
         if (prior.operationId !== request.operationId || prior.title !== request.title) throw new
         WorkstreamError('Root already owns a different Workstream', 'WORKSTREAM_CONFLICT')
-        return structuredClone(prior)
+        return this.durable(caller, structuredClone(prior))
       }
       this.text(request.title, 'title')
       if (caller.session.header.parentSession !== undefined) throw new
@@ -157,7 +163,7 @@ export class WorkstreamService extends Service {
         if (prior.name !== request.name || prior.provider !== request.provider || prior.prompt !== request.prompt ||
           prior.description !== request.description) throw new WorkstreamError('Member operation id was reused with different input',
           'WORKSTREAM_CONFLICT')
-        if (prior.phase === 'active') return prior
+        if (prior.phase === 'active') return this.durable(owner, prior)
         if (prior.phase !== 'provisioning') throw new
         WorkstreamError('Member is stopped or stopping; use a new operation id and name', 'WORKSTREAM_CONFLICT')
         return this.reconcileMember(owner, snapshot, prior, request.signal)
@@ -203,7 +209,8 @@ export class WorkstreamService extends Service {
    * @param rootSessionId - explicit technical owner.
    * @param request - CAS revision and active new coordinator.
    * @returns committed next snapshot.
-   * @throws WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.
+   * @throws WorkstreamPartialHandoffError when some Tickets could not move, were handed back by a competing writer, or the
+   * service began stopping after some moved; the coordinator is unchanged and the same call may be retried.
    */
   async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }):
   Promise<WorkstreamSnapshot> {
@@ -214,9 +221,10 @@ export class WorkstreamService extends Service {
       this.target(snapshot, request.coordinatorId)
       const next: WorkstreamSnapshot = { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId }
       this.fit(next)
-      const moved = await this.moveTickets(owner, snapshot, request.coordinatorId)
+      const moved = await this.moveTicketsAndAppend(owner, snapshot, next)
       try {
-        return await this.commit(owner, next)
+        await this.ctx.sessions.flush(owner.session)
+        return structuredClone(next)
       } catch (error: unknown) {
         if (moved === 0) throw error
         throw new WorkstreamError('Tickets moved but the Workstream coordinator commit is uncertain; refresh and inspect before retrying',
@@ -242,7 +250,7 @@ export class WorkstreamService extends Service {
         if (prior.senderId !== caller.id || prior.targetId !== request.targetId || prior.text !== request.text ||
           JSON.stringify(prior.context) !== JSON.stringify(request.context ?? null)) throw new
         WorkstreamError('Message operation id was reused with different input', 'WORKSTREAM_CONFLICT')
-        if (prior.delivery.phase !== 'intent') return prior
+        if (prior.delivery.phase !== 'intent') return this.durable(owner, prior)
         return this.reconcileMessage(owner, snapshot, prior, request.signal)
       }
       this.text(request.text, 'text')
@@ -282,7 +290,7 @@ export class WorkstreamService extends Service {
       WorkstreamError('Only the message recipient can acknowledge it', 'WORKSTREAM_UNAUTHORIZED')
       if (message.delivery.phase === 'intent') throw new WorkstreamError('Reconcile inbox acceptance before acknowledgement',
         'WORKSTREAM_UNKNOWN')
-      if (message.delivery.phase === 'processed') return message
+      if (message.delivery.phase === 'processed') return this.durable(owner, message)
       return this.saveMessage(owner, snapshot, { ...message, delivery: { ...message.delivery, phase: 'processed' } })
     })
   }
@@ -344,14 +352,14 @@ export class WorkstreamService extends Service {
       if (member.phase !== 'stopping') await this.saveMember(owner, snapshot, { ...member, phase: 'stopping' })
       return { owner, stopped: undefined }
     })
-    if (begun.stopped !== undefined) return begun.stopped
+    if (begun.stopped !== undefined) return this.durable(begun.owner, begun.stopped)
     // Drain outside the root queue: the child's own queued Workstream tools must be able to finish for it to settle.
     await this.ctx.subagents.drainChildren(begun.owner, [targetId])
     return this.enqueue(rootSessionId, async () => {
       const snapshot = this.state(begun.owner)
       const current = snapshot.members.find(candidate => candidate.id === targetId)
       if (current === undefined) throw new WorkstreamError('Member disappeared while stopping', 'WORKSTREAM_UNKNOWN')
-      if (current.phase === 'stopped') return current
+      if (current.phase === 'stopped') return this.durable(begun.owner, current)
       return this.saveMember(begun.owner, snapshot, { ...current, phase: 'stopped', diagnostic: null })
     })
   }
@@ -415,27 +423,48 @@ export class WorkstreamService extends Service {
     WorkstreamError('Current Workstream coordinator authority is required; the owner may reclaim it by handoff', 'WORKSTREAM_UNAUTHORIZED')
     return membership
   }
-  /** Hand every open Ticket coordinated by a Workstream member to the target; unmoved Tickets are reported, never skipped.
-   * Re-lists after each pass so Tickets created through `ctx.tickets` while earlier ones moved are included. The caller
-   * commits the Workstream snapshot synchronously after the final empty pass, so no listed Ticket is left behind.
-   * @returns number of Tickets moved by this call. */
-  private async moveTickets(owner: Agent, snapshot: WorkstreamSnapshot, coordinatorId: SessionId): Promise<number> {
-    const moved: TicketId[] = []
+  /** Hand every open Ticket coordinated by a Workstream member to the new coordinator, then append the next snapshot.
+   *
+   * The final empty Ticket list and the snapshot append run in one synchronous step, so no Ticket can be created between
+   * them; a Ticket created earlier is in the list and moves, and one created later names the new coordinator through the
+   * Ticket coordinator authority. Passes repeat while Tickets created during earlier moves remain. Each Ticket moves at
+   * most once per call: one that comes back under another coordinator, or any move after service shutdown begins, ends the
+   * call with a partial outcome instead of continuing. The snapshot is only appended when no Ticket is left behind.
+   * @returns number of Tickets moved by this call.
+   * @throws WorkstreamPartialHandoffError when a Ticket could not move, was handed back, or the service is stopping. */
+  private async moveTicketsAndAppend(owner: Agent, snapshot: WorkstreamSnapshot, next: WorkstreamSnapshot): Promise<number> {
+    const coordinatorId = next.coordinatorId
+    const moved = new Set<TicketId>()
+    const stopIfDisposed = (open: readonly TicketId[]): void => {
+      if (!this.lifetime.signal.aborted) return
+      const cause = new WorkstreamError('Workstream service has stopped', 'WORKSTREAM_DISPOSED', { cause: this.lifetime.signal.reason })
+      if (moved.size === 0) throw cause
+      throw new WorkstreamPartialHandoffError([...moved], open.filter(id => !moved.has(id)), { cause })
+    }
     for (;;) {
       const open = this.ctx.tickets.list(owner.session).filter(ticket => ticket.terminalOutcome === undefined
         && ticket.coordinatorId !== coordinatorId && snapshot.members.some(member => member.id === ticket.coordinatorId))
-      if (open.length === 0) return moved.length
+      const openIds = open.map(ticket => ticket.id)
+      stopIfDisposed(openIds)
+      if (open.length === 0) { this.append(owner, next); return moved.size }
       const pending: TicketId[] = []
       let cause: unknown
       for (const ticket of open) {
+        stopIfDisposed(openIds)
+        if (moved.has(ticket.id)) {
+          pending.push(ticket.id)
+          cause ??= new WorkstreamError(`Ticket ${ticket.id} was handed back during the handoff; resolve the competing writer and retry`,
+            'WORKSTREAM_CONFLICT')
+          continue
+        }
         try {
           await this.ctx.agents.withInitiator(owner, () =>
             this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
               actorId: owner.id, newCoordinatorId: coordinatorId }))
-          moved.push(ticket.id)
+          moved.add(ticket.id)
         } catch (error: unknown) { pending.push(ticket.id); cause ??= error }
       }
-      if (pending.length > 0) throw new WorkstreamPartialHandoffError(moved, pending, { cause })
+      if (pending.length > 0) throw new WorkstreamPartialHandoffError([...moved], pending, { cause })
     }
   }
   private target(snapshot: WorkstreamSnapshot, id: SessionId): WorkstreamMember {
@@ -460,11 +489,21 @@ export class WorkstreamService extends Service {
     if (bytes(snapshot) > this.config.maxSnapshotBytes) throw new
     WorkstreamError('Complete Workstream state exceeds maxSnapshotBytes', 'WORKSTREAM_LIMIT')
   }
-  private async commit(owner: Agent, snapshot: WorkstreamSnapshot): Promise<WorkstreamSnapshot> {
+  /** Synchronously make a snapshot the live projection state; durability is a separate `flush`. */
+  private append(owner: Agent, snapshot: WorkstreamSnapshot): void {
     this.fit(snapshot)
     owner.session.append('workstream/state', { version: 1, snapshot: structuredClone(snapshot) })
+  }
+  private async commit(owner: Agent, snapshot: WorkstreamSnapshot): Promise<WorkstreamSnapshot> {
+    this.append(owner, snapshot)
     await this.ctx.sessions.flush(owner.session)
     return structuredClone(snapshot)
+  }
+  /** An idempotent success must not outrun durability: an earlier attempt may have appended `value` and failed its flush.
+   * Flushing the owning Session again retries that write and propagates a continuing storage failure. */
+  private async durable<T>(owner: Agent, value: T): Promise<T> {
+    await this.ctx.sessions.flush(owner.session)
+    return value
   }
   private async saveMember(owner: Agent, snapshot: WorkstreamSnapshot, member: WorkstreamMember): Promise<WorkstreamMember> {
     await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, members: snapshot.members.map(candidate =>

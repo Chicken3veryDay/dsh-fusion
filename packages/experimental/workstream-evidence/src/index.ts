@@ -95,6 +95,8 @@ export class WorkstreamEvidenceService extends Service {
     rootSessionId: SessionId,
     request: PublishEvidenceRequest,
   ): Promise<WorkstreamEvidenceVersionRecord> {
+    // The caller may reuse its buffer while this publish waits or saves; the digest, size check and saved bytes use this copy.
+    const bytes = typeof request.content === 'string' ? Buffer.from(request.content, 'utf8') : Uint8Array.from(request.content)
     this.live(caller)
     this.ctx.workstreams.requireMembership(caller, rootSessionId)
 
@@ -108,11 +110,6 @@ export class WorkstreamEvidenceService extends Service {
       if (!Number.isSafeInteger(request.expectedVersion) || request.expectedVersion < 1) {
         throw new WorkstreamEvidenceError('expectedVersion must be a positive integer', 'WORKSTREAM_EVIDENCE_INVALID_INPUT')
       }
-
-      const rawBytes = typeof request.content === 'string'
-        ? Buffer.from(request.content, 'utf8')
-        : request.content
-      const bytes = new Uint8Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength)
 
       if (bytes.byteLength > this.config.maxBytesPerArtifact) {
         throw new WorkstreamEvidenceError(
@@ -137,6 +134,8 @@ export class WorkstreamEvidenceService extends Service {
               && ver.version === request.expectedVersion
               && ver.digest === digest
             ) {
+              // An earlier attempt may have appended this version and failed its flush; success requires durability.
+              await this.ctx.sessions.flush(owner.session)
               return structuredClone(ver)
             }
             throw new WorkstreamEvidenceError(

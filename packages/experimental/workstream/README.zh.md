@@ -28,13 +28,13 @@ Workstream 是一个根 Session 的持久化团队记录。它把完整的 Works
 
 服务提供 `open`、`get`、`list`、`requireMembership`、`addMember`、`handoff`、`sendMessage`、`acknowledge`、`waitForChange`、`interrupt`、`stop`、`createTicket`、`assignTicket` 和 `endTicket`。只有根 Session 可以调用 `open`。一个根 Session 至多拥有一个 Workstream，对同一 `operationId` 和标题重复调用 `open` 是幂等的。所有者是角色为 `owner` 的第一个成员，同时也是第一任协调者。`addMember` 通过指定的 Subagent 提供方创建可继续的子 Session，该提供方必须实现 `prepareContinuable`。`handoff` 把协调者权限转移给一个活跃成员，并接收 `expectedRevision`；版本已变化时返回 `WORKSTREAM_CONFLICT`。交接后，子 Session 仍以根 Session 为父。协调者操作（`addMember`、`handoff`、`interrupt`、`stop`）要求调用方是不可变的所有者或当前协调者。`assignTicket` 和 `endTicket` 要求调用方就是在任的协调者，因为 Ticket 会把调用方记为 actor；所有者要先用 `handoff` 取回该角色。`stop` 拒绝所有者和当前协调者，因此协调者要先交接，才能停止自己。`stop` 在根队列内提交 `stopping` 阶段，子 Session 排空期间释放该队列，使其自身排队的 Workstream 工具调用可以完成，然后根据当前状态提交 `stopped`。
 
-每个修改操作都接收由调用方选定的 `operationId`。用不同输入复用同一 id 会返回 `WORKSTREAM_CONFLICT`。结果不确定后，成员创建和消息投递不会重复执行：服务返回 `WORKSTREAM_UNKNOWN`，用相同 id 重试时，服务会先读取子 Session 日志确认是否已接收，再记录进展。消息依次经过 `intent`、`accepted`（接收方收件箱已收下）和 `processed`（接收方调用了 `acknowledge`）。接收方空闲并不意味着 `processed`。`sendMessage` 接收可选的 `WorkstreamContextPacket`，它会随消息写入日志并投递给接收方。
+每个修改操作都接收由调用方选定的 `operationId`。用不同输入复用同一 id 会返回 `WORKSTREAM_CONFLICT`。结果不确定后，成员创建和消息投递不会重复执行：服务返回 `WORKSTREAM_UNKNOWN`，用相同 id 重试时，服务会先读取子 Session 日志确认是否已接收，再记录进展。消息依次经过 `intent`、`accepted`（接收方收件箱已收下）和 `processed`（接收方调用了 `acknowledge`）。接收方空闲并不意味着 `processed`。`sendMessage` 接收可选的 `WorkstreamContextPacket`，它会随消息写入日志并投递给接收方。重试时若发现先前结果已记录（已打开的 Workstream、已激活的成员、已接收或已处理的消息、已停止的成员），会先刷新根 Session 再返回，因此首次尝试在追加后写入失败时，不会被报告为已提交；存储故障持续时重试会被拒绝。
 
 `waitForChange` 在根 Session 追加任意事件（包括 Ticket 事件）时、`timeoutMs` 到期时返回，调用方中止或服务关闭时则拒绝。`timeoutMs` 必须是不超过 `maxWaitMs` 的正整数。若 Workstream 版本已不同于 `afterRevision`，它立即返回。
 
 `createTicket`、`assignTicket` 和 `endTicket` 在根 Session 上转发给 `ctx.tickets`。`createTicket` 把当前 Workstream 协调者记为 Ticket 的协调者，`assignTicket` 和 `endTicket` 把经过认证的调用方作为 Ticket 的 `actorId`，因此 Ticket 历史能显示是谁在协调。任何活跃成员都可以提议 Ticket。分配要求目标是活跃的子成员，完成则适用 Ticket 的验收检查。传入其他 Session id 从不构成授权：Ticket 的权限属于在任协调者，并对照实时 `Agent` 检查。
 
-`handoff` 让 Ticket 协调权随角色移动。它先通过 `ctx.tickets.handoff` 把所有由 Workstream 成员协调的未结根 Ticket 交给新协调者，再提交 Workstream 快照。移动任何 Ticket 之前会先检查最终快照大小，并且会重复列出未结 Ticket 直到没有剩余，因此交接期间通过 `ctx.tickets` 创建的 Ticket 也会一并移动。快照是提交点，所以 Workstream 协调者不会指向 Ticket 尚未跟随的成员。Ticket 自身的交接必须由该 Ticket 当前的协调者授权，因此 Workstream 把该协调者作为交接 actor 传入，即使是所有者强制交接。若有 Ticket 无法移动，`handoff` 抛出 `WorkstreamPartialHandoffError`（code 为 `WORKSTREAM_PARTIAL_HANDOFF`），带有 `moved` 和 `pending` 的 Ticket id，并保持 Workstream 协调者不变。重复同一调用即可移动剩余 Ticket；已在目标名下的 Ticket 会被跳过。移动 `proposed` 状态的 Ticket 会把它设为 `coordinating`，与 Ticket 的交接一致。
+`handoff` 让 Ticket 协调权随角色移动。它先通过 `ctx.tickets.handoff` 把所有由 Workstream 成员协调的未结根 Ticket 交给新协调者，再提交 Workstream 快照。移动任何 Ticket 之前会先检查最终快照大小，并且会重复列出未结 Ticket 直到没有剩余，因此交接期间通过 `ctx.tickets` 创建的 Ticket 也会一并移动。最后一次空列表检查与快照追加在同一个同步步骤中完成，其间不会出现新的 Ticket；之后默认指向所有者的直接 `ctx.tickets.create` 会通过 Workstream 注册的 Ticket 协调授权方记录当前在任的协调者。快照是提交点，所以 Workstream 协调者不会指向 Ticket 尚未跟随的成员。每个 Ticket 在一次调用中最多移动一次：被竞争写入方交回的 Ticket，或服务开始关闭后的任何移动，都会以 `WorkstreamPartialHandoffError` 结束调用（服务已停止且尚未移动任何 Ticket 时抛出 `WORKSTREAM_DISPOSED`），而不是无限重复列出。Ticket 自身的交接必须由该 Ticket 当前的协调者授权，因此 Workstream 把该协调者作为交接 actor 传入，即使是所有者强制交接。若有 Ticket 无法移动，`handoff` 抛出 `WorkstreamPartialHandoffError`（code 为 `WORKSTREAM_PARTIAL_HANDOFF`），带有 `moved` 和 `pending` 的 Ticket id，并保持 Workstream 协调者不变。重复同一调用即可移动剩余 Ticket；已在目标名下的 Ticket 会被跳过。移动 `proposed` 状态的 Ticket 会把它设为 `coordinating`，与 Ticket 的交接一致。
 
 模型调用方需要使用服务时，挂载 `WorkstreamTools`。挂载工具是可选的，与服务相互独立。配置字段均为正的安全整数：`maxMembers`（16）、`maxMessages`（256）、`maxSnapshotBytes`（1048576）、`maxMessageBytes`（65536）和 `maxWaitMs`（3600000）。超出限制时返回 `WORKSTREAM_LIMIT`。
 
@@ -93,7 +93,7 @@ Workstream 是一个根 Session 的持久化团队记录。它把完整的 Works
 - 此包没有浏览器监督 UI，也没有针对已收到消息的自动触发器；接收方通过自己的收件箱得知消息，并可调用 `workstream_wait`。
 - 上下文包是调用方提供的文本；Workstream 不会自行汇总需求、决策或游标之后的变更，也不读取制品内容或校验摘要。
 - 快照保留所有成员和消息回执，不做压缩；限制作用于完整快照，因此长期存在的 Workstream 会达到 `WORKSTREAM_LIMIT`。
-- 交接会移动所有由 Workstream 成员协调的未结根 Ticket，包括直接通过 `ctx.tickets` 创建的 Ticket。Ticket 历史把该 Ticket 此前的协调者记为交接 actor，而不是强制交接的所有者。并发的 Ticket 修改可能让某个 Ticket 保持待移动状态，直到重试 `handoff`。
+- 交接会移动所有由 Workstream 成员协调的未结根 Ticket，包括直接通过 `ctx.tickets` 创建的 Ticket。Ticket 历史把该 Ticket 此前的协调者记为交接 actor，而不是强制交接的所有者。并发的 Ticket 修改（包括所有者将其交回）可能让某个 Ticket 保持待移动状态，直到重试 `handoff`。创建时显式指定所有者之外协调者的直接 Ticket 会保持该协调者，直到交接将其移动。
 - 不确定的成员创建或消息投递返回 `WORKSTREAM_UNKNOWN`。仅当调用方用同一操作重试时，服务才会对账；它从不自行重新启动子 Session 或重发消息。
 
 <a id="dev-note"></a>
