@@ -126,6 +126,12 @@ export interface MapView {
   /** Groups left out because the view byte bound was reached. */
   readonly omittedGroups: number
   readonly pending: readonly MapPendingNote[]
+  /** Pending entries skipped at the start of this page. */
+  readonly pendingOffset: number
+  /** Offset for the next pending page, or null when all remaining entries fit. */
+  readonly nextPendingOffset: number | null
+  /** Pending entries after this page that did not fit. */
+  readonly omittedPending: number
   /** Notes whose cited sections changed or vanished. */
   readonly staleNotes: number
   /** True when the index has changed since the curator last processed it. */

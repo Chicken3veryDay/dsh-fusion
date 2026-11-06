@@ -31,7 +31,7 @@ import {
   type CatalogBranch,
 } from './messages.ts'
 import { formatPath, parsePath, splitPath } from './paths.ts'
-import { byteLength } from './text.ts'
+import { byteLength, clip } from './text.ts'
 import {
   activeToolNames,
   contextTreeProjectionDefinition,
@@ -117,7 +117,7 @@ export class ContextTreeService extends Service {
       // order, so an activation appends to the declarations instead of shifting the ones before it.
       const base = [...candidates.keys()].filter(name => this.baseTools.has(name))
       const managed = [...candidates.keys()].filter(name => !this.baseTools.has(name) && this.managedAdmits(name, agent))
-      const activated = [...activeToolNames(this.projection.stateOf(agent.session))]
+      const activated = [...activeToolNames(this.stateFor(agent))]
         .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
       return orderedAdmission([...base, ...managed, ...activated])
     })
@@ -229,7 +229,7 @@ export class ContextTreeService extends Service {
    * @returns the names, in log order.
    */
   activeTools(agent: Agent): ReadonlySet<string> {
-    return activeToolNames(this.projection.stateOf(agent.session))
+    return activeToolNames(this.stateFor(agent))
   }
 
   /**
@@ -276,7 +276,10 @@ export class ContextTreeService extends Service {
     collect(start, 1)
     const path = formatPath(start.segments)
     const capped = requested > depth
-    const header = browseHeader(path, depth, capped)
+    const footer = browseFooter(0, offset, Math.max(0, all.length - offset))
+    const framing = listingBytes(browseHeader('', depth, capped), [], footer)
+    const displayPath = clip(path, Math.max(3, this.config.maxBrowseBytes - framing))
+    const header = browseHeader(displayPath, depth, capped)
     const nodes = []
     const lines: string[] = []
     for (const candidate of all.slice(offset)) {
@@ -290,6 +293,7 @@ export class ContextTreeService extends Service {
     }
     return {
       path,
+      ...displayPath === path ? {} : { displayPath },
       depth,
       depthCapped: capped,
       nodes,
@@ -313,7 +317,7 @@ export class ContextTreeService extends Service {
       throw new ContextTreeError(`paths must hold 1 to ${this.config.maxLoadPaths} entries, got ${request.paths.length}`, 'CONTEXT_TREE_INVALID_INPUT')
     }
     const tree = await this.treeFor(agent, signal)
-    const state = this.projection.stateOf(agent.session)
+    const state = this.stateFor(agent)
     const active = activeToolNames(state)
     const missing: string[] = []
     const sectionNodes = new Map<ContextSectionId, { node: TreeNode; section: ContextSectionMeta }>()
@@ -379,6 +383,18 @@ export class ContextTreeService extends Service {
     }
   }
 
+  /** Intersect logged candidates with the Session-owned current surface; queued grants remain eligible. */
+  private stateFor(agent: Agent): ContextTreeProjectionState {
+    const state = this.projection.stateOf(agent.session)
+    const visible = new Set<number>(agent.session.surface.nodes)
+    return {
+      ...state,
+      grants: state.grants.filter(entry => visible.has(entry.seq)),
+      activations: state.activations.filter(entry => visible.has(entry.seq)),
+      catalog: state.catalog !== null && visible.has(state.catalog.seq) ? state.catalog : null,
+    }
+  }
+
   private async treeFor(agent: Agent, signal: AbortSignal | undefined): Promise<ContextTree> {
     if (this.disposed) throw new ContextTreeError('context tree disposed', 'CONTEXT_TREE_DISPOSED')
     const snapshot = await this.ctx.contextIndex.snapshot(
@@ -425,14 +441,14 @@ export class ContextTreeService extends Service {
     const wanted = [...new Set([...this.coreProviders].flatMap(provider => provider(agent)))]
     if (wanted.length === 0) return []
     const tree = await this.treeFor(agent, signal)
-    const held = grantedHashes(this.projection.stateOf(agent.session))
+    const held = grantedHashes(this.stateFor(agent))
     const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
     let room = this.config.coreBytes
     const missing = wanted.filter((id) => {
       const leaf = leaves.get(id)
-      if (leaf === undefined || held.get(id) === leaf.section.hash || leaf.section.bytes > room) return false
+      if (leaf === undefined || leaf.section.bytes > room) return false
       room -= leaf.section.bytes
-      return true
+      return held.get(id) !== leaf.section.hash
     })
     if (missing.length === 0) return []
     const read = await this.ctx.contextIndex.read(
@@ -473,7 +489,7 @@ export class ContextTreeService extends Service {
       }
     }
     if (branches.length === 0) return undefined
-    const state = this.projection.stateOf(agent.session)
+    const state = this.stateFor(agent)
     if (state.catalog?.digest === catalogDigest(branches)) return undefined
     return catalogMessage(branches, state.published, this.droppedPaths(state))
   }

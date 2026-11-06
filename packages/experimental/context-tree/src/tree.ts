@@ -180,7 +180,12 @@ function sourceNodes(
       [],
       { section },
     ))
-    nodes.push(node(base, 'source', source.path, sourceSummary(source, sections, input.maxSummaryBytes), children))
+    const existing = nodes.findIndex(entry => formatPath(entry.segments) === formatPath(base))
+    const group = nodes[existing]
+    if (group === undefined) nodes.push(node(base, 'source', source.path, sourceSummary(source, sections, input.maxSummaryBytes), children))
+    else {
+      nodes[existing] = { ...group, children: [...group.children, ...children] }
+    }
   }
   return nodes
 }
@@ -206,7 +211,8 @@ function placeTools(input: TreeInput): { groups: Record<ContextOrigin, Map<strin
     let placement: ToolPlacement | undefined
     for (const assign of input.assigners) {
       placement = assign(tool)
-      if (placement !== undefined) break
+      if (placement !== undefined && (tool.origin === 'unknown' || placement.origin === tool.origin)) break
+      placement = undefined
     }
     if (placement === undefined) defaults.push(tool)
     else placed.set(tool.name, placement)

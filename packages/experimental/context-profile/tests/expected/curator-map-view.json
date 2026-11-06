@@ -1,0 +1,41 @@
+{
+  "schema": {
+    "name": "map_view",
+    "description": "Read the project map: groups with their members and notes, the eager core, pending notes, and which notes are stale. Pass nextPendingOffset as pending_offset to continue omitted pending notes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pending_offset": {
+          "type": "integer",
+          "description": "Pending entries to skip; use nextPendingOffset from the previous view. Default 0."
+        }
+      }
+    }
+  },
+  "view": {
+    "ownerSessionId": "<owner>",
+    "revision": 2,
+    "curatorId": "<curator>",
+    "core": [],
+    "pending": [
+      {
+        "id": "<pending-note>",
+        "text": "Tests run with vitest.",
+        "cites": [
+          {
+            "kind": "evidence",
+            "ref": "package.json test script"
+          }
+        ],
+        "by": "<owner>"
+      }
+    ],
+    "pendingOffset": 0,
+    "nextPendingOffset": null,
+    "omittedPending": 0,
+    "groups": [],
+    "omittedGroups": 0,
+    "staleNotes": 0,
+    "indexChanged": false
+  }
+}

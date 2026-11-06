@@ -273,13 +273,13 @@ describe('placement from origin', () => {
     expect(await w.tree.unresolvedToolOrigins(w.agent)).toEqual(['mcp__github__list_issues', 'mcp__github__create_issue', 'deploy_run', 'deploy_status', 'lonely'])
   })
 
-  it('lets a hint override the recorded origin and keeps an unrecorded origin under Global', async () => {
+  it('preserves recorded origin against conflicting hints and keeps unrecorded tools under Global', async () => {
     const w = await world()
     w.ctx.tools.register(probeTool('ws_build', w.calls), { origin: 'project' })
     w.tree.registerToolGroup({ names: ['ws_build'], origin: 'global', group: 'builders' })
-    const global = await w.tree.browse(w.agent, { path: 'Tools/Global/builders', depth: 1 })
-    expect(global.nodes.map(node => node.path)).toEqual(['Tools/Global/builders/ws_build'])
-    expect((await w.tree.browse(w.agent, { path: 'Tools/Project' })).nodes).toEqual([])
+    const project = await w.tree.browse(w.agent, { path: 'Tools/Project/other', depth: 1 })
+    expect(project.nodes.map(node => node.path)).toEqual(['Tools/Project/other/ws_build'])
+    expect((await w.tree.browse(w.agent, { path: 'Tools/Global' })).nodes.map(node => node.path)).not.toContain('Tools/Global/builders')
     expect(await w.tree.unresolvedToolOrigins(w.agent)).not.toContain('ws_build')
     expect(await w.tree.unresolvedToolOrigins(w.agent)).toContain('lonely')
   })
@@ -996,4 +996,123 @@ describe('curator seams', () => {
     expect(grants(await stepMessages(w, 1))).toHaveLength(0)
     expect((await w.tree.browse(w.agent, { path: 'Instructions/Project' })).nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])
   })
+})
+
+async function reviewStep(w: World): Promise<UserMessage[]> {
+  const decision = await agentEvents(w.ctx, w.agent).waterfall(
+    'agent/pre-step', { modelSelection: SELECTION, messages: [], turn: 1, step: 2, signal: SIGNAL },
+    () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
+  )
+  return decision.kind === 'enter' ? decision.messages : []
+}
+
+it.each(['queued', 'claimed', 'logged'] as const)('R1 a section cut by a folder load can be reloaded in full while %s', async (stage) => {
+  const w = await world({ maxLoadBytes: 32 })
+  const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project/AGENTS.md' })
+  const first = await w.tree.load(w.agent, { paths: ['Instructions/Project/AGENTS.md'] })
+  expect(first.result.granted).toHaveLength(2)
+  expect(first.result.granted[1]!.truncated).toBe(true)
+  w.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [...first.contexts] })
+  if (stage !== 'queued') w.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: first.contexts.length, inserted: [] })
+  if (stage === 'logged') for (const message of first.contexts) w.session.append('user/message', message, { surfaceOp: 'append' })
+  const retry = await w.tree.load(w.agent, { paths: [listing.nodes[1]!.path] })
+  expect(retry.result.alreadyLoaded, 'A partial body is not a complete held section').toEqual([])
+  expect(retry.result.granted).toMatchObject([{ truncated: false }])
+})
+
+it('R2 eager core budget applies across successive steps', async () => {
+  const w = await world({ coreBytes: 4096 })
+  write(join(w.project, 'AGENTS.md'), '# First\n\n' + '界'.repeat(950) + '\n\n## Second\n\n' + '界'.repeat(950) + '\n')
+  const metas = (await w.ctx.contextIndex.snapshot({ workingDirectory: w.project })).sections
+    .filter(section => section.kind === 'project-instructions')
+  expect(metas).toHaveLength(2)
+  expect(metas.every(section => section.bytes < 4096)).toBe(true)
+  expect(metas.reduce((sum, section) => sum + section.bytes, 0)).toBeGreaterThan(4096)
+  w.tree.registerEagerCore(() => metas.map(section => section.id))
+  const first = (await reviewStep(w)).filter(message => message.source.kind === 'context-grant')
+  expect(first).toHaveLength(1)
+  for (const message of first) w.session.append('user/message', message, { surfaceOp: 'append' })
+  const second = (await reviewStep(w)).filter(message => message.source.kind === 'context-grant')
+  expect(second, 'Previously granted core sections still consume the fixed core budget').toHaveLength(0)
+})
+
+
+it('R10 rendered browse headers stay inside the byte budget for a valid deep path', async () => {
+  const w = await world({ maxBrowseBytes: 256 })
+  const relative = 'docs/' + '深'.repeat(70) + '.md'
+  write(join(w.project, relative), '# Document\n\nContent.\n')
+  // This oversized file node is valid even when a broad listing cannot fit its line.
+  const path = 'Sources/Project/' + relative.replaceAll('/', '%2F')
+  const result = await call(w, 'context_browse', { path })
+  expect(result.isError).toBe(false)
+  expect(Buffer.byteLength(textOf(result), 'utf8')).toBeLessThanOrEqual(256)
+  await expect(textOf(result) + '\n').toMatchFileSnapshot('./expected/long-path-browse.txt')
+})
+
+it('R11 replaced section grants can be loaded again when their text is gone', async () => {
+  const w = await world()
+  const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project/AGENTS.md' })
+  const path = listing.nodes[0]!.path
+  const outcome = await w.tree.load(w.agent, { paths: [path] })
+  const original = w.session.append('user/message', outcome.contexts[0]!, { surfaceOp: 'append' })
+  expect(JSON.stringify(w.session.deriveMessages())).toContain('Use pnpm.')
+  w.session.append('user/message', createUserMessage({
+    content: [{ type: 'text', text: 'The previous context was removed.' }], source: { kind: 'user' },
+  }), {
+    surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq },
+    sourceEventSeqs: [original.seq],
+  })
+  expect(JSON.stringify(w.session.deriveMessages())).not.toContain('Use pnpm.')
+  const retry = await w.tree.load(w.agent, { paths: [path] })
+  expect(retry.result.alreadyLoaded, 'Replaced grant text is no longer in the conversation').toEqual([])
+  expect(retry.result.granted).toHaveLength(1)
+})
+
+
+it('checked: full replay after compaction has the same revoked activation and grant state', async () => {
+  const w = await world()
+  const outcome = await w.tree.load(w.agent, { paths: ['Instructions/Project', 'Tools/Global/deploy'] })
+  const { start, end } = conversation(w.session, { 2: outcome.contexts })
+  await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+  const other = new Context()
+  contexts.push(other)
+  new SessionProjectionRegistry(other)
+  const replay = await other.sessionProjections.register(contextTreeProjectionDefinition)
+  const live = await w.ctx.sessionProjections.register(contextTreeProjectionDefinition)
+  expect(replay.stateOf(w.session)).toEqual(live.stateOf(w.session))
+  expect(replay.stateOf(w.session).activations).toEqual([])
+  expect(replay.stateOf(w.session).grants).toEqual([])
+  expect(replay.stateOf(w.session).dropped.length).toBeGreaterThan(0)
+})
+
+it('keeps grants cited as evidence and follows replacement order rather than numeric sequence ranges', async () => {
+  const w = await world()
+  const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project/AGENTS.md' })
+  const loaded = await w.tree.load(w.agent, { paths: ['Instructions/Project/AGENTS.md'] })
+  const [first, second] = loaded.contexts.map(message => w.session.append('user/message', message, { surfaceOp: 'append' }))
+  const replacement = w.session.append('user/message', loaded.contexts[0]!, {
+    surfaceOp: { op: 'replace', startSeq: first!.seq, endSeq: first!.seq },
+    sourceEventSeqs: [first!.seq, second!.seq],
+  })
+  const held = await w.tree.load(w.agent, { paths: listing.nodes.map(node => node.path) })
+  expect(held.result.alreadyLoaded).toHaveLength(2)
+  w.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Removed both sections.' }], source: { kind: 'user' } }), {
+    surfaceOp: { op: 'replace', startSeq: replacement.seq, endSeq: second!.seq },
+    sourceEventSeqs: [replacement.seq, second!.seq],
+  })
+  const retry = await w.tree.load(w.agent, { paths: listing.nodes.map(node => node.path) })
+  expect(retry.result.alreadyLoaded).toEqual([])
+  expect(retry.result.granted).toHaveLength(2)
+})
+
+it('revokes activation messages removed by an ordinary Session surface replacement', async () => {
+  const w = await world()
+  const outcome = await w.tree.load(w.agent, { paths: ['Tools/Global/deploy'] })
+  const original = w.session.append('user/message', outcome.contexts[0]!, { surfaceOp: 'append' })
+  expect(await declared(w)).toContain('deploy_run')
+  w.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Removed tool activation.' }], source: { kind: 'user' } }), {
+    surfaceOp: { op: 'replace', startSeq: original.seq, endSeq: original.seq }, sourceEventSeqs: [original.seq],
+  })
+  expect(await declared(w)).not.toContain('deploy_run')
+  expect(w.tree.activeTools(w.agent).size).toBe(0)
 })

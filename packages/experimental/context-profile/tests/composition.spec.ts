@@ -42,9 +42,21 @@ interface Request {
   readonly hasStub: boolean
 }
 
+interface LoggedMapView {
+  readonly ownerSessionId: string
+  readonly curatorId: string
+  readonly pending: readonly { readonly id: string; readonly by: string; readonly [key: string]: unknown }[]
+  readonly [key: string]: unknown
+}
+
 interface LogEvent {
   readonly type: string
-  readonly data?: { readonly source?: { readonly kind?: string }; readonly op?: { readonly kind?: string } }
+  readonly data?: {
+    readonly source?: { readonly kind?: string }
+    readonly op?: { readonly kind?: string }
+    readonly message?: { readonly toolCallId: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
+    readonly header?: { readonly tools?: readonly { readonly name: string; readonly [key: string]: unknown }[] }
+  }
 }
 
 async function sessionFiles(dir: string): Promise<string[]> {
@@ -198,6 +210,18 @@ describe('Context tree profile layer through the real Loader', () => {
     const logs = sessions.map(events => ({ events, edits: events.filter(event => event.type === 'context-map/state') }))
     const mainLog = logs.filter(log => log.edits.length > 0)
     expect(mainLog).toHaveLength(1)
+    const initialView = sessions.flat().find(event => event.type === 'tool/result' && event.data?.message?.toolCallId === 'cm-view-1')
+    expect(initialView).toBeDefined()
+    const view = JSON.parse(initialView!.data!.message!.content.map(block => block.text ?? '').join('')) as LoggedMapView
+    const schema = sessions.flat().filter(event => event.type === 'request/header')
+      .flatMap(event => event.data?.header?.tools ?? []).find(tool => tool.name === 'map_view')
+    expect(schema).toBeDefined()
+    await expect(JSON.stringify({ schema, view: {
+      ...view,
+      ownerSessionId: '<owner>',
+      curatorId: '<curator>',
+      pending: view.pending.map(note => ({ ...note, id: '<pending-note>', by: '<owner>' })),
+    } }, null, 2) + '\n').toMatchFileSnapshot('./expected/curator-map-view.json')
     const ops = mainLog[0]!.edits.map(event => event.data?.op?.kind)
     expect(ops).toEqual(expect.arrayContaining(['note-pending', 'claim', 'group-set', 'note-file']))
     expect(JSON.stringify(mainLog[0]!.events)).not.toContain('project map curator')

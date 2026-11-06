@@ -83,7 +83,7 @@ Every field has a default.
 | `maxDroppedBytes` | 1024 | bytes of the revoked-section list a republished catalog keeps across later compactions |
 | `coreBytes` | 4096 | section bytes an eager core provider may grant at the start of a conversation |
 
-An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`.
+An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse keeps its full path in the result and clips only the displayed header when needed to fit `maxBrowseBytes`. A partial section grant can be loaded again; only complete grants suppress duplicate loads. Eager core selection charges every selected section against `coreBytes` on every step, including sections already held.
 
 ### Events
 
@@ -93,9 +93,9 @@ The package adds no event type. It uses the existing `user/message` event with t
 ## Understand the implementation
 
 - [`src/types.ts`](src/types.ts) holds the types, including the message source shapes.
-- [`src/tree.ts`](src/tree.ts) builds the tree from the context index snapshot and the tool registry, with origin placement and grouping.
+- [`src/tree.ts`](src/tree.ts) builds the tree from the context index snapshot and the tool registry, with origin placement and grouping. Recorded tool origins take precedence over conflicting placement hints; unknown origins may be assigned. A curated folder sharing a file path includes the file's ungrouped sections at that same address.
 - [`src/paths.ts`](src/paths.ts) encodes and splits paths; [`src/render.ts`](src/render.ts) renders browse and load results; [`src/messages.ts`](src/messages.ts) builds the catalog, grant, and activation messages.
-- [`src/projection.ts`](src/projection.ts) is the Session projection that derives loaded sections, activations, and the published catalog from the log.
+- [`src/projection.ts`](src/projection.ts) is the Session projection that derives loaded sections, activations, and the published catalog from the log. The service intersects logged candidates with the Session-owned current surface, so any surface replacement permits removed sections to be loaded again and revokes removed activations.
 - [`src/index.ts`](src/index.ts) is the service: the admission policy, the pre-step catalog hook, revocable sources, browse, and load.
 - [`src/tools.ts`](src/tools.ts) registers the two model tools.
 
@@ -154,7 +154,7 @@ Append-only growth until compaction, which replaces earlier request tokens as it
 - **Skills are not in the tree** — `skill` stays a base tool.
 - **Compaction request** — the request that compacts still declares activated tools; declarations drop on the next step. Fixing it needs the tool set to resolve after the compaction pre-step.
 - **Later compactions** — a second compaction summarizes the first checkpoint, so earlier revocation stubs fold into the summary.
-- **Duplicate grants** — a section whose grant is queued or claimed but not yet logged counts as loaded, so a second load in that window is not granted twice.
+- **Duplicate grants** — a section whose complete grant is queued or claimed but not yet logged counts as loaded, so a second load in that window is not granted twice.
 - **Subagents** — a subagent starts with the base tools; activations are not inherited.
 - **Refresh cost** — the context index re-stats instruction and documentation files on every step.
 - **Dropped sections** — compaction folds earlier revocation stubs into its summary on a second compaction. The tree keeps its own list of revoked sections in projection state (bounded by `maxDroppedBytes`) and republishes it with the catalog, which mitigates but does not fix this; the fix belongs to compaction.

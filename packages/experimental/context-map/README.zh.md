@@ -39,7 +39,7 @@ kind: "package-reference"
 
 ### 策展者角色
 
-该角色是记录在日志中的持久授权，依据发起调用的确切存活智能体检查，而不是依据传入的 Session id。持有者恰好一个。`claim` 替换前任持有者并记录交接；`release` 放弃角色。未释放就消失的持有者会被记录为已离开，角色随即空出。策展者工具 `map_view`、`map_group`、`map_note` 和 `map_core` 只对持有者声明，且服务在执行时拒绝任何其他调用者，因此过期的工具集不会带来任何权限。这里没有任何包导入助手：以后的助手通过 `ctx.contextMap.claim` 接管该角色。
+该角色是记录在日志中的持久授权，依据发起调用的确切存活智能体检查，而不是依据传入的 Session id。每张地图的持有者恰好一个；插件重新加载后，服务从已准备的活动 Session 投影恢复持有者与地图所有者的关联。`claim` 替换前任持有者并记录交接；`release` 放弃角色。未释放就消失的持有者会被记录为已离开，角色随即空出。策展者工具 `map_view`、`map_group`、`map_note` 和 `map_core` 只对持有者声明，且服务在执行时拒绝任何其他调用者，因此过期的工具集不会带来任何权限。这里没有任何包导入助手：以后的助手通过 `ctx.contextMap.claim` 接管该角色。
 
 ### 默认策展者
 
@@ -48,7 +48,7 @@ kind: "package-reference"
 1. 从工作智能体的提供方中选择路线：窗口不小于 `minContextTokens` 的最小模型，使用其最低推理强度。模型目录不含价格，因此以此作为“便宜”的代理。该路线必须比工作智能体自己的路线更低（窗口更小，或窗口相同而工作智能体运行在高于其最低的强度）；否则记录 `CONTEXT_MAP_NO_CHEAP_ROUTE` 且策展者不运行，因为昂贵的策展者比没有策展者更糟；
 2. 为预留的子 id 声明角色，并通过现有的子智能体服务启动子智能体，受 `maxSteps` 和 `maxTokens` 限制；
 3. 在工作完成、达到步数上限、或其他持有者声明接管角色时结束（立即让出，仅在该持有者离开后才重新启动）；
-4. 在下一次运行之前或释放之前，总是先释放角色并等待子智能体结束。
+4. 销毁时取消尚未完成的目录读取并观察稍后的失败，在下一次运行或销毁之前释放角色并等待子智能体结束。
 
 ### 服务 API
 
@@ -72,7 +72,9 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 ### 工具
 
 - `context_note(text, cites?)`，所有智能体可用：记录一条简短事实，返回待处理笔记 id 和等待中的笔记数。子智能体的笔记提交到它所属对话的地图。
-- `map_view()`、`map_group(action, …)`、`map_note(action, …)`、`map_core(sections)`，仅策展者可用。
+- `map_view(pending_offset?)`、`map_group(action, …)`、`map_note(action, …)`、`map_core(sections)`，仅策展者可用。
+
+视图将完整序列化结果计入预算，包括待处理笔记、核心章节 id 和计数器。`omittedPending` 表示本页之后的待处理笔记；将 `nextPendingOffset` 作为 `pending_offset` 传入，即可在相同修订版继续。`omittedGroups` 统计未能容纳的分组。如果元数据或单条待处理笔记无法容纳，则以 `CONTEXT_MAP_LIMIT` 失败；请增大 `maxViewBytes`。
 
 ### 配置
 
@@ -131,7 +133,7 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 
 #### 模型看到的内容
 
-树目录和 `context_browse` 把策展分组显示为文件夹，带有策展者的标题和摘要；含有过期笔记的分组带过期标记。已分组的章节不再显示其文件节点。已归档的笔记由策展者和助手通过 `map_view` 与 `snapshotOf` 读取；工作智能体只看到过期标记，看不到笔记文本。
+树目录和 `context_browse` 把策展分组显示为文件夹，带有策展者的标题和摘要；含有过期笔记的分组在摘要之前显示过期标记，因此裁剪摘要时仍保留警告。已分组的章节不再显示其文件节点。已归档的笔记由策展者和助手通过 `map_view` 与 `snapshotOf` 读取；工作智能体只看到过期标记，看不到笔记文本。
 
 #### Token 影响
 

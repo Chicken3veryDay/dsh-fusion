@@ -1,7 +1,7 @@
 /**
  * Session projection of what the context tree has put into a conversation: loaded sections,
  * activated tools, and the published catalog. Compaction removes the entries it shadows, so
- * the state always describes material still in the model's history.
+ * the service intersects these candidates with the Session surface for other replacements.
  *
  * Tool admission for a step runs after the step claims its inbox batch and before that batch
  * is logged, so an activation counts from the moment its message is durably queued for the next
@@ -13,23 +13,23 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const seq = z.number().int().nonnegative()
 const names = z.array(z.string().min(1))
-const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1) }).strict()
-const pendingGrant = z.object({ key: z.string().min(1), hash: z.string().min(1) }).strict()
+const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean(), path: z.string().min(1) }).strict()
+const pendingGrant = z.object({ key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean() }).strict()
 const logged = z.object({ seq, id: z.string().min(1), key: z.string().min(1), tools: names, nodes: names }).strict()
 const dropped = z.object({ key: z.string().min(1), paths: names }).strict()
 const queued = z.object({ id: z.string().min(1), tools: names, grants: z.array(pendingGrant) }).strict()
 const catalog = z.object({ seq, digest: z.string().min(1) }).strict()
 
 const stateSchema = z.object({
-  /** Loaded sections still in history, one entry per section id. */
+  /** Loaded-section candidates after compaction, one entry per section id. */
   grants: z.array(grant),
-  /** Activation messages still in history, in log order. */
+  /** Activation-message candidates after compaction, in log order. */
   activations: z.array(logged),
   /** Messages waiting for the next step, in queue order; `tools` and `grants` are empty for other messages. */
   inbox: z.array(queued),
   /** Activation and grant messages a step claimed and has not logged yet. */
   claimed: z.array(queued),
-  /** The catalog message still in history, if any. */
+  /** The newest catalog candidate after compaction, if any. */
   catalog: catalog.nullable(),
   /** Loaded material that compaction removed and nothing has loaded again, oldest first, at most {@link DROPPED_RETAINED}. */
   dropped: z.array(dropped),
@@ -40,7 +40,7 @@ const stateSchema = z.object({
 /** Private checkpoint state; consumers read through `ContextTreeService`. */
 export type ContextTreeProjectionState = z.infer<typeof stateSchema>
 
-const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1) })
+const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1), truncated: z.boolean().optional() })
 const activationSource = z.object({ kind: z.literal('context-activation'), key: z.string().min(1), tools: names, nodes: names })
 const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest: z.string().min(1) })
 
@@ -49,9 +49,9 @@ const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest
  * @param message - any logged or queued message.
  * @returns the key and hash, empty when the message is not a readable grant.
  */
-function grantsOf(message: { readonly source: unknown }): { key: string; hash: string }[] {
+function grantsOf(message: { readonly source: unknown }): { key: string; hash: string; truncated: boolean }[] {
   const parsed = grantSource.safeParse(message.source)
-  return parsed.success ? [{ key: parsed.data.key, hash: parsed.data.hash }] : []
+  return parsed.success ? [{ key: parsed.data.key, hash: parsed.data.hash, truncated: parsed.data.truncated === true }] : []
 }
 
 /**
@@ -81,7 +81,7 @@ export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
  */
 export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
-  stateVersion: 2,
+  stateVersion: 3,
   stateSchema,
   init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], published: false }),
   apply: (state, event) => {
@@ -101,7 +101,13 @@ export const contextTreeProjectionDefinition = {
       const source: unknown = event.data.source
       const granted = grantSource.safeParse(source)
       if (granted.success) {
-        const entry = { seq: event.seq, key: granted.data.key, hash: granted.data.hash, path: granted.data.path }
+        const entry = {
+          seq: event.seq,
+          key: granted.data.key,
+          hash: granted.data.hash,
+          truncated: granted.data.truncated === true,
+          path: granted.data.path,
+        }
         return {
           ...state,
           dropped: state.dropped.filter(existing => existing.key !== entry.key),
@@ -159,12 +165,15 @@ export function activeToolNames(state: ContextTreeProjectionState): ReadonlySet<
 /**
  * Section hashes the conversation holds or is about to hold: logged grants, then grants a step
  * claimed, then grants still queued. A later entry for a section replaces an earlier one.
+ * Truncated grants never satisfy a complete-section load.
  * @param state - projection state.
- * @returns the hash of each section's newest grant, keyed by section id.
+ * @returns the hash of each section's newest complete grant, keyed by section id.
  */
 export function grantedHashes(state: ContextTreeProjectionState): ReadonlyMap<string, string> {
   const hashes = new Map<string, string>()
-  for (const entry of state.grants) hashes.set(entry.key, entry.hash)
-  for (const entry of [...state.claimed, ...state.inbox]) for (const grant of entry.grants) hashes.set(grant.key, grant.hash)
+  for (const entry of state.grants) if (!entry.truncated) hashes.set(entry.key, entry.hash)
+  for (const entry of [...state.claimed, ...state.inbox]) {
+    for (const grant of entry.grants) if (!grant.truncated) hashes.set(grant.key, grant.hash)
+  }
   return hashes
 }

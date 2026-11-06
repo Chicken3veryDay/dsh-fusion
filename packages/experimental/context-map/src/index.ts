@@ -150,8 +150,6 @@ export class ContextMapService extends Service {
   private readonly config: ResolvedConfig
   private projection!: ProjectionHandle<ContextMapProjectionState>
   private readonly watchers = new Set<(change: MapChange) => void>()
-  /** Holder id to the owner whose map it holds; process-local, rebuilt by claims. */
-  private readonly holders = new Map<SessionId, SessionId>()
   /** Section hashes the index had at each owner's last read, for the stale flag the tree shows. */
   private readonly hashes = new Map<SessionId, ReadonlyMap<ContextSectionId, string>>()
   private readonly announced = new Map<SessionId, string>()
@@ -183,9 +181,8 @@ export class ContextMapService extends Service {
       return decision
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
-      const ownerId = this.holders.get(agent.id)
+      const ownerId = this.heldOwnerId(agent.id)
       if (ownerId === undefined) return
-      this.holders.delete(agent.id)
       this.notify({ kind: 'holder-gone', ownerSessionId: ownerId, holderId: agent.id })
       void this.releaseGone(ownerId, agent.id).catch((error: unknown) => {
         this.ctx.logger.warn(`context map: could not log the end of curator ${agent.id}: ${String(error)}`)
@@ -210,7 +207,7 @@ export class ContextMapService extends Service {
    */
   isCurator(agent: Agent): boolean {
     if (this.disposed || this.ctx.agents.get(agent.id) !== agent) return false
-    const owner = this.ctx.agents.get(this.holders.get(agent.id) ?? this.rootOf(agent).id)
+    const owner = this.ctx.agents.get(this.heldOwnerId(agent.id) ?? this.rootOf(agent).id)
     return owner !== undefined && this.snapshotOf(owner).curatorId === agent.id
   }
 
@@ -245,35 +242,66 @@ export class ContextMapService extends Service {
   /**
    * Read a map as a member of its Session lineage: the owner, a direct child, or the holder.
    * @param caller - the exact live agent.
-   * @param target - which map; defaults to the caller's own root.
+   * @param target - map (defaults to the held map or caller's root) and pendingOffset (defaults to 0).
    * @param signal - cancellation.
    * @returns a view within `maxViewBytes`, with stale notes flagged.
-   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder.
+   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder;
+   * `CONTEXT_MAP_LIMIT` when metadata or one pending note cannot fit; increase `maxViewBytes` to read it.
    */
-  async view(caller: Agent, target: MapTarget = {}, signal?: AbortSignal): Promise<MapView> {
+  async view(caller: Agent, target: MapTarget & { readonly pendingOffset?: number } = {}, signal?: AbortSignal): Promise<MapView> {
     const owner = this.member(caller, target.rootSessionId)
     const facts = await this.facts(owner, signal)
     const snapshot = this.snapshotOf(owner)
+    const pendingOffset = target.pendingOffset ?? 0
+    if (!Number.isSafeInteger(pendingOffset) || pendingOffset < 0) {
+      throw new ContextMapError('pendingOffset must be a non-negative integer', 'CONTEXT_MAP_INVALID_INPUT')
+    }
     const groups: MapGroupView[] = []
-    let staleNotes = 0
-    const base = {
+    const pending: MapSnapshot['pending'][number][] = []
+    const staleNotes = snapshot.groups.reduce((sum, group) => sum + group.notes.filter(note => isStale(note.cites, facts)).length, 0)
+    const view: MapView = {
       ownerSessionId: snapshot.ownerSessionId,
       revision: snapshot.revision,
       curatorId: snapshot.curatorId,
       core: snapshot.core,
-      pending: snapshot.pending,
+      pending,
+      pendingOffset,
+      nextPendingOffset: null,
+      omittedPending: Math.max(0, snapshot.pending.length - pendingOffset),
+      groups,
+      omittedGroups: snapshot.groups.length,
+      staleNotes,
       indexChanged: snapshot.indexDigest !== facts.digest,
     }
-    let omittedGroups = 0
+    const fits = (candidate: MapView): boolean => byteLength(JSON.stringify(candidate)) <= this.config.maxViewBytes
+    if (!fits(view)) {
+      throw new ContextMapError('Map metadata exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+    }
+    let bounded = view
+    for (const note of snapshot.pending.slice(pendingOffset)) {
+      const omittedPending = bounded.omittedPending - 1
+      const candidate = { ...bounded, pending: [...pending, note], omittedPending,
+        nextPendingOffset: omittedPending > 0 ? pendingOffset + pending.length + 1 : null }
+      if (!fits(candidate)) break
+      pending.push(note)
+      bounded = candidate
+    }
+    if (bounded.omittedPending > 0) {
+      if (pending.length === 0) {
+        throw new ContextMapError('One pending note exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+      }
+      bounded = { ...bounded, nextPendingOffset: pendingOffset + pending.length }
+    }
     for (const group of snapshot.groups) {
       const notes = group.notes.map(note => ({ ...note, stale: isStale(note.cites, facts) }))
-      staleNotes += notes.filter(note => note.stale).length
       const next = { ...group, notes }
-      const size = byteLength(JSON.stringify({ ...base, groups: [...groups, next], omittedGroups, staleNotes: 0 }))
-      if (size > this.config.maxViewBytes) omittedGroups += 1
-      else groups.push(next)
+      const candidate = { ...bounded, groups: [...groups, next], omittedGroups: bounded.omittedGroups - 1 }
+      if (fits(candidate)) {
+        groups.push(next)
+        bounded = candidate
+      }
     }
-    return { ...base, groups, omittedGroups, staleNotes }
+    return bounded
   }
 
   /**
@@ -301,8 +329,6 @@ export class ContextMapService extends Service {
       route: request.route ?? null,
       indexDigest: facts.digest,
     })
-    if (current.curatorId !== null && current.curatorId !== holderId) this.holders.delete(current.curatorId)
-    this.holders.set(holderId, owner.id)
     this.announced.delete(owner.id)
     return committed
   }
@@ -316,13 +342,12 @@ export class ContextMapService extends Service {
    */
   async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot> {
     this.live(caller)
-    const owner = this.ownerFor(target.rootSessionId ?? this.holders.get(caller.id) ?? this.rootOf(caller).id)
+    const owner = this.ownerFor(target.rootSessionId ?? this.heldOwnerId(caller.id) ?? this.rootOf(caller).id)
     const current = this.snapshotOf(owner)
     if (caller !== owner && current.curatorId !== caller.id) {
       throw new ContextMapError('Only the curator or the map owner may release the role', 'CONTEXT_MAP_UNAUTHORIZED')
     }
     if (current.curatorId === null) return current
-    this.holders.delete(current.curatorId)
     return this.commit(owner, caller.id, { kind: 'release', target: current.curatorId }, { ...current, curatorId: null, route: null })
   }
 
@@ -640,11 +665,16 @@ export class ContextMapService extends Service {
   /** The owner of the map a live caller may read: its own root, its parent, or the one it holds. */
   private member(caller: Agent, rootSessionId: SessionId | undefined): Agent {
     this.live(caller)
-    const owner = this.ownerFor(rootSessionId ?? this.holders.get(caller.id) ?? this.rootOf(caller).id)
+    const owner = this.ownerFor(rootSessionId ?? this.heldOwnerId(caller.id) ?? this.rootOf(caller).id)
     if (this.rootOf(caller) !== owner && this.snapshotOf(owner).curatorId !== caller.id) {
       throw new ContextMapError('Caller is not part of this map\'s Session lineage and does not hold its curator role', 'CONTEXT_MAP_UNAUTHORIZED')
     }
     return owner
+  }
+
+  /** Resolve reverse role lookup from prepared live owner projections, including after plugin reload. */
+  private heldOwnerId(holderId: SessionId): SessionId | undefined {
+    return this.ctx.agents.list().find(owner => this.projection.stateOf(owner.session).snapshot?.curatorId === holderId)?.id
   }
 
   private snapshotOfRoot(agent: Agent): MapSnapshot {
@@ -673,7 +703,7 @@ export class ContextMapService extends Service {
         origin,
         name,
         title: group.title,
-        summary: stale ? `${group.summary} (some notes are stale until re-verified)` : group.summary,
+        summary: stale ? `[stale until re-verified] ${group.summary}` : group.summary,
         sections: group.sections,
         tools: group.tools,
       }

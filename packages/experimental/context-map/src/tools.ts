@@ -61,10 +61,24 @@ export class ContextMapTools extends Service {
     }))
     this.ctx.tools.register(defineTool({
       name: 'map_view',
-      description: 'Read the project map: groups with their members and notes, the eager core, pending notes, and which notes are stale.',
-      parameters: {},
+      description: 'Read the project map: groups with their members and notes, the eager core, pending notes, and which notes are stale. Pass nextPendingOffset as pending_offset to continue omitted pending notes.',
+      parameters: { pending_offset: { type: 'integer', description: 'Pending entries to skip; use nextPendingOffset from the previous view. Default 0.' } },
       output,
-      execute: async (_args, exec) => z.json().parse(await this.ctx.contextMap.view(caller(exec.agent), {}, exec.signal)),
+      execute: async (args, exec) => {
+        const agent = caller(exec.agent)
+        if (!this.ctx.contextMap.isCurator(agent)) {
+          throw new ContextMapError('Only the live curator may run map_view', 'CONTEXT_MAP_UNAUTHORIZED')
+        }
+        const view = await this.ctx.contextMap.view(
+          agent,
+          args.pending_offset === undefined ? {} : { pendingOffset: args.pending_offset },
+          exec.signal,
+        )
+        if (!this.ctx.contextMap.isCurator(agent)) {
+          throw new ContextMapError('Only the live curator may run map_view', 'CONTEXT_MAP_UNAUTHORIZED')
+        }
+        return z.json().parse(view)
+      },
     }), { when: isCurator })
     this.ctx.tools.register(defineTool({
       name: 'map_group',

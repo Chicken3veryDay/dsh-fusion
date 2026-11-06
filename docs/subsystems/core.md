@@ -1000,12 +1000,13 @@ snapshotOf(owner: Agent): MapSnapshot
 /**
  * Read a map as a member of its Session lineage: the owner, a direct child, or the holder.
  * @param caller - the exact live agent.
- * @param target - which map; defaults to the caller's own root.
+ * @param target - map (defaults to the held map or caller's root) and pendingOffset (defaults to 0).
  * @param signal - cancellation.
  * @returns a view within `maxViewBytes`, with stale notes flagged.
- * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder;
+ * `CONTEXT_MAP_LIMIT` when metadata or one pending note cannot fit; increase `maxViewBytes` to read it.
  */
-async view(caller: Agent, target: MapTarget = {}, signal?: AbortSignal): Promise<MapView>
+async view(caller: Agent, target: MapTarget & { readonly pendingOffset?: number } = {}, signal?: AbortSignal): Promise<MapView>
 
 /**
  * Take the curator role for an agent. The previous holder, live or not, is replaced and the

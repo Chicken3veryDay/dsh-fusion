@@ -39,7 +39,7 @@ A note whose cited section changed or vanished is stale: its group summary says 
 
 ### The curator role
 
-The role is a durable grant recorded in the log, checked against the exact live agent that calls, never against a Session id passed in. There is exactly one holder. `claim` replaces the previous holder and logs the handoff; `release` gives the role up. A holder that disappears without releasing is recorded as gone and the role is free again. The curator tools `map_view`, `map_group`, `map_note`, and `map_core` are declared only for the holder, and the service rejects any other caller at execution, so a stale tool set gains nothing. No package here imports an assistant: a later assistant claims the role through `ctx.contextMap.claim`.
+The role is a durable grant recorded in the log, checked against the exact live agent that calls, never against a Session id passed in. There is exactly one holder per map; the owner association is recovered from prepared live Session projections after plugin reload. `claim` replaces the previous holder and logs the handoff; `release` gives the role up. A holder that disappears without releasing is recorded as gone and the role is free again. The curator tools `map_view`, `map_group`, `map_note`, and `map_core` are declared only for the holder, and the service rejects any other caller at execution, so a stale tool set gains nothing. No package here imports an assistant: a later assistant claims the role through `ctx.contextMap.claim`.
 
 ### The default curator
 
@@ -48,7 +48,7 @@ The role is a durable grant recorded in the log, checked against the exact live 
 1. picks a route from the working agent's provider: the smallest model with at least `minContextTokens` of window, at its least reasoning effort. The catalog carries no price, so this is the proxy for "cheap". The route must undercut the working agent's own route (smaller window, or the same window while the working agent runs above its least effort); otherwise `CONTEXT_MAP_NO_CHEAP_ROUTE` is logged and the curator does not run, because an expensive curator is worse than none;
 2. claims the role for a reserved child id and starts a subagent through the existing subagent service, bounded by `maxSteps` and `maxTokens`;
 3. ends when its work is done, the step bound is reached, or another holder claims the role (it yields at once and restarts only after that holder is gone);
-4. always releases the role and settles the subagent before the next run or before disposal.
+4. cancels a pending catalog read on disposal, observes any late catalog failure, releases the role and settles the subagent before the next run or before disposal.
 
 ### Service API
 
@@ -72,7 +72,9 @@ The service also exposes `watch`, `isCurator`, `curatorOf`, `snapshotOf`, `note`
 ### Tools
 
 - `context_note(text, cites?)` for every agent: records one short fact. It returns the pending id and how many notes wait. A subagent's note goes to the map of the conversation it belongs to.
-- `map_view()`, `map_group(action, …)`, `map_note(action, …)`, `map_core(sections)` for the curator only.
+- `map_view(pending_offset?)`, `map_group(action, …)`, `map_note(action, …)`, `map_core(sections)` for the curator only.
+
+The view budgets the complete serialized result, including pending notes, core ids, and counters. `omittedPending` reports pending notes beyond the page; pass `nextPendingOffset` as `pending_offset` to continue at the same revision. `omittedGroups` counts groups that do not fit. Metadata or a single pending note that cannot fit fails with `CONTEXT_MAP_LIMIT`; increase `maxViewBytes`.
 
 ### Configuration
 
@@ -131,7 +133,7 @@ The schema sits among the declared tools and is a base tool, so it is part of th
 
 #### What the model sees
 
-The tree catalog and `context_browse` show curated groups as folders with the curator's title and summary, and a stale marker on a group that holds a stale note. Grouped sections leave their file node. Filed notes are read by the curator and by assistants through `map_view` and `snapshotOf`; the working agent sees only the stale marker, not the note text.
+The tree catalog and `context_browse` show curated groups as folders with the curator's title and summary, and a stale marker before the summary of a group that holds a stale note, so summary clipping preserves the warning. Grouped sections leave their file node. Filed notes are read by the curator and by assistants through `map_view` and `snapshotOf`; the working agent sees only the stale marker, not the note text.
 
 #### Token effect
 

@@ -4476,7 +4476,7 @@ Array of [`ContentBlock`](#persistence-type-sha256-8064c03c87c357fd1575cb9395ce8
 
 SHA-256: `a921288d83bbbdcc3411ab6047ea3b9c7f9b20605c4393e097daf2659b895a4d`
 
-Sources: [`packages/experimental/context-tree/src/types.ts:190`](../packages/experimental/context-tree/src/types.ts)
+Sources: [`packages/experimental/context-tree/src/types.ts:192`](../packages/experimental/context-tree/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -4497,7 +4497,7 @@ Sources: [`packages/experimental/context-tree/src/types.ts:190`](../packages/exp
 
 SHA-256: `af40a502e21641afb7330512f767c5e9d9f6b4ab32a4ac152e686480f963a77d`
 
-Sources: [`packages/experimental/context-tree/src/types.ts:204`](../packages/experimental/context-tree/src/types.ts)
+Sources: [`packages/experimental/context-tree/src/types.ts:206`](../packages/experimental/context-tree/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -4517,7 +4517,7 @@ Sources: [`packages/experimental/context-tree/src/types.ts:204`](../packages/exp
 
 SHA-256: `8dfd3fd79b472198b13164bc4eb61b24b52c358b987267e3c386b94e0b95afea`
 
-Sources: [`packages/experimental/context-tree/src/types.ts:172`](../packages/experimental/context-tree/src/types.ts)
+Sources: [`packages/experimental/context-tree/src/types.ts:174`](../packages/experimental/context-tree/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|

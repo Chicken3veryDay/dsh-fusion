@@ -83,7 +83,7 @@ export function placeTools(ctx: Context) {
 | `maxDroppedBytes` | 1024 | 重新发布的目录在后续压缩之间保留的已撤销章节列表的字节数 |
 | `coreBytes` | 4096 | 急切核心提供方在对话开始时可授予的章节字节数 |
 
-不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。
+不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。 浏览结果保留完整路径，仅在需要满足 `maxBrowseBytes` 时裁剪显示标题中的路径。部分章节授权可以重新加载；只有完整授权才抑制重复加载。每一步的核心选择都会将所有选中章节计入 `coreBytes`，包括已经持有的章节。
 
 ### 事件
 
@@ -93,9 +93,9 @@ export function placeTools(ctx: Context) {
 ## 理解实现
 
 - [`src/types.ts`](src/types.ts) 包含类型，包括消息来源的形状。
-- [`src/tree.ts`](src/tree.ts) 根据上下文索引快照和工具注册表构建树，并完成来源放置与分组。
+- [`src/tree.ts`](src/tree.ts) 根据上下文索引快照和工具注册表构建树，并完成来源放置与分组。 已记录的工具来源优先于冲突的放置提示；来源未知时可以指定。策展文件夹与文件路径相同时，同一地址也包含该文件未分组的章节。
 - [`src/paths.ts`](src/paths.ts) 编码并拆分路径；[`src/render.ts`](src/render.ts) 渲染浏览和加载结果；[`src/messages.ts`](src/messages.ts) 构造目录、授权和激活消息。
-- [`src/projection.ts`](src/projection.ts) 是 Session 投影，从日志推导已加载章节、激活和已发布目录。
+- [`src/projection.ts`](src/projection.ts) 是 Session 投影，从日志推导已加载章节、激活和已发布目录。 服务将已记录的候选项与 Session 当前表面相交，因此任何表面替换都允许重新加载已移除的章节，并撤销已移除的工具激活。
 - [`src/index.ts`](src/index.ts) 是服务：准入策略、pre-step 目录钩子、可撤销来源、浏览与加载。
 - [`src/tools.ts`](src/tools.ts) 注册两个模型工具。
 
@@ -155,7 +155,7 @@ export function placeTools(ctx: Context) {
 - **技能不在树中**——`skill` 仍是基础工具。
 - **压缩请求**——执行压缩的请求仍声明已激活的工具；声明在下一步消失。修复需要让工具集在压缩 pre-step 之后解析。
 - **后续压缩**——第二次压缩会总结第一个检查点，因此更早的撤销存根被并入摘要。
-- **重复授权**——授权已排队或已被领取但尚未写入日志的章节视为已加载，因此在这段时间内第二次加载不会再授权一次。
+- **重复授权**——完整授权已排队或已被领取但尚未写入日志的章节视为已加载，因此在这段时间内第二次加载不会再授权一次。
 - **子智能体**——子智能体只从基础工具开始；不继承激活。
 - **刷新成本**——上下文索引每一步都会重新 stat 指令和文档文件。
 - **丢弃的章节**——第二次压缩会把更早的撤销存根并入摘要。树在投影状态中保留自己的已撤销章节列表（受 `maxDroppedBytes` 限制），并随目录重新发布，这缓解但没有修复该问题；修复属于压缩。

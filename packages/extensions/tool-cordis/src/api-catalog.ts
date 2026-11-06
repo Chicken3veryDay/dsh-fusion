@@ -964,11 +964,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a detached snapshot; revision 0 when nothing was committed.',
       },
       {
-        signature: 'async view(caller: Agent, target: MapTarget = {}, signal?: AbortSignal): Promise<MapView>',
+        signature: 'async view(caller: Agent, target: MapTarget & { readonly pendingOffset?: number } = {}, signal?: AbortSignal): Promise<MapView>',
         description: 'Read a map as a member of its Session lineage: the owner, a direct child, or the holder.',
-        parameters: [{ name: 'caller', description: 'the exact live agent.' }, { name: 'target', description: 'which map; defaults to the caller\'s own root.' }, { name: 'signal', description: 'cancellation.' }],
+        parameters: [{ name: 'caller', description: 'the exact live agent.' }, { name: 'target', description: 'map (defaults to the held map or caller\'s root) and pendingOffset (defaults to 0).' }, { name: 'signal', description: 'cancellation.' }],
         returns: 'a view within `maxViewBytes`, with stale notes flagged.',
-        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder.'],
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder; `CONTEXT_MAP_LIMIT` when metadata or one pending note cannot fit; increase `maxViewBytes` to read it.'],
       },
       {
         signature: 'async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot>',
@@ -6885,7 +6885,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContextBrowseResult',
-    declaration: 'export interface ContextBrowseResult {\n    readonly path: string;\n    readonly depth: number;\n    readonly depthCapped: boolean;\n    readonly nodes: readonly ContextNodeView[];\n    readonly total: number;\n    readonly offset: number;\n    readonly remaining: number;\n}',
+    declaration: 'export interface ContextBrowseResult {\n    readonly path: string;\n    readonly displayPath?: string;\n    readonly depth: number;\n    readonly depthCapped: boolean;\n    readonly nodes: readonly ContextNodeView[];\n    readonly total: number;\n    readonly offset: number;\n    readonly remaining: number;\n}',
   },
   {
     name: 'ContextCatalog',
@@ -8245,7 +8245,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MapView',
-    declaration: 'export interface MapView {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroupView[];\n    readonly omittedGroups: number;\n    readonly pending: readonly MapPendingNote[];\n    readonly staleNotes: number;\n    readonly indexChanged: boolean;\n}',
+    declaration: 'export interface MapView {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroupView[];\n    readonly omittedGroups: number;\n    readonly pending: readonly MapPendingNote[];\n    readonly pendingOffset: number;\n    readonly nextPendingOffset: number | null;\n    readonly omittedPending: number;\n    readonly staleNotes: number;\n    readonly indexChanged: boolean;\n}',
   },
   {
     name: 'MarketCompatibility',

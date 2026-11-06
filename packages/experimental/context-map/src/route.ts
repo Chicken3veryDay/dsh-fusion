@@ -57,7 +57,20 @@ export async function selectCuratorRoute(
   if (current === undefined) {
     throw new ContextMapError('The agent has no model route to choose a cheaper curator route beside', 'CONTEXT_MAP_NO_CHEAP_ROUTE')
   }
-  const models = (await llm.listModels(current.provider)).slice(0, config.maxRoutesInspected)
+  signal?.throwIfAborted()
+  const catalog = llm.listModels(current.provider)
+  const aborted = Promise.withResolvers<never>()
+  const onAbort = (): void => { aborted.reject(signal?.reason) }
+  signal?.addEventListener('abort', onAbort, { once: true })
+  let models: readonly { readonly id: string }[]
+  try {
+    if (signal?.aborted === true) onAbort()
+    // Promise.race observes late catalog rejection after cancellation; this read has no owned mutations.
+    models = (await Promise.race([catalog, aborted.promise])).slice(0, config.maxRoutesInspected)
+    signal?.throwIfAborted()
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+  }
   const own = await llm.resolveModelInfo(current.provider, current.model, signal)
   const ownWindow = own.context?.contextWindow ?? Number.POSITIVE_INFINITY
   const ownEffort = effortIndex(own, current.reasoningEffort)

@@ -88,10 +88,16 @@ describe('the default curator', () => {
       textResponse('done'),
     ])
     const testing = (await w.sections()).find(section => section.headingPath.includes('Testing'))!
-    await w.ctx.contextMap.note(w.owner, { text: 'Tests run with vitest.', cites: [testing.id] })
-
-    await vi.waitFor(() => { expect(w.ctx.contextMap.snapshotOf(w.owner).groups[0]?.notes).toHaveLength(1) })
+    const filed = Promise.withResolvers<undefined>()
+    const unwatch = w.ctx.contextMap.watch(() => {
+      if (w.ctx.contextMap.snapshotOf(w.owner).groups[0]?.notes.length === 1) filed.resolve(undefined)
+    })
+    try {
+      await w.ctx.contextMap.note(w.owner, { text: 'Tests run with vitest.', cites: [testing.id] })
+      await filed.promise
+    } finally { unwatch() }
     await w.ctx.contextCurator.idle(w.owner.id)
+    expect(w.ctx.contextMap.snapshotOf(w.owner).groups[0]?.notes).toHaveLength(1)
     const map = w.ctx.contextMap.snapshotOf(w.owner)
     expect(map.pending).toEqual([])
     expect(map.curatorId).toBeNull()
@@ -139,41 +145,64 @@ describe('the default curator', () => {
   it('cancels a running curator when the service is disposed and settles before returning', async () => {
     const w = await scripted(() => ['hang'])
     const curator = w.ctx.contextCurator
-    await w.ctx.contextMap.note(w.owner, { text: 'Check this.' })
-    await vi.waitFor(() => { expect(w.adapter.requests).toHaveLength(1) })
-    expect(curator.isRunning(w.owner.id)).toBe(true)
-    expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).not.toBeNull()
+    const entered = Promise.withResolvers<undefined>()
+    const original = w.adapter.stream.bind(w.adapter)
+    const stream = vi.spyOn(w.adapter, 'stream').mockImplementation(async function* (options) {
+      for await (const chunk of original(options)) {
+        entered.resolve(undefined)
+        yield chunk
+      }
+    })
+    try {
+      await w.ctx.contextMap.note(w.owner, { text: 'Check this.' })
+      await entered.promise
+      expect(w.adapter.requests).toHaveLength(1)
+      expect(curator.isRunning(w.owner.id)).toBe(true)
+      expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).not.toBeNull()
 
-    await w.curatorFiber!.dispose()
-    expect(curator.isRunning(w.owner.id)).toBe(false)
-    expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBeNull()
-    expect(w.ctx.agents.list().map(agent => agent.id)).toEqual([w.owner.id])
+      await w.curatorFiber!.dispose()
+      expect(curator.isRunning(w.owner.id)).toBe(false)
+      expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBeNull()
+      expect(w.ctx.agents.list().map(agent => agent.id)).toEqual([w.owner.id])
+    } finally { stream.mockRestore() }
   })
 
   it('yields to another holder that claims the role and resumes when that holder is disposed', async () => {
     const w = await scripted(() => ['hang', 'hang'])
-    await w.ctx.contextMap.note(w.owner, { text: 'Check this.' })
-    await vi.waitFor(() => { expect(w.adapter.requests).toHaveLength(1) })
-    const first = w.ctx.contextMap.snapshotOf(w.owner).curatorId
+    const requests = [Promise.withResolvers<undefined>(), Promise.withResolvers<undefined>()]
+    const original = w.adapter.stream.bind(w.adapter)
+    const stream = vi.spyOn(w.adapter, 'stream').mockImplementation(async function* (options) {
+      for await (const chunk of original(options)) {
+        requests[w.adapter.requests.length - 1]?.resolve(undefined)
+        yield chunk
+      }
+    })
+    try {
+      await w.ctx.contextMap.note(w.owner, { text: 'Check this.' })
+      await requests[0]!.promise
+      expect(w.adapter.requests).toHaveLength(1)
+      const first = w.ctx.contextMap.snapshotOf(w.owner).curatorId
 
-    const assistant = await w.spawnRoot('assistant')
-    await w.ctx.contextMap.claim(w.owner, { holderId: assistant.id })
-    await w.ctx.contextCurator.idle(w.owner.id)
-    expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBe(assistant.id)
-    expect(w.ctx.contextCurator.isRunning(w.owner.id)).toBe(false)
-    expect(w.ctx.agents.get(first!)).toBeUndefined()
+      const assistant = await w.spawnRoot('assistant')
+      await w.ctx.contextMap.claim(w.owner, { holderId: assistant.id })
+      await w.ctx.contextCurator.idle(w.owner.id)
+      expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBe(assistant.id)
+      expect(w.ctx.contextCurator.isRunning(w.owner.id)).toBe(false)
+      expect(w.ctx.agents.get(first!)).toBeUndefined()
 
-    await w.ctx.contextMap.note(w.owner, { text: 'Another thing.' })
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(w.adapter.requests).toHaveLength(1)
-    expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBe(assistant.id)
+      await w.ctx.contextMap.note(w.owner, { text: 'Another thing.' })
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(w.adapter.requests).toHaveLength(1)
+      expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBe(assistant.id)
 
-    await w.disposeRoot(assistant)
-    await vi.waitFor(() => { expect(w.adapter.requests).toHaveLength(2) })
-    const resumed = w.ctx.contextMap.snapshotOf(w.owner).curatorId
-    expect(resumed).not.toBeNull()
-    expect(resumed).not.toBe(assistant.id)
-    expect(resumed).not.toBe(first)
+      await w.disposeRoot(assistant)
+      await requests[1]!.promise
+      expect(w.adapter.requests).toHaveLength(2)
+      const resumed = w.ctx.contextMap.snapshotOf(w.owner).curatorId
+      expect(resumed).not.toBeNull()
+      expect(resumed).not.toBe(assistant.id)
+      expect(resumed).not.toBe(first)
+    } finally { stream.mockRestore() }
   })
 
   it('reports that no route is cheap instead of running on an expensive one', async () => {

@@ -57,7 +57,7 @@ export function listingBytes(header: string, lines: readonly string[], footer: s
 export function renderBrowse(result: ContextBrowseResult): string {
   const footer = browseFooter(result.nodes.length, result.offset, result.remaining)
   return [
-    browseHeader(result.path, result.depth, result.depthCapped),
+    browseHeader(result.displayPath ?? result.path, result.depth, result.depthCapped),
     ...result.nodes.map(browseLine),
     ...footer === '' ? [] : [footer],
   ].join('\n')

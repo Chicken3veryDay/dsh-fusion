@@ -48,6 +48,8 @@ export interface ContextNodeView {
 export interface ContextBrowseResult {
   /** The node that was listed; empty for the root. */
   readonly path: string
+  /** Byte-bounded path for display when the full machine-readable path cannot fit. */
+  readonly displayPath?: string
   /** The depth that applied, after capping. */
   readonly depth: number
   /** True when the requested depth was lowered to the configured maximum. */
@@ -118,7 +120,7 @@ export interface ToolPlacement {
 
 /**
  * Decide the placement of one tool. Return `undefined` to leave the decision to later
- * assigners and then to the deterministic default.
+ * assigners and then to the deterministic default. Opinions conflicting with a recorded origin are ignored.
  * @param tool - name and description of the registered tool.
  * @returns the placement, or `undefined` for no opinion.
  */
