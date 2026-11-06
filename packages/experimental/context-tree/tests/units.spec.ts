@@ -111,20 +111,23 @@ describe('rendering', () => {
 })
 
 describe('compaction stubs', () => {
-  it('names a revoked grant by anchor and path', () => {
+  it('names a revoked grant by anchor and stable section id', async () => {
     const stub = grantStub({
       kind: 'context-grant', form: 'instructions', key: 'k', path: 'Instructions/Project/AGENTS.md', anchor: 'AGENTS.md#Rules',
       sourceKind: 'project-instructions', hash: 'sha256:x',
     })
     expect(stub).toEqual({
       key: 'k',
-      text: 'loaded AGENTS.md#Rules; reload with context_load("Instructions/Project/AGENTS.md") if needed',
+      text: 'loaded AGENTS.md#Rules; reload with context_load("k") if needed',
     })
+    await expect(stub.text + '\n').toMatchFileSnapshot('./expected/section-reload-stub.txt')
   })
 
-  it('lists at most four revoked tools and counts the rest', () => {
+  it('lists at most four revoked tools and counts the rest', async () => {
     const base = { kind: 'context-activation', form: 'notice', summary: 's', key: 'k', nodes: ['Tools/Global/deploy'] } as const
-    expect(activationStub({ ...base, tools: ['a', 'b'] }).text).toBe('tools no longer callable: a, b; load Tools/Global/deploy again with context_load if needed')
-    expect(activationStub({ ...base, tools: ['a', 'b', 'c', 'd', 'e', 'f'] }).text).toContain('a, b, c, d and 2 more')
+    expect(activationStub({ ...base, tools: ['a', 'b'] }).text).toBe('tools no longer callable: a, b; load Tools/@/a, Tools/@/b again with context_load if needed')
+    const text = activationStub({ ...base, tools: ['a', 'b', 'c', 'd', 'e', 'f'] }).text
+    expect(text).toContain('a, b, c, d and 2 more')
+    await expect(text + '\n').toMatchFileSnapshot('./expected/tool-reload-stub.txt')
   })
 })

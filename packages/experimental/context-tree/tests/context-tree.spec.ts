@@ -18,7 +18,7 @@ import LlmRuntime, {
   type StreamChunk,
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import SessionStore, { Session, SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
@@ -548,7 +548,7 @@ describe('compaction', () => {
     const derived = texts(w.session.deriveMessages())
     expect(derived).not.toContain('Run vitest.')
     expect(derived).not.toContain('<context-activation>')
-    expect(derived).toContain('reload with context_load("Instructions/Project/AGENTS.md/')
+    expect(derived).toContain('reload with context_load("sec_')
     expect(derived).toContain('tools no longer callable: deploy_run, deploy_status')
 
     const republished = await agentEvents(w.ctx, w.agent).waterfall(
@@ -575,7 +575,8 @@ describe('compaction', () => {
     const text = catalog?.content.map(block => block.type === 'text' ? block.text : '').join('') ?? ''
     expect(text).toContain('Dropped by compaction')
     expect(text).toContain('Instructions/Project/AGENTS.md/')
-    expect(text).toContain('Tools/Global/deploy')
+    expect(text).toContain('Tools/@/deploy_run')
+    expect(text).toContain('Tools/@/deploy_status')
   })
 
   it('removes a dropped entry once the same material is loaded again', async () => {
@@ -1118,4 +1119,98 @@ it('revokes activation messages removed by an ordinary Session surface replaceme
   })
   expect(await declared(w)).not.toContain('deploy_run')
   expect(w.tree.activeTools(w.agent).size).toBe(0)
+})
+
+
+it.each(['queued', 'claimed', 'logged', 'legacy'] as const)('core replacements retain the old budget charge while %s until compaction', async (stage) => {
+  const w = await world({ coreBytes: 4096 })
+  write(join(w.project, 'AGENTS.md'), '# First\n\n' + '界'.repeat(950) + '\n\n## Second\n\n' + '界'.repeat(950) + '\n')
+  const metas = (await w.ctx.contextIndex.snapshot({ workingDirectory: w.project })).sections
+    .filter(section => section.kind === 'project-instructions')
+  let selected = [metas[0]!.id]
+  w.tree.registerEagerCore(() => selected)
+  const first = (await reviewStep(w)).filter(message => message.source.kind === 'context-grant').map((message) => {
+    if (stage !== 'legacy' || message.source.kind !== 'context-grant') return message
+    const { coreBytes: _charge, ...source } = message.source
+    return { ...message, source }
+  })
+  expect(first).toHaveLength(1)
+  w.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: first })
+  if (stage !== 'queued') w.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: first.length, inserted: [] })
+  if (stage === 'logged' || stage === 'legacy') for (const message of first) w.session.append('user/message', message, { surfaceOp: 'append' })
+  selected = [metas[1]!.id]
+  expect((await reviewStep(w)).filter(message => message.source.kind === 'context-grant')).toHaveLength(0)
+  if (stage === 'logged' || stage === 'legacy') {
+    const { start, end } = conversation(w.session, {})
+    await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+    expect((await reviewStep(w)).filter(message => message.source.kind === 'context-grant')).toHaveLength(1)
+  }
+})
+
+
+it.each(['section', 'tools'] as const)('reloads logged %s identities from stubs and the dropped catalog after regrouping and compaction', async (kind) => {
+  const w = await world()
+  const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project/AGENTS.md' })
+  const path = kind === 'section' ? listing.nodes[0]!.path : 'Tools/Global/deploy'
+  const loaded = await w.tree.load(w.agent, { paths: [path] })
+  const source = loaded.contexts[0]!.source
+  const reloads = source.kind === 'context-grant' ? [source.key]
+    : source.kind === 'context-activation' ? source.tools.map(name => `Tools/@/${encodeURIComponent(name)}`) : []
+  expect(reloads.length).toBeGreaterThan(0)
+  w.tree.registerCuratedGroups(() => [{
+    root: kind === 'section' ? 'Instructions' : 'Tools', origin: 'project', name: 'regrouped', title: 'Regrouped', summary: 'Use for this work.',
+    sections: kind === 'section' && source.kind === 'context-grant' ? [ContextSectionIdOf(source.key)] : [],
+    tools: kind === 'tools' ? ['deploy_run', 'deploy_status'] : [],
+  }])
+  const { start, end } = conversation(w.session, { 2: loaded.contexts })
+  await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+  const stub = texts(w.session.deriveMessages())
+  for (const address of reloads) expect(stub).toContain(address)
+  const catalog = texts(await reviewStep(w))
+  if (kind === 'tools') for (const address of reloads) expect(catalog).toContain(address)
+  else expect(catalog).toContain(path)
+  const reloaded = await w.tree.load(w.agent, { paths: [...reloads, path] })
+  expect(reloaded.result.missing).toEqual([])
+  if (kind === 'section') expect(reloaded.result.granted).toHaveLength(1)
+  else expect(reloaded.result.activated.flatMap(entry => entry.tools)).toEqual(['deploy_run', 'deploy_status'])
+})
+
+
+it('restores core charges and reload identities from a serialized checkpoint plus the compaction suffix', async () => {
+  const w = await world()
+  await w.ctx.plugin(SessionStore)
+  w.ctx.effect(() => w.ctx.sessions.enter(w.session), 'test.session()')
+  w.ctx.sessions.announce(w.session)
+  const sections = (await w.ctx.contextIndex.snapshot({ workingDirectory: w.project })).sections
+    .filter(section => section.kind === 'project-instructions')
+  w.tree.registerEagerCore(() => sections.map(section => section.id))
+  const core = (await reviewStep(w)).filter(message => message.source.kind === 'context-grant')
+  for (const message of core) w.session.append('user/message', message, { surfaceOp: 'append' })
+  const reader = await w.ctx.sessionProjections.register(contextTreeProjectionDefinition)
+  const prefix = reader.stateOf(w.session)
+  const checkpoint = contextTreeProjectionDefinition.stateSchema.parse(JSON.parse(JSON.stringify(prefix)))
+  expect(checkpoint.grants.reduce((sum, grant) => sum + (grant.coreBytes ?? 0), 0))
+    .toBe(sections.reduce((sum, section) => sum + section.bytes, 0))
+  const legacy = { ...checkpoint, grants: checkpoint.grants.map(({ coreBytes: _bytes, ...grant }) => grant) }
+  expect(contextTreeProjectionDefinition.stateSchema.safeParse(legacy).success).toBe(false)
+  const suffix: SessionEvent[] = []
+  const unwatch = w.ctx.on('session/event', (session, event) => { if (session.id === w.session.id) suffix.push(event) })
+  try {
+    const loaded = await w.tree.load(w.agent, { paths: ['Tools/Global/deploy'] })
+    const { start, end } = conversation(w.session, { 2: loaded.contexts })
+    await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+    const restored = suffix.reduce((state, event) => contextTreeProjectionDefinition.apply(state, event), checkpoint)
+    expect(restored).toEqual(reader.stateOf(w.session))
+    expect(restored.grants).toEqual([])
+    expect(restored.dropped.flatMap(entry => entry.tools)).toEqual(['deploy_run', 'deploy_status'])
+  } finally { unwatch() }
+})
+
+
+it('resolves stable tool addresses even when the tool name is also an origin folder', async () => {
+  const w = await world()
+  w.ctx.tools.register(probeTool('Global', w.calls))
+  const loaded = await w.tree.load(w.agent, { paths: ['Tools/@/Global'] })
+  expect(loaded.result.missing).toEqual([])
+  expect(loaded.result.activated.flatMap(entry => entry.tools)).toEqual(['Global'])
 })

@@ -34,9 +34,10 @@ function digestOf(parts: readonly string[]): string {
  * @param path - tree path the section was loaded from.
  * @param body - the section body from the index.
  * @param sourceKind - where the file comes from.
+ * @param coreBytes - bytes charged to the eager-core budget until compaction; defaults to zero for explicit loads.
  * @returns a user message whose source marks it revocable.
  */
-export function grantMessage(path: string, body: ContextSectionBody, sourceKind: ContextSourceKind): UserMessage {
+export function grantMessage(path: string, body: ContextSectionBody, sourceKind: ContextSourceKind, coreBytes?: number): UserMessage {
   const tail = body.truncated ? '\n[Cut here: the load budget ended inside this section; the rest is in the file.]' : ''
   return createUserMessage({
     content: [{
@@ -51,6 +52,7 @@ export function grantMessage(path: string, body: ContextSectionBody, sourceKind:
       anchor: body.anchor,
       sourceKind,
       hash: body.hash,
+      coreBytes: coreBytes ?? 0,
       ...body.truncated ? { truncated: true as const } : {},
     },
   })
@@ -145,7 +147,7 @@ export function catalogMessage(
 export function grantStub(source: ContextGrantSource): RevocableSourceStub {
   return {
     key: source.key,
-    text: `loaded ${clip(source.anchor, 120)}; reload with context_load("${clip(source.path, 160)}") if needed`,
+    text: `loaded ${clip(source.anchor, 120)}; reload with context_load("${source.key}") if needed`,
   }
 }
 
@@ -159,6 +161,6 @@ export function activationStub(source: ContextActivationSource): RevocableSource
   const more = source.tools.length > 4 ? ` and ${source.tools.length - 4} more` : ''
   return {
     key: source.key,
-    text: `tools no longer callable: ${shown}${more}; load ${clip(source.nodes.join(', '), 160)} again with context_load if needed`,
+    text: `tools no longer callable: ${shown}${more}; load ${source.tools.map(name => `Tools/@/${encodeURIComponent(name)}`).join(', ')} again with context_load if needed`,
   }
 }

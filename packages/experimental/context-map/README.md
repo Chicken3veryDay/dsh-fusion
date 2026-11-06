@@ -39,7 +39,7 @@ A note whose cited section changed or vanished is stale: its group summary says 
 
 ### The curator role
 
-The role is a durable grant recorded in the log, checked against the exact live agent that calls, never against a Session id passed in. There is exactly one holder per map; the owner association is recovered from prepared live Session projections after plugin reload. `claim` replaces the previous holder and logs the handoff; `release` gives the role up. A holder that disappears without releasing is recorded as gone and the role is free again. The curator tools `map_view`, `map_group`, `map_note`, and `map_core` are declared only for the holder, and the service rejects any other caller at execution, so a stale tool set gains nothing. No package here imports an assistant: a later assistant claims the role through `ctx.contextMap.claim`.
+The role is a durable grant recorded in the log, checked against the exact live agent that calls, never against a Session id passed in. There is exactly one holder per map; a reverse holder index is rebuilt from prepared live Session projections on load and updated on agent creation and map commits. A holder may curate several maps; pass `root_session_id` to each curator tool to select one. Disposal releases every held map. `claim` replaces the previous holder and logs the handoff; `release` gives the role up. A holder that disappears without releasing is recorded as gone and the role is free again. The curator tools `map_view`, `map_group`, `map_note`, and `map_core` are declared only for the holder, and the service rejects any other caller at execution, so a stale tool set gains nothing. No package here imports an assistant: a later assistant claims the role through `ctx.contextMap.claim`.
 
 ### The default curator
 
@@ -72,9 +72,9 @@ The service also exposes `watch`, `isCurator`, `curatorOf`, `snapshotOf`, `note`
 ### Tools
 
 - `context_note(text, cites?)` for every agent: records one short fact. It returns the pending id and how many notes wait. A subagent's note goes to the map of the conversation it belongs to.
-- `map_view(pending_offset?)`, `map_group(action, …)`, `map_note(action, …)`, `map_core(sections)` for the curator only.
+- `map_view(pending_after?, group_after?, group_id?, note_after?)`, `map_group(action, …)`, `map_note(action, …)`, `map_core(sections)` for the curator only.
 
-The view budgets the complete serialized result, including pending notes, core ids, and counters. `omittedPending` reports pending notes beyond the page; pass `nextPendingOffset` as `pending_offset` to continue at the same revision. `omittedGroups` counts groups that do not fit. Metadata or a single pending note that cannot fit fails with `CONTEXT_MAP_LIMIT`; increase `maxViewBytes`.
+The view budgets the complete serialized result. Continue pending notes with `nextPendingAfter` as `pending_after`, groups with `nextGroupAfter` as `group_after`, and an incomplete group's notes with its id as `group_id` and `nextNoteAfter` as `note_after`. Cursors follow ids in lexical order and remain valid after filing, dropping, or retiring earlier entries. New entries before a cursor appear on a fresh scan. Group pages omit pending notes, so a full queue cannot hide groups. Each group's `omittedNotes` counts notes left after its page. Metadata or a single item that cannot fit fails with `CONTEXT_MAP_LIMIT`; increase `maxViewBytes`. The minimum view budget is 1,024 bytes and must also cover `512 + 23 × maxCoreSections` bytes of metadata. A rejected note at a full queue wakes the default curator again.
 
 ### Configuration
 

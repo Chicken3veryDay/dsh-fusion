@@ -13,15 +13,20 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const seq = z.number().int().nonnegative()
 const names = z.array(z.string().min(1))
-const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean(), path: z.string().min(1) }).strict()
-const pendingGrant = z.object({ key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean() }).strict()
+const grant = z.object({
+  seq, key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean(),
+  coreBytes: z.number().int().nonnegative().nullable(), path: z.string().min(1),
+}).strict()
+const pendingGrant = z.object({
+  key: z.string().min(1), hash: z.string().min(1), truncated: z.boolean(), coreBytes: z.number().int().nonnegative().nullable(),
+}).strict()
 const logged = z.object({ seq, id: z.string().min(1), key: z.string().min(1), tools: names, nodes: names }).strict()
-const dropped = z.object({ key: z.string().min(1), paths: names }).strict()
+const dropped = z.object({ key: z.string().min(1), paths: names, tools: names }).strict()
 const queued = z.object({ id: z.string().min(1), tools: names, grants: z.array(pendingGrant) }).strict()
 const catalog = z.object({ seq, digest: z.string().min(1) }).strict()
 
 const stateSchema = z.object({
-  /** Loaded-section candidates after compaction, one entry per section id. */
+  /** Loaded-section candidates after compaction, including earlier eager grants still charged to the core budget. */
   grants: z.array(grant),
   /** Activation-message candidates after compaction, in log order. */
   activations: z.array(logged),
@@ -40,7 +45,7 @@ const stateSchema = z.object({
 /** Private checkpoint state; consumers read through `ContextTreeService`. */
 export type ContextTreeProjectionState = z.infer<typeof stateSchema>
 
-const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1), truncated: z.boolean().optional() })
+const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1), truncated: z.boolean().optional(), coreBytes: z.number().int().nonnegative().optional() })
 const activationSource = z.object({ kind: z.literal('context-activation'), key: z.string().min(1), tools: names, nodes: names })
 const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest: z.string().min(1) })
 
@@ -49,9 +54,11 @@ const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest
  * @param message - any logged or queued message.
  * @returns the key and hash, empty when the message is not a readable grant.
  */
-function grantsOf(message: { readonly source: unknown }): { key: string; hash: string; truncated: boolean }[] {
+function grantsOf(message: { readonly source: unknown }): { key: string; hash: string; truncated: boolean; coreBytes: number | null }[] {
   const parsed = grantSource.safeParse(message.source)
-  return parsed.success ? [{ key: parsed.data.key, hash: parsed.data.hash, truncated: parsed.data.truncated === true }] : []
+  return parsed.success ? [{
+    key: parsed.data.key, hash: parsed.data.hash, truncated: parsed.data.truncated === true, coreBytes: parsed.data.coreBytes ?? null,
+  }] : []
 }
 
 /**
@@ -81,7 +88,7 @@ export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
  */
 export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
-  stateVersion: 3,
+  stateVersion: 4,
   stateSchema,
   init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], published: false }),
   apply: (state, event) => {
@@ -106,12 +113,15 @@ export const contextTreeProjectionDefinition = {
           key: granted.data.key,
           hash: granted.data.hash,
           truncated: granted.data.truncated === true,
+          coreBytes: granted.data.coreBytes ?? null,
           path: granted.data.path,
         }
         return {
           ...state,
           dropped: state.dropped.filter(existing => existing.key !== entry.key),
-          grants: [...state.grants.filter(existing => existing.key !== entry.key), entry],
+          grants: [...state.grants.filter(existing => (
+            existing.key !== entry.key || existing.coreBytes === null || existing.coreBytes > 0
+          )), entry],
           claimed: state.claimed.filter(pending => pending.id !== event.data.id),
         }
       }
@@ -139,8 +149,9 @@ export const contextTreeProjectionDefinition = {
         return state
       }
       const lost = [
-        ...state.grants.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: [entry.path] })),
-        ...state.activations.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: entry.nodes })),
+        ...state.grants.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: [entry.path], tools: [] })),
+        ...state.activations.filter(entry => shadowed.has(entry.seq))
+          .map(entry => ({ key: entry.key, paths: entry.nodes, tools: entry.tools })),
       ]
       const lostKeys = new Set(lost.map(entry => entry.key))
       const remembered = [...state.dropped.filter(entry => !lostKeys.has(entry.key)), ...lost].slice(-DROPPED_RETAINED)

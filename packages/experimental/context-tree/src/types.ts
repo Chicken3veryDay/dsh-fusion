@@ -186,6 +186,8 @@ export interface ContextGrantSource {
   readonly hash: string
   /** True when the injected text is a prefix of the section. */
   readonly truncated?: true
+  /** Bytes charged to the eager-core budget until revocation; zero for explicit loads, absent in earlier records. */
+  readonly coreBytes?: number
 }
 
 /** Tool activation message source; revocable at compaction. */

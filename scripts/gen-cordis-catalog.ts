@@ -1072,6 +1072,8 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   DropPendingRequest: 'packages/experimental/context-map/README.md',
   FilePendingRequest: 'packages/experimental/context-map/README.md',
   MapChange: 'packages/experimental/context-map/README.md',
+  MapGroupId: 'packages/experimental/context-map/README.md',
+  MapNoteId: 'packages/experimental/context-map/README.md',
   MapPendingId: 'packages/experimental/context-map/README.md',
   MapSnapshot: 'packages/experimental/context-map/README.md',
   MapTarget: 'packages/experimental/context-map/README.md',

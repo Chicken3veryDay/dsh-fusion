@@ -1,13 +1,29 @@
 {
   "schema": {
     "name": "map_view",
-    "description": "Read the project map: groups with their members and notes, the eager core, pending notes, and which notes are stale. Pass nextPendingOffset as pending_offset to continue omitted pending notes.",
+    "description": "Read the project map, core, pending notes, and stale flags. Follow nextPendingAfter as pending_after and nextGroupAfter as group_after even after edits. For a group with omittedNotes, read group_id with note_after from nextNoteAfter until complete. Group pages omit pending notes.",
     "parameters": {
       "type": "object",
       "properties": {
-        "pending_offset": {
-          "type": "integer",
-          "description": "Pending entries to skip; use nextPendingOffset from the previous view. Default 0."
+        "root_session_id": {
+          "type": "string",
+          "description": "Map owner Session id; required when you hold several maps."
+        },
+        "pending_after": {
+          "type": "string",
+          "description": "Continue pending notes after this id; use nextPendingAfter."
+        },
+        "group_after": {
+          "type": "string",
+          "description": "Continue groups after this id; use nextGroupAfter, or an empty string to start groups only."
+        },
+        "group_id": {
+          "type": "string",
+          "description": "Read one group and its notes without pending notes."
+        },
+        "note_after": {
+          "type": "string",
+          "description": "Continue group_id notes after this id; use nextNoteAfter."
         }
       }
     }
@@ -30,10 +46,10 @@
         "by": "<owner>"
       }
     ],
-    "pendingOffset": 0,
-    "nextPendingOffset": null,
+    "nextPendingAfter": null,
     "omittedPending": 0,
     "groups": [],
+    "nextGroupAfter": null,
     "omittedGroups": 0,
     "staleNotes": 0,
     "indexChanged": false

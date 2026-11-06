@@ -319,19 +319,33 @@ export class ContextTreeService extends Service {
     const tree = await this.treeFor(agent, signal)
     const state = this.stateFor(agent)
     const active = activeToolNames(state)
+    const allLeaves = leavesOf(tree.root)
     const missing: string[] = []
     const sectionNodes = new Map<ContextSectionId, { node: TreeNode; section: ContextSectionMeta }>()
     const toolOwners = new Map<string, string>()
     for (const raw of request.paths) {
       const segments = splitPath(raw)
       const found = segments === undefined || segments.length === 0 ? undefined : findNode(tree, segments)
-      if (found === undefined) {
-        missing.push(raw)
+      if (found !== undefined) {
+        const leaves = leavesOf(found)
+        for (const leaf of leaves.sections) if (!sectionNodes.has(leaf.section.id)) sectionNodes.set(leaf.section.id, leaf)
+        for (const leaf of leaves.tools) if (!toolOwners.has(leaf.tool)) toolOwners.set(leaf.tool, formatPath(found.segments))
         continue
       }
-      const leaves = leavesOf(found)
-      for (const leaf of leaves.sections) if (!sectionNodes.has(leaf.section.id)) sectionNodes.set(leaf.section.id, leaf)
-      for (const leaf of leaves.tools) if (!toolOwners.has(leaf.tool)) toolOwners.set(leaf.tool, formatPath(found.segments))
+      const identity = segments?.at(-1)
+      const section = allLeaves.sections.find(leaf => leaf.section.id === identity)
+      if (section !== undefined) {
+        sectionNodes.set(section.section.id, section)
+        continue
+      }
+      const names = new Set([
+        ...allLeaves.tools.filter(leaf => leaf.tool === identity && (segments?.length === 1 || segments?.[0] === 'Tools')).map(leaf => leaf.tool),
+        ...state.activations.filter(entry => entry.nodes.includes(raw)).flatMap(entry => entry.tools),
+        ...state.dropped.filter(entry => entry.paths.includes(raw)).flatMap(entry => entry.tools),
+      ])
+      const tools = allLeaves.tools.filter(leaf => names.has(leaf.tool))
+      if (tools.length === 0) missing.push(raw)
+      for (const leaf of tools) if (!toolOwners.has(leaf.tool)) toolOwners.set(leaf.tool, raw)
     }
 
     const held = grantedHashes(state)
@@ -441,32 +455,45 @@ export class ContextTreeService extends Service {
     const wanted = [...new Set([...this.coreProviders].flatMap(provider => provider(agent)))]
     if (wanted.length === 0) return []
     const tree = await this.treeFor(agent, signal)
-    const held = grantedHashes(this.stateFor(agent))
+    const state = this.stateFor(agent)
+    const held = grantedHashes(state)
     const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
-    let room = this.config.coreBytes
+    const heldGrants = [...state.grants, ...[...state.claimed, ...state.inbox].flatMap(entry => entry.grants)]
+    // Earlier writers did not distinguish explicit loads from eager grants.
+    if (heldGrants.some(grant => grant.coreBytes === null)) return []
+    const heldCore = heldGrants.reduce((sum, grant) => sum + (grant.coreBytes ?? 0), 0)
+    const selectedHeld = wanted.reduce((sum, id) => {
+      const leaf = leaves.get(id)
+      if (leaf === undefined || held.get(id) !== leaf.section.hash
+        || heldGrants.some(grant => (
+          grant.key === id && grant.hash === leaf.section.hash && grant.coreBytes !== null && grant.coreBytes > 0
+        ))) return sum
+      return sum + leaf.section.bytes
+    }, 0)
+    let room = Math.max(0, this.config.coreBytes - heldCore - selectedHeld)
     const missing = wanted.filter((id) => {
       const leaf = leaves.get(id)
-      if (leaf === undefined || leaf.section.bytes > room) return false
+      if (leaf === undefined || held.get(id) === leaf.section.hash || leaf.section.bytes > room) return false
       room -= leaf.section.bytes
-      return held.get(id) !== leaf.section.hash
+      return true
     })
     if (missing.length === 0) return []
     const read = await this.ctx.contextIndex.read(
       { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
       missing,
-      { maxBytes: this.config.coreBytes },
+      { maxBytes: this.config.coreBytes - heldCore - selectedHeld },
       signal,
     )
     // A section cut by the budget is not granted: its hash would count it as held without its full text.
     return read.sections.flatMap((body) => {
       const leaf = leaves.get(body.id)
-      return leaf === undefined || body.truncated ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind)]
+      return leaf === undefined || body.truncated ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind, body.bytes)]
     })
   }
 
   /** Newest dropped paths that fit `maxDroppedBytes`, oldest first, with a count of the ones left out. */
   private droppedPaths(state: ContextTreeProjectionState): string[] {
-    const paths = [...new Set(state.dropped.flatMap(entry => entry.paths))]
+    const paths = [...new Set(state.dropped.flatMap(entry => entry.tools.length > 0 ? entry.tools.map(name => `Tools/@/${encodeURIComponent(name)}`) : entry.paths))]
     const shown: string[] = []
     let used = 0
     for (const path of paths.toReversed()) {

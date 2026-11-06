@@ -104,6 +104,10 @@ describe('the default curator', () => {
     expect(map.groups[0]).toMatchObject({ path: RULES, notes: [{ text: 'Tests run with vitest.' }] })
     expect(w.adapter.requests.map(request => [request.model, request.reasoningEffort])).toEqual(Array(4).fill(['small', 'low']))
 
+    const prompt = w.adapter.requests[0]!.messages.flatMap(message => message.content)
+      .flatMap(block => block.type === 'text' ? [block.text] : []).find(text => text.startsWith('You are the project map curator.'))
+    if (prompt === undefined) throw new Error('Curator prompt missing from its first request')
+    await expect(prompt + '\n').toMatchFileSnapshot('./expected/curator-prompt.txt')
     const events = await logged(w.ctx, w.owner.id)
     const ops = events.filter(event => event.type === 'context-map/state').map(event => (event.data as { op: { kind: string } }).op.kind)
     expect(ops).toEqual(['note-pending', 'claim', 'group-set', 'note-file', 'release'])

@@ -1,0 +1,1 @@
+loaded AGENTS.md#Rules; reload with context_load("k") if needed

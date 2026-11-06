@@ -153,6 +153,7 @@ export class ContextMapService extends Service {
   /** Section hashes the index had at each owner's last read, for the stale flag the tree shows. */
   private readonly hashes = new Map<SessionId, ReadonlyMap<ContextSectionId, string>>()
   private readonly announced = new Map<SessionId, string>()
+  private readonly heldOwners = new Map<SessionId, Set<SessionId>>()
   private disposed = false
 
   constructor(ctx: Context, config: Config = {}) {
@@ -166,6 +167,13 @@ export class ContextMapService extends Service {
       this.disposed = true
       this.watchers.clear()
     }, 'contextMap.runtime()')
+    for (const agent of this.ctx.agents.list()) this.indexHolder(agent)
+    this.ctx.on('agent/created', ({ agent }) => { this.indexHolder(agent) })
+    this.ctx.on('session/event', (session, event) => {
+      if (event.type !== 'context-map/state' || event.data.snapshot.ownerSessionId !== session.id) return
+      const owner = this.ctx.agents.get(session.id)
+      if (owner !== undefined) this.indexHolder(owner)
+    })
     this.ctx.contextTree.registerCuratedGroups(agent => this.groupsFor(agent))
     this.ctx.contextTree.registerEagerCore(agent => this.snapshotOfRoot(agent).core)
     this.ctx.contextTree.registerManagedTools(CURATOR_TOOL_NAMES, agent => this.isCurator(agent))
@@ -181,12 +189,15 @@ export class ContextMapService extends Service {
       return decision
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
-      const ownerId = this.heldOwnerId(agent.id)
-      if (ownerId === undefined) return
-      this.notify({ kind: 'holder-gone', ownerSessionId: ownerId, holderId: agent.id })
-      void this.releaseGone(ownerId, agent.id).catch((error: unknown) => {
-        this.ctx.logger.warn(`context map: could not log the end of curator ${agent.id}: ${String(error)}`)
-      })
+      const owners = [...this.heldOwners.get(agent.id) ?? []]
+      for (const held of this.heldOwners.values()) held.delete(agent.id)
+      this.heldOwners.delete(agent.id)
+      for (const ownerId of owners) {
+        this.notify({ kind: 'holder-gone', ownerSessionId: ownerId, holderId: agent.id })
+        void this.releaseGone(ownerId, agent.id).catch((error: unknown) => {
+          this.ctx.logger.warn(`context map: could not log the end of curator ${agent.id}: ${String(error)}`)
+        })
+      }
     })
   }
 
@@ -203,12 +214,13 @@ export class ContextMapService extends Service {
   /**
    * Whether an agent holds the curator role of its map right now.
    * @param agent - the agent.
+   * @param rootSessionId - optional map to check.
    * @returns true only for the live holder.
    */
-  isCurator(agent: Agent): boolean {
+  isCurator(agent: Agent, rootSessionId?: SessionId): boolean {
     if (this.disposed || this.ctx.agents.get(agent.id) !== agent) return false
-    const owner = this.ctx.agents.get(this.heldOwnerId(agent.id) ?? this.rootOf(agent).id)
-    return owner !== undefined && this.snapshotOf(owner).curatorId === agent.id
+    const owners = this.heldOwners.get(agent.id)
+    return rootSessionId === undefined ? (owners?.size ?? 0) > 0 : owners?.has(rootSessionId) === true
   }
 
   /**
@@ -242,66 +254,72 @@ export class ContextMapService extends Service {
   /**
    * Read a map as a member of its Session lineage: the owner, a direct child, or the holder.
    * @param caller - the exact live agent.
-   * @param target - map (defaults to the held map or caller's root) and pendingOffset (defaults to 0).
+   * @param target - map and edit-stable cursors; groupId reads one group's notes without pending entries.
    * @param signal - cancellation.
-   * @returns a view within `maxViewBytes`, with stale notes flagged.
-   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder;
-   * `CONTEXT_MAP_LIMIT` when metadata or one pending note cannot fit; increase `maxViewBytes` to read it.
+   * @returns a view within `maxViewBytes`, with continuations and stale notes flagged.
+   * @throws {@link ContextMapError} for an unauthorized caller, unknown group, or an item exceeding the view budget.
    */
-  async view(caller: Agent, target: MapTarget & { readonly pendingOffset?: number } = {}, signal?: AbortSignal): Promise<MapView> {
+  async view(caller: Agent, target: MapTarget & {
+    readonly pendingAfter?: MapPendingId
+    readonly groupAfter?: MapGroupId | ''
+    readonly groupId?: MapGroupId
+    readonly noteAfter?: MapNoteId | ''
+  } = {}, signal?: AbortSignal): Promise<MapView> {
+    if (target.noteAfter !== undefined && target.groupId === undefined) {
+      throw new ContextMapError('noteAfter requires groupId', 'CONTEXT_MAP_INVALID_INPUT')
+    }
     const owner = this.member(caller, target.rootSessionId)
     const facts = await this.facts(owner, signal)
     const snapshot = this.snapshotOf(owner)
-    const pendingOffset = target.pendingOffset ?? 0
-    if (!Number.isSafeInteger(pendingOffset) || pendingOffset < 0) {
-      throw new ContextMapError('pendingOffset must be a non-negative integer', 'CONTEXT_MAP_INVALID_INPUT')
-    }
-    const groups: MapGroupView[] = []
-    const pending: MapSnapshot['pending'][number][] = []
-    const staleNotes = snapshot.groups.reduce((sum, group) => sum + group.notes.filter(note => isStale(note.cites, facts)).length, 0)
-    const view: MapView = {
-      ownerSessionId: snapshot.ownerSessionId,
-      revision: snapshot.revision,
-      curatorId: snapshot.curatorId,
-      core: snapshot.core,
-      pending,
-      pendingOffset,
-      nextPendingOffset: null,
-      omittedPending: Math.max(0, snapshot.pending.length - pendingOffset),
-      groups,
-      omittedGroups: snapshot.groups.length,
-      staleNotes,
+    const pending = target.groupAfter !== undefined || target.groupId !== undefined ? []
+      : snapshot.pending.filter(note => note.id > (target.pendingAfter ?? '')).toSorted((a, b) => a.id.localeCompare(b.id))
+    const groups = target.groupId === undefined
+      ? snapshot.groups.filter(group => group.id > (target.groupAfter ?? '')).toSorted((a, b) => a.id.localeCompare(b.id))
+      : [this.group(snapshot, target.groupId)]
+    let view: MapView = {
+      ownerSessionId: snapshot.ownerSessionId, revision: snapshot.revision, curatorId: snapshot.curatorId,
+      core: snapshot.core, pending: [], nextPendingAfter: null, omittedPending: pending.length,
+      groups: [], nextGroupAfter: null, omittedGroups: groups.length,
+      staleNotes: snapshot.groups.reduce((sum, group) => sum + group.notes.filter(note => isStale(note.cites, facts)).length, 0),
       indexChanged: snapshot.indexDigest !== facts.digest,
     }
     const fits = (candidate: MapView): boolean => byteLength(JSON.stringify(candidate)) <= this.config.maxViewBytes
-    if (!fits(view)) {
-      throw new ContextMapError('Map metadata exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
-    }
-    let bounded = view
-    for (const note of snapshot.pending.slice(pendingOffset)) {
-      const omittedPending = bounded.omittedPending - 1
-      const candidate = { ...bounded, pending: [...pending, note], omittedPending,
-        nextPendingOffset: omittedPending > 0 ? pendingOffset + pending.length + 1 : null }
-      if (!fits(candidate)) break
-      pending.push(note)
-      bounded = candidate
-    }
-    if (bounded.omittedPending > 0) {
-      if (pending.length === 0) {
-        throw new ContextMapError('One pending note exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+    if (!fits(view)) throw new ContextMapError('Map metadata exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+    for (const note of pending) {
+      const omittedPending = view.omittedPending - 1
+      const next = { ...view, pending: [...view.pending, note], omittedPending, nextPendingAfter: omittedPending > 0 ? note.id : null }
+      if (!fits(next)) {
+        if (view.pending.length === 0) throw new ContextMapError('One pending note exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+        break
       }
-      bounded = { ...bounded, nextPendingOffset: pendingOffset + pending.length }
+      view = next
     }
-    for (const group of snapshot.groups) {
-      const notes = group.notes.map(note => ({ ...note, stale: isStale(note.cites, facts) }))
-      const next = { ...group, notes }
-      const candidate = { ...bounded, groups: [...groups, next], omittedGroups: bounded.omittedGroups - 1 }
-      if (fits(candidate)) {
-        groups.push(next)
-        bounded = candidate
+    for (const group of groups) {
+      const notes = group.notes.filter(note => note.id > (target.noteAfter ?? '')).toSorted((a, b) => a.id.localeCompare(b.id))
+      const header: MapGroupView = { ...group, notes: [], omittedNotes: notes.length, nextNoteAfter: notes.length > 0 ? target.noteAfter ?? '' : null }
+      let next: MapView = { ...view, groups: [...view.groups, header], omittedGroups: view.omittedGroups - 1,
+        nextGroupAfter: view.omittedGroups > 1 ? group.id : null }
+      if (!fits(next)) break
+      let detail = header
+      for (const note of notes) {
+        const omittedNotes = detail.omittedNotes - 1
+        const candidate = { ...detail, notes: [...detail.notes, { ...note, stale: isStale(note.cites, facts) }],
+          omittedNotes, nextNoteAfter: omittedNotes > 0 ? note.id : null }
+        const page = { ...next, groups: [...view.groups, candidate] }
+        if (!fits(page)) break
+        detail = candidate
+        next = page
       }
+      if (target.groupId !== undefined && notes.length > 0 && detail.notes.length === 0) {
+        throw new ContextMapError('One group note exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+      }
+      view = next
     }
-    return bounded
+    if (view.omittedGroups > 0 && view.nextGroupAfter === null) view = { ...view, nextGroupAfter: target.groupAfter ?? '' }
+    if (target.groupAfter !== undefined && groups.length > 0 && view.groups.length === 0) {
+      throw new ContextMapError('One group exceeds maxViewBytes; increase the view budget', 'CONTEXT_MAP_LIMIT')
+    }
+    return view
   }
 
   /**
@@ -366,6 +384,7 @@ export class ContextMapService extends Service {
     this.live(caller)
     const current = this.snapshotOf(owner)
     if (current.pending.length >= this.config.maxPendingNotes) {
+      this.notify({ kind: 'note-filed', ownerSessionId: owner.id })
       throw new ContextMapError(`${current.pending.length} notes already wait for the curator; try again later`, 'CONTEXT_MAP_LIMIT')
     }
     const text = noteText(request.text, this.config)
@@ -644,6 +663,7 @@ export class ContextMapService extends Service {
       throw new ContextMapError(`the map would exceed ${this.config.maxSnapshotBytes} bytes; merge or retire groups first`, 'CONTEXT_MAP_LIMIT')
     }
     owner.session.append('context-map/state', { version: 1, op: { ...op, actor }, snapshot })
+    this.indexHolder(owner)
     await this.ctx.sessions.flush(owner.session)
     this.notify({ kind: op.kind === 'note-pending' ? 'note-filed' : 'committed', ownerSessionId: owner.id })
     return structuredClone(snapshot)
@@ -672,9 +692,25 @@ export class ContextMapService extends Service {
     return owner
   }
 
-  /** Resolve reverse role lookup from prepared live owner projections, including after plugin reload. */
+  /** Rebuildable live role index; projections remain the authority. */
+  private indexHolder(owner: Agent): void {
+    for (const [holder, owners] of this.heldOwners) {
+      owners.delete(owner.id)
+      if (owners.size === 0) this.heldOwners.delete(holder)
+    }
+    const snapshot = this.projection.stateOf(owner.session).snapshot
+    if (snapshot === null || snapshot.ownerSessionId !== owner.id || snapshot.curatorId === null) return
+    const owners = this.heldOwners.get(snapshot.curatorId) ?? new Set<SessionId>()
+    owners.add(owner.id)
+    this.heldOwners.set(snapshot.curatorId, owners)
+  }
+
   private heldOwnerId(holderId: SessionId): SessionId | undefined {
-    return this.ctx.agents.list().find(owner => this.projection.stateOf(owner.session).snapshot?.curatorId === holderId)?.id
+    const owners = this.heldOwners.get(holderId)
+    if (owners !== undefined && owners.size > 1) {
+      throw new ContextMapError('Several maps are held; specify rootSessionId', 'CONTEXT_MAP_INVALID_INPUT')
+    }
+    return owners?.values().next().value
   }
 
   private snapshotOfRoot(agent: Agent): MapSnapshot {

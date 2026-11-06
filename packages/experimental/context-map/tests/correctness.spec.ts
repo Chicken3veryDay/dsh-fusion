@@ -45,11 +45,12 @@ it('R6 map_view stays bounded when pending notes alone exceed the view budget', 
   const view = await w.ctx.contextMap.view(w.owner)
   expect(Buffer.byteLength(JSON.stringify(view), 'utf8')).toBeLessThanOrEqual(8192)
   expect(view.omittedPending).toBeGreaterThan(0)
-  expect(view.nextPendingOffset).toBe(view.pending.length)
-  const next = await w.ctx.contextMap.view(w.owner, { pendingOffset: view.nextPendingOffset! })
+  expect(view.nextPendingAfter).toBe(view.pending.at(-1)!.id)
+  const next = await w.ctx.contextMap.view(w.owner, { pendingAfter: view.nextPendingAfter! })
   expect(Buffer.byteLength(JSON.stringify(next), 'utf8')).toBeLessThanOrEqual(8192)
-  expect(next.nextPendingOffset).toBeNull()
-  expect([...view.pending, ...next.pending].map(note => note.id)).toEqual(w.ctx.contextMap.snapshotOf(w.owner).pending.map(note => note.id))
+  expect(next.nextPendingAfter).toBeNull()
+  expect([...view.pending, ...next.pending].map(note => note.id))
+    .toEqual(w.ctx.contextMap.snapshotOf(w.owner).pending.map(note => note.id).toSorted())
 })
 
 it('R7 grouping one section cannot hide another section at the same file path', async () => {

@@ -45,7 +45,7 @@ const MINIMUMS: Readonly<Record<keyof Required<Config>, number>> = {
   maxSummaryBytes: 16,
   maxCoreSections: 1,
   maxSnapshotBytes: 1024,
-  maxViewBytes: 256,
+  maxViewBytes: 1024,
 }
 
 const CURATOR_DEFAULTS = {
@@ -100,6 +100,10 @@ export function resolveConfig(config: Config): ResolvedConfig {
     if (!Number.isSafeInteger(value) || value < minimum) {
       throw new ContextMapError(`${key} must be a safe integer of at least ${minimum}, got ${String(value)}`, 'CONTEXT_MAP_INVALID_CONFIG')
     }
+  }
+  const metadataBytes = 512 + merged.maxCoreSections * 23
+  if (merged.maxViewBytes < metadataBytes) {
+    throw new ContextMapError(`maxViewBytes must be at least ${metadataBytes} for maxCoreSections`, 'CONTEXT_MAP_INVALID_CONFIG')
   }
   return merged
 }

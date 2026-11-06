@@ -36,7 +36,7 @@ Mount `@deepseek-ai/dsh-experimental-context-index`, then this package (default 
 
 The origin comes from where a file or registration is from, never from its name. Files take their origin from the context index source. A registered tool takes its origin from the registration (`ctx.tools.originOf`), which the producer that reads the configuration layer records: an MCP server with `origin: project` or an ACP session server places its tools under `Project`, and `origin: global` places them under `Global`. A hint or assigner overrides it. A tool whose registration recorded no origin reads as `unknown`, stays under `Global`, and is listed by `unresolvedToolOrigins`. Tool groups come from `registerToolGroup` hints, else from the tool name: `mcp__<server>__*` becomes group `mcp-<server>`, a prefix before the first `_` shared by at least two tools becomes that group, and the rest go to `other`.
 
-A path is the node's segments joined by `/`, as `context_browse` prints it, for example `Tools/Global/probe`. A `%` or `/` inside a segment, such as the `/` in `$DSH_HOME/AGENTS.md`, is written `%25` or `%2F`.
+A path is the node's segments joined by `/`, as `context_browse` prints it, for example `Tools/Global/probe`. `context_load` also accepts a bare section id or `Tools/@/<encoded-tool-name>` independently of the current grouping. A previously logged section path resolves by its final section id after regrouping. Tool compaction stubs and the dropped catalog use stable tool addresses; retained activation records also resolve their previous group paths. A `%` or `/` inside a segment, such as the `/` in `$DSH_HOME/AGENTS.md`, is written `%25` or `%2F`.
 
 ### Tools
 
@@ -83,7 +83,7 @@ Every field has a default.
 | `maxDroppedBytes` | 1024 | bytes of the revoked-section list a republished catalog keeps across later compactions |
 | `coreBytes` | 4096 | section bytes an eager core provider may grant at the start of a conversation |
 
-An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse keeps its full path in the result and clips only the displayed header when needed to fit `maxBrowseBytes`. A partial section grant can be loaded again; only complete grants suppress duplicate loads. Eager core selection charges every selected section against `coreBytes` on every step, including sections already held.
+An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse keeps its full path in the result and clips only the displayed header when needed to fit `maxBrowseBytes`. A partial section grant can be loaded again; only complete grants suppress duplicate loads. Eager grants record their byte charge in the Session source. All held eager grants, including earlier selections and queued or claimed grants, consume `coreBytes` until revocation. Changing the core cannot accumulate another full budget before compaction; selected sections already held through explicit loads also consume the budget. Earlier grants without a recorded charge defer new eager grants until revocation, because their eager or explicit origin is unknown.
 
 ### Events
 

@@ -114,6 +114,9 @@ export interface MapNoteView extends MapNote {
 /** A group as the model sees it. */
 export interface MapGroupView extends Omit<MapGroup, 'notes'> {
   readonly notes: readonly MapNoteView[]
+  /** Notes after this page; read with groupId and nextNoteAfter. */
+  readonly omittedNotes: number
+  readonly nextNoteAfter: MapNoteId | '' | null
 }
 
 /** The bounded read a curator or member gets. */
@@ -126,10 +129,10 @@ export interface MapView {
   /** Groups left out because the view byte bound was reached. */
   readonly omittedGroups: number
   readonly pending: readonly MapPendingNote[]
-  /** Pending entries skipped at the start of this page. */
-  readonly pendingOffset: number
-  /** Offset for the next pending page, or null when all remaining entries fit. */
-  readonly nextPendingOffset: number | null
+  /** Stable pending id to pass as pendingAfter, or null when this queue page is complete. */
+  readonly nextPendingAfter: MapPendingId | null
+  /** Stable group id to pass as groupAfter; an empty string starts the group pages without pending notes. */
+  readonly nextGroupAfter: MapGroupId | '' | null
   /** Pending entries after this page that did not fit. */
   readonly omittedPending: number
   /** Notes whose cited sections changed or vanished. */

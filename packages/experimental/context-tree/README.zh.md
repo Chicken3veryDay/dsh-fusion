@@ -36,7 +36,7 @@ kind: "package-reference"
 
 来源由文件或注册的出处决定，绝不由名称决定。文件的来源取自上下文索引的 source。已注册工具的来源取自其注册记录（`ctx.tools.originOf`），由读取配置层的生产方写入：`origin: project` 的 MCP 服务器或 ACP 会话服务器会把其工具放在 `Project` 下，`origin: global` 则放在 `Global` 下。提示或分配器可以覆盖它。注册时没有记录来源的工具读作 `unknown`，仍放在 `Global` 下，并由 `unresolvedToolOrigins` 列出。工具分组来自 `registerToolGroup` 提示，否则来自工具名：`mcp__<server>__*` 成为分组 `mcp-<server>`，至少两个工具共享的首个 `_` 之前的前缀成为该分组，其余进入 `other`。
 
-路径是节点各段用 `/` 连接，与 `context_browse` 打印的一致，例如 `Tools/Global/probe`。段内的 `%` 或 `/`（例如 `$DSH_HOME/AGENTS.md` 中的 `/`）写作 `%25` 或 `%2F`。
+路径是节点各段用 `/` 连接，与 `context_browse` 打印的一致，例如 `Tools/Global/probe`。段内的 `%` 或 `/`（例如 `$DSH_HOME/AGENTS.md` 中的 `/`）写作 `%25` 或 `%2F`。 `context_load` 还接受独立于当前分组的裸章节 id 或 `Tools/@/<编码后的工具名>`。重新分组后，已记录的章节路径按末尾章节 id 解析。工具压缩存根和已丢弃目录使用稳定工具地址；保留的激活记录也可解析先前的分组路径。
 
 ### 工具
 
@@ -83,7 +83,7 @@ export function placeTools(ctx: Context) {
 | `maxDroppedBytes` | 1024 | 重新发布的目录在后续压缩之间保留的已撤销章节列表的字节数 |
 | `coreBytes` | 4096 | 急切核心提供方在对话开始时可授予的章节字节数 |
 
-不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。 浏览结果保留完整路径，仅在需要满足 `maxBrowseBytes` 时裁剪显示标题中的路径。部分章节授权可以重新加载；只有完整授权才抑制重复加载。每一步的核心选择都会将所有选中章节计入 `coreBytes`，包括已经持有的章节。
+不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。 浏览结果保留完整路径，仅在需要满足 `maxBrowseBytes` 时裁剪显示标题中的路径。部分章节授权可以重新加载；只有完整授权才抑制重复加载。急切授权在 Session 来源中记录其字节费用。所有仍持有的急切授权，包括之前的选择以及已排队或已认领的授权，都会持续占用 `coreBytes`，直到撤销。更改核心不能在压缩前再累积一整份预算；通过显式加载已持有的选中章节也会占用预算。较早的授权没有记录费用，无法区分其来自急切授予还是显式加载，因此会将新的急切授权推迟到撤销之后。
 
 ### 事件
 

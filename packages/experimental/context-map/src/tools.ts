@@ -6,6 +6,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { ContextMapError } from './error.ts'
@@ -21,6 +22,8 @@ const output = {
   schema: { type: 'json' as const },
   render: (_args: unknown, value: unknown): [{ type: 'text'; text: string }] => [{ type: 'text', text: JSON.stringify(value) }],
 }
+const root = { root_session_id: { type: 'string' as const, description: 'Map owner Session id; required when you hold several maps.' } }
+const target = (id: string | undefined) => id === undefined ? {} : { rootSessionId: SessionId(id) }
 const revision = { type: 'integer' as const, required: true as const, description: 'Revision from map_view; the edit is rejected if the map moved on.' }
 
 function summary(snapshot: MapSnapshot): { revision: number; groups: number; pending: number; core: number } {
@@ -61,20 +64,32 @@ export class ContextMapTools extends Service {
     }))
     this.ctx.tools.register(defineTool({
       name: 'map_view',
-      description: 'Read the project map: groups with their members and notes, the eager core, pending notes, and which notes are stale. Pass nextPendingOffset as pending_offset to continue omitted pending notes.',
-      parameters: { pending_offset: { type: 'integer', description: 'Pending entries to skip; use nextPendingOffset from the previous view. Default 0.' } },
+      description: 'Read the project map, core, pending notes, and stale flags. Follow nextPendingAfter as pending_after and nextGroupAfter as group_after even after edits. For a group with omittedNotes, read group_id with note_after from nextNoteAfter until complete. Group pages omit pending notes.',
+      parameters: {
+        ...root,
+        pending_after: { type: 'string', description: 'Continue pending notes after this id; use nextPendingAfter.' },
+        group_after: { type: 'string', description: 'Continue groups after this id; use nextGroupAfter, or an empty string to start groups only.' },
+        group_id: { type: 'string', description: 'Read one group and its notes without pending notes.' },
+        note_after: { type: 'string', description: 'Continue group_id notes after this id; use nextNoteAfter.' },
+      },
       output,
       execute: async (args, exec) => {
         const agent = caller(exec.agent)
-        if (!this.ctx.contextMap.isCurator(agent)) {
+        if (!this.ctx.contextMap.isCurator(agent, args.root_session_id === undefined ? undefined : SessionId(args.root_session_id))) {
           throw new ContextMapError('Only the live curator may run map_view', 'CONTEXT_MAP_UNAUTHORIZED')
         }
         const view = await this.ctx.contextMap.view(
           agent,
-          args.pending_offset === undefined ? {} : { pendingOffset: args.pending_offset },
+          {
+            ...target(args.root_session_id),
+            ...args.pending_after === undefined ? {} : { pendingAfter: brandString<MapPendingId>(args.pending_after) },
+            ...args.group_after === undefined ? {} : { groupAfter: args.group_after === '' ? '' as const : brandString<MapGroupId>(args.group_after) },
+            ...args.group_id === undefined ? {} : { groupId: brandString<MapGroupId>(args.group_id) },
+            ...args.note_after === undefined ? {} : { noteAfter: args.note_after === '' ? '' as const : brandString<MapNoteId>(args.note_after) },
+          },
           exec.signal,
         )
-        if (!this.ctx.contextMap.isCurator(agent)) {
+        if (!this.ctx.contextMap.isCurator(agent, args.root_session_id === undefined ? undefined : SessionId(args.root_session_id))) {
           throw new ContextMapError('Only the live curator may run map_view', 'CONTEXT_MAP_UNAUTHORIZED')
         }
         return z.json().parse(view)
@@ -87,6 +102,7 @@ export class ContextMapTools extends Service {
         + 'Origin is Global or Project), title, one-line summary saying when to use the members, and sections or tools; '
         + 'pass group_id to replace a group. merge: moves from_group and its notes into group_id. retire: removes group_id and its notes.',
       parameters: {
+        ...root,
         action: { type: 'string', required: true, enum: ['set', 'merge', 'retire'], description: 'What to do.' },
         expected_revision: revision,
         group_id: { type: 'string', description: 'Existing group (replace, merge target, retire).' },
@@ -102,16 +118,17 @@ export class ContextMapTools extends Service {
         const agent = caller(exec.agent)
         const map = this.ctx.contextMap
         const expectedRevision = args.expected_revision
+        const mapTarget = target(args.root_session_id)
         const groupId = args.group_id === undefined ? undefined : brandString<MapGroupId>(args.group_id)
         if (args.action === 'retire') {
-          return z.json().parse(summary(await map.retireGroup(agent, { expectedRevision, groupId: required(groupId, 'group_id', 'retire') }, exec.signal)))
+          return z.json().parse(summary(await map.retireGroup(agent, { ...mapTarget, expectedRevision, groupId: required(groupId, 'group_id', 'retire') }, exec.signal)))
         }
         if (args.action === 'merge') {
           const from = brandString<MapGroupId>(required(args.from_group, 'from_group', 'merge'))
-          return z.json().parse(summary(await map.mergeGroups(agent, { expectedRevision, from, into: required(groupId, 'group_id', 'merge') }, exec.signal)))
+          return z.json().parse(summary(await map.mergeGroups(agent, { ...mapTarget, expectedRevision, from, into: required(groupId, 'group_id', 'merge') }, exec.signal)))
         }
         return z.json().parse(summary(await map.setGroup(agent, {
-          expectedRevision,
+          ...mapTarget, expectedRevision,
           group: {
             ...groupId === undefined ? {} : { groupId },
             path: required(args.path, 'path', 'set'),
@@ -131,6 +148,7 @@ export class ContextMapTools extends Service {
         + 'verify: re-read the sources of a stale note, then call this to refresh its hashes (optionally correcting text). '
         + 'retire: delete a filed note. drop: discard a pending note. A note can never cite another note.',
       parameters: {
+        ...root,
         action: { type: 'string', required: true, enum: ['add', 'file', 'verify', 'retire', 'drop'], description: 'What to do.' },
         expected_revision: revision,
         group_id: { type: 'string', description: 'add, file: destination group.' },
@@ -144,17 +162,18 @@ export class ContextMapTools extends Service {
         const agent = caller(exec.agent)
         const map = this.ctx.contextMap
         const expectedRevision = args.expected_revision
+        const mapTarget = target(args.root_session_id)
         const groupId = (action: string): MapGroupId => brandString<MapGroupId>(required(args.group_id, 'group_id', action))
         const noteId = (action: string): MapNoteId => brandString<MapNoteId>(required(args.note_id, 'note_id', action))
         const pendingId = (action: string): MapPendingId => brandString<MapPendingId>(required(args.pending_id, 'pending_id', action))
         switch (args.action) {
           case 'add':
             return z.json().parse(summary(await map.addNote(agent, {
-              expectedRevision, groupId: groupId('add'), text: required(args.text, 'text', 'add'), cites: args.cites ?? [],
+              ...mapTarget, expectedRevision, groupId: groupId('add'), text: required(args.text, 'text', 'add'), cites: args.cites ?? [],
             }, exec.signal)))
           case 'file':
             return z.json().parse(summary(await map.filePending(agent, {
-              expectedRevision,
+              ...mapTarget, expectedRevision,
               pendingId: pendingId('file'),
               groupId: groupId('file'),
               ...args.text === undefined ? {} : { text: args.text },
@@ -162,12 +181,12 @@ export class ContextMapTools extends Service {
             }, exec.signal)))
           case 'verify':
             return z.json().parse(summary(await map.verifyNote(agent, {
-              expectedRevision, noteId: noteId('verify'), ...args.text === undefined ? {} : { text: args.text },
+              ...mapTarget, expectedRevision, noteId: noteId('verify'), ...args.text === undefined ? {} : { text: args.text },
             }, exec.signal)))
           case 'retire':
-            return z.json().parse(summary(await map.retireNote(agent, { expectedRevision, noteId: noteId('retire') }, exec.signal)))
+            return z.json().parse(summary(await map.retireNote(agent, { ...mapTarget, expectedRevision, noteId: noteId('retire') }, exec.signal)))
           case 'drop':
-            return z.json().parse(summary(await map.dropPending(agent, { expectedRevision, pendingId: pendingId('drop') }, exec.signal)))
+            return z.json().parse(summary(await map.dropPending(agent, { ...mapTarget, expectedRevision, pendingId: pendingId('drop') }, exec.signal)))
         }
       },
     }), { when: isCurator })
@@ -175,12 +194,13 @@ export class ContextMapTools extends Service {
       name: 'map_core',
       description: 'Choose the sections granted up front at the start of every conversation, most important first. Keep it small: each costs context in every session.',
       parameters: {
+        ...root,
         expected_revision: revision,
         sections: { type: 'array', required: true, items: { type: 'string' }, description: 'Section ids in priority order; an empty list clears the core.' },
       },
       output,
       execute: async (args, exec) => z.json().parse(summary(await this.ctx.contextMap.setCore(caller(exec.agent), {
-        expectedRevision: args.expected_revision, sections: args.sections,
+        ...target(args.root_session_id), expectedRevision: args.expected_revision, sections: args.sections,
       }, exec.signal))),
     }), { when: isCurator })
   }

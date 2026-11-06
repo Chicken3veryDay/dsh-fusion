@@ -972,9 +972,10 @@ watch(listener: (change: MapChange) => void): () => void
 /**
  * Whether an agent holds the curator role of its map right now.
  * @param agent - the agent.
+ * @param rootSessionId - optional map to check.
  * @returns true only for the live holder.
  */
-isCurator(agent: Agent): boolean
+isCurator(agent: Agent, rootSessionId?: SessionId): boolean
 
 /**
  * The holder of an owner's curator role.
@@ -1000,13 +1001,12 @@ snapshotOf(owner: Agent): MapSnapshot
 /**
  * Read a map as a member of its Session lineage: the owner, a direct child, or the holder.
  * @param caller - the exact live agent.
- * @param target - map (defaults to the held map or caller's root) and pendingOffset (defaults to 0).
+ * @param target - map and edit-stable cursors; groupId reads one group's notes without pending entries.
  * @param signal - cancellation.
- * @returns a view within `maxViewBytes`, with stale notes flagged.
- * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder;
- * `CONTEXT_MAP_LIMIT` when metadata or one pending note cannot fit; increase `maxViewBytes` to read it.
+ * @returns a view within `maxViewBytes`, with continuations and stale notes flagged.
+ * @throws {@link ContextMapError} for an unauthorized caller, unknown group, or an item exceeding the view budget.
  */
-async view(caller: Agent, target: MapTarget & { readonly pendingOffset?: number } = {}, signal?: AbortSignal): Promise<MapView>
+async view(caller: Agent, target: MapTarget & { readonly pendingAfter?: MapPendingId readonly groupAfter?: MapGroupId | '' readonly groupId?: MapGroupId readonly noteAfter?: MapNoteId | '' } = {}, signal?: AbortSignal): Promise<MapView>
 
 /**
  * Take the curator role for an agent. The previous holder, live or not, is replaced and the
