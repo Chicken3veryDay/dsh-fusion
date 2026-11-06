@@ -31,6 +31,7 @@ import {
   type CatalogBranch,
 } from './messages.ts'
 import { formatPath, parsePath, splitPath } from './paths.ts'
+import { byteLength } from './text.ts'
 import {
   activeToolNames,
   contextTreeProjectionDefinition,
@@ -346,6 +347,20 @@ export class ContextTreeService extends Service {
     })
   }
 
+  /** Newest dropped paths that fit `maxDroppedBytes`, oldest first, with a count of the ones left out. */
+  private droppedPaths(state: ContextTreeProjectionState): string[] {
+    const paths = [...new Set(state.dropped.flatMap(entry => entry.paths))]
+    const shown: string[] = []
+    let used = 0
+    for (const path of paths.toReversed()) {
+      used += byteLength(path) + 2
+      if (used > this.config.maxDroppedBytes) break
+      shown.unshift(path)
+    }
+    const left = paths.length - shown.length
+    return left > 0 ? [...shown, `and ${left} more`] : shown
+  }
+
   private async pendingCatalog(agent: Agent, signal: AbortSignal): Promise<UserMessage | undefined> {
     const tree = await this.treeFor(agent, signal)
     const branches: CatalogBranch[] = []
@@ -359,7 +374,7 @@ export class ContextTreeService extends Service {
     if (branches.length === 0) return undefined
     const state = this.projection.stateOf(agent.session)
     if (state.catalog?.digest === catalogDigest(branches)) return undefined
-    return catalogMessage(branches, state.published)
+    return catalogMessage(branches, state.published, this.droppedPaths(state))
   }
 }
 

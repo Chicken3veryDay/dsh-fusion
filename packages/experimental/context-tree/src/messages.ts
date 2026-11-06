@@ -98,9 +98,14 @@ export function catalogDigest(branches: readonly CatalogBranch[]): string {
  * The catalog message.
  * @param branches - the non-empty origin folders, in order.
  * @param update - whether an earlier catalog existed in this session.
+ * @param dropped - paths compaction removed and nothing has loaded again, oldest first; a later checkpoint cannot fold them away.
  * @returns a user message that records its digest and branches.
  */
-export function catalogMessage(branches: readonly CatalogBranch[], update: boolean): UserMessage {
+export function catalogMessage(
+  branches: readonly CatalogBranch[],
+  update: boolean,
+  dropped: readonly string[] = [],
+): UserMessage {
   const lines = branches.map(branch => `- ${branch.path}: ${branch.summary}`)
   return createUserMessage({
     content: [{
@@ -114,6 +119,7 @@ export function catalogMessage(branches: readonly CatalogBranch[], update: boole
         '<context_tree>',
         ...lines,
         '</context_tree>',
+        ...dropped.length === 0 ? [] : ['', `Dropped by compaction (load again with context_load if you still need them): ${dropped.join('; ')}`],
         '',
         'Call `context_browse` (a path and a depth) to see titles and when to use each node; call `context_load` with paths to load them.',
         'Loading an instruction or source node adds its text to the conversation. Loading a tool node makes those tools callable from your next step; tools you have not loaded cannot be called.',

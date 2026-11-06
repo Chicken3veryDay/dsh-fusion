@@ -196,4 +196,6 @@ export interface Config {
   maxActivatedTools?: number
   /** Longest summary line a node shows, in UTF-8 bytes (default 160). */
   maxSummaryBytes?: number
+  /** UTF-8 bytes of the dropped-by-compaction list a republished catalog carries (default 1,024). */
+  maxDroppedBytes?: number
 }

@@ -34,7 +34,8 @@ export const CONTEXT_TOOL_NAMES: readonly string[] = ['context_browse', 'context
  * Defaults and what each bound is sized against: a browse of 64 nodes at 160 bytes is about
  * 10 KB of lines, so 8 KB of rendered text keeps one browse under a quarter of the
  * agent-instructions chain budget; a load injects at most half of the 64 KiB read ceiling of
- * the context index; 32 activations cover the largest default tool group (21 `ticket_*` tools).
+ * the context index; the dropped list gets half of the 2,048-byte stub budget compaction-basic
+ * gives one checkpoint; 32 activations cover the largest default tool group (21 `ticket_*` tools).
  */
 const DEFAULTS = {
   baseTools: DEFAULT_BASE_TOOLS as string[],
@@ -45,6 +46,7 @@ const DEFAULTS = {
   maxLoadBytes: 32_768,
   maxActivatedTools: 32,
   maxSummaryBytes: 160,
+  maxDroppedBytes: 1024,
 } as const satisfies Required<Config>
 
 const MINIMUMS = {
@@ -55,6 +57,7 @@ const MINIMUMS = {
   maxLoadBytes: 1,
   maxActivatedTools: 1,
   maxSummaryBytes: 32,
+  maxDroppedBytes: 64,
 } as const
 
 /** Schemastery schema for the service; every field defaults, so no configuration is required. */
@@ -67,6 +70,7 @@ export const ConfigSchema: z<Config> = z.object({
   maxLoadBytes: z.number().step(1).min(MINIMUMS.maxLoadBytes).default(DEFAULTS.maxLoadBytes),
   maxActivatedTools: z.number().step(1).min(MINIMUMS.maxActivatedTools).default(DEFAULTS.maxActivatedTools),
   maxSummaryBytes: z.number().step(1).min(MINIMUMS.maxSummaryBytes).default(DEFAULTS.maxSummaryBytes),
+  maxDroppedBytes: z.number().step(1).min(MINIMUMS.maxDroppedBytes).default(DEFAULTS.maxDroppedBytes),
 })
 
 function invalid(message: string): never {

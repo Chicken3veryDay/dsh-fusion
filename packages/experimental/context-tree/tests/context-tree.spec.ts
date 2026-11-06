@@ -560,6 +560,34 @@ describe('compaction', () => {
     expect(JSON.stringify(again?.source)).toContain('"update":true')
   })
 
+  it('keeps the list of dropped material across a second compaction that folds the first stubs into its summary', async () => {
+    const w = await world()
+    const first = conversation(w.session, { 2: await loadedContexts(w, ['Instructions/Project/AGENTS.md']) })
+    await w.engine.compactRegion(first.start, first.end, w.agent, SIGNAL)
+    const second = conversation(w.session, { 2: await loadedContexts(w, ['Tools/Global/deploy']) })
+    await w.engine.compactRegion(second.start, second.end, w.agent, SIGNAL)
+
+    const decision = await agentEvents(w.ctx, w.agent).waterfall(
+      'agent/pre-step', { modelSelection: SELECTION, messages: [], turn: 9, step: 2, signal: SIGNAL },
+      () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
+    )
+    const catalog = (decision.kind === 'enter' ? decision.messages : [])[0]
+    const text = catalog?.content.map(block => block.type === 'text' ? block.text : '').join('') ?? ''
+    expect(text).toContain('Dropped by compaction')
+    expect(text).toContain('Instructions/Project/AGENTS.md/')
+    expect(text).toContain('Tools/Global/deploy')
+  })
+
+  it('removes a dropped entry once the same material is loaded again', async () => {
+    const w = await world()
+    const { start, end } = conversation(w.session, { 2: await loadedContexts(w, ['Tools/Global/deploy']) })
+    await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+    await call(w, 'context_load', { paths: ['Tools/Global/deploy'] })
+    enterStep(w)
+    const state = (await w.ctx.sessionProjections.register(contextTreeProjectionDefinition)).stateOf(w.session)
+    expect(state.dropped).toEqual([])
+  })
+
   it('allows loading the same material again after compaction', async () => {
     const w = await world()
     const { start, end } = conversation(w.session, { 2: await loadedContexts(w, ['Tools/Global/deploy', 'Instructions/Project/AGENTS.md']) })

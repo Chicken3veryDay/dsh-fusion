@@ -13,9 +13,10 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const seq = z.number().int().nonnegative()
 const names = z.array(z.string().min(1))
-const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1) }).strict()
+const grant = z.object({ seq, key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1) }).strict()
 const pendingGrant = z.object({ key: z.string().min(1), hash: z.string().min(1) }).strict()
-const logged = z.object({ seq, id: z.string().min(1), tools: names }).strict()
+const logged = z.object({ seq, id: z.string().min(1), key: z.string().min(1), tools: names, nodes: names }).strict()
+const dropped = z.object({ key: z.string().min(1), paths: names }).strict()
 const queued = z.object({ id: z.string().min(1), tools: names, grants: z.array(pendingGrant) }).strict()
 const catalog = z.object({ seq, digest: z.string().min(1) }).strict()
 
@@ -30,6 +31,8 @@ const stateSchema = z.object({
   claimed: z.array(queued),
   /** The catalog message still in history, if any. */
   catalog: catalog.nullable(),
+  /** Loaded material that compaction removed and nothing has loaded again, oldest first, at most {@link DROPPED_RETAINED}. */
+  dropped: z.array(dropped),
   /** Whether any catalog was ever published, so a republication can say it replaces an earlier one. */
   published: z.boolean(),
 }).strict()
@@ -37,8 +40,8 @@ const stateSchema = z.object({
 /** Private checkpoint state; consumers read through `ContextTreeService`. */
 export type ContextTreeProjectionState = z.infer<typeof stateSchema>
 
-const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1) })
-const activationSource = z.object({ kind: z.literal('context-activation'), tools: names })
+const grantSource = z.object({ kind: z.literal('context-grant'), key: z.string().min(1), hash: z.string().min(1), path: z.string().min(1) })
+const activationSource = z.object({ kind: z.literal('context-activation'), key: z.string().min(1), tools: names, nodes: names })
 const catalogSource = z.object({ kind: z.literal('context-tree-catalog'), digest: z.string().min(1) })
 
 /**
@@ -61,6 +64,13 @@ function activationTools(message: { readonly source: unknown }): string[] {
   return parsed.success ? parsed.data.tools : []
 }
 
+/**
+ * Most dropped entries the state keeps. A second compaction folds the stubs of the first into its
+ * summary, so the state is the only place that still names older drops; the catalog lists the
+ * newest of them within its own byte bound.
+ */
+export const DROPPED_RETAINED = 64
+
 /** Projection key; host-only, so no client sees it. */
 export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
 
@@ -73,7 +83,7 @@ export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
   stateVersion: 2,
   stateSchema,
-  init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, published: false }),
+  init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], published: false }),
   apply: (state, event) => {
     if (event.type === 'agent/inbox/spliced') {
       if (event.data.target !== 'next-step') return state
@@ -91,18 +101,21 @@ export const contextTreeProjectionDefinition = {
       const source: unknown = event.data.source
       const granted = grantSource.safeParse(source)
       if (granted.success) {
-        const entry = { seq: event.seq, key: granted.data.key, hash: granted.data.hash }
+        const entry = { seq: event.seq, key: granted.data.key, hash: granted.data.hash, path: granted.data.path }
         return {
           ...state,
+          dropped: state.dropped.filter(existing => existing.key !== entry.key),
           grants: [...state.grants.filter(existing => existing.key !== entry.key), entry],
           claimed: state.claimed.filter(pending => pending.id !== event.data.id),
         }
       }
       const activated = activationSource.safeParse(source)
       if (activated.success) {
+        const { key, tools, nodes } = activated.data
         return {
           ...state,
-          activations: [...state.activations, { seq: event.seq, id: event.data.id, tools: activated.data.tools }],
+          dropped: state.dropped.filter(existing => existing.key !== key),
+          activations: [...state.activations, { seq: event.seq, id: event.data.id, key, tools, nodes }],
           claimed: state.claimed.filter(entry => entry.id !== event.data.id),
         }
       }
@@ -119,7 +132,13 @@ export const contextTreeProjectionDefinition = {
       if (grants.length === state.grants.length && activations.length === state.activations.length && (kept || state.catalog === null)) {
         return state
       }
-      return { ...state, grants, activations, catalog: kept ? state.catalog : null }
+      const lost = [
+        ...state.grants.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: [entry.path] })),
+        ...state.activations.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: entry.nodes })),
+      ]
+      const lostKeys = new Set(lost.map(entry => entry.key))
+      const remembered = [...state.dropped.filter(entry => !lostKeys.has(entry.key)), ...lost].slice(-DROPPED_RETAINED)
+      return { ...state, grants, activations, dropped: remembered, catalog: kept ? state.catalog : null }
     }
     return state
   },
