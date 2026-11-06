@@ -88,7 +88,7 @@ export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
  */
 export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
-  stateVersion: 4,
+  stateVersion: 5,
   stateSchema,
   init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], published: false }),
   apply: (state, event) => {
@@ -148,8 +148,10 @@ export const contextTreeProjectionDefinition = {
       if (grants.length === state.grants.length && activations.length === state.activations.length && (kept || state.catalog === null)) {
         return state
       }
+      const retainedKeys = new Set(grants.map(entry => entry.key))
       const lost = [
-        ...state.grants.filter(entry => shadowed.has(entry.seq)).map(entry => ({ key: entry.key, paths: [entry.path], tools: [] })),
+        ...state.grants.filter(entry => shadowed.has(entry.seq) && !retainedKeys.has(entry.key))
+          .map(entry => ({ key: entry.key, paths: [entry.path], tools: [] })),
         ...state.activations.filter(entry => shadowed.has(entry.seq))
           .map(entry => ({ key: entry.key, paths: entry.nodes, tools: entry.tools })),
       ]

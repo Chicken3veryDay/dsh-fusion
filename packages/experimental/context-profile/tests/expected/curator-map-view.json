@@ -7,7 +7,7 @@
       "properties": {
         "root_session_id": {
           "type": "string",
-          "description": "Map owner Session id; required when you hold several maps."
+          "description": "Map owner Session id; omit for your own conversation, specify for another map you curate."
         },
         "pending_after": {
           "type": "string",

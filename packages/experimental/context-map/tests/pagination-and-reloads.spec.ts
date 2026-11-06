@@ -176,17 +176,17 @@ it('restarts the default curator when a full pending queue rejects another note'
 })
 
 
-it('accepts the minimum view budget with UUID holders and eight core ids and rejects insufficient core metadata budgets', async () => {
+it('accepts a small-note view budget with UUID holders and eight core ids and rejects insufficient core metadata budgets', async () => {
   expect(() => resolveConfig({ maxViewBytes: 1024, maxCoreSections: 100 })).toThrow(/maxViewBytes/)
-  const w = await world({ map: { maxViewBytes: 1024 } })
+  const w = await world({ map: { maxViewBytes: 1049, maxNoteBytes: 16, maxCitesPerNote: 1, maxEvidenceBytes: 8 } })
   w.write('AGENTS.md', Array.from({ length: 8 }, (_, i) => `${i === 0 ? '#' : '##'} Rule ${i}\n\nRule text.\n`).join('\n'))
   const owner = await w.spawnRoot('11111111-1111-4111-8111-111111111111')
   const holder = await w.spawnRoot('22222222-2222-4222-8222-222222222222')
   await w.ctx.contextMap.claim(owner, { holderId: holder.id })
   const sections = await w.projectSections()
   expect(sections).toHaveLength(8)
-  await w.ctx.contextMap.setCore(holder, { expectedRevision: 1, sections })
-  const view = await w.ctx.contextMap.view(holder)
+  await w.ctx.contextMap.setCore(holder, { rootSessionId: owner.id, expectedRevision: 1, sections })
+  const view = await w.ctx.contextMap.view(holder, { rootSessionId: owner.id })
   expect(view.core).toHaveLength(8)
   expect(Buffer.byteLength(JSON.stringify(view))).toBeLessThanOrEqual(1024)
 })

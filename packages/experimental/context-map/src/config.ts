@@ -102,8 +102,13 @@ export function resolveConfig(config: Config): ResolvedConfig {
     }
   }
   const metadataBytes = 512 + merged.maxCoreSections * 23
-  if (merged.maxViewBytes < metadataBytes) {
-    throw new ContextMapError(`maxViewBytes must be at least ${metadataBytes} for maxCoreSections`, 'CONTEXT_MAP_INVALID_CONFIG')
+  // JSON escapes a one-byte control character to six bytes. Include citation objects,
+  // the pending author/id, and the continuation cursor as well as the page metadata.
+  const citationBytes = Math.max(128, 29 + 6 * merged.maxEvidenceBytes)
+  const noteBytes = 128 + 6 * merged.maxNoteBytes + merged.maxCitesPerNote * (citationBytes + 1)
+  const minimumViewBytes = metadataBytes + noteBytes
+  if (!Number.isSafeInteger(minimumViewBytes) || merged.maxViewBytes < minimumViewBytes) {
+    throw new ContextMapError(`maxViewBytes must be at least ${minimumViewBytes} for the configured note and core limits`, 'CONTEXT_MAP_INVALID_CONFIG')
   }
   return merged
 }

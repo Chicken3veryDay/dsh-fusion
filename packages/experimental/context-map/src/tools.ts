@@ -22,7 +22,7 @@ const output = {
   schema: { type: 'json' as const },
   render: (_args: unknown, value: unknown): [{ type: 'text'; text: string }] => [{ type: 'text', text: JSON.stringify(value) }],
 }
-const root = { root_session_id: { type: 'string' as const, description: 'Map owner Session id; required when you hold several maps.' } }
+const root = { root_session_id: { type: 'string' as const, description: 'Map owner Session id; omit for your own conversation, specify for another map you curate.' } }
 const target = (id: string | undefined) => id === undefined ? {} : { rootSessionId: SessionId(id) }
 const revision = { type: 'integer' as const, required: true as const, description: 'Revision from map_view; the edit is rejected if the map moved on.' }
 
@@ -41,7 +41,7 @@ export class ContextMapTools extends Service {
   constructor(ctx: Context) { super(ctx, 'contextMapTools') }
 
   protected [Service.init](): void {
-    const isCurator = ({ agent }: { agent: Agent }): boolean => this.ctx.contextMap.isCurator(agent)
+    const isCurator = ({ agent }: { agent: Agent }): boolean => this.ctx.contextMap.curatedRoots(agent).length > 0
     this.ctx.tools.register(defineTool({
       name: 'context_note',
       description:

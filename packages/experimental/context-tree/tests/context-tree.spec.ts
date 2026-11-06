@@ -1214,3 +1214,24 @@ it('resolves stable tool addresses even when the tool name is also an origin fol
   expect(loaded.result.missing).toEqual([])
   expect(loaded.result.activated.flatMap(entry => entry.tools)).toEqual(['Global'])
 })
+
+it('R3-m2 the republished catalog does not list a section as dropped while its newer grant is still in the conversation', async () => {
+  const w = await world({ coreBytes: 4096 })
+  const [rules] = (await w.ctx.contextIndex.snapshot({ workingDirectory: w.project })).sections
+    .filter(section => section.kind === 'project-instructions')
+  w.tree.registerEagerCore(() => [rules!.id])
+  // Step 1: catalog plus the eager grant of the rules section.
+  const first = await reviewStep(w)
+  expect(first.map(message => message.source.kind)).toEqual(['context-tree-catalog', 'context-grant'])
+  // The section's text changes; the agent loads the new version explicitly.
+  write(join(w.project, 'AGENTS.md'), '# Project rules\n\nUse pnpm 10.\n\n## Testing\n\nRun vitest.\n')
+  const reload = await w.tree.load(w.agent, { paths: [rules!.id] })
+  expect(reload.result.granted).toHaveLength(1)
+  const { start, end } = conversation(w.session, { 2: first, 4: reload.contexts })
+  await w.engine.compactRegion(start, end, w.agent, SIGNAL)
+  expect(texts(w.session.deriveMessages()), 'the newer grant sits in the retained tail').toContain('Use pnpm 10.')
+  expect((await w.tree.load(w.agent, { paths: [rules!.id] })).result.alreadyLoaded).toHaveLength(1)
+  const catalog = texts((await reviewStep(w)).filter(message => message.source.kind === 'context-tree-catalog'))
+  expect(catalog).toContain('<context_tree>')
+  expect(catalog, 'The section is still in the conversation, so it was not dropped').not.toContain(rules!.id)
+})

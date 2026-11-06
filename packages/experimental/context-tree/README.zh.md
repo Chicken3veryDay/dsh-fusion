@@ -95,7 +95,7 @@ export function placeTools(ctx: Context) {
 - [`src/types.ts`](src/types.ts) 包含类型，包括消息来源的形状。
 - [`src/tree.ts`](src/tree.ts) 根据上下文索引快照和工具注册表构建树，并完成来源放置与分组。 已记录的工具来源优先于冲突的放置提示；来源未知时可以指定。策展文件夹与文件路径相同时，同一地址也包含该文件未分组的章节。
 - [`src/paths.ts`](src/paths.ts) 编码并拆分路径；[`src/render.ts`](src/render.ts) 渲染浏览和加载结果；[`src/messages.ts`](src/messages.ts) 构造目录、授权和激活消息。
-- [`src/projection.ts`](src/projection.ts) 是 Session 投影，从日志推导已加载章节、激活和已发布目录。 服务将已记录的候选项与 Session 当前表面相交，因此任何表面替换都允许重新加载已移除的章节，并撤销已移除的工具激活。
+- [`src/projection.ts`](src/projection.ts) 是 Session 投影，从日志推导已加载章节、激活和已发布目录。 只有章节不再有保留的授权时，压缩才会将其列为已丢弃。服务将已记录的候选项与 Session 当前表面相交，因此任何表面替换都允许重新加载已移除的章节，并撤销已移除的工具激活。
 - [`src/index.ts`](src/index.ts) 是服务：准入策略、pre-step 目录钩子、可撤销来源、浏览与加载。
 - [`src/tools.ts`](src/tools.ts) 注册两个模型工具。
 

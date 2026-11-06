@@ -238,7 +238,7 @@ describe('the curator role', () => {
     await map.claim(w.owner, { holderId: other.id })
     expect(map.curatorOf(w.owner)).toBe(other.id)
     expect(map.isCurator(w.owner)).toBe(false)
-    expect(map.isCurator(other)).toBe(true)
+    expect(map.isCurator(other, w.owner.id)).toBe(true)
     await map.release(w.owner)
     expect(map.curatorOf(w.owner)).toBeNull()
     const ops = (await logged(w.ctx, w.owner.id)).filter(event => event.type === 'context-map/state')

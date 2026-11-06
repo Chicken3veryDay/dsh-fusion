@@ -19,15 +19,15 @@ it('R5 role authority survives context-map plugin reload', async () => {
   const w = await world()
   const assistant = await w.spawnRoot('assistant')
   await w.ctx.contextMap.claim(w.owner, { holderId: assistant.id })
-  expect(w.ctx.contextMap.isCurator(assistant)).toBe(true)
+  expect(w.ctx.contextMap.isCurator(assistant, w.owner.id)).toBe(true)
   expect(await declared(w, assistant)).toContain('map_core')
   const fiber = [...w.ctx.registry.get(ContextMapService)!.fibers][0]!
   await fiber.dispose()
   await w.ctx.plugin(ContextMapService)
   expect(w.ctx.contextMap.snapshotOf(w.owner).curatorId).toBe(assistant.id)
-  expect(w.ctx.contextMap.isCurator(assistant), 'The durable role must recover its owner association').toBe(true)
+  expect(w.ctx.contextMap.isCurator(assistant, w.owner.id), 'The durable role must recover its owner association').toBe(true)
   expect(await declared(w, assistant)).toContain('map_core')
-  expect((await w.ctx.contextMap.view(assistant)).ownerSessionId).toBe(w.owner.id)
+  expect((await w.ctx.contextMap.view(assistant, { rootSessionId: w.owner.id })).ownerSessionId).toBe(w.owner.id)
   const gone = Promise.withResolvers<undefined>()
   const unwatch = w.ctx.contextMap.watch((change) => { if (change.kind === 'committed') gone.resolve(undefined) })
   try {

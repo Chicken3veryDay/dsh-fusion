@@ -144,10 +144,10 @@ export class DefaultContextCurator extends Service {
     if (holder !== null) {
       if (this.ctx.agents.get(holder) !== undefined) return
       // The recorded holder did not survive a restart; its claim no longer excludes anyone.
-      await this.ctx.contextMap.release(owner)
+      await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
     }
     this.dirty.delete(owner.id)
-    const view = await this.ctx.contextMap.view(owner)
+    const view = await this.ctx.contextMap.view(owner, { rootSessionId: owner.id })
     if (this.isStopping() || this.runs.has(owner.id) || this.ctx.contextMap.snapshotOf(owner).curatorId !== null) return
     if (view.pending.length === 0 && !view.indexChanged && view.staleNotes === 0) return
     await this.start(owner)
@@ -166,7 +166,7 @@ export class DefaultContextCurator extends Service {
       const choice = await selectCuratorRoute(this.ctx.llm, owner, this.config, controller.signal)
       this.failures.delete(owner.id)
       controller.signal.throwIfAborted()
-      await this.ctx.contextMap.claim(owner, { holderId: childId, route: choice.route }, controller.signal)
+      await this.ctx.contextMap.claim(owner, { rootSessionId: owner.id, holderId: childId, route: choice.route }, controller.signal)
       controller.signal.throwIfAborted()
       const effort = choice.route.reasoningEffort
       run.activation = await this.ctx.subagents.startActivation({
@@ -222,7 +222,7 @@ export class DefaultContextCurator extends Service {
     }
     try {
       if (this.ctx.agents.get(owner.id) === owner && this.ctx.contextMap.snapshotOf(owner).curatorId === run.childId) {
-        await this.ctx.contextMap.release(owner)
+        await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
       }
     } catch (error: unknown) {
       this.ctx.logger.warn(`context curator: releasing the role failed: ${String(error)}`)

@@ -946,6 +946,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'true only for the live holder.',
       },
       {
+        signature: 'curatedRoots(agent: Agent): readonly SessionId[]',
+        description: 'Maps whose curator tools a live agent may use.',
+        parameters: [{ name: 'agent', description: 'the exact live agent.' }],
+        returns: 'detached owner ids; empty for stale callers or an unloaded service.',
+      },
+      {
         signature: 'curatorOf(owner: Agent): SessionId | null',
         description: 'The holder of an owner\'s curator role.',
         parameters: [{ name: 'owner', description: 'the map owner.' }],

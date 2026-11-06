@@ -978,6 +978,13 @@ watch(listener: (change: MapChange) => void): () => void
 isCurator(agent: Agent, rootSessionId?: SessionId): boolean
 
 /**
+ * Maps whose curator tools a live agent may use.
+ * @param agent - the exact live agent.
+ * @returns detached owner ids; empty for stale callers or an unloaded service.
+ */
+curatedRoots(agent: Agent): readonly SessionId[]
+
+/**
  * The holder of an owner's curator role.
  * @param owner - the map owner.
  * @returns the holder id, or `null`; the holder may no longer be live.

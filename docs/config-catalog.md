@@ -1193,7 +1193,7 @@ export interface Config {
   maxCoreSections?: number
   /** UTF-8 bytes of one logged map snapshot (default 65,536). */
   maxSnapshotBytes?: number
-  /** UTF-8 bytes of one rendered view (default 8,192). */
+  /** UTF-8 bytes of one rendered view; must fit page metadata and a maximum-size note (default 8,192). */
   maxViewBytes?: number
 }
 ```

@@ -95,7 +95,7 @@ The package adds no event type. It uses the existing `user/message` event with t
 - [`src/types.ts`](src/types.ts) holds the types, including the message source shapes.
 - [`src/tree.ts`](src/tree.ts) builds the tree from the context index snapshot and the tool registry, with origin placement and grouping. Recorded tool origins take precedence over conflicting placement hints; unknown origins may be assigned. A curated folder sharing a file path includes the file's ungrouped sections at that same address.
 - [`src/paths.ts`](src/paths.ts) encodes and splits paths; [`src/render.ts`](src/render.ts) renders browse and load results; [`src/messages.ts`](src/messages.ts) builds the catalog, grant, and activation messages.
-- [`src/projection.ts`](src/projection.ts) is the Session projection that derives loaded sections, activations, and the published catalog from the log. The service intersects logged candidates with the Session-owned current surface, so any surface replacement permits removed sections to be loaded again and revokes removed activations.
+- [`src/projection.ts`](src/projection.ts) is the Session projection that derives loaded sections, activations, and the published catalog from the log. Compaction lists a section as dropped only when no retained grant for that section remains. The service intersects logged candidates with the Session-owned current surface, so any surface replacement permits removed sections to be loaded again and revokes removed activations.
 - [`src/index.ts`](src/index.ts) is the service: the admission policy, the pre-step catalog hook, revocable sources, browse, and load.
 - [`src/tools.ts`](src/tools.ts) registers the two model tools.
 

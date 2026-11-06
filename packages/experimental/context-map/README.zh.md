@@ -39,7 +39,7 @@ kind: "package-reference"
 
 ### 策展者角色
 
-该角色是记录在日志中的持久授权，依据发起调用的确切存活智能体检查，而不是依据传入的 Session id。每张地图的持有者恰好一个；反向持有者索引在加载时从已准备的活动 Session 投影重建，并在智能体创建和地图提交时更新。持有者可以策展多张地图；每个策展工具都可通过 `root_session_id` 选择地图。持有者销毁时释放其持有的全部地图。`claim` 替换前任持有者并记录交接；`release` 放弃角色。未释放就消失的持有者会被记录为已离开，角色随即空出。策展者工具 `map_view`、`map_group`、`map_note` 和 `map_core` 只对持有者声明，且服务在执行时拒绝任何其他调用者，因此过期的工具集不会带来任何权限。这里没有任何包导入助手：以后的助手通过 `ctx.contextMap.claim` 接管该角色。
+该角色是记录在日志中的持久授权，依据发起调用的确切存活智能体检查，而不是依据传入的 Session id。每张地图的持有者恰好一个；反向持有者索引在加载时从已准备的活动 Session 投影重建，并在智能体创建和地图提交时更新。持有者可以策展多张地图；策展工具通过 `root_session_id`、服务编辑通过 `rootSessionId` 选择其他对话的地图。省略目标始终选择调用者自己的根对话，即使调用者持有其他地图也是如此。持有者销毁时释放其持有的全部地图。`claim` 替换前任持有者并记录交接；`release` 放弃角色。未释放就消失的持有者会被记录为已离开，角色随即空出。策展者工具 `map_view`、`map_group`、`map_note` 和 `map_core` 只对持有者声明，且服务在执行时拒绝任何其他调用者，因此过期的工具集不会带来任何权限。这里没有任何包导入助手：以后的助手通过 `ctx.contextMap.claim` 接管该角色。
 
 ### 默认策展者
 
@@ -61,20 +61,20 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
   await ctx.contextMap.claim(assistant, { holderId: assistant.id, rootSessionId: owner.id })
   const view = await ctx.contextMap.view(assistant, { rootSessionId: owner.id })
   await ctx.contextMap.setGroup(assistant, {
-    expectedRevision: view.revision,
+    rootSessionId: owner.id, expectedRevision: view.revision,
     group: { path: 'Tools/Global/shell', title: 'Shell tools', summary: 'Use when running commands.', tools: ['bash'] },
   })
 }
 ```
 
-服务还提供 `watch`、`isCurator`、`curatorOf`、`snapshotOf`、`note`、`mergeGroups`、`retireGroup`、`addNote`、`verifyNote`、`retireNote`、`filePending`、`dropPending` 和 `setCore`。
+服务还提供 `watch`、`curatedRoots`、`isCurator`、`curatorOf`、`snapshotOf`、`note`、`mergeGroups`、`retireGroup`、`addNote`、`verifyNote`、`retireNote`、`filePending`、`dropPending` 和 `setCore`。
 
 ### 工具
 
 - `context_note(text, cites?)`，所有智能体可用：记录一条简短事实，返回待处理笔记 id 和等待中的笔记数。子智能体的笔记提交到它所属对话的地图。
 - `map_view(pending_after?, group_after?, group_id?, note_after?)`、`map_group(action, …)`、`map_note(action, …)`、`map_core(sections)`，仅策展者可用。
 
-视图将完整序列化结果计入预算。将 `nextPendingAfter` 作为 `pending_after` 继续待处理笔记，将 `nextGroupAfter` 作为 `group_after` 继续分组；如分组的笔记未列完，将其 id 作为 `group_id`，并将 `nextNoteAfter` 作为 `note_after` 继续。游标按 id 的字典序前进，即使之前的条目已归档、丢弃或退役也仍然有效。游标之前的新条目会在重新扫描时出现。分组页面不包含待处理笔记，因此满队列不会隐藏分组。每个分组的 `omittedNotes` 统计本页之后的笔记。如果元数据或单个条目无法容纳，则以 `CONTEXT_MAP_LIMIT` 失败；请增大 `maxViewBytes`。视图预算最小为 1,024 字节，且必须容纳 `512 + 23 × maxCoreSections` 字节的元数据。满队列拒绝新笔记时会再次唤醒默认策展者。
+视图将完整序列化结果计入预算。将 `nextPendingAfter` 作为 `pending_after` 继续待处理笔记，将 `nextGroupAfter` 作为 `group_after` 继续分组；如分组的笔记未列完，将其 id 作为 `group_id`，并将 `nextNoteAfter` 作为 `note_after` 继续。游标按 id 的字典序前进，即使之前的条目已归档、丢弃或退役也仍然有效。游标之前的新条目会在重新扫描时出现。分组页面不包含待处理笔记，因此满队列不会隐藏分组。每个分组的 `omittedNotes` 统计本页之后的笔记。如果元数据或单个条目无法容纳，则以 `CONTEXT_MAP_LIMIT` 失败；请增大 `maxViewBytes`。加载时，`maxViewBytes` 必须容纳页面元数据，以及按配置的文本和引用限制计算的最大待处理笔记，包括 JSON 转义。若编辑会使单个待处理笔记、分组头或分组笔记超出视图预算，则在写入日志前拒绝该编辑。满队列拒绝新笔记时会再次唤醒默认策展者。
 
 ### 配置
 
