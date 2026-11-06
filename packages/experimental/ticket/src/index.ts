@@ -5,8 +5,8 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type {} from '@deepseek-ai/dsh-session-persistence'
-import { Session, type SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { ticketProjectionDefinition, validateTicketChange } from './projection.ts'
 import type { TicketProjectionState } from './projection.ts'
@@ -24,7 +24,7 @@ import {
 import type {
   BeginTicketAttemptRequest, UpdateTicketAttemptRequest, SettleTicketAttemptRequest, ReviseTicketRequest,
   SubmitTicketCandidateRequest, CheckTicketCandidateRequest, PlanTicketMissionRequest, MissionView,
-  TicketAttemptSnapshot, TicketMutationRequest,
+  TicketAttemptSnapshot, TicketMutationRequest, TicketAttemptController,
   AnswerTicketQuestionRequest,
   CloseTicketQuestionRequest,
   AskTicketQuestionRequest,
@@ -136,6 +136,27 @@ function nextStatusForAssignment(ticket: TicketSnapshot): TicketStatus {
   return live ? 'executing' : 'ready'
 }
 
+/** One execution-owned attempt in the settlement ledger. The root is named by id and resolved when each write runs. */
+interface Settlement {
+  readonly rootId: SessionId
+  readonly ticketId: TicketId
+  readonly attemptId: TicketAttemptId
+  readonly assignmentId: AssignmentId
+  readonly actorId: SessionId
+  /** First observed producer outcome; later settlement calls retry this one. */
+  outcome?: SettleTicketAttemptRequest['outcome']
+  readonly diagnostics: readonly string[]
+}
+
+interface AttemptOperationOptions {
+  /** Written by the execution owner: no caller CAS or participant check. */
+  readonly executionOwned?: boolean
+  /** Runs once the operation is in the in-memory log, appended now or found on retry, before the flush. */
+  readonly recorded?: () => void
+  /** A settled attempt is already terminal: settlement retries only repeat the flush. */
+  readonly settledByAnyOperation?: TicketAttemptId
+}
+
 function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
@@ -160,6 +181,13 @@ export class TicketService extends Service {
   private readonly recoveryFailures = new Set<SessionId>()
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly coordinatorAuthorities = new Set<(session: Session, requested: SessionId) => SessionId | undefined>()
+  /** Execution-admitted attempts this service owns until a durable flush shows them settled, keyed like scope reservations. */
+  private readonly settlements = new Map<string, Settlement>()
+  /** Roots live when this service activated; their attempts may still belong to the previous service generation's producers. */
+  private readonly activationRoots = new Set<SessionId>()
+  /** Stored roots whose log could not be read; shared-workspace admission stays refused while any remains. */
+  private readonly unreadableRoots = new Map<SessionId, unknown>()
+  private storedScan: Promise<void> | undefined
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'tickets')
@@ -176,26 +204,24 @@ export class TicketService extends Service {
 
   protected async [Service.init](): Promise<void> {
     this.projection = await this.ctx.sessionProjections.register(ticketProjectionDefinition)
-    this.ctx.on('session/created', (session) => { this.retainScopes(session) })
+    this.ctx.on('session/created', (session) => {
+      this.retainScopes(session)
+      // Announcement keeps the Session read-only until dispatch unwinds, so recovery writes start afterwards.
+      void Promise.resolve().then(() => this.recoverRoot(session)).catch((error: unknown) => {
+        this.ctx.logger.warn(`Ticket attempt recovery for Session "${session.id}" did not persist; the next resume retries it: ${String(error)}`)
+      })
+    })
     this.ctx.on('session/event', (session, event) => {
       if (event.type === 'ticket/state') this.retainScopes(session)
     })
-    this.ctx.effect(() => () => { this.tails.clear(); this.scopeReservations.clear(); this.recoveryFailures.clear() }, 'tickets.runtime()')
-    for (const session of this.ctx.sessions.list()) this.retainScopes(session)
-    const persistence = this.ctx.get('sessionPersistence')
-    if (persistence !== undefined) {
-      for (const { header } of await persistence.list()) {
-        if (this.ctx.sessions.get(header.id) !== undefined) continue
-        try {
-          await using stored = await persistence.open(header.id, 'read')
-          const log = await stored.read()
-          this.retainScopes(Session.fromRestore(
-            header.id, log.events, stored.header, stored.inheritedEventCount, log.eventState, this.ctx.sessions.messageProjections,
-          ))
-        } catch (error: unknown) {
-          this.reportRecoveryFailure(header.id, error)
-        }
-      }
+    this.ctx.effect(() => async () => {
+      await this.drainSettlements()
+      this.tails.clear(); this.scopeReservations.clear(); this.recoveryFailures.clear(); this.settlements.clear()
+      this.activationRoots.clear(); this.unreadableRoots.clear(); this.storedScan = undefined
+    }, 'tickets.runtime()')
+    for (const session of this.ctx.sessions.list()) {
+      this.activationRoots.add(session.id)
+      this.retainScopes(session)
     }
   }
 
@@ -254,13 +280,18 @@ export class TicketService extends Service {
       const id = request.id ?? TicketId(`ticket-${session.id}-${String(state.tickets.length + 1)}`)
       if (state.tickets.some(ticket => ticket.id === id)) throw new TicketError(`Ticket "${id}" already exists`, 'TICKET_INVALID_INPUT')
       const subject = nonEmpty('subject', request.subject)
+      const requested = request.coordinatorId ?? session.id
       let coordinatorId: SessionId
-      try { coordinatorId = this.authorizedCoordinator(session, request.coordinatorId ?? session.id) } catch (cause: unknown) {
+      try { coordinatorId = this.authorizedCoordinator(session, requested) } catch (cause: unknown) {
+        // An authority's own TicketError carries its handling code, such as a retryable TICKET_COORDINATOR_UNAVAILABLE.
+        if (cause instanceof TicketError) throw cause
         throw new TicketError('Ticket coordinator authority failed', 'TICKET_RECOVERY_FAILED', { cause })
       }
       const coordinator = this.ctx.agents.get(coordinatorId)
       if (coordinator === undefined || this.ctx.sessions.get(coordinatorId) !== coordinator.session) {
-        throw new TicketError('Ticket coordinator must be a registered live Agent', 'TICKET_AUTHORITY')
+        const origin = coordinatorId === requested ? '' : ' selected by the coordinator authority'
+        throw new TicketError(`Ticket coordinator "${coordinatorId}"${origin} must be a registered live Agent; resume that Agent, `
+          + `or hand coordination back to the Session owner "${session.id}", then retry`, 'TICKET_AUTHORITY')
       }
       const now = Date.now()
       const ticket: TicketSnapshot = {
@@ -624,6 +655,9 @@ export class TicketService extends Service {
   }
 
   /** Admit one execution attempt before effects; repeated operation identities do not append.
+   *
+   * With `capture`, the attempt is execution-owned: `capture` receives the attempt-bound recorder as soon as the admission is
+   * appended or found on retry, before the flush, so a failed flush still leaves the execution owner able to retry or settle it.
    * @param session - Owning Session.
    * @param request - Attempt identity, placement, actor and CAS revision.
    * @param capture - Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.
@@ -634,8 +668,20 @@ export class TicketService extends Service {
     capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView> }) => void,
   ): Promise<TicketView> {
     this.assertCaller(request.actorId)
+    if (request.workspace.kind === 'shared-workspace') await this.reconcileStoredReservations()
+    const key = JSON.stringify([session.id, request.ticketId, request.attemptId])
+    const recorded = capture === undefined ? undefined : () => {
+      if (!this.settlements.has(key)) {
+        this.settlements.set(key, {
+          rootId: session.id, ticketId: request.ticketId, attemptId: request.attemptId, assignmentId: request.assignmentId,
+          actorId: request.actorId, diagnostics: [],
+        })
+      }
+      const settlement = this.settlements.get(key)
+      if (settlement !== undefined) capture(this.recorder(settlement))
+    }
     // Scope checks and append run synchronously in the Session queue; durability never holds a host-wide lock.
-    const ticket = await this.attemptOperation(session, request, 'begin', (ticket) => {
+    return await this.attemptOperation(session, request, 'begin', (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
       this.assertParticipant(ticket, request.actorId, assignment.id)
       if (ticket.operations.some(item => item.id === executionOperationId(request.attemptId, 'settled'))) throw new TicketError('Execution settlement identity is already used; choose a fresh attempt identity', 'TICKET_OPERATION_CONFLICT')
@@ -659,7 +705,10 @@ export class TicketService extends Service {
             }
             return contains(path, otherPath) || contains(otherPath, path)
           }))
-          if (conflict) throw new TicketError(`Exclusive write scope is reserved by unsettled work in Session "${reservation.root}"`, 'TICKET_ATTEMPT_STATE')
+          if (conflict) {
+            throw new TicketError(`Exclusive write scope is reserved by unsettled work in Session "${reservation.root}"; settle that work, `
+              + 'or resume that Session so recovery can settle it', 'TICKET_ATTEMPT_STATE')
+          }
         }
       }
       if (ticket.specification.dependencies.some(id => this.get(session, id).terminalOutcome?.kind !== 'completed')) throw new TicketError('dependencies must be accepted before execution', 'TICKET_ACCEPTANCE')
@@ -675,26 +724,105 @@ export class TicketService extends Service {
         ? { ...item, revision: item.revision + 1, activeAttemptId: attempt.id, attempts: item.attempts + 1, status: 'running' as const } : item)
       const next = { ...ticket, assignments, attempts: [...ticket.attempts, attempt] }
       return { ...next, status: nextStatusForAssignment(next) }
-    })
-    capture?.({
+    }, recorded === undefined ? {} : { recorded })
+  }
+
+  /** Attempt-bound recorder over the settlement ledger; every write resolves the root Session by id when it runs. */
+  private recorder(settlement: Settlement): TicketAttemptController {
+    return {
       update: async (stage, facts) => {
-        const update = { ...request, ...facts, operationId: executionOperationId(request.attemptId, stage) }
-        return this.attemptOperation(session, update, 'update', current => this.changeAttempt(current, update, attempt => ({
+        const root = this.liveRoot(settlement)
+        const update = {
+          ...this.settlementRequest(settlement, root), ...facts, operationId: executionOperationId(settlement.attemptId, stage),
+        }
+        return this.attemptOperation(root, update, 'update', current => this.changeAttempt(current, update, attempt => ({
           ...attempt, ...facts, diagnostics: [...attempt.diagnostics, ...facts.diagnostics ?? []], updatedAt: Date.now(),
-        }), true), true)
+        }), true), { executionOwned: true })
       },
       settle: async (outcome) => {
-        const settle = { ...request, outcome, operationId: executionOperationId(request.attemptId, 'settled') }
-        return this.attemptOperation(session, settle, 'settle', (current) => {
-          const changed = this.changeAttempt(current, settle, attempt => ({ ...attempt, status: 'settled', outcome, updatedAt: Date.now() }), true)
-          const assignments = changed.assignments.map(item => item.id === request.assignmentId && ['running', 'claimed', 'assigned'].includes(item.status)
-            ? { ...item, status: 'released' as const, revision: item.revision + 1 } : item)
-          const next = { ...changed, assignments }
-          return { ...next, status: nextStatusForAssignment(next) }
-        }, true)
+        settlement.outcome ??= outcome
+        return this.writeSettlement(settlement)
       },
-    })
-    return ticket
+    }
+  }
+
+  private settlementRequest(settlement: Settlement, root: Session) {
+    return {
+      ticketId: settlement.ticketId, attemptId: settlement.attemptId, assignmentId: settlement.assignmentId,
+      actorId: settlement.actorId, expectedRevision: this.get(root, settlement.ticketId).revision,
+    }
+  }
+
+  private liveRoot(settlement: Settlement): Session {
+    const root = this.ctx.sessions.get(settlement.rootId)
+    if (root === undefined) {
+      throw new TicketError(`Ticket root Session "${settlement.rootId}" is not live; resume it, then retry`, 'TICKET_ROOT_UNAVAILABLE')
+    }
+    return root
+  }
+
+  /** Write the ledger's settlement to the live root; the entry and its reservation leave only after a durable flush. */
+  private async writeSettlement(settlement: Settlement): Promise<TicketView> {
+    const { outcome } = settlement
+    if (outcome === undefined) throw new TicketError('Ticket attempt settlement has no observed outcome', 'TICKET_ATTEMPT_STATE')
+    const pending = (cause?: unknown) => new TicketError(`Ticket attempt "${settlement.attemptId}" ended ${outcome}; `
+      + `resume Session "${settlement.rootId}" to persist its settlement`, 'TICKET_SETTLEMENT_PENDING', cause === undefined ? undefined : { cause })
+    const root = this.ctx.sessions.get(settlement.rootId)
+    if (root === undefined) throw pending()
+    const settle = { ...this.settlementRequest(settlement, root), outcome, operationId: executionOperationId(settlement.attemptId, 'settled') }
+    try {
+      return await this.attemptOperation(root, settle, 'settle', (current) => {
+        const changed = this.changeAttempt(current, settle, attempt => ({
+          ...attempt, status: 'settled', outcome, updatedAt: Date.now(), diagnostics: [...attempt.diagnostics, ...settlement.diagnostics],
+        }), true)
+        const assignments = changed.assignments.map(item => item.id === settlement.assignmentId && ['running', 'claimed', 'assigned'].includes(item.status)
+          ? { ...item, status: 'released' as const, revision: item.revision + 1 } : item)
+        const next = { ...changed, assignments }
+        return { ...next, status: nextStatusForAssignment(next) }
+      }, { executionOwned: true, settledByAnyOperation: settlement.attemptId })
+    } catch (error: unknown) {
+      if (this.ctx.sessions.get(settlement.rootId) !== root) throw pending(error)
+      throw error
+    }
+  }
+
+  /** Finish what this service owns for one root that became live: replay known outcomes, and settle in-process attempts
+   * an earlier host admitted, since their producers ended with that host. */
+  private async recoverRoot(session: Session): Promise<void> {
+    if (this.projection === undefined || this.ctx.sessions.get(session.id) !== session) return
+    const writes: Promise<unknown>[] = []
+    for (const settlement of this.settlements.values()) {
+      if (settlement.rootId === session.id && settlement.outcome !== undefined) writes.push(this.writeSettlement(settlement))
+    }
+    const state = this.projection.stateOf(session)
+    if (!this.activationRoots.has(session.id) && state.failure === undefined) {
+      for (const ticket of state.tickets) for (const attempt of ticket.attempts) {
+        const key = JSON.stringify([session.id, ticket.id, attempt.id])
+        if (this.settlements.has(key) || attempt.executor.kind !== 'in-process'
+          || !['preparing', 'running', 'stopping'].includes(attempt.status)
+          // Only the execution owner writes reserved stage facts, so they mark an attempt whose producer this host family ran.
+          || !ticket.operations.some(item => item.id.startsWith(executionOperationId(attempt.id, '').slice(0, -3)))) continue
+        const settlement: Settlement = {
+          rootId: session.id, ticketId: ticket.id, attemptId: attempt.id, assignmentId: attempt.assignmentId, actorId: session.id,
+          outcome: 'cancelled', diagnostics: ['The in-process producer ended with the host that admitted it; recovered as cancelled'],
+        }
+        this.settlements.set(key, settlement)
+        writes.push(this.writeSettlement(settlement))
+      }
+    }
+    const failures = (await Promise.allSettled(writes)).flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
+    if (failures.length > 0) throw new AggregateError(failures, 'Ticket attempt recovery did not persist')
+  }
+
+  /** Teardown makes one last attempt for known outcomes and reports what stays pending for the next resume. */
+  private async drainSettlements(): Promise<void> {
+    for (const settlement of [...this.settlements.values()]) {
+      if (settlement.outcome === undefined) continue
+      try { await this.writeSettlement(settlement) } catch (error: unknown) {
+        this.ctx.logger.warn(`Ticket attempt "${settlement.attemptId}" in Session "${settlement.rootId}" ended ${settlement.outcome}, `
+          + `but its settlement is not durable; resuming that Session settles it: ${String(error)}`)
+      }
+    }
   }
 
   /** Record runtime receipts, stopping or uncertainty without releasing work.
@@ -837,8 +965,9 @@ export class TicketService extends Service {
   }
 
   private async attemptOperation<T extends TicketMutationRequest & { readonly operationId: TicketOperationId }>(
-    session: Session, request: T, kind: string, update: (ticket: TicketSnapshot) => TicketSnapshot, executionOwned = false,
+    session: Session, request: T, kind: string, update: (ticket: TicketSnapshot) => TicketSnapshot, options: AttemptOperationOptions = {},
   ): Promise<TicketView> {
+    const { executionOwned = false } = options
     if (!executionOwned && request.operationId.startsWith('ticket-execution:')) throw new TicketError('Operation prefix ticket-execution: is reserved for execution facts; choose another operation identity', 'TICKET_INVALID_INPUT')
     const { expectedRevision: _revision, ...payload } = request
     const legacyFingerprint = operationFingerprint({ kind, ...payload })
@@ -849,14 +978,24 @@ export class TicketService extends Service {
       const operation = ticket.operations.find(item => item.id === request.operationId)
       if (operation !== undefined) {
         if (operation.request !== fingerprint && operation.request !== legacyFingerprint) throw new TicketError('operation identity was reused with different arguments', 'TICKET_OPERATION_CONFLICT')
+        options.recorded?.()
+        await this.durable(session)
+        return ticket
+      }
+      // Settlement compacted this committed operation into its tombstone; a retry reports the recorded Ticket.
+      const tombstone = ticket.operations.find(item => item.retiredIds?.includes(request.operationId))
+      if (tombstone !== undefined) {
+        if (!('attemptId' in request) || request.attemptId !== tombstone.attemptId) throw new TicketError('Operation belongs to another, settled attempt', 'TICKET_ATTEMPT_STATE')
+        await this.durable(session)
+        return ticket
+      }
+      if (options.settledByAnyOperation !== undefined
+        && ticket.attempts.some(item => item.id === options.settledByAnyOperation && item.status === 'settled')) {
         await this.durable(session)
         return ticket
       }
       if (!executionOwned && ticket.revision !== request.expectedRevision) throw new TicketError('Ticket revision changed', 'TICKET_STALE_REVISION')
       if (ticket.terminalOutcome !== undefined) throw new TicketError('Ticket is terminal', 'TICKET_TERMINAL')
-      if (ticket.operations.some(item => item.retiredIds?.includes(request.operationId))) {
-        throw new TicketError('Operation belongs to a settled attempt', 'TICKET_ATTEMPT_STATE')
-      }
       const changed = update(ticket)
       const attemptId = 'attemptId' in request && typeof request.attemptId === 'string'
         ? changed.attempts.find(item => item.id === request.attemptId)?.id : undefined
@@ -870,7 +1009,9 @@ export class TicketService extends Service {
           ...retired.length === 0 ? {} : { retiredIds: retired.flatMap(item => [item.id, ...item.retiredIds ?? []]) },
         }],
       }
-      await this.commit(session, next)
+      this.append(session, next)
+      options.recorded?.()
+      await this.durable(session)
       return next
     }, executionOwned)
   }
@@ -968,6 +1109,15 @@ export class TicketService extends Service {
   }
 
   private async commit(session: Session, ticket: TicketSnapshot): Promise<void> {
+    this.append(session, ticket)
+    await this.durable(session)
+  }
+
+  /** Validate and append one complete snapshot to the exact live Session; durability is the caller's next step. */
+  private append(session: Session, ticket: TicketSnapshot): void {
+    if (this.ctx.sessions.get(session.id) !== session) {
+      throw new TicketError(`Ticket Session "${session.id}" is not live; resume it, then retry`, 'TICKET_ROOT_UNAVAILABLE')
+    }
     const previous = this.state(session).tickets.find(candidate => candidate.id === ticket.id)
     try {
       validateTicketChange(previous, ticket)
@@ -997,33 +1147,86 @@ export class TicketService extends Service {
     const bytes = Math.max(textBytes(JSON.stringify(ticket)), textBytes(JSON.stringify(reserved)))
     if (bytes > this.config.maxSnapshotBytes) throw new TicketError(`Ticket snapshot exceeds ${String(this.config.maxSnapshotBytes)} bytes`, 'TICKET_SNAPSHOT_TOO_LARGE')
     session.append('ticket/state', { version: 2, sessionId: session.id, ticket })
-    await this.durable(session)
   }
 
+  /** Flush the exact live Session, then release the reservations and settlement ownership its settled attempts held.
+   * A Session object outside the store has nothing to flush without persistence; with persistence it must be resumed. */
   private async durable(session: Session): Promise<void> {
-    if (this.ctx.sessions.get(session.id) !== session && this.ctx.get('sessionPersistence') !== undefined) {
-      throw new TicketError(`Ticket Session "${session.id}" must be resumed before settlement can be persisted`, 'TICKET_RECOVERY_FAILED')
-    }
     if (this.ctx.sessions.get(session.id) === session) await this.ctx.sessions.flush(session)
+    else if (this.ctx.get('sessionPersistence') !== undefined) {
+      throw new TicketError(`Ticket Session "${session.id}" is not live; resume it, then retry`, 'TICKET_ROOT_UNAVAILABLE')
+    }
     const state = this.state(session)
-    for (const [key, reservation] of this.scopeReservations) {
-      if (reservation.root === session.id && state.tickets.some(ticket => ticket.attempts.some(attempt =>
-        attempt.id === reservation.attempt.id && attempt.status === 'settled' && key === JSON.stringify([session.id, ticket.id, attempt.id])))) {
-        this.scopeReservations.delete(key)
-      }
+    for (const ticket of state.tickets) for (const attempt of ticket.attempts) {
+      if (attempt.status !== 'settled') continue
+      const key = JSON.stringify([session.id, ticket.id, attempt.id])
+      this.scopeReservations.delete(key)
+      this.settlements.delete(key)
     }
   }
 
   private retainScopes(session: Session): void {
     if (this.projection === undefined) return
-    const state = this.projection.stateOf(session)
+    this.retainState(session.id, this.projection.stateOf(session))
+  }
+
+  private retainState(root: SessionId, state: TicketProjectionState): void {
     for (const ticket of state.tickets) for (const attempt of ticket.attempts) {
       if (attempt.status === 'settled' || attempt.workspace.kind !== 'shared-workspace') continue
-      this.scopeReservations.set(JSON.stringify([session.id, ticket.id, attempt.id]), {
-        root: session.id, attempt, scopes: this.assignment(ticket, attempt.assignmentId).workScopes,
+      this.scopeReservations.set(JSON.stringify([root, ticket.id, attempt.id]), {
+        root, attempt, scopes: this.assignment(ticket, attempt.assignmentId).workScopes,
       })
     }
-    if (state.failure !== undefined) this.reportRecoveryFailure(session.id, state.failure)
+    if (state.failure !== undefined) this.reportRecoveryFailure(root, state.failure)
+  }
+
+  /** Bring stored-root reservations up to date before a shared-workspace admission.
+   *
+   * The first call lists storage and folds only the `ticket/state` events of each stored root that is not live; activation
+   * reads no log. A listing failure or an unreadable root refuses the admission and is retried by the next one. Reservations
+   * of a root whose stored Session no longer exists are released.
+   */
+  private async reconcileStoredReservations(): Promise<void> {
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) return
+    this.storedScan ??= persistence.list().then(async (stored) => {
+      for (const { header } of stored) {
+        if (this.ctx.sessions.get(header.id) === undefined) await this.scanStoredRoot(persistence, header.id)
+      }
+    })
+    try { await this.storedScan } catch (cause: unknown) {
+      this.storedScan = undefined
+      throw new TicketError('Stored Ticket reservations could not be listed; shared-workspace admission is refused until storage '
+        + 'recovers, then retry', 'TICKET_RECOVERY_FAILED', { cause })
+    }
+    const stale = new Set([...this.unreadableRoots.keys(), ...[...this.scopeReservations.values()].map(item => item.root)])
+    for (const root of stale) {
+      if (this.ctx.sessions.get(root) !== undefined || await persistence.stat(root) !== undefined) continue
+      this.unreadableRoots.delete(root)
+      for (const [key, reservation] of this.scopeReservations) if (reservation.root === root) this.scopeReservations.delete(key)
+      for (const [key, settlement] of this.settlements) if (settlement.rootId === root) this.settlements.delete(key)
+    }
+    for (const root of [...this.unreadableRoots.keys()]) await this.scanStoredRoot(persistence, root)
+    if (this.unreadableRoots.size > 0) {
+      const roots = [...this.unreadableRoots.keys()].map(root => `"${root}"`).join(', ')
+      throw new TicketError(`Stored Session ${roots} could not be read to rebuild its Ticket reservations; shared-workspace admission `
+        + 'is refused until it is readable or removed, then retry', 'TICKET_RECOVERY_FAILED', { cause: [...this.unreadableRoots.values()][0] })
+    }
+  }
+
+  private async scanStoredRoot(persistence: SessionPersistence, root: SessionId): Promise<void> {
+    try {
+      await using stored = await persistence.open(root, 'read')
+      const log = await stored.read()
+      let state = ticketProjectionDefinition.init(stored.header)
+      for (const event of log.events) if (event.type === 'ticket/state') state = ticketProjectionDefinition.apply(state, event)
+      this.unreadableRoots.delete(root)
+      // A root resumed during the read publishes its own reservations from its live log.
+      if (this.ctx.sessions.get(root) === undefined) this.retainState(root, state)
+    } catch (error: unknown) {
+      this.unreadableRoots.set(root, error)
+      this.reportRecoveryFailure(root, error)
+    }
   }
 
   private reportRecoveryFailure(root: SessionId, cause: unknown): void {

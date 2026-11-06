@@ -4506,7 +4506,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, \'status\' | \'workspaceReceipt\' | \'runtimeReceipt\' | \'diagnostics\'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest[\'outcome\']): Promise<TicketView> }) => void, ): Promise<TicketView>',
-        description: 'Admit one execution attempt before effects; repeated operation identities do not append.',
+        description: 'Admit one execution attempt before effects; repeated operation identities do not append.\n\nWith `capture`, the attempt is execution-owned: `capture` receives the attempt-bound recorder as soon as the admission is appended or found on retry, before the flush, so a failed flush still leaves the execution owner able to retry or settle it.',
         parameters: [{ name: 'session', description: 'Owning Session.' }, { name: 'request', description: 'Attempt identity, placement, actor and CAS revision.' }, { name: 'capture', description: 'Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.' }],
         returns: 'Durably flushed Ticket, including on retry; rejects unsettled replacements or changed operation payloads.',
       },

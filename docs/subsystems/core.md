@@ -1482,6 +1482,9 @@ async cancel(session: Session, request: EndTicketRequest): Promise<TicketView>
 async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView>
 
 /** Admit one execution attempt before effects; repeated operation identities do not append.
+ *
+ * With `capture`, the attempt is execution-owned: `capture` receives the attempt-bound recorder as soon as the admission is
+ * appended or found on retry, before the flush, so a failed flush still leaves the execution owner able to retry or settle it.
  * @param session - Owning Session.
  * @param request - Attempt identity, placement, actor and CAS revision.
  * @param capture - Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.
