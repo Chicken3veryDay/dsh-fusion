@@ -7,6 +7,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { RemoteError, type RemoteResult, type TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkstreamActionInjected, WorkstreamCommand } from '../src/client/WorkstreamAction.tsx'
 import { WorkstreamAction } from '../src/client/WorkstreamAction.tsx'
+import { CommandNotice } from '../src/client/notices.tsx'
 import { failureOf, inject, mountWorkstreamPanel } from '../src/client/mount.ts'
 import { failureText } from '../src/client/views.tsx'
 import { en, zh } from '../src/client/locales.ts'
@@ -154,6 +155,16 @@ describe('Workstream panel browser plugin', () => {
     expect(failureText(failure, t(zh) as never)).toBe(zh['error.forbidden'])
     expect(failureText(failure, t(zh) as never)).not.toContain('remote access')
     expect(en['error.forbidden']).not.toBe(en['error.denied'])
+  })
+
+  it('hands the shell overlay the same report store that the header action publishes to', async () => {
+    const b = await bench()
+    const overlay = b.ctx.slots.entries('shell.overlay').find(candidate => candidate.component === CommandNotice)!
+    const { reports } = overlay.inject!() as { reports: { getSnapshot(): unknown } }
+    const command: WorkstreamCommand = { kind: 'resolve', request: { ticketId: build.id, attentionId: 'n1' as never, expectedRevision: 4 } }
+    b.actions().reportFailure({ code: 'failed', message: 'm' }, command)
+    expect(reports.getSnapshot()).toMatchObject({ failure: { code: 'failed' } })
+    expect(b.actions().drafts.getSnapshot().size).toBe(0)
   })
 
   it('reports other refusals without rereading', async () => {
