@@ -21,7 +21,7 @@ import { launchChromium } from './launch.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-browser-use'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import type {} from '@deepseek-ai/dsh-tools'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 /** Cordis identity for the native Stagehand provider. */
 export const name = 'experimental-browser-use-stagehand-native'
@@ -215,7 +215,7 @@ export function apply(ctx: Context, input: Config): void {
 }
 
 function mountTools(ctx: Context, resources: SessionResources<BrowserResource>): void {
-  const names = new Set<string>()
+  const definitions = new Set<ToolDefinition>()
   const descriptions: Record<BrowserMethod, string> = {
     navigate: 'Navigate a Stagehand browser tab to a URL.',
     tabs: 'List, create, select, or close a Stagehand browser tab.',
@@ -226,8 +226,7 @@ function mountTools(ctx: Context, resources: SessionResources<BrowserResource>):
   }
   for (const method of Object.keys(browserInputs) as BrowserMethod[]) {
     const toolName = `stagehand_${method}`
-    names.add(toolName)
-    ctx.tools.register(createMcpToolDefinition(ctx, {
+    const definition = createMcpToolDefinition(ctx, {
       name: toolName,
       rawName: method,
       description: descriptions[method],
@@ -237,11 +236,13 @@ function mountTools(ctx: Context, resources: SessionResources<BrowserResource>):
         const resource = await resources.get(agent)
         return resource.native.execute(method, args, resource.operationSignal)
       },
-    }))
+    })
+    definitions.add(definition)
+    ctx.tools.register(definition)
   }
   ctx.systemPrompt.section({ name: 'browser-use:stagehand-native', text: GUIDANCE, order: ctx.systemPrompt.getSectionOrder('TOOL_COMPUTER_USE') })
   ctx.on('tools/execute', async (exec, next) => {
-    if (!names.has(exec.name)) return next()
+    if (exec.definition === undefined || !definitions.has(exec.definition)) return next()
     const agent = exec.agent
     if (agent === undefined || ctx.agents.get(agent.id) !== agent) {
       throw new Error('Stagehand browser tools require an exact live Agent')

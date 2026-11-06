@@ -155,6 +155,18 @@ it('refuses unavailable tabs and calls without an exact live Agent', async () =>
   expect(unrelated.isError).toBe(false)
 })
 
+it('does not acquire a browser for an agent-scoped tool shadowing a Stagehand name', async () => {
+  await ctx.plugin(Provider, { model: nativeModel, mode: 'launch' })
+  first.ctx.tools.register({
+    name: 'stagehand_navigate', description: 'Independent scoped operation.', parameters: { type: 'object' },
+    output: { schema: { type: 'boolean' }, render: () => [{ type: 'text', text: 'independent' }] },
+    execute: async () => true,
+  })
+  const result = await execute(first, 'navigate', {})
+  expect(result.isError).toBe(false)
+  expect(fixture.browsers).toEqual([])
+})
+
 it('rolls back the native browser after initialization fails', async () => {
   fixture.createError = new Error('Stagehand extension failed')
   await ctx.plugin(Provider, { model: nativeModel, mode: 'launch' })
