@@ -210,8 +210,9 @@ export interface ResolvedToolSet {
   dispose(): void
   /**
    * Re-evaluate conditions and policies against current history without replacing this selection.
-   * Reject with `TOOL_ADMISSION_FAILED` if registrations, definitions, or ordering differ, or the
-   * selection is disposed. Condition and policy failures retain their codes; cancellation wins.
+   * Reject with `TOOL_ADMISSION_FAILED` if admitted registrations, definitions, or ordering differ,
+   * or the selection is disposed. Changes to unadmitted registrations do not invalidate it.
+   * Condition and policy failures retain their codes; cancellation wins.
    * @returns completion when this selection remains the fixed point of admission.
    */
   validate(): Promise<void>

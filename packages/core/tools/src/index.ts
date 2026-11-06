@@ -376,8 +376,8 @@ export class ToolsService extends Service {
     const checkRegistrations = (): void => {
       signal.throwIfAborted()
       const current = this.view(agent)
-      if (closed || current.visible.size !== view.visible.size
-        || [...view.registrations].some(([name, entry]) => current.registrations.get(name) !== entry)) {
+      if (closed || [...admitted.keys()].some(name =>
+        current.registrations.get(name) !== view.registrations.get(name))) {
         throw new ToolAdmissionError(new Error('Tool registrations changed during request reconciliation; retry the turn'))
       }
     }

@@ -78,3 +78,20 @@ it.each(['condition', 'policy', 'cancel', 'late-removal'] as const)(
     } finally { release.resolve(undefined); selected.dispose() }
   },
 )
+
+
+it.each(['added', 'removed', 'replaced'] as const)('ignores an %s unadmitted registration while retaining admitted identities', async (path) => {
+  const h = await harness()
+  h.ctx.tools.register(h.definition)
+  const hidden = { ...h.definition, name: 'unadmitted' }
+  const registration = path === 'added' ? undefined : h.ctx.tools.register(hidden, { when: () => false })
+  const selected = await h.ctx.tools.resolve(h.input)
+  try {
+    registration?.()
+    if (path !== 'removed') h.ctx.tools.register(hidden)
+    await expect(selected.validate()).resolves.toBeUndefined()
+    expect([...selected.view(h.agent).values()]).toEqual([h.definition])
+    expect(h.ctx.tools.executable('unadmitted', h.agent, selected)).toBeUndefined()
+    expect(h.ctx.tools.executable('probe', h.agent, selected)).toBe(h.definition)
+  } finally { selected.dispose() }
+})

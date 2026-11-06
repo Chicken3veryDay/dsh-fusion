@@ -72,7 +72,7 @@ ctx.tools.register(defineTool({
 
 `resolve({ agent, modelSelection, signal })` 返回步骤拥有的 `ResolvedToolSet`。将它作为 `toolSet` 传给提示词组装以及该步骤的 `ctx.tools.execute()` 批次，被替换或批次结束后释放。循环在每次请求准备及待提交消息写入之后仅解析一次；只有捕获的定义身份、执行器与已渲染上下文哈希一致时，才保留已接受的提示词。执行器把批次的集合应用到每次调用，包括 PTC 程序的子调用。注册仍由 effect 持有；每份集合只准入原 agent scope 中的原注册。注销、新的限制或同名替换会阻止尚未开始的调用继续使用它；取消之后，调用以共享 pipeline 的取消结果结束。已经开始的操作保留协作取消义务。批次没有已解析集合时，条件工具调用返回 `UNKNOWN_TOOL`。
 
-`toolSet.validate()` 检查原注册，并重新计算其条件与准入策略，不发布新的工具集合。定义与顺序必须一致；注册改变、集合已释放或准入改变均以 `TOOL_ADMISSION_FAILED` 拒绝。条件与策略失败保留原错误码，取消优先。循环仅在协调过程于解析之后新增模型可见历史时验证一次；结果不稳定时，在发起请求前结束轮次，不重复组装。无论结果如何，都应释放保留的集合。
+`toolSet.validate()` 检查原注册，并重新计算其条件与准入策略，不发布新的工具集合。定义与顺序必须一致；已准入注册改变、集合已释放或准入改变均以 `TOOL_ADMISSION_FAILED` 拒绝。未准入注册的变化不会使该选择失效，也不会增加可调用工具。条件与策略失败保留原错误码，取消优先。循环仅在协调过程于解析之后新增模型可见历史时验证一次；结果不稳定时，在发起请求前结束轮次，不重复组装。无论结果如何，都应释放保留的集合。
 
 `get(name, scope, toolSet)`、`definitions(scope, toolSet)` 和 `schemas(scope, toolSet)` 读取已准入集合；省略 `toolSet` 时只查看已注册定义，不计算条件。`executable(name, scope, toolSet)` 是执行时的查找：它应用集合，没有集合时排除条件注册。执行器的描述与分区通过 `AssembleContext.toolSet` 接收同一集合。展示变换不能增删可调用工具。 `isExecutable(definition, scope, toolSet)` 在主体开始前按身份检查保留的定义；没有集合时，条件注册和带准入策略的 scope 均不可执行。
 
