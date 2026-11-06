@@ -47,7 +47,7 @@ patch 在 `dsh-base` 之后插入三个服务、三个工具行和 Web 面板：
 
 patch 中每个服务限制都是显式 Config 值，与包默认值相同。
 
-本层不为 `ticket_assign` 添加守卫。Ticket 接受任何 Session 作为受派人，因此 Workstream 注册了 Ticket 分配授权方，在 Ticket 队列内的分配提交时拒绝不是该根 Workstream 活跃子成员的受派人（`TICKET_AUTHORITY`），规则与 `workstream_assign_ticket` 相同。因此，停止操作在分配排队等待期间完成时，该分配仍会被拒绝。没有 Workstream 的根交给 Ticket 处理。
+本层不为 `ticket_assign` 添加守卫。Ticket 接受任何 Session 作为受派人，因此 Workstream 注册了 Ticket 分配授权方，在 Ticket 队列内的分配提交时拒绝不是该根 Workstream 活跃子成员的受派人（`TICKET_AUTHORITY`），规则与 `workstream_assign_ticket` 相同。因此，停止操作在分配排队等待期间完成时，该分配仍会被拒绝。没有 Workstream 的根交给 Ticket 处理。`ticket_*` 工具依赖 `workstreams`，因此会随其一起卸载，不会在 Workstream 的 Ticket 授权方缺席时运行。
 
 -----
 
@@ -57,7 +57,7 @@ patch 中每个服务限制都是显式 Config 值，与包默认值相同。
 <details>
 <summary>实现细节——点击展开</summary>
 
-运行时内容是 [`cordis.patch.yml`](cordis.patch.yml)。三个工具类是各自包的具名导出，而 Loader 只挂载模块的默认导出，因此本包用单行入口把它们重新导出为默认导出：`./ticket-tools`、`./workstream-tools` 与 `./workstream-evidence-tools`。
+运行时内容是 [`cordis.patch.yml`](cordis.patch.yml)。三个工具类是各自包的具名导出，而 Loader 只挂载模块的默认导出，因此本包用入口把它们重新导出为默认导出：`./ticket-tools`、`./workstream-tools` 与 `./workstream-evidence-tools`。`./ticket-tools` 继承 `TicketTools`，仅为添加 `workstreams` 依赖。
 
 Agent Teams 保持未挂载。`WorkstreamService` 通过 `ctx.subagents` 的收件箱投递消息、中断和停止，并记录持久的接收回执，因此不需要 Team roster 或 `ctx.agentTeams`。挂载 Agent Teams 会在 Ticket 之外增加第二个 `team_task_*` 看板。base 的 `subagent`、`list_agents` 与 `send_message` 工具仍然可用，且绕过 Workstream 授权；Workstream 成员请使用 `workstream_*` 工具。
 

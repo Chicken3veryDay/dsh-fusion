@@ -47,7 +47,7 @@ The patch inserts three services, three tool rows, and the Web panel after `dsh-
 
 Every service limit is an explicit Config value in the patch, equal to the package default.
 
-The profile adds no guard to `ticket_assign`. Ticket accepts any Session as an assignee, so Workstream registers a Ticket assignment authority that refuses, inside Ticket's queued assignment, an assignee that is not an active child member of the root's Workstream (`TICKET_AUTHORITY`), the same rule as `workstream_assign_ticket`. A stop that completes while the assignment waits in Ticket's queue therefore still refuses it. A root with no Workstream is left to Ticket.
+The profile adds no guard to `ticket_assign`. Ticket accepts any Session as an assignee, so Workstream registers a Ticket assignment authority that refuses, inside Ticket's queued assignment, an assignee that is not an active child member of the root's Workstream (`TICKET_AUTHORITY`), the same rule as `workstream_assign_ticket`. A stop that completes while the assignment waits in Ticket's queue therefore still refuses it. A root with no Workstream is left to Ticket. The `ticket_*` tools depend on `workstreams`, so they unload with it and never run while Workstream's Ticket authorities are absent.
 
 -----
 
@@ -57,7 +57,7 @@ The profile adds no guard to `ticket_assign`. Ticket accepts any Session as an a
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The runtime content is [`cordis.patch.yml`](cordis.patch.yml). The three tool classes are named exports of their packages, and the Loader mounts only a module's default export, so this package re-exports each as the default of a one-line entry: `./ticket-tools`, `./workstream-tools`, and `./workstream-evidence-tools`.
+The runtime content is [`cordis.patch.yml`](cordis.patch.yml). The three tool classes are named exports of their packages, and the Loader mounts only a module's default export, so this package re-exports each as the default of an entry: `./ticket-tools`, `./workstream-tools`, and `./workstream-evidence-tools`. `./ticket-tools` subclasses `TicketTools` only to add the `workstreams` dependency.
 
 Agent Teams stays unmounted. `WorkstreamService` delivers messages, interruption, and stop through `ctx.subagents` inbox delivery and records durable acceptance receipts, so it needs no Team roster or `ctx.agentTeams`. Mounting Agent Teams would add a second `team_task_*` board beside Tickets. The base `subagent`, `list_agents`, and `send_message` tools stay available and bypass Workstream authorization; use `workstream_*` tools for Workstream members.
 
