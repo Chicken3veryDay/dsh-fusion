@@ -1490,7 +1490,7 @@ async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView
  * @param capture - Optional execution owner receiving an attempt-bound recorder after admission; omitted for manual admission.
  * @returns Durably flushed Ticket, including on retry; rejects unsettled replacements or changed operation payloads.
  */
-async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView> }) => void, ): Promise<TicketView>
+async beginAttempt( session: Session, request: BeginTicketAttemptRequest, capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView> settle(outcome: SettleTicketAttemptRequest['outcome'], facts?: Pick<SettleTicketAttemptRequest, 'workspaceReceipt'>): Promise<TicketView> }) => void, ): Promise<TicketView>
 
 /** Record runtime receipts, stopping or uncertainty without releasing work.
  * @param session - Owning Session.

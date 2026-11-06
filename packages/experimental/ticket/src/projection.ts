@@ -212,6 +212,7 @@ export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = ticketSnapshotV1S
     id: z.string().min(1).transform(value => TicketOperationId(value)), request: z.string().min(1),
     attemptId: z.string().min(1).transform(value => TicketAttemptId(value)).optional(),
     retiredIds: z.array(z.string().min(1).transform(value => TicketOperationId(value))).optional(),
+    retiredRequests: z.array(z.string().min(1)).optional(),
   }).strict()),
   missionPlans: z.array(z.object({
     id: z.string().min(1).transform(value => MissionId(value)), revision: positiveInteger,

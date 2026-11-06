@@ -487,8 +487,10 @@ export interface TicketOperationSnapshot {
   readonly request: string
   /** Attempt owning this operation; absent on historical records and operations unrelated to attempts. */
   readonly attemptId?: TicketAttemptId
-  /** Retired operation ids retained by the settlement record to refuse reuse without retaining request fingerprints. */
+  /** Retired operation ids retained by the settlement record to refuse reuse by another attempt. */
   readonly retiredIds?: readonly TicketOperationId[]
+  /** Request fingerprints of `retiredIds`, index for index, so a retry with changed arguments is refused; absent on older records. */
+  readonly retiredRequests?: readonly string[]
 }
 /** A Mission milestone references Ticket completion, never a second mutable status. */
 export interface MissionMilestone { readonly title: string; readonly ticketIds: readonly TicketId[] }
@@ -584,9 +586,12 @@ export interface TicketAttemptController {
    * @returns The committed Ticket.
    */
   update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>
-  /** Record actual producer settlement and release a live assignment.
-   * @param outcome - Observed terminal outcome.
+  /** Hand the observed producer outcome to the settlement ledger, then write it. The ledger owns the outcome from the call,
+   * before any await, and retains it until a flush makes it durable. A failed or cancelled outcome releases the assignment;
+   * a succeeded one leaves it open for its result report.
+   * @param outcome - Observed terminal outcome; the first outcome handed over wins for later calls.
+   * @param facts - Workspace receipt to record with the settlement when the attempt has none yet.
    * @returns The committed Ticket.
    */
-  settle(outcome: 'succeeded' | 'failed' | 'cancelled'): Promise<TicketView>
+  settle(outcome: 'succeeded' | 'failed' | 'cancelled', facts?: Pick<SettleTicketAttemptRequest, 'workspaceReceipt'>): Promise<TicketView>
 }

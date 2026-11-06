@@ -30,6 +30,8 @@ export interface TicketExecutionConfig {
 export interface PrepareTicketExecutionRequest extends Omit<BeginTicketAttemptRequest, 'actorId'> {
   readonly rootSessionId: Session['id']
   readonly worktreeName?: string
+  /** Cancels preparation until the handle is published and is not retained afterwards; cancel running work with a
+   * `startJob` signal or `dispose()`. */
   readonly signal?: AbortSignal
 }
 
@@ -63,6 +65,8 @@ interface Reservation {
   readonly rootId: Session['id']
   readonly ownerId: Session['id']
   readonly fingerprint: string
+  /** Preparation lifetime: disposal of the caller, worker or root, or teardown, aborts it in every preparation phase. */
+  readonly lifetime: AbortController
   preparation: Promise<TicketExecutionHandle>
   /** Admission is in the in-memory log but its flush failed: an identical retry re-runs preparation from storage. */
   unflushed?: TicketAttemptController
@@ -106,8 +110,9 @@ export class TicketExecutionService extends Service {
       const handles = [...this.handles].filter(handle => !handle.stopFailed
         && (handle.caller === agent || handle.worker === agent || handle.rootId === agent.session.id))
       for (const [key, reservation] of this.reservations) {
-        if (reservation.unflushed !== undefined && (reservation.caller === agent || reservation.ownerId === agent.id
-          || reservation.rootId === agent.session.id)) void this.abandonAdmission(key, reservation)
+        if (reservation.caller !== agent && reservation.ownerId !== agent.id && reservation.rootId !== agent.session.id) continue
+        reservation.lifetime.abort(new TicketError(`Ticket execution owner "${agent.id}" was disposed during preparation`, 'TICKET_AUTHORITY'))
+        void this.abandonAdmission(key, reservation)
       }
       void Promise.all(handles.map(handle => this.disposeHandle(handle))).catch((error: unknown) => {
         this.ctx.logger.warn(`Ticket execution owner disposal did not settle; reservation retained for reconciliation: ${String(error)}`)
@@ -115,6 +120,7 @@ export class TicketExecutionService extends Service {
     })
     this.ctx.effect(() => async () => {
       this.closing = true
+      for (const reservation of this.reservations.values()) reservation.lifetime.abort(new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE'))
       await Promise.allSettled([...this.reservations.values()].map(entry => entry.preparation))
       await Promise.all([...this.reservations].map(([key, reservation]) => this.abandonAdmission(key, reservation)))
       const results = await Promise.allSettled([...this.handles].map(handle => this.disposeHandle(handle)))
@@ -148,7 +154,8 @@ export class TicketExecutionService extends Service {
           if (retained.unflushed === undefined) return retained.preparation
           // The admission is recorded in memory; retrying repeats its flush and continues preparation.
           delete retained.unflushed
-          retained.preparation = this.track(key, root, request, this.prepareHandle(caller, root, assignment, request))
+          const preparation = this.prepareHandle(caller, root, assignment, request, retained.lifetime.signal)
+          retained.preparation = this.track(key, root, request, preparation)
           return retained.preparation
         }
         if (current.attempts.some(item => item.assignmentId === assignment.id && item.status !== 'settled')) throw new TicketError('Ticket assignment already has a different execution reservation', 'TICKET_ATTEMPT_STATE')
@@ -161,8 +168,9 @@ export class TicketExecutionService extends Service {
         throw new TicketError('Recovered Ticket attempt requires settlement reconciliation before execution', 'TICKET_ATTEMPT_STATE')
       }
       this.preflight(request)
-      const preparation = this.track(key, root, request, this.prepareHandle(caller, root, assignment, request))
-      this.reservations.set(key, { caller, rootId: root.id, ownerId: assignment.ownerId, fingerprint, preparation })
+      const lifetime = new AbortController()
+      const preparation = this.track(key, root, request, this.prepareHandle(caller, root, assignment, request, lifetime.signal))
+      this.reservations.set(key, { caller, rootId: root.id, ownerId: assignment.ownerId, fingerprint, lifetime, preparation })
       return preparation
     } catch (error: unknown) {
       return Promise.reject(error instanceof Error ? error : new Error('Ticket execution preparation failed', { cause: error }))
@@ -194,6 +202,14 @@ export class TicketExecutionService extends Service {
     }
   }
 
+  /** Every identity the handle publishes must still be the registered live Agent. */
+  private assertOwners(caller: Agent, root: Agent, worker: Agent | undefined): void {
+    this.assertCaller(caller)
+    if (this.ctx.agents.get(root.id) !== root || (worker !== undefined && this.ctx.agents.get(worker.id) !== worker)) {
+      throw new TicketError('Ticket execution owner was disposed during preparation', 'TICKET_AUTHORITY')
+    }
+  }
+
   private assertCaller(caller: Agent): void {
     const initiating = this.ctx.agents.currentInitiator()
     if ((initiating !== undefined && initiating !== caller) || this.ctx.agents.get(caller.id) !== caller
@@ -217,9 +233,9 @@ export class TicketExecutionService extends Service {
 
   private async prepareHandle(
     caller: Agent, root: Session, assignment: AssignmentSnapshot,
-    request: PrepareTicketExecutionRequest,
+    request: PrepareTicketExecutionRequest, lifetime: AbortSignal,
   ): Promise<TicketExecutionHandle> {
-    const signal = request.signal ?? new AbortController().signal
+    const signal = request.signal === undefined ? lifetime : AbortSignal.any([request.signal, lifetime])
     const technicalRoot = this.ctx.agents.get(root.id)
     if (technicalRoot === undefined) throw new TicketError('Ticket technical root Agent is not live', 'TICKET_AUTHORITY')
     const worker = request.executor.kind === 'in-process' ? this.ctx.agents.get(assignment.ownerId) : undefined
@@ -242,8 +258,13 @@ export class TicketExecutionService extends Service {
       }, (controller) => { recorder = controller }))
     } catch (error: unknown) {
       // The admission is in the log without a durable flush; this reservation owns it until a retry or its owner ends it.
-      const reservation = this.reservations.get(JSON.stringify([root.id, request.ticketId, request.assignmentId]))
-      if (recorder !== undefined && reservation !== undefined) reservation.unflushed = recorder
+      const key = JSON.stringify([root.id, request.ticketId, request.assignmentId])
+      const reservation = this.reservations.get(key)
+      if (recorder !== undefined && reservation !== undefined) {
+        reservation.unflushed = recorder
+        // An owner disposed while the admission flushed leaves no retry to wait for.
+        if (lifetime.aborted) void this.abandonAdmission(key, reservation)
+      }
       throw error
     }
     if (recorder === undefined) throw new TicketError('Ticket admission did not grant an execution recorder', 'TICKET_RECOVERY_FAILED')
@@ -252,6 +273,7 @@ export class TicketExecutionService extends Service {
     let activation: SubagentActivation | undefined
     let retainedHandle: LiveHandle | undefined
     let effectInFlight = false
+    let disposedAtPublication = false
     try {
       signal.throwIfAborted()
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- admission awaited persistence since the preceding shutdown check.
@@ -270,6 +292,7 @@ export class TicketExecutionService extends Service {
       }
       await this.update(controller, 'workspace', { status: 'running', workspaceReceipt: workspace })
       signal.throwIfAborted()
+      this.assertOwners(caller, technicalRoot, worker)
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can set `closing` during the awaited workspace update.
       if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
       if (request.executor.kind !== 'in-process') {
@@ -304,6 +327,11 @@ export class TicketExecutionService extends Service {
       retainedHandle = handle
       this.handles.add(handle)
       await this.update(controller, 'runtime', { status: 'running', runtimeReceipt })
+      if (handle.closing) {
+        // An owner was disposed after the handle was registered; that disposal owns the settlement.
+        disposedAtPublication = true
+        throw signal.reason instanceof Error ? signal.reason : new TicketError('Ticket execution owner was disposed during preparation', 'TICKET_AUTHORITY')
+      }
       const ticket = this.ctx.tickets.get(this.liveRoot(root.id), request.ticketId)
       const attempt = ticket.attempts.find(item => item.id === request.attemptId)
       const nextAssignment = ticket.assignments.find(item => item.id === assignment.id)
@@ -317,22 +345,28 @@ export class TicketExecutionService extends Service {
         dispose: () => this.disposeHandle(handle),
       }
     } catch (error: unknown) {
+      if (disposedAtPublication) {
+        await retainedHandle?.disposal?.catch(() => {})
+        throw error
+      }
       const failures: unknown[] = [error]
       if (retainedHandle !== undefined) retainedHandle.closing = true
       if (activation !== undefined) {
         try { await this.bounded(activation.dispose()) } catch (cleanup: unknown) { failures.push(cleanup) }
       }
       if (!effectInFlight && activation === undefined) {
+        if (retainedHandle !== undefined) this.handles.delete(retainedHandle)
+        this.reservations.delete(JSON.stringify([root.id, request.ticketId, request.assignmentId]))
+        // The outcome is certain and no producer started. The ledger takes it with the known workspace receipt before any
+        // write that can fail, and owns it until a flush makes it durable.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can begin during any awaited preparation stage.
+        const outcome = signal.aborted || this.closing ? 'cancelled' : 'failed'
         try {
-          if (workspace !== undefined) await this.update(controller, 'preparation-workspace', { status: 'stopping', workspaceReceipt: workspace })
-          // The outcome is certain; the settlement ledger owns it from here, including a write that must wait for storage or resume.
-          if (retainedHandle !== undefined) this.handles.delete(retainedHandle)
-          this.reservations.delete(JSON.stringify([root.id, request.ticketId, request.assignmentId]))
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can begin during any awaited preparation stage.
-          await controller.settle(signal.aborted || this.closing ? 'cancelled' : 'failed')
+          await controller.settle(outcome, workspace === undefined ? undefined : { workspaceReceipt: workspace })
         } catch (recording: unknown) { failures.push(recording) }
-        throw new AggregateError(failures, 'Ticket preparation ended before a producer started; a settlement that is not durable yet '
-          + 'is retried by the next write to its root or when the root resumes')
+        if (failures.length === 1) throw error instanceof Error ? error : new Error('Ticket preparation failed', { cause: error })
+        throw new AggregateError(failures, `Ticket preparation ended before a producer started; its ${outcome} settlement is not durable `
+          + 'yet and is completed by the next write to its root, a resume of that root, or Ticket teardown')
       }
       try {
         await this.update(controller, 'preparation-unknown', {

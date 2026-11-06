@@ -162,6 +162,7 @@ export function validateCurrentTicketChange(previous: TicketSnapshot | undefined
   for (const operation of ticket.operations) {
     if (operation.attemptId !== undefined && !ticket.attempts.some(attempt => attempt.id === operation.attemptId)) reject('operation references an unknown attempt')
     if (operation.retiredIds !== undefined && !ticket.attempts.some(attempt => attempt.id === operation.attemptId && attempt.status === 'settled')) reject('retired operations require a settled attempt')
+    if (operation.retiredRequests !== undefined && operation.retiredRequests.length !== operation.retiredIds?.length) reject('retired operation fingerprints must match retired ids')
   }
   unique(ticket.specification.acceptanceCriteria.map(item => item.id), 'criterion')
   for (const attempt of ticket.attempts) {

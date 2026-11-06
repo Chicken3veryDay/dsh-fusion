@@ -150,12 +150,16 @@ interface Settlement {
   readonly actorId: SessionId
   /** First observed producer outcome; later settlement calls retry this one. */
   outcome?: SettleTicketAttemptRequest['outcome']
+  /** Known workspace receipt written with the settlement when the attempt has none recorded. */
+  workspaceReceipt?: SettleTicketAttemptRequest['workspaceReceipt']
   readonly diagnostics: readonly string[]
 }
 
 interface AttemptOperationOptions {
   /** Written by the execution owner: no caller CAS or participant check. */
   readonly executionOwned?: boolean
+  /** Durable execution-ownership record appended in the same snapshot as the admission, so restart can identify it. */
+  readonly admittedBy?: TicketOperationId
   /** Runs once the operation is in the in-memory log, appended now or found on retry, before the flush. */
   readonly recorded?: () => void
   /** A settled attempt is already terminal: settlement retries only repeat the flush. */
@@ -670,7 +674,10 @@ export class TicketService extends Service {
    */
   async beginAttempt(
     session: Session, request: BeginTicketAttemptRequest,
-    capture?: (controller: { update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>; settle(outcome: SettleTicketAttemptRequest['outcome']): Promise<TicketView> }) => void,
+    capture?: (controller: {
+      update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>
+      settle(outcome: SettleTicketAttemptRequest['outcome'], facts?: Pick<SettleTicketAttemptRequest, 'workspaceReceipt'>): Promise<TicketView>
+    }) => void,
   ): Promise<TicketView> {
     this.assertCaller(request.actorId)
     if (request.workspace.kind === 'shared-workspace') await this.reconcileStoredReservations()
@@ -729,7 +736,7 @@ export class TicketService extends Service {
         ? { ...item, revision: item.revision + 1, activeAttemptId: attempt.id, attempts: item.attempts + 1, status: 'running' as const } : item)
       const next = { ...ticket, assignments, attempts: [...ticket.attempts, attempt] }
       return { ...next, status: nextStatusForAssignment(next) }
-    }, recorded === undefined ? {} : { recorded })
+    }, recorded === undefined ? {} : { recorded, admittedBy: executionOperationId(request.attemptId, 'admitted') })
   }
 
   /** Attempt-bound recorder over the settlement ledger; every write resolves the root Session by id when it runs. */
@@ -744,8 +751,10 @@ export class TicketService extends Service {
           ...attempt, ...facts, diagnostics: [...attempt.diagnostics, ...facts.diagnostics ?? []], updatedAt: Date.now(),
         }), true), { executionOwned: true })
       },
-      settle: async (outcome) => {
+      settle: (outcome, facts) => {
+        // The ledger takes ownership synchronously, before any write that can fail.
         settlement.outcome ??= outcome
+        settlement.workspaceReceipt ??= facts?.workspaceReceipt
         return this.writeSettlement(settlement)
       },
     }
@@ -777,11 +786,16 @@ export class TicketService extends Service {
     const settle = { ...this.settlementRequest(settlement, root), outcome, operationId: executionOperationId(settlement.attemptId, 'settled') }
     try {
       return await this.attemptOperation(root, settle, 'settle', (current) => {
-        const changed = this.changeAttempt(current, settle, attempt => ({
-          ...attempt, status: 'settled', outcome, updatedAt: Date.now(), diagnostics: [...attempt.diagnostics, ...settlement.diagnostics],
-        }), true)
-        const assignments = changed.assignments.map(item => item.id === settlement.assignmentId && ['running', 'claimed', 'assigned'].includes(item.status)
-          ? { ...item, status: 'released' as const, revision: item.revision + 1 } : item)
+        const changed = this.changeAttempt(current, settle, (attempt) => {
+          const workspaceReceipt = attempt.workspaceReceipt ?? settlement.workspaceReceipt
+          return {
+            ...attempt, status: 'settled', outcome, updatedAt: Date.now(), diagnostics: [...attempt.diagnostics, ...settlement.diagnostics],
+            ...workspaceReceipt === undefined ? {} : { workspaceReceipt },
+          }
+        }, true)
+        // Settlement releases execution resources; a successful contribution stays open for its result report.
+        const assignments = outcome === 'succeeded' ? changed.assignments : changed.assignments.map(item => item.id === settlement.assignmentId
+          && ['running', 'claimed', 'assigned'].includes(item.status) ? { ...item, status: 'released' as const, revision: item.revision + 1 } : item)
         const next = { ...changed, assignments }
         return { ...next, status: nextStatusForAssignment(next) }
       }, { executionOwned: true, settledByAnyOperation: settlement.attemptId })
@@ -803,13 +817,16 @@ export class TicketService extends Service {
     if (!this.activationRoots.has(session.id) && state.failure === undefined) {
       for (const ticket of state.tickets) for (const attempt of ticket.attempts) {
         const key = JSON.stringify([session.id, ticket.id, attempt.id])
-        if (this.settlements.has(key) || attempt.executor.kind !== 'in-process'
-          || !['preparing', 'running', 'stopping'].includes(attempt.status)
-          // Only the execution owner writes reserved stage facts, so they mark an attempt whose producer this host family ran.
+        // Only the execution owner writes reserved operation records, starting with its admission, so they mark an attempt
+        // this host family admitted. Before its workspace stage no producer of any placement has started; an in-process
+        // producer ends with its host in every unsettled phase.
+        const inProcess = attempt.executor.kind === 'in-process' && ['preparing', 'running', 'stopping'].includes(attempt.status)
+        if (this.settlements.has(key) || (!inProcess && attempt.status !== 'preparing')
           || !ticket.operations.some(item => item.id.startsWith(executionOperationPrefix(attempt.id)))) continue
         const settlement: Settlement = {
           rootId: session.id, ticketId: ticket.id, attemptId: attempt.id, assignmentId: attempt.assignmentId, actorId: session.id,
-          outcome: 'cancelled', diagnostics: ['The in-process producer ended with the host that admitted it; recovered as cancelled'],
+          outcome: 'cancelled', diagnostics: [inProcess ? 'The in-process producer ended with the host that admitted it; recovered as cancelled'
+            : 'The admission ended with the host that admitted it before any producer started; recovered as cancelled'],
         }
         this.settlements.set(key, settlement)
         writes.push(this.writeSettlement(settlement))
@@ -988,10 +1005,12 @@ export class TicketService extends Service {
         await this.durable(session)
         return ticket
       }
-      // Settlement compacted this committed operation into its tombstone; a retry reports the recorded Ticket.
+      // Settlement compacted this committed operation into its tombstone; an identical retry reports the recorded Ticket.
       const tombstone = ticket.operations.find(item => item.retiredIds?.includes(request.operationId))
       if (tombstone !== undefined) {
         if (!('attemptId' in request) || request.attemptId !== tombstone.attemptId) throw new TicketError('Operation belongs to another, settled attempt', 'TICKET_ATTEMPT_STATE')
+        const retired = tombstone.retiredRequests?.[tombstone.retiredIds?.indexOf(request.operationId) ?? -1]
+        if (retired !== undefined && retired !== fingerprint && retired !== legacyFingerprint) throw new TicketError('operation identity was reused with different arguments', 'TICKET_OPERATION_CONFLICT')
         await this.durable(session)
         return ticket
       }
@@ -1007,12 +1026,20 @@ export class TicketService extends Service {
         ? changed.attempts.find(item => item.id === request.attemptId)?.id : undefined
       const retired = attemptId === undefined || !changed.attempts.some(item => item.id === attemptId && item.status === 'settled')
         ? [] : ticket.operations.filter(item => item.attemptId === attemptId)
+      // Fingerprints are retained only when every retired id has one, so the two lists stay aligned index for index.
+      const retiredRequests = retired.every(item => (item.retiredIds?.length ?? 0) === (item.retiredRequests?.length ?? 0))
+        ? retired.flatMap(item => [item.request, ...item.retiredRequests ?? []]) : undefined
+      const admitted = options.admittedBy === undefined || attemptId === undefined ? []
+        : [{ id: options.admittedBy, request: fingerprint, attemptId }]
       const next = {
         ...changed, revision: ticket.revision + 1, updatedAt: Date.now(),
-        operations: [...ticket.operations.filter(item => !retired.includes(item)), {
+        operations: [...ticket.operations.filter(item => !retired.includes(item)), ...admitted, {
           id: request.operationId, request: fingerprint,
           ...attemptId === undefined ? {} : { attemptId },
-          ...retired.length === 0 ? {} : { retiredIds: retired.flatMap(item => [item.id, ...item.retiredIds ?? []]) },
+          ...retired.length === 0 ? {} : {
+            retiredIds: retired.flatMap(item => [item.id, ...item.retiredIds ?? []]),
+            ...retiredRequests === undefined ? {} : { retiredRequests },
+          },
         }],
       }
       this.append(session, next)
@@ -1189,8 +1216,9 @@ export class TicketService extends Service {
   /** Bring stored-root reservations up to date before a shared-workspace admission.
    *
    * The first call lists storage and folds only the `ticket/state` events of each stored root that is not live; activation
-   * reads no log. A listing failure or an unreadable root refuses the admission and is retried by the next one. Reservations
-   * of a root whose stored Session no longer exists are released.
+   * reads no log. A listing failure or an unreadable root refuses the admission and is retried by the next one. When a root's
+   * stored Session no longer exists, its reservations are released unless an owner in this host still awaits its producer's
+   * outcome; that owner releases them once it hands an outcome to the ledger.
    */
   private async reconcileStoredReservations(): Promise<void> {
     const persistence = this.ctx.get('sessionPersistence')
@@ -1209,14 +1237,16 @@ export class TicketService extends Service {
     for (const root of stale) {
       if (this.ctx.sessions.get(root) !== undefined || await persistence.stat(root) !== undefined) continue
       this.unreadableRoots.delete(root)
-      for (const [key, reservation] of this.scopeReservations) if (reservation.root === root) this.scopeReservations.delete(key)
+      // Deleting a log is not producer settlement: an owner in this host that has not observed its outcome keeps its scopes.
+      const owned = (key: string) => this.settlements.has(key) && this.settlements.get(key)?.outcome === undefined
+      for (const [key, reservation] of this.scopeReservations) {
+        if (reservation.root === root && !owned(key)) this.scopeReservations.delete(key)
+      }
       for (const [key, settlement] of this.settlements) {
-        if (settlement.rootId !== root) continue
+        if (settlement.rootId !== root || settlement.outcome === undefined) continue
         this.settlements.delete(key)
-        if (settlement.outcome !== undefined) {
-          this.ctx.logger.warn(`Ticket attempt "${settlement.attemptId}" ended ${settlement.outcome}, but its root Session "${root}" `
-            + 'was deleted before the settlement could be persisted; the outcome is discarded with that Session')
-        }
+        this.ctx.logger.warn(`Ticket attempt "${settlement.attemptId}" ended ${settlement.outcome}, but its root Session "${root}" `
+          + 'was deleted before the settlement could be persisted; the outcome is discarded with that Session')
       }
     }
     for (const root of [...this.unreadableRoots.keys()]) await this.scanStoredRoot(persistence, root)

@@ -9,8 +9,8 @@
   en: 1387c4505dde2faf
   zh: 48570fa1c13d6910
 /session-persistence-event-catalog/persistence-type-fingerprints:
-  en: 5139afab1e48e7c9
-  zh: 5f0ceabc8f267331
+  en: b886e3c70db50dc1
+  zh: b985c5a81b1c2e9e
 /session-persistence-event-catalog/event-envelope:
   en: 56414ffd00cdc32a
   zh: 6dc11eb013e95e41
@@ -1620,14 +1620,14 @@
   en: fd5c23767df08e37
   zh: 1b197ef225fe6484
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone:
-  en: 48e38225e621d53a
-  zh: b7e5576f0ccd0c2c
+  en: 88c4aa3aa3196df6
+  zh: added16d3128f82d
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone~2:
   en: f93e2223c296924d
   zh: bd1df4a53540c07d
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot:
-  en: ae6069ff45efca53
-  zh: 334be200e87bb01b
+  en: 4c069eb62ea10397
+  zh: 1c6c8ddbc5affbe5
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot~2:
   en: 22f0e54758741f5c
   zh: 3a1db959f9f95f38
@@ -1803,14 +1803,14 @@
   en: 9238e788d5792ad5
   zh: d9977cac3b8cf05a
 /session-persistence-event-catalog/resolved-persistence-types/ticketcontribution:
-  en: 6f7ee1deee9984ad
-  zh: 714293738ccb82cd
+  en: 04c04e9a884514cf
+  zh: 55918d2dfea02731
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot:
-  en: 7151112b583ec2b6
-  zh: 8bc111b5f6efb4ca
+  en: cd0dbb6afe63bef2
+  zh: b35aa03b73f96653
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot~2:
-  en: d51037850d945a5f
-  zh: 0583e5442a6299b9
+  en: 691ae9c84b94a01a
+  zh: 0775dd515d2c008c
 /session-persistence-event-catalog/resolved-persistence-types/ticketparent:
   en: 9dfb108853dc9b2a
   zh: bfd52dbbb1543b1c
@@ -1833,11 +1833,11 @@
   en: 793651710d77210a
   zh: 9013fd8c3b3ece2a
 /session-persistence-event-catalog/resolved-persistence-types/ticketruntimereceipt:
-  en: bb088a981d363e1f
-  zh: 2e688810afd53d36
+  en: 86bea3261e1427dd
+  zh: cb48a7b2b186a19f
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshot:
-  en: 8b6e12f3d1e1b31a
-  zh: a138d7b0c1343f02
+  en: 6f6e4a0c56507ab6
+  zh: aff0bdae58ce781f
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshotv1:
   en: 7d1c17d31d97c885
   zh: 1752c602792e4105
@@ -1974,20 +1974,20 @@
   en: 399ef28f15cf04c1
   zh: b5a628ec61a2184a
 /session-persistence-event-catalog/resolved-persistence-types/tuple-1-positions~3:
-  en: 51cdfcdc6a40e526
-  zh: eeeae74e27059d4e
+  en: 1fceacd7cf628179
+  zh: eae2057e5ff7f968
 /session-persistence-event-catalog/resolved-persistence-types/union-2-variants:
-  en: d72b2bf00a4a6f03
-  zh: 58fcd5ed809ed9e3
-/session-persistence-event-catalog/resolved-persistence-types/union-2-variants~2:
   en: a40307c955e7cf2c
   zh: dd01c718d2fdbdf7
-/session-persistence-event-catalog/resolved-persistence-types/union-2-variants~3:
+/session-persistence-event-catalog/resolved-persistence-types/union-2-variants~2:
   en: 9333ecfb6c1936e4
   zh: bc2ae71e3cfbe2c9
+/session-persistence-event-catalog/resolved-persistence-types/union-2-variants~3:
+  en: 7da8dd0a751bcbb7
+  zh: 7a377f82938a6276
 /session-persistence-event-catalog/resolved-persistence-types/union-2-variants~4:
-  en: 9e9eeaba42dc2b79
-  zh: 59bfa094aa8bcfb2
+  en: 81ffbcc8db5e4f05
+  zh: e60d5d854fdc05f9
 /session-persistence-event-catalog/resolved-persistence-types/union-2-variants~5:
   en: 8898479823c885d0
   zh: 892c3d1af26fb744
@@ -2694,11 +2694,11 @@
   en: 54df6622b61e486e
   zh: 8e2cc04dd59614e1
 /session-persistence-event-catalog/resolved-persistence-types/sessionid-ticket-version:
-  en: 0441766d7dec34e0
-  zh: bcd53b6b0fdb3bd1
+  en: 0222a85abc7dae34
+  zh: 2e4e65d305b98a5e
 /session-persistence-event-catalog/resolved-persistence-types/sessionid-ticket-version~2:
-  en: 3c875bbd5c3f5a39
-  zh: eff06f74002c6c54
+  en: 256bb6ae7eed072a
+  zh: e3589fa1c1b7921a
 /session-persistence-event-catalog/resolved-persistence-types/shadowedrange-shadowedseqs-shadowedtokencount:
   en: adf28aa9e9ce7ffa
   zh: 4f4ee96bbd1a628c
@@ -2928,11 +2928,11 @@
   en: 1484738718de5312
   zh: 3e6fbe9c64068225
 /session-persistence-event-catalog/resolved-persistence-types/type-text-delta:
-  en: 9274054eb0fe45d2
-  zh: 06ba071d121d132a
+  en: c16d6f8a85a59f21
+  zh: 085d4d0e311bb067
 /session-persistence-event-catalog/resolved-persistence-types/type-ticket-state:
-  en: 152833ffaaceb1e5
-  zh: 52d8854da8828ca0
+  en: 1b4a47cfd095ee6d
+  zh: 2a0a0c2ae03b29cf
 /session-persistence-event-catalog/resolved-persistence-types/type-todo-write:
   en: 2fa7ba77598a95b4
   zh: 50972b51d77e9155
