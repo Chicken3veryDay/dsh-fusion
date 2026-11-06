@@ -96,10 +96,12 @@ export class WorkstreamEvidenceService extends Service {
     request: PublishEvidenceRequest,
   ): Promise<WorkstreamEvidenceVersionRecord> {
     this.live(caller)
-    const { owner } = this.ctx.workstreams.requireMembership(caller, rootSessionId)
+    this.ctx.workstreams.requireMembership(caller, rootSessionId)
 
     return this.enqueue(rootSessionId, async () => {
       this.live(caller)
+      // Membership can be revoked while this publish waits behind earlier ones.
+      const { owner } = this.ctx.workstreams.requireMembership(caller, rootSessionId)
       const artifactId = WorkstreamEvidenceArtifactId(request.artifactId)
       const operationId = WorkstreamEvidenceOperationId(request.operationId)
 
@@ -183,10 +185,15 @@ export class WorkstreamEvidenceService extends Service {
         name: displayName,
       })
 
+      // A stop that began during attachment I/O must not authorize this late write.
+      this.live(caller)
+      this.ctx.workstreams.requireMembership(caller, rootSessionId)
+
       const newVersion: WorkstreamEvidenceVersionRecord = {
         artifactId,
         version: request.expectedVersion,
-        name: displayName,
+        // The provider may normalize the display name; reads rebuild the reference from the canonical one.
+        name: fileRef.name,
         ref: String(fileRef.attachmentId),
         digest,
         bytes: bytes.byteLength,
@@ -436,7 +443,7 @@ export class WorkstreamEvidenceService extends Service {
   }
 
   /**
-   * Aggregate change request bindings across the root and active member Sessions.
+   * Aggregate change request bindings across the root and every retained member Session, including stopped members.
    * @param caller - live Workstream member.
    * @param rootSessionId - Workstream root Session id.
    * @returns Deduplicated change requests, diagnostics, and whether every Session was read.

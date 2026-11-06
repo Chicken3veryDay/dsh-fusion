@@ -28,13 +28,13 @@ Workstream Evidence 为一个 Workstream 保存具名证据产物的不可变、
 
 服务提供 `publish`、`get`、`list`、`read`、`readText`、`prepareContext` 和 `aggregateChangeRequests`。
 
-`publish` 把内容保存为 Attachment 文件，并把版本追加到根 Session。新产物的 `expectedVersion` 为 1，已有产物则为下一个版本号；其他值返回 `WORKSTREAM_EVIDENCE_STALE_VERSION`。内容可以是字符串或 `Uint8Array`。产物 id 长 1–200 个字符，且不含 `/`、`\` 或 `..`。操作 id 长 1–200 个字符。使用相同 `operationId`、产物 id、期望版本和内容重试，会返回已存储的版本；任何差异都返回 `WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`。版本从不被编辑或删除。
+`publish` 把内容保存为 Attachment 文件，并把版本追加到根 Session。新产物的 `expectedVersion` 为 1，已有产物则为下一个版本号；其他值返回 `WORKSTREAM_EVIDENCE_STALE_VERSION`。内容可以是字符串或 `Uint8Array`。产物 id 长 1–200 个字符，且不含 `/`、`\` 或 `..`。操作 id 长 1–200 个字符。使用相同 `operationId`、产物 id、期望版本和内容重试，会返回已存储的版本；任何差异都返回 `WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`。版本从不被编辑或删除。保存的 `name` 是 Attachment 存储返回的规范文件名，可能与请求的 `name` 不同（例如 `notes/spec.md` 保存为 `spec.md`）。排队的发布开始时以及 Attachment 保存之后都会再次检查成员资格，因此正在停止的成员无法追加版本。
 
 `get` 返回某个版本的元数据；省略 `version` 时返回最新版本。`list` 返回每个产物及其完整版本历史。`read` 以流方式读取 Attachment，并对照记录校验字节长度和 `sha256:` 摘要，不一致或读取失败时返回 `WORKSTREAM_EVIDENCE_CORRUPT`。`readText` 还要求版本大小不超过 `maxToolTextBytes`，且字节是有效的 UTF-8，否则分别返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED` 或 `WORKSTREAM_EVIDENCE_INVALID_INPUT`。
 
 `prepareContext` 构建供 `ctx.workstreams.sendMessage` 使用的 `WorkstreamContextPacket`。每个请求的产物都需要确切的 `version`，上下文包携带已存储的 `ref` 和 `digest`，而不是路径。产物 id 含 `/`、`\`、`..` 或以 `file:` 开头时，会作为可变或外部链接被拒绝。序列化后的上下文包超过 `maxContextPacketBytes` 时返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`。该方法不发送上下文包。
 
-`aggregateChangeRequests` 读取根 Session 和每个活跃成员的 `forgeSession.changeRequests`，并按 URL 对绑定分组。每个条目为每个 Session 列出一项贡献，包含其来源和最近一次轮询更新，根 Session 在先。它从不写入 forge。当 forge 服务未挂载，或某个 Session 未加载时，`complete` 为 `false`，并在 `diagnostics` 中给出说明。
+`aggregateChangeRequests` 读取根 Session 和每个保留的成员（包括已停止的成员）的 `forgeSession.changeRequests`，并按 URL 对绑定分组。每个条目为每个 Session 列出一项贡献，包含其来源和最近一次轮询更新，根 Session 在先。它从不写入 forge。当 forge 服务未挂载，或某个 Session 未加载时，`complete` 为 `false`，并在 `diagnostics` 中给出说明。
 
 配置字段均为正的安全整数：`maxBytesPerArtifact`（10 MiB）、`maxArtifacts`（256）、`maxVersionsPerArtifact`（64）、`maxTotalBytes`（100 MiB）、`maxContextPacketBytes`（65536）和 `maxToolTextBytes`（65536）。超出发布限制时返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED`。
 

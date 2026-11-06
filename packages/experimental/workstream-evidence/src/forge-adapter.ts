@@ -10,7 +10,7 @@ import type {
 } from './types.ts'
 
 /**
- * Aggregate the root and active member Sessions' change request bindings by URL.
+ * Aggregate the root and every retained member Session's change request bindings by URL, including stopped members.
  * Each contributing Session keeps its own origin and latest polling result; Sessions that cannot be read are
  * reported in `diagnostics` and `complete` is false. Never writes to a forge.
  * @param ctx - Context that injects `agents`, `sessions`, and `workstreams`; `forgeSession` is optional.
@@ -31,7 +31,7 @@ export function aggregateChangeRequests(
 
   const sessionIds = [...new Set<SessionId>([
     snapshot.ownerSessionId,
-    ...snapshot.members.filter(member => member.phase === 'active').map(member => member.id),
+    ...snapshot.members.map(member => member.id),
   ])]
   const diagnostics: string[] = []
   const byUrl = new Map<string, { ref: AggregatedChangeRequest['ref']; contributions: ChangeRequestContribution[] }>()

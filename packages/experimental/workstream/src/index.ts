@@ -213,8 +213,16 @@ export class WorkstreamService extends Service {
       if (snapshot.revision !== request.expectedRevision) throw new
       WorkstreamError('Workstream changed; refresh before handoff', 'WORKSTREAM_CONFLICT')
       this.target(snapshot, request.coordinatorId)
-      await this.moveTickets(owner, snapshot, request.coordinatorId)
-      return this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId })
+      const next: WorkstreamSnapshot = { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId }
+      this.fit(next)
+      const moved = await this.moveTickets(owner, snapshot, request.coordinatorId)
+      try {
+        return await this.commit(owner, next)
+      } catch (error: unknown) {
+        if (moved === 0) throw error
+        throw new WorkstreamError('Tickets moved but the Workstream coordinator commit is uncertain; refresh and inspect before retrying',
+          'WORKSTREAM_UNKNOWN', { cause: error })
+      }
     })
   }
 
@@ -328,15 +336,24 @@ export class WorkstreamService extends Service {
    * @returns stopped durable member after actual producer settlement.
    */
   async stop(caller: Agent, rootSessionId: SessionId, targetId: SessionId): Promise<WorkstreamMember> {
-    return this.enqueue(rootSessionId, async () => {
+    const begun = await this.enqueue(rootSessionId, async () => {
       const { owner, snapshot } = this.coordinator(caller, rootSessionId)
       const member = snapshot.members.find(candidate => candidate.id === targetId)
       if (member === undefined || targetId === owner.id || targetId === snapshot.coordinatorId) throw new
       WorkstreamError('Select a child other than the coordinator', 'WORKSTREAM_INVALID_INPUT')
-      if (member.phase === 'stopped') return member
-      await this.saveMember(owner, snapshot, { ...member, phase: 'stopping' })
-      await this.ctx.subagents.drainChildren(owner, [targetId])
-      return this.saveMember(owner, this.state(owner), { ...member, phase: 'stopped', diagnostic: null })
+      if (member.phase === 'stopped') return { owner, stopped: member }
+      if (member.phase !== 'stopping') await this.saveMember(owner, snapshot, { ...member, phase: 'stopping' })
+      return { owner, stopped: undefined }
+    })
+    if (begun.stopped !== undefined) return begun.stopped
+    // Drain outside the root queue: the child's own queued Workstream tools must be able to finish for it to settle.
+    await this.ctx.subagents.drainChildren(begun.owner, [targetId])
+    return this.enqueue(rootSessionId, async () => {
+      const snapshot = this.state(begun.owner)
+      const current = snapshot.members.find(candidate => candidate.id === targetId)
+      if (current === undefined) throw new WorkstreamError('Member disappeared while stopping', 'WORKSTREAM_UNKNOWN')
+      if (current.phase === 'stopped') return current
+      return this.saveMember(begun.owner, snapshot, { ...current, phase: 'stopped', diagnostic: null })
     })
   }
 
@@ -398,21 +415,27 @@ export class WorkstreamService extends Service {
     WorkstreamError('Current Workstream coordinator authority is required; the owner may reclaim it by handoff', 'WORKSTREAM_UNAUTHORIZED')
     return membership
   }
-  /** Hand every open Ticket coordinated by a Workstream member to the target; unmoved Tickets are reported, never skipped. */
-  private async moveTickets(owner: Agent, snapshot: WorkstreamSnapshot, coordinatorId: SessionId): Promise<void> {
+  /** Hand every open Ticket coordinated by a Workstream member to the target; unmoved Tickets are reported, never skipped.
+   * Re-lists after each pass so Tickets created through `ctx.tickets` while earlier ones moved are included. The caller
+   * commits the Workstream snapshot synchronously after the final empty pass, so no listed Ticket is left behind.
+   * @returns number of Tickets moved by this call. */
+  private async moveTickets(owner: Agent, snapshot: WorkstreamSnapshot, coordinatorId: SessionId): Promise<number> {
     const moved: TicketId[] = []
-    const pending: TicketId[] = []
-    let cause: unknown
-    for (const ticket of this.ctx.tickets.list(owner.session)) {
-      if (ticket.terminalOutcome !== undefined || ticket.coordinatorId === coordinatorId
-        || !snapshot.members.some(member => member.id === ticket.coordinatorId)) continue
-      try {
-        await this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
-          actorId: ticket.coordinatorId, newCoordinatorId: coordinatorId })
-        moved.push(ticket.id)
-      } catch (error: unknown) { pending.push(ticket.id); cause ??= error }
+    for (;;) {
+      const open = this.ctx.tickets.list(owner.session).filter(ticket => ticket.terminalOutcome === undefined
+        && ticket.coordinatorId !== coordinatorId && snapshot.members.some(member => member.id === ticket.coordinatorId))
+      if (open.length === 0) return moved.length
+      const pending: TicketId[] = []
+      let cause: unknown
+      for (const ticket of open) {
+        try {
+          await this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
+            actorId: ticket.coordinatorId, newCoordinatorId: coordinatorId })
+          moved.push(ticket.id)
+        } catch (error: unknown) { pending.push(ticket.id); cause ??= error }
+      }
+      if (pending.length > 0) throw new WorkstreamPartialHandoffError(moved, pending, { cause })
     }
-    if (pending.length > 0) throw new WorkstreamPartialHandoffError(moved, pending, { cause })
   }
   private target(snapshot: WorkstreamSnapshot, id: SessionId): WorkstreamMember {
     const member = snapshot.members.find(candidate => candidate.id === id && candidate.phase === 'active')
@@ -432,9 +455,12 @@ export class WorkstreamService extends Service {
     if (state === null) throw new WorkstreamError('Workstream is absent', 'WORKSTREAM_NOT_FOUND')
     return state
   }
-  private async commit(owner: Agent, snapshot: WorkstreamSnapshot): Promise<WorkstreamSnapshot> {
+  private fit(snapshot: WorkstreamSnapshot): void {
     if (bytes(snapshot) > this.config.maxSnapshotBytes) throw new
     WorkstreamError('Complete Workstream state exceeds maxSnapshotBytes', 'WORKSTREAM_LIMIT')
+  }
+  private async commit(owner: Agent, snapshot: WorkstreamSnapshot): Promise<WorkstreamSnapshot> {
+    this.fit(snapshot)
     owner.session.append('workstream/state', { version: 1, snapshot: structuredClone(snapshot) })
     await this.ctx.sessions.flush(owner.session)
     return structuredClone(snapshot)
