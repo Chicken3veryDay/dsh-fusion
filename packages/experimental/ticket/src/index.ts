@@ -12,6 +12,7 @@ import { ticketProjectionDefinition, validateTicketChange } from './projection.t
 import type { TicketProjectionState } from './projection.ts'
 import { assertTicketAcceptance, validateTicketReferences } from './validation.ts'
 import { TicketError } from './errors.ts'
+import { type AttemptCommand, attemptAdmitsCommand, durableAttemptStatus } from './attempt-lifecycle.ts'
 import {
   AssignmentId,
   TicketAttemptId, TicketOperationId, MissionId,
@@ -166,6 +167,12 @@ interface AttemptOperationOptions {
   readonly settledByAnyOperation?: TicketAttemptId
 }
 
+/** Refuse a Ticket command that the attempt's durable status does not admit. */
+function admitCommand(attempt: TicketAttemptSnapshot, command: AttemptCommand): void {
+  const decision = attemptAdmitsCommand(durableAttemptStatus(attempt), command)
+  if (decision !== 'allowed') throw new TicketError(`Attempt "${attempt.id}": ${decision.reason}`, 'TICKET_ATTEMPT_STATE')
+}
+
 function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
@@ -191,6 +198,7 @@ export class TicketService extends Service {
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly coordinatorAuthorities = new Set<(session: Session, requested: SessionId) => SessionId | undefined>()
   private readonly assignmentAuthorities = new Set<(session: Session, assigneeId: SessionId) => void>()
+  private readonly admissionGuards = new Set<(reserved: readonly TicketAttemptSnapshot[]) => void>()
   /** Execution-admitted attempts this service owns until a durable flush shows them settled, keyed like scope reservations. */
   private readonly settlements = new Map<string, Settlement>()
   /** Roots live when this service activated; their attempts may still belong to the previous service generation's producers. */
@@ -262,6 +270,20 @@ export class TicketService extends Service {
   registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void {
     this.assignmentAuthorities.add(authority)
     return () => { this.assignmentAuthorities.delete(authority) }
+  }
+
+  /** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
+   *
+   * `beginAttempt` consults every guard inside the Session's command queue, after the scope checks and in the same
+   * synchronous step as the append. The guard receives every unsettled attempt this service knows from live roots and
+   * from the stored-root scan, and refuses by throwing a `TicketError`, which fails the admission unchanged and appends
+   * nothing; any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.
+   * @param guard - synchronous decision over the known unsettled attempts.
+   * @returns disposer that removes the guard.
+   */
+  registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void {
+    this.admissionGuards.add(guard)
+    return () => { this.admissionGuards.delete(guard) }
   }
 
   /** Read all Tickets recovered from one Session's durable log.
@@ -431,7 +453,8 @@ export class TicketService extends Service {
     this.assertCaller(request.actorId)
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
-      if (assignment.activeAttemptId !== undefined && ticket.attempts.some(attempt => attempt.id === assignment.activeAttemptId && attempt.status !== 'settled')) throw new TicketError('settle the active attempt before claiming or releasing its Assignment', 'TICKET_ATTEMPT_STATE')
+      const active = ticket.attempts.find(attempt => attempt.id === assignment.activeAttemptId)
+      if (active !== undefined) admitCommand(active, 'release')
       if (assignment.ownerId !== request.actorId && ticket.coordinatorId !== request.actorId) throw new TicketError('only the assigned worker or coordinator may release the Assignment', 'TICKET_AUTHORITY')
       if (assignment.status !== 'running' && assignment.status !== 'claimed' && assignment.status !== 'assigned') throw new TicketError(`Assignment "${assignment.id}" cannot be released from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
       const nextAssignment: AssignmentSnapshot = { ...assignment, revision: assignment.revision + 1, status: 'released' }
@@ -459,7 +482,7 @@ export class TicketService extends Service {
         if (request.attemptId !== assignment.activeAttemptId) throw new TicketError('report must name the current active attempt', 'TICKET_STALE_ATTEMPT')
         const attempt = ticket.attempts.find(item => item.id === request.attemptId)
         if (attempt?.specRevision !== ticket.specification.revision) throw new TicketError('report belongs to an obsolete specification', 'TICKET_STALE_ATTEMPT')
-        if (attempt.status === 'settled' && (attempt.outcome !== 'succeeded' || request.kind !== 'result')) throw new TicketError('settled attempt cannot report progress or failure', 'TICKET_ATTEMPT_STATE')
+        admitCommand(attempt, request.kind === 'result' ? 'report-result' : request.kind === 'failure' ? 'report-failure' : 'report-progress')
       } else if (request.attemptId !== undefined) throw new TicketError('unknown report attempt', 'TICKET_STALE_ATTEMPT')
       if (ticket.reports.length >= this.config.maxReports) throw new TicketError('report limit exhausted', 'TICKET_LIMIT')
       const summary = nonEmpty('report summary', request.summary)
@@ -737,6 +760,21 @@ export class TicketService extends Service {
           if (conflict) {
             throw new TicketError(`Exclusive write scope is reserved by unsettled work in Session "${reservation.root}"; settle that work, `
               + 'or resume that Session so recovery can settle it', 'TICKET_ATTEMPT_STATE')
+          }
+        }
+        if (this.admissionGuards.size > 0) {
+          const reserved = new Map<string, TicketAttemptSnapshot>()
+          for (const [key, reservation] of this.scopeReservations) reserved.set(key, reservation.attempt)
+          for (const root of this.ctx.sessions.list()) {
+            for (const known of this.projection?.stateOf(root).tickets ?? []) for (const attempt of known.attempts) {
+              if (attempt.status !== 'settled') reserved.set(JSON.stringify([root.id, known.id, attempt.id]), attempt)
+            }
+          }
+          for (const guard of this.admissionGuards) {
+            try { guard([...reserved.values()]) } catch (cause: unknown) {
+              if (cause instanceof TicketError) throw cause
+              throw new TicketError('Ticket admission guard failed', 'TICKET_RECOVERY_FAILED', { cause })
+            }
           }
         }
       }
@@ -1107,7 +1145,7 @@ export class TicketService extends Service {
     return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       if (ticket.terminalOutcome !== undefined || ticket.status === 'completed' || ticket.status === 'failed' || ticket.status === 'cancelled') throw new TicketError(`Ticket "${ticket.id}" is already terminal`, 'TICKET_TERMINAL')
-      if (ticket.attempts.some(attempt => attempt.status !== 'settled')) throw new TicketError('settle all attempts before ending the Ticket', 'TICKET_ATTEMPT_STATE')
+      for (const attempt of ticket.attempts) admitCommand(attempt, 'end-ticket')
       if (status === 'completed') assertTicketAcceptance(ticket, this.state(session).tickets)
       const summary = nonEmpty('terminal summary', request.summary)
       const at = Date.now()

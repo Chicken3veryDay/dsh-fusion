@@ -18,7 +18,7 @@ it('R6-1 preparation cancellation during the runtime flush must reject before pu
   let flushes = 0
   const spy = vi.spyOn(ctx.sessions, 'flush').mockImplementation(async (session) => {
     if (++flushes === 3) { entered.resolve(undefined); await release.promise }
-    await flush(session)
+    return await flush(session)
   })
   const cancellation = new AbortController()
   const preparation = ctx.ticketExecution.prepare(worker, {
