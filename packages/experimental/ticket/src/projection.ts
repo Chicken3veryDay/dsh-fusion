@@ -267,9 +267,9 @@ export function isTicketEvent(event: SessionEvent): event is TicketSessionEvent 
 export function isTicketStatusTransitionAllowed(previous: TicketStatus, next: TicketStatus): boolean {
   if (previous === next) return true
   const allowed: Record<TicketStatus, readonly TicketStatus[]> = {
-    proposed: ['ready', 'coordinating', 'executing', 'waiting', 'blocked', 'cancelled'],
-    ready: ['coordinating', 'executing', 'integrating', 'waiting', 'blocked', 'cancelled'],
-    coordinating: ['ready', 'executing', 'integrating', 'reviewing', 'waiting', 'blocked', 'cancelled'],
+    proposed: ['ready', 'coordinating', 'executing', 'waiting', 'blocked', 'failed', 'cancelled'],
+    ready: ['coordinating', 'executing', 'integrating', 'waiting', 'blocked', 'failed', 'cancelled'],
+    coordinating: ['ready', 'executing', 'integrating', 'reviewing', 'waiting', 'blocked', 'failed', 'cancelled'],
     executing: ['ready', 'integrating', 'reviewing', 'waiting', 'blocked', 'completed', 'failed', 'cancelled'],
     integrating: ['ready', 'executing', 'reviewing', 'waiting', 'blocked', 'completed', 'failed', 'cancelled'],
     reviewing: ['executing', 'waiting', 'completed', 'failed', 'blocked', 'cancelled'],
