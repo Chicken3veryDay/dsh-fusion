@@ -27,13 +27,19 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** The Ticket changed after the panel read it; reread the projection before retrying. */
     'workstreamPanel/stale-revision': Record<string, never>
-    /** The calling Session is not the Workstream member or Ticket role the command requires. */
-    'workstreamPanel/denied': Record<string, never>
+    /**
+     * The calling Session lacks the Ticket role the command requires, or `reason: 'not-member'` when it is not an
+     * active member of the Workstream.
+     */
+    'workstreamPanel/denied': { readonly reason?: 'not-member' }
     /** The calling Peer lacks the Remote access grant for the displayed or root Session, or for a member Session that Changes reads. */
     'workstreamPanel/forbidden': Record<string, never>
     /** The Workstream owner is not live or the Session belongs to no Workstream. */
     'workstreamPanel/unavailable': Record<string, never>
-    /** The Ticket service rejected the command; the message carries its diagnostic. */
-    'workstreamPanel/rejected': Record<string, never>
+    /**
+     * The Ticket service rejected the command and the message carries its diagnostic, or Workstream refused it:
+     * `reason: 'workstream-stopping'` while the service stops, `reason: 'workstream'` for any other refusal.
+     */
+    'workstreamPanel/rejected': { readonly reason?: 'workstream-stopping' | 'workstream' }
   }
 }

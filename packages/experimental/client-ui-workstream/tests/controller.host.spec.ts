@@ -138,7 +138,7 @@ describe('Workstream panel Remote', () => {
   it('reports incomplete change requests when no forge service is mounted', async () => {
     const { ctx, owner } = await setup()
     expect(ctx.workstreamPanel.changeRequests(owner)).toEqual({
-      complete: false, changeRequests: [], diagnostics: ['Forge session service is not mounted'],
+      complete: false, changeRequests: [], diagnostics: ['Forge session service is not mounted'], gaps: [{ kind: 'forge-unavailable' }],
     })
   })
 
@@ -160,5 +160,17 @@ describe('Workstream panel Remote', () => {
     await expect(ctx.workstreamPanel.closeQuestion(owner, {
       ticketId: ticket.id, questionId: question, expectedRevision: ticket.revision,
     })).rejects.toMatchObject({ code, message: 'membership refused' })
+  })
+
+  it.each([
+    ['WORKSTREAM_UNAUTHORIZED', 'workstreamPanel/denied', { reason: 'not-member' }],
+    ['WORKSTREAM_DISPOSED', 'workstreamPanel/rejected', { reason: 'workstream-stopping' }],
+    ['WORKSTREAM_INVALID_INPUT', 'workstreamPanel/rejected', { reason: 'workstream' }],
+  ] as const)('R5-N6 tells the panel why the Workstream refused: %s carries %j', async (domain, code, details) => {
+    const { ctx, owner, ticket, question } = await setup()
+    vi.spyOn(ctx.workstreams, 'requireMembership').mockImplementation(() => { throw new WorkstreamError('membership refused', domain) })
+    await expect(ctx.workstreamPanel.closeQuestion(owner, {
+      ticketId: ticket.id, questionId: question, expectedRevision: ticket.revision,
+    })).rejects.toMatchObject({ code, details })
   })
 })

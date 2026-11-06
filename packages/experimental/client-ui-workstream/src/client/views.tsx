@@ -7,7 +7,7 @@ import type {
   AssignmentSnapshot, TicketAttentionSnapshot, TicketStatus, TicketView,
 } from '@deepseek-ai/dsh-experimental-ticket/client'
 import type { WorkstreamMember, WorkstreamSnapshot } from '@deepseek-ai/dsh-experimental-workstream/client'
-import type { WorkstreamEvidenceArtifactRecord } from '@deepseek-ai/dsh-experimental-workstream-evidence/client'
+import type { ChangeRequestGap, WorkstreamEvidenceArtifactRecord } from '@deepseek-ai/dsh-experimental-workstream-evidence/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { draftId, type AnswerDraft, type AnswerDraftStore } from './drafts.ts'
 import { missions, type NeedsItem } from './model.ts'
@@ -29,10 +29,21 @@ export function failureText(failure: WorkstreamFailure, t: T): string {
     case 'stale': return t('error.stale')
     case 'refresh-failed': return t('error.refresh')
     case 'denied': return t('error.denied')
+    case 'not-member': return t('error.notMember')
     case 'forbidden': return t('error.forbidden')
     case 'unavailable': return t('error.unavailable')
     case 'rejected': return t('error.rejected', { message: failure.message })
+    case 'workstream-stopping': return t('error.stopping')
+    case 'workstream-refused': return t('error.workstream', { message: failure.message })
     case 'failed': return t('error.failed', { message: failure.message })
+  }
+}
+
+/** Localize one reason a change request list may be incomplete. */
+function gapText(gap: ChangeRequestGap, t: T, nameOf: NameOf): string {
+  switch (gap.kind) {
+    case 'forge-unavailable': return t('changes.gap.forge')
+    case 'session-not-loaded': return t('changes.gap.session', { name: nameOf(gap.sessionId) })
   }
 }
 
@@ -343,7 +354,7 @@ export function TeamView({ sessionId, rootId, workstream, openMember, t }: Pick<
                   {` · ${t(`phase.${member.phase}`)}`}
                 </small>
                 {member.description.length > 0 && <small className={css.memberDescription}>{member.description}</small>}
-                {member.diagnostic !== null && <small className={css.diagnostic}>{member.diagnostic}</small>}
+                {member.phase === 'provisioning' && <small className={css.diagnostic}>{t('member.provisioning')}</small>}
               </span>
             </button>
           )
@@ -388,7 +399,7 @@ export function ChangesView({ sessionId, changeRequests, nameOf, t }: Pick<Works
   const value = 'ok' in state && state.ok ? state.value : retained
   const failure = 'ok' in state && !state.ok ? state.failure : null
   if (value === null) return <>{toolbar}{failure !== null && <FailureNotice failure={failure} t={t} />}</>
-  const { complete, changeRequests: entries, diagnostics } = value
+  const { complete, changeRequests: entries, gaps } = value
   return (
     <>
       {toolbar}
@@ -396,7 +407,7 @@ export function ChangesView({ sessionId, changeRequests, nameOf, t }: Pick<Works
       {!complete && (
         <div className={css.warningNotice} role="status" data-incomplete>
           <StateDot state="warning" />
-          {t('changes.incomplete', { reasons: diagnostics.join('; ') })}
+          {t('changes.incomplete', { reasons: gaps.map(gap => gapText(gap, t, nameOf)).join('; ') })}
         </div>
       )}
       {entries.length === 0

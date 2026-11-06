@@ -38,8 +38,8 @@ kind: "package-reference"
 ### 查看工作、成员、变更与文件
 
 - **工作** 显示 Mission 计划及按工单状态计算的各里程碑完成数，然后列出每个工单的状态、协调者、依赖与分派。
-- **成员** 显示每个成员的角色、协调者标记、阶段、描述与诊断。选择所有者会打开所有者 Session；选择其他成员会打开其 continuable 子会话地址。当前会话与准备中的成员不可选择。
-- **变更** 在视图打开和点击重新加载时读取聚合的变更请求。重新加载期间及失败后保留上次成功读取的列表，并在旁边显示错误。每一项链接到其网页并列出绑定它的 Session。当某个 Session 或 forge 服务无法读取时，提示说明列表可能不完整并给出原因。
+- **成员** 显示每个成员的角色、协调者标记、阶段、描述，以及成员仍在准备中时的本地化提示。选择所有者会打开所有者 Session；选择其他成员会打开其 continuable 子会话地址。当前会话与准备中的成员不可选择。
+- **变更** 在视图打开和点击重新加载时读取聚合的变更请求。重新加载期间及失败后保留上次成功读取的列表，并在旁边显示错误。每一项链接到其网页并列出绑定它的 Session。当某个 Session 或 forge 服务无法读取时，提示说明列表可能不完整并以类型化缺口生成的本地化文本给出原因。
 - **文件** 显示每个证据产物及其每个保留版本的编号、大小、作者与摘要前缀。面板不读取产物内容。
 
 -----
@@ -50,7 +50,7 @@ kind: "package-reference"
 <details>
 <summary>实现内部细节 — 点击展开</summary>
 
-`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`，并以调用者作为发起 Agent。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个保留成员（包括已停止成员）的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；根或成员 Session 缺少 Remote 访问授权时为 `workstreamPanel/forbidden`。其他失败原样传播。
+`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`，并以调用者作为发起 Agent。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个保留成员（包括已停止成员）的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`。当调用者不是 Workstream 的活跃成员时，拒绝访问携带 `reason: 'not-member'`；服务正在停止时，拒绝变更携带 `reason: 'workstream-stopping'`，其他 Workstream 拒绝携带 `reason: 'workstream'`，因此面板显示 Workstream 的原因，而不是 Ticket 的措辞。根或成员 Session 缺少 Remote 访问授权时为 `workstreamPanel/forbidden`。其他失败原样传播。
 
 Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头 action 和 shell overlay 命令报告；释放时先撤回两个 slot，再撤回 Remote。stale-revision 失败调用 `sessions.refreshProjections(root, true)`，绕过已就绪的缓存并取消较早的读取。带序号的基线保留较新的投影帧。被同一根的较新重新读取中止的读取，会等待较新的读取，而不报告刷新失败。Gateway 的 `remote-access/denied` 与 `workstreamPanel/forbidden` 都显示本地化的无权限文案。
 

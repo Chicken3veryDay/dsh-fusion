@@ -35,7 +35,7 @@ async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) 
     closeQuestion: vi.fn(async (): Promise<RemoteResult<void>> => ok),
     acknowledgeAttention: vi.fn(async (): Promise<RemoteResult<void>> => ok),
     resolveAttention: vi.fn(async (): Promise<RemoteResult<void>> => ok),
-    changeRequests: vi.fn(async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } })),
+    changeRequests: vi.fn(async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [], gaps: [] } })),
   }
   ctx.provide('remote.workstreamPanel', panel as never)
   const refreshProjections = vi.fn(async (_id: SessionId, _force?: boolean) => {})
@@ -178,7 +178,8 @@ describe('Workstream panel browser plugin', () => {
 
   it('reads change requests for the displayed Session and types a failure', async () => {
     const b = await bench()
-    expect(await b.actions().changeRequests(ROOT)).toEqual({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } })
+    expect(await b.actions().changeRequests(ROOT))
+      .toEqual({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [], gaps: [] } })
     b.panel.changeRequests.mockResolvedValueOnce({ ok: false, error: new RemoteError('workstreamPanel/unavailable', 'owner not live', {}) } as never)
     expect(await b.actions().changeRequests(ROOT)).toEqual({ ok: false, failure: { code: 'unavailable', message: 'owner not live' } })
     expect(b.panel.changeRequests).toHaveBeenCalledWith(ROOT)
@@ -194,6 +195,16 @@ describe('Workstream panel browser plugin', () => {
     ['gateway/internal', 'failed'],
   ] as const)('classifies %s as %s', (code, kind) => {
     expect(failureOf({ code, message: 'm' })).toEqual({ code: kind, message: 'm' })
+  })
+
+  it.each([
+    ['workstreamPanel/denied', { reason: 'not-member' }, 'not-member'],
+    ['workstreamPanel/rejected', { reason: 'workstream-stopping' }, 'workstream-stopping'],
+    ['workstreamPanel/rejected', { reason: 'workstream' }, 'workstream-refused'],
+    ['workstreamPanel/denied', {}, 'denied'],
+    ['workstreamPanel/rejected', {}, 'rejected'],
+  ] as const)('R5-N6 classifies %s with %j as %s', (code, details, kind) => {
+    expect(failureOf({ code, message: 'm', details })).toEqual({ code: kind, message: 'm' })
   })
 
   it('opens members through the Workstream root and only from the main view', async () => {

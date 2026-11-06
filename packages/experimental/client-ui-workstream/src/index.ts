@@ -6,7 +6,6 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { TicketError } from '@deepseek-ai/dsh-experimental-ticket'
 import type { TicketErrorCode } from '@deepseek-ai/dsh-experimental-ticket'
 import { WorkstreamError } from '@deepseek-ai/dsh-experimental-workstream'
-import type { WorkstreamErrorCode } from '@deepseek-ai/dsh-experimental-workstream'
 import type { AggregatedChangeRequestsResult } from '@deepseek-ai/dsh-experimental-workstream-evidence'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -32,11 +31,13 @@ function ticketCode(code: TicketErrorCode): PanelErrorCode {
   }
 }
 
-function workstreamCode(code: WorkstreamErrorCode): PanelErrorCode {
-  switch (code) {
-    case 'WORKSTREAM_UNAUTHORIZED': return 'workstreamPanel/denied'
-    case 'WORKSTREAM_NOT_FOUND': return 'workstreamPanel/unavailable'
-    default: return 'workstreamPanel/rejected'
+function workstreamFailure(error: WorkstreamError): RemoteError {
+  const options = { cause: error }
+  switch (error.code) {
+    case 'WORKSTREAM_UNAUTHORIZED': return new RemoteError('workstreamPanel/denied', error.message, { reason: 'not-member' }, options)
+    case 'WORKSTREAM_NOT_FOUND': return new RemoteError('workstreamPanel/unavailable', error.message, {}, options)
+    case 'WORKSTREAM_DISPOSED': return new RemoteError('workstreamPanel/rejected', error.message, { reason: 'workstream-stopping' }, options)
+    default: return new RemoteError('workstreamPanel/rejected', error.message, { reason: 'workstream' }, options)
   }
 }
 
@@ -47,7 +48,7 @@ function workstreamCode(code: WorkstreamErrorCode): PanelErrorCode {
  */
 function panelError(error: unknown): unknown {
   if (error instanceof TicketError) return new RemoteError(ticketCode(error.code), error.message, {}, { cause: error })
-  if (error instanceof WorkstreamError) return new RemoteError(workstreamCode(error.code), error.message, {}, { cause: error })
+  if (error instanceof WorkstreamError) return workstreamFailure(error)
   return error
 }
 

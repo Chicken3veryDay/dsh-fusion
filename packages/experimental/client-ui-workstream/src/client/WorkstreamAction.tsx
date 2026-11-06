@@ -28,7 +28,8 @@ export type WorkstreamCommand =
 
 /** Typed command or read failure; `message` is the Host diagnostic. */
 export interface WorkstreamFailure {
-  readonly code: 'stale' | 'refresh-failed' | 'denied' | 'forbidden' | 'unavailable' | 'rejected' | 'failed'
+  readonly code: 'stale' | 'refresh-failed' | 'denied' | 'not-member' | 'forbidden' | 'unavailable' | 'rejected'
+    | 'workstream-stopping' | 'workstream-refused' | 'failed'
   readonly message: string
 }
 

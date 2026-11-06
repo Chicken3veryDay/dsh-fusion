@@ -23,7 +23,7 @@ export const workstream: WorkstreamSnapshot = {
   members: [
     { id: ROOT, name: 'owner', role: 'owner', diagnostic: null, description: 'Release 2.0', provider: 'owner', operationId, prompt: '', phase: 'active' },
     { id: WORKER, name: 'builder', role: 'member', diagnostic: null, description: 'Builds the release', provider: 'spawn', operationId, prompt: 'Build', phase: 'active' },
-    { id: REVIEWER, name: 'reviewer', role: 'member', diagnostic: 'exited with code 1', description: '', provider: 'spawn', operationId, prompt: 'Review', phase: 'stopped' },
+    { id: REVIEWER, name: 'reviewer', role: 'member', diagnostic: null, description: '', provider: 'spawn', operationId, prompt: 'Review', phase: 'stopped' },
     { id: 'pending' as SessionId, name: 'pending', role: 'member', diagnostic: null, description: '', provider: 'spawn', operationId, prompt: '', phase: 'provisioning' },
     { id: 'leaving' as SessionId, name: 'leaving', role: 'member', diagnostic: null, description: '', provider: 'spawn', operationId, prompt: '', phase: 'stopping' },
   ],

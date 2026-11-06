@@ -27,19 +27,29 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Services required before the Remote contribution mounts. */
 export const inject = ['remote', 'sessions', 'uiWorkspace', 'slots', 'locale']
 
+/** The `reason` a panel failure carries in its details, when it has one. */
+function reasonOf(details: object | undefined): unknown {
+  return details !== undefined && 'reason' in details ? details.reason : undefined
+}
+
 /**
  * Classify a Remote failure for inline display.
  * @param error - typed Remote failure.
  * @returns the panel failure kind and Host diagnostic.
  */
-export function failureOf(error: { readonly code: RemoteErrorCode; readonly message: string }): WorkstreamFailure {
+export function failureOf(
+  error: { readonly code: RemoteErrorCode; readonly message: string; readonly details?: object },
+): WorkstreamFailure {
+  const reason = reasonOf(error.details)
   switch (error.code) {
     case 'workstreamPanel/stale-revision': return { code: 'stale', message: error.message }
-    case 'workstreamPanel/denied': return { code: 'denied', message: error.message }
+    case 'workstreamPanel/denied': return { code: reason === 'not-member' ? 'not-member' : 'denied', message: error.message }
     case 'workstreamPanel/forbidden':
     case 'remote-access/denied': return { code: 'forbidden', message: error.message }
     case 'workstreamPanel/unavailable': return { code: 'unavailable', message: error.message }
-    case 'workstreamPanel/rejected': return { code: 'rejected', message: error.message }
+    case 'workstreamPanel/rejected':
+      return { code: reason === 'workstream-stopping' ? 'workstream-stopping' : reason === 'workstream' ? 'workstream-refused' : 'rejected',
+        message: error.message }
     default: return { code: 'failed', message: error.message }
   }
 }

@@ -42,7 +42,7 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
     removed: false, openState: 'open', openError: null, hasMore: false, loadingOlder: false, promptError: null,
     blank: false, lastAgentError: null, promptAttempted: false, awaitingFirstTurn: false,
   })
-  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [] }
+  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [], gaps: [] }
   const reports = createCommandReports()
   const injected = {
     reportFailure: reports.reportFailure,
@@ -104,7 +104,7 @@ it('a conflict remains visible when refreshing removes the affected question', a
 it('a failed reload retains the previously visible change requests', async () => {
   const b = bench()
   b.injected.changeRequests.mockResolvedValueOnce({ ok: true, value: {
-    complete: true, diagnostics: [], changeRequests: [{
+    complete: true, diagnostics: [], gaps: [], changeRequests: [{
       url: 'https://example.test/pr/42', ref: null, contributions: [],
     }],
   } })
@@ -143,7 +143,7 @@ it.each(['tab', 'panel', 'conversation'] as const)('a rejected answer remains re
 
 it('Changes retains its list while the reload is pending', async () => {
   const b = bench()
-  const value: AggregatedChangeRequestsResult = { complete: true, diagnostics: [], changeRequests: [{
+  const value: AggregatedChangeRequestsResult = { complete: true, diagnostics: [], gaps: [], changeRequests: [{
     url: 'https://example.test/pr/42', ref: null, contributions: [],
   }] }
   b.injected.changeRequests.mockResolvedValueOnce({ ok: true, value })

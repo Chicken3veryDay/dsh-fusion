@@ -39,7 +39,7 @@ function bench() {
     sessionId: ROOT, useSession: bindSnapshotSelector(session), useSessions: bindSnapshotSelector(sessions),
     useSessionStatus: bindSnapshotSelector(createSnapshotStore<SessionStatusSnapshot>(new Map())),
     command, drafts, reportFailure: reports.reportFailure, openMember: () => {},
-    changeRequests: async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } }),
+    changeRequests: async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [], gaps: [] } }),
     t: makeTranslate(en, commonEn),
   }
   // The component reads the shared Session list; the other runtime hooks are unused here.

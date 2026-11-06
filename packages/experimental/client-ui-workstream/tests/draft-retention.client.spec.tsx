@@ -39,7 +39,7 @@ function bench() {
     removed: false, openState: 'open', openError: null, hasMore: false, loadingOlder: false, promptError: null,
     blank: false, lastAgentError: null, promptAttempted: false, awaitingFirstTurn: false,
   })
-  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [] }
+  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [], gaps: [] }
   const reports = createCommandReports()
   const injected = {
     reportFailure: reports.reportFailure,

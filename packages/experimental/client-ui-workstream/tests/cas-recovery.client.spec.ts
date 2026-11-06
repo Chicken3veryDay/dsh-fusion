@@ -33,7 +33,7 @@ async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) 
     closeQuestion: vi.fn(async (): Promise<RemoteResult<void>> => ok),
     acknowledgeAttention: vi.fn(async (): Promise<RemoteResult<void>> => ok),
     resolveAttention: vi.fn(async (): Promise<RemoteResult<void>> => ok),
-    changeRequests: vi.fn(async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } })),
+    changeRequests: vi.fn(async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [], gaps: [] } })),
   }
   ctx.provide('remote.workstreamPanel', panel as never)
   const refreshProjections = vi.fn(async (_id: SessionId, _force?: boolean) => {})

@@ -43,7 +43,7 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
     removed: false, openState: 'open', openError: null, hasMore: false, loadingOlder: false, promptError: null,
     blank: false, lastAgentError: null, promptAttempted: false, awaitingFirstTurn: false,
   })
-  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [] }
+  const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [], gaps: [] }
   const reports = createCommandReports()
   const injected = {
     reportFailure: reports.reportFailure,
@@ -258,11 +258,13 @@ describe('WorkstreamAction', () => {
     expect(current).toHaveProperty('disabled', true)
     expect(current.textContent).toContain('Current chat')
     expect(current.textContent).toContain('Builds the release')
-    expect(within(dialog).getByText('pending').closest('button')).toHaveProperty('disabled', true)
+    const pending = within(dialog).getByText('pending').closest('button')!
+    expect(pending).toHaveProperty('disabled', true)
+    expect(pending.textContent, 'R5-N6 a member still provisioning is described by localized copy').toContain(en['member.provisioning'])
+    expect(pending.textContent).not.toContain('Provisioning acceptance')
     expect(within(dialog).getByRole('button', { name: 'Open conversation: leaving' }).textContent).toContain('Member · Stopping')
     const reviewer = within(dialog).getByRole('button', { name: 'Open conversation: reviewer' })
     expect(reviewer.textContent).toContain('Stopped')
-    expect(reviewer.textContent).toContain('exited with code 1')
     fireEvent.click(reviewer)
     expect(b.injected.openMember).toHaveBeenCalledWith(WORKER, REVIEWER)
     b.injected.openMember.mockImplementationOnce(() => { throw new Error('not retained') })
@@ -283,6 +285,7 @@ describe('WorkstreamAction', () => {
       settle({ ok: true, value: {
         complete: false,
         diagnostics: ['Session reviewer is not loaded; its change requests are not included'],
+        gaps: [{ kind: 'session-not-loaded', sessionId: WORKER }, { kind: 'forge-unavailable' }],
         changeRequests: [
           { url: 'https://example.test/pr/1', ref, contributions: [
             { sessionId: ROOT, origin: 'created', update: null },
@@ -299,7 +302,7 @@ describe('WorkstreamAction', () => {
       } })
     })
     expect(dialog.querySelector('[data-incomplete]')?.textContent)
-      .toBe('This list may be incomplete: Session reviewer is not loaded; its change requests are not included')
+      .toBe('This list may be incomplete: builder is not loaded; the code hosting service is unavailable')
     const first = dialog.querySelector('[data-change-request="https://example.test/pr/1"]')!
     expect(within(first as HTMLElement).getByRole('link', { name: 'Add release notes' }).getAttribute('href')).toBe('https://example.test/pr/1')
     expect(first.textContent).toContain('Draft')
@@ -342,7 +345,7 @@ describe('WorkstreamAction', () => {
     tab(/^Changes$/u)
     tab(/^Files1$/u)
     await act(async () => {
-      settle({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } })
+      settle({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [], gaps: [] } })
       fail(new Error('late'))
     })
     expect(within(dialog).queryByRole('alert')).toBeNull()
