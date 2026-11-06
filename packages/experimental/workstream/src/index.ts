@@ -11,7 +11,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import { steerHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
-import type { AssignTicketRequest, CreateTicketRequest, EndTicketRequest, TicketId, TicketView } from '@deepseek-ai/dsh-experimental-ticket'
+import { TicketError, type AssignTicketRequest, type CreateTicketRequest, type EndTicketRequest, type TicketId, type TicketView } from '@deepseek-ai/dsh-experimental-ticket'
 import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 import { acceptedMessage } from './accepted-message.ts'
 import { workstreamProjectionDefinition } from './projection.ts'
@@ -84,7 +84,8 @@ export class WorkstreamService extends Service {
     this.ctx.effect(() => this.ctx.tickets.registerCoordinatorAuthority((session, requested) => {
       if (!this.ready) {
         if (requested !== session.id) return undefined
-        throw new WorkstreamError('Workstream is still loading; retry the Ticket creation', 'WORKSTREAM_NOT_READY')
+        const message = 'Workstream is still loading; retry the Ticket creation'
+        throw new TicketError(message, 'TICKET_COORDINATOR_UNAVAILABLE', { cause: new WorkstreamError(message, 'WORKSTREAM_NOT_READY') })
       }
       const snapshot = this.projection.stateOf(session).snapshot
       return snapshot !== null && requested === snapshot.ownerSessionId ? snapshot.coordinatorId : undefined

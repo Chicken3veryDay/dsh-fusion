@@ -137,9 +137,9 @@ describe('round-3 Workstream review', () => {
     const [, admission] = await Promise.all([reloading, creating.then(ticket => ({ ticket }), (error: unknown) => ({ error }))])
     expect(ctx.workstreams.get(owner, owner.id).coordinatorId).toBe(member.id)
     // An owner-default creation admitted during the load is refused with nothing appended; it never records the owner.
-    // Ticket wraps a refusing coordinator authority and keeps the Workstream refusal as the cause.
+    // The refusal is Ticket's retryable coordinator-unavailable code with the Workstream refusal as its cause.
     expect(admission, 'reload and direct Ticket creation must not commit different coordinators')
-      .toMatchObject({ error: { code: 'TICKET_RECOVERY_FAILED', cause: { code: 'WORKSTREAM_NOT_READY' } } })
+      .toMatchObject({ error: { code: 'TICKET_COORDINATOR_UNAVAILABLE', cause: { code: 'WORKSTREAM_NOT_READY' } } })
     expect(ctx.tickets.list(owner.session)).toEqual([])
     const retried = await ctx.agents.withInitiator(owner, () => ctx.tickets.create(owner.session,
       { subject: 'After reload', description: '' }))
