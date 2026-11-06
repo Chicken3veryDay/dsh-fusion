@@ -135,6 +135,8 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
         case 'teardown':
         case 'dispose': return { kind: 'stopping', cancel: true }
         case 'settle': return { kind: 'stopping', cancel: state.cancel }
+        // A host caller recorded the outcome with `settleAttempt`, which vouches that the producers ended.
+        case 'reconciled': return { kind: 'released' }
         default: return reject(state, event)
       }
     case 'uncertain':
