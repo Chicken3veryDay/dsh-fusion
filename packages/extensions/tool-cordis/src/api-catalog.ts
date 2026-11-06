@@ -4232,6 +4232,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the exact Cordis effect disposer.',
       },
       {
+        signature: 'async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>',
+        description: 'Collect pending durable context after request preparation, independently of inbox claiming. Providers must respect cancellation and may return messages with their own source metadata.',
+        parameters: [{ name: 'context', description: 'requesting scope and plugin-defined assembly fields; omitted uses global providers.' }, { name: 'pending', description: 'accepted messages awaiting logging; omitted or empty on retries.' }],
+        returns: 'additional messages the caller must log before deriving the model request.',
+      },
+      {
         signature: 'refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly',
         description: 'Refresh accepted registered runtime facts for request admission. Contexts added only by the assembly waterfall retain their accepted values. Current suppression removes optional contexts, and missing required registrations are restored in registry order. Sections, tools, and interpolation variables retain the accepted assembly; their providers and waterfall do not rerun.',
         parameters: [{ name: 'assembly', description: 'accepted assembly for this scope and step.' }, { name: 'context', description: 'the same scope and current plugin-defined assembly fields.' }],
@@ -4723,6 +4729,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the executable definition, or undefined when the call must fail as `UNKNOWN_TOOL`.',
       },
       {
+        signature: 'isExecutable(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean',
+        description: 'Check a retained definition before body invocation without resolving a name again.',
+        parameters: [{ name: 'definition', description: 'exact definition accepted before execution policy.' }, { name: 'scope', description: 'calling agent; omitted checks the global scope.' }, { name: 'toolSet', description: 'step admission; omitted requires an unconditional registration and no admission policy.' }],
+        returns: 'whether this definition remains admitted and visible to the caller.',
+      },
+      {
         signature: 'async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>',
         description: 'Resolve conditions once for this step without changing shared registrations, then narrow the result by the registered admission policies. Cancellation, a rejected condition, or a failing policy publishes no partial selection. Removed registrations cannot be restored by a late condition result.',
         parameters: [{ name: 'context', description: 'preparing agent, captured model selection, and cancellation.' }],
@@ -4745,6 +4757,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Provide the executor for the calling scope; an unscoped contribution is the deployment default. Rendering any executor-owned section requires the viewing scope\'s selection to remain available.',
         parameters: [{ name: 'executor', description: 'initialized provider owned by the contributing plugin.' }],
         returns: 'the effect disposer. Unloading leaves the selection unavailable until it is replaced.',
+      },
+      {
+        signature: 'selectExecutor(scope?: ScopeKey): ToolExecutor',
+        description: 'Resolve the nearest scoped provider, or the deployment default.',
+        parameters: [{ name: 'scope', description: 'Agent or preset scope; omitted selects only the root contribution.' }],
+        returns: 'the selected executor; throws when it is missing or unloaded.',
       },
       {
         signature: 'async execute(input: ToolBatchInput): Promise<ToolBatchResult>',
@@ -6088,6 +6106,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Emitted when any prompt provider changes.',
     description: 'Emitted when any prompt provider changes. This registry notification is unfiltered because a global change affects every scope.',
     parameters: [],
+  },
+  {
+    name: 'system-prompt/request-context',
+    mode: 'waterfall',
+    signature: '\'system-prompt/request-context\'(this: Scoped<SystemPrompt>, context: AssembleContext, pending: readonly UserMessage[], next: () => Promise<UserMessage[]>): Promise<UserMessage[]>',
+    summary: 'Publish pending context messages after request preparation on every attempt.',
+    description: 'Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before sending the request. Return only context absent from the surviving Session history. Retries invoke providers again.',
+    parameters: [{ name: 'context', description: 'requesting scope, model selection, and cancellation.' }, { name: 'pending', description: 'accepted messages not yet logged on the first attempt; empty on retries.' }],
   },
   {
     name: 'tools/change',
@@ -10703,7 +10729,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SystemPrompt',
-    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
+    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
   },
   {
     name: 'SystemPromptMessageSource',
@@ -11115,7 +11141,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolExecution',
-    declaration: 'export interface ToolExecution extends ToolExecutionInput {\n    readonly rootCallId: ToolCallId;\n    readonly token: ToolExecutionToken;\n}',
+    declaration: 'export interface ToolExecution extends ToolExecutionInput {\n    readonly definition?: ToolDefinition;\n    readonly rootCallId: ToolCallId;\n    readonly token: ToolExecutionToken;\n}',
   },
   {
     name: 'ToolExecutionFailure',
@@ -11243,7 +11269,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    async invoke(input: ToolInvocation): Promise<ToolExecutionResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    isExecutable(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    selectExecutor(scope?: ScopeKey): ToolExecutor;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    async invoke(input: ToolInvocation): Promise<ToolExecutionResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',

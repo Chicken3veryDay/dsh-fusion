@@ -189,6 +189,15 @@ tools(provider: (context: AssembleContext) => ToolProviderResult): () => void
 variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void
 
 /**
+ * Collect pending durable context after request preparation, independently of inbox claiming.
+ * Providers must respect cancellation and may return messages with their own source metadata.
+ * @param context - requesting scope and plugin-defined assembly fields; omitted uses global providers.
+ * @param pending - accepted messages awaiting logging; omitted or empty on retries.
+ * @returns additional messages the caller must log before deriving the model request.
+ */
+async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>
+
+/**
  * Refresh accepted registered runtime facts for request admission. Contexts
  * added only by the assembly waterfall retain their accepted values. Current
  * suppression removes optional contexts, and missing required registrations
@@ -211,6 +220,8 @@ refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptA
  */
 async assemble(context: AssembleContext = {}): Promise<PromptAssembly>
 ```
+
+Types: [UserMessage](session.zh.md)
 
 Source: [`packages/core/system-prompt/src/index.ts`](../../packages/core/system-prompt/src/index.ts)
 
@@ -258,6 +269,28 @@ Emitted when any prompt provider changes. This registry notification is unfilter
  */
 'system-prompt/change'(): void
 ```
+
+Source: [`packages/core/system-prompt/src/index.ts`](../../packages/core/system-prompt/src/index.ts)
+
+<a id="system-promptrequest-context--waterfall"></a>
+
+#### `system-prompt/request-context` — waterfall
+
+Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before sending the request. Return only context absent from the surviving Session history. Retries invoke providers again.
+
+```ts cordis-catalog
+/**
+ * Publish pending context messages after request preparation on every attempt. Providers must not
+ * claim inbox input or commit these messages; the loop logs them before sending the request.
+ * Return only context absent from the surviving Session history. Retries invoke providers again.
+ * @param context - requesting scope, model selection, and cancellation.
+ * @param pending - accepted messages not yet logged on the first attempt; empty on retries.
+ * @mode waterfall
+ */
+'system-prompt/request-context'(this: Scoped<SystemPrompt>, context: AssembleContext, pending: readonly UserMessage[], next: () => Promise<UserMessage[]>): Promise<UserMessage[]>
+```
+
+Types: [Scoped](scope.zh.md) · [UserMessage](session.zh.md)
 
 Source: [`packages/core/system-prompt/src/index.ts`](../../packages/core/system-prompt/src/index.ts)
 <!-- END GENERATED cordis-surface -->
