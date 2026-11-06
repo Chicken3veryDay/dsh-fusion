@@ -1,0 +1,52 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/context-index/README.md
+/:
+  en: c514b27cb0fe08a9
+  zh: 38bfd74ded3103bd
+/deepseek-ai-dsh-experimental-context-index:
+  en: b44a82eb6c04cdf9
+  zh: 6ed919cdb8024f32
+/deepseek-ai-dsh-experimental-context-index/summary:
+  en: 0fb79ebe8d33dc08
+  zh: 7d723a9c4eee0ba7
+/deepseek-ai-dsh-experimental-context-index/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: 03a4bf09d960f762
+/deepseek-ai-dsh-experimental-context-index/use-this-package:
+  en: a896ccc75ddbe3d5
+  zh: fe4cdcf685b5aa47
+/deepseek-ai-dsh-experimental-context-index/use-this-package/sources:
+  en: f0df8f9808d2f01a
+  zh: f32b3353271fb77f
+/deepseek-ai-dsh-experimental-context-index/use-this-package/sections-and-ids:
+  en: 68e0ce7182a28a2a
+  zh: 44ea67fd17c38912
+/deepseek-ai-dsh-experimental-context-index/use-this-package/refresh:
+  en: b628349cc8e52334
+  zh: dc1fd1bc459e2d42
+/deepseek-ai-dsh-experimental-context-index/use-this-package/reads-and-catalogs:
+  en: 04611da99bf22cfd
+  zh: e6caee9a309a0701
+/deepseek-ai-dsh-experimental-context-index/use-this-package/diagnostics:
+  en: 364a947893142606
+  zh: fa6295f1204362bb
+/deepseek-ai-dsh-experimental-context-index/use-this-package/configuration:
+  en: 59ed4056e5a80026
+  zh: 7c57998531bac641
+/deepseek-ai-dsh-experimental-context-index/understand-the-implementation:
+  en: 6ab64719f0fc382e
+  zh: 265d2f3cf5ea4374
+/deepseek-ai-dsh-experimental-context-index/model-experience:
+  en: 1eee90685852a535
+  zh: 8c71a3d01218947e
+/deepseek-ai-dsh-experimental-context-index/model-experience/kv-cache-effect:
+  en: e0222b5e3f43f111
+  zh: 0303dd1c26a8754d
+/deepseek-ai-dsh-experimental-context-index/known-limitations-and-deferred-work:
+  en: c6a25d5ebfc430c8
+  zh: 523f633efad7c68f
+/deepseek-ai-dsh-experimental-context-index/known-limitations-and-deferred-work/dev-note:
+  en: f99b9b10bcb9e1dd
+  zh: 01296b065a629ea7

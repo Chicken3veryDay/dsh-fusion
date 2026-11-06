@@ -201,7 +201,15 @@ flowchart LR
   svc_fusionConfig["ctx.fusionConfig<br/>Opt-in Fusion configuration"]
   pkg_experimental_fusion_participants["experimental-fusion-participants"]
   svc_fusionParticipants["ctx.fusionParticipants<br/>Retained Fusion participant contexts"]
+  pkg_experimental_client_ui_workstream["experimental-client-ui-workstream"]
+  svc_workstreamPanel["ctx.workstreamPanel<br/>Workstream panel Remote"]
   svc_tickets["ctx.tickets<br/>Durable Ticket coordination domain"]
+  pkg_experimental_workstream["experimental-workstream"]
+  svc_workstreams["ctx.workstreams<br/>Durable Workstream membership"]
+  pkg_experimental_workstream_evidence["experimental-workstream-evidence"]
+  svc_workstreamEvidence["ctx.workstreamEvidence<br/>Immutable Workstream evidence"]
+  pkg_experimental_context_index["experimental-context-index"]
+  svc_contextIndex["ctx.contextIndex<br/>Instruction and documentation section index"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
   pkg_commands["commands"]
@@ -382,9 +390,11 @@ flowchart LR
   pkg_experimental_claude_code_mods --> svc_claudeCodeMods
   pkg_experimental_client_ui_cot_translation --> svc_cotTranslation
   pkg_experimental_client_ui_forge --> svc_forgePanel
+  pkg_experimental_client_ui_workstream --> svc_workstreamPanel
   pkg_experimental_computer_use_cua_driver_mcp --> svc_computerUse
   pkg_experimental_computer_use_cua_driver_mcp --> svc_interaction
   pkg_experimental_computer_use_cua_driver_native --> svc_computerUse
+  pkg_experimental_context_index --> svc_contextIndex
   pkg_experimental_forge --> svc_forge
   pkg_experimental_forge_github --> svc_forge
   pkg_experimental_forge_session --> svc_forgeSession
@@ -396,6 +406,8 @@ flowchart LR
   pkg_experimental_ticket --> svc_ticketExecution
   pkg_experimental_ticket --> svc_tickets
   pkg_experimental_translator --> svc_translator
+  pkg_experimental_workstream --> svc_workstreams
+  pkg_experimental_workstream_evidence --> svc_workstreamEvidence
   pkg_experimental_worktree --> svc_worktrees
   pkg_file_reference --> svc_fileReferences
   pkg_file_reference_local --> svc_fileReferences
@@ -744,7 +756,11 @@ flowchart LR
 | `ctx.planMode` | `core` | [`plan-mode`](../packages/plan/plan-mode) | - | - | - | 折叠已记录的计划／模式状态，在轮次边界刷新用户选择，渲染由部署方拥有的指导信息，注册 /plan，并在状态转换期间保持计划退出 schema 稳定。 |
 | `ctx.fusionConfig` | `core` | [`fusion-config`](../packages/preset/fusion-config) | - | - | - | 捕获不可变的角色选择，并通过显式组合的人类命令提供非推理就绪检查。 |
 | `ctx.fusionParticipants` | `service` | [`experimental-fusion-participants`](../packages/experimental/fusion-participants) | - | - | - | 保留根与参与者 Session，供停驻 Agent 采用，不激活任务。 |
+| `ctx.workstreamPanel` | `service` | [`experimental-client-ui-workstream`](../packages/experimental/client-ui-workstream) | - | - | - | 以当前显示的活动 Session 身份，在其 Workstream 根上运行 Ticket 问题与关注命令，并为 Web 面板读取聚合的成员变更请求。 |
 | `ctx.tickets` | `core` | [`experimental-ticket`](../packages/experimental/ticket) | - | - | - | 在 Session 事件日志中拥有持久化的直接 Worker 分配、执行声明、报告、问题、关注项、协调者交接和终态结果。 |
+| `ctx.workstreams` | `core` | [`experimental-workstream`](../packages/experimental/workstream) | - | - | - | 负责 Workstream 成员关系、转移 Ticket 协调的协调者交接、可附带上下文包的确认式成员间消息，以及根 Session 上的 Ticket 操作。 |
+| `ctx.workstreamEvidence` | `core` | [`experimental-workstream-evidence`](../packages/experimental/workstream-evidence) | - | - | - | 负责按内容寻址的证据版本及经摘要校验的读取、由保留版本构建的上下文包，以及对成员变更请求的只读聚合。 |
+| `ctx.contextIndex` | `service` | [`experimental-context-index`](../packages/experimental/context-index) | - | - | - | 把指令文件和文档拆分为具有稳定 id、内容哈希和锚点的章节，并通过 ctx.fs 渲染有界清单和章节读取。 |
 | `ctx.agentPresets` | `core` | [`agent-preset-registry`](../packages/preset/agent-preset-registry) | - | - | - | 立即挂载 YAML 声明的 preset 版本，把 Agent 和冷读取绑定到作用域内的贡献，并保留已替换的版本，直到最后一个使用者释放它。 |
 | `ctx.commands` | `core` | [`commands`](../packages/interaction/commands) | - | - | - | 插件注册直接面向人的命令，而不会把调用发送给模型。 |
 | `ctx.sessionProjections` | `core` | [`session-projection`](../packages/session/session-projection) | - | [`api-session-controller`](../packages/api/session-controller), [`tool-todo`](../packages/todo/tool-todo), [`session-title`](../packages/session/session-title) | - | 各领域注册由状态驱动的折叠单元；主动驱动过程维护每个会话的水位状态，Session controller 提供 baseline 并推送发生变化的值。 |

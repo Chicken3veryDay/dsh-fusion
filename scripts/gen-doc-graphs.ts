@@ -701,6 +701,13 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Owns content-addressed evidence versions with digest-verified reads, context packets built from retained versions, and read-only aggregation of member change requests.',
   },
   {
+    key: 'contextIndex',
+    pkg: 'experimental-context-index',
+    title: 'Instruction and documentation section index',
+    mode: 'service',
+    note: 'Splits instruction files and documentation into sections with stable ids, content hashes, and anchors, and renders bounded catalogs and section reads through ctx.fs.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

@@ -1106,6 +1106,52 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-index -->
+<a id="deepseek-aidsh-experimental-context-index"></a>
+
+## `@deepseek-ai/dsh-experimental-context-index`
+
+- `inject`: `fs`
+- `source`: [`packages/experimental/context-index/src/types.ts:164`](../packages/experimental/context-index/src/types.ts)
+
+```ts config-catalog
+/**
+ * Index configuration. Every field has a working default, so no configuration is required.
+ * Misconfigured values make the service fail at mount.
+ */
+export interface Config {
+  /** Directory entries that mark the project root while walking up from the working directory (default `['.git']`). */
+  projectRootMarkers?: string[]
+  /** Same-directory instruction file names, all indexed (default `['AGENTS.md', 'CLAUDE.md']`, as agent-instructions). */
+  instructionFileCandidates?: string[]
+  /** Same-directory local overlay names, indexed after the base files (default `['AGENTS.local.md', 'CLAUDE.local.md']`). */
+  localInstructionFileCandidates?: string[]
+  /** Working-directory-relative documentation roots (default `['docs', 'doc']`). */
+  docRoots?: string[]
+  /** Case-insensitive extensions of documentation files (default `['.md', '.markdown']`). */
+  docExtensions?: string[]
+  /** Largest source file in UTF-8 bytes; larger files get a `too-large` diagnostic (default 1,048,576, as agent-instructions). */
+  maxSourceBytes?: number
+  /** Largest section body in UTF-8 bytes before it is split at paragraph boundaries (default 8,192). */
+  maxSectionBytes?: number
+  /** Longest heading text shown in an anchor, in UTF-8 bytes (default 120). */
+  maxHeadingBytes?: number
+  /** Most documentation files per working directory (default 1,024). */
+  maxDocFiles?: number
+  /** Deepest documentation directory level below a root (default 8). */
+  maxDocDepth?: number
+  /** Total UTF-8 bytes of all sources per working directory (default 16,777,216). */
+  maxTotalSourceBytes?: number
+  /** Ceiling and default for a read's byte budget (default 65,536, the agent-instructions chain budget). */
+  maxReadBytes?: number
+  /** Ceiling and default for a catalog's byte budget (default 8,192). */
+  maxCatalogBytes?: number
+  /** Working directories kept in memory; the least recently used is evicted (default 16). */
+  maxIndexedDirectories?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-index -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-cua-macos -->
 <a id="deepseek-aidsh-experimental-cua-macos"></a>
 

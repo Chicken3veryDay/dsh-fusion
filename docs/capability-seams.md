@@ -206,6 +206,8 @@ flowchart LR
   svc_workstreams["ctx.workstreams<br/>Durable Workstream membership"]
   pkg_experimental_workstream_evidence["experimental-workstream-evidence"]
   svc_workstreamEvidence["ctx.workstreamEvidence<br/>Immutable Workstream evidence"]
+  pkg_experimental_context_index["experimental-context-index"]
+  svc_contextIndex["ctx.contextIndex<br/>Instruction and documentation section index"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
   pkg_commands["commands"]
@@ -390,6 +392,7 @@ flowchart LR
   pkg_experimental_computer_use_cua_driver_mcp --> svc_computerUse
   pkg_experimental_computer_use_cua_driver_mcp --> svc_interaction
   pkg_experimental_computer_use_cua_driver_native --> svc_computerUse
+  pkg_experimental_context_index --> svc_contextIndex
   pkg_experimental_forge --> svc_forge
   pkg_experimental_forge_github --> svc_forge
   pkg_experimental_forge_session --> svc_forgeSession
@@ -755,6 +758,7 @@ flowchart LR
 | `ctx.tickets` | `core` | [`experimental-ticket`](../packages/experimental/ticket) | - | - | - | Owns durable direct-worker assignments, execution declarations, reports, questions, attention items, coordinator handoff, and terminal outcomes in Session event logs. |
 | `ctx.workstreams` | `core` | [`experimental-workstream`](../packages/experimental/workstream) | - | - | - | Owns Workstream membership, coordinator handoff that moves Ticket coordination, acknowledged peer messages with optional context packets, and Ticket operations on the root Session. |
 | `ctx.workstreamEvidence` | `core` | [`experimental-workstream-evidence`](../packages/experimental/workstream-evidence) | - | - | - | Owns content-addressed evidence versions with digest-verified reads, context packets built from retained versions, and read-only aggregation of member change requests. |
+| `ctx.contextIndex` | `service` | [`experimental-context-index`](../packages/experimental/context-index) | - | - | - | Splits instruction files and documentation into sections with stable ids, content hashes, and anchors, and renders bounded catalogs and section reads through ctx.fs. |
 | `ctx.agentPresets` | `core` | [`agent-preset-registry`](../packages/preset/agent-preset-registry) | - | - | - | Eagerly mounts YAML-declared preset revisions, binds Agents and cold readers to scoped contributions, and retains retired revisions until their last user releases them. |
 | `ctx.commands` | `core` | [`commands`](../packages/interaction/commands) | - | - | - | Plugins register direct human commands without sending invocations to the model. |
 | `ctx.sessionProjections` | `core` | [`session-projection`](../packages/session/session-projection) | - | [`api-session-controller`](../packages/api/session-controller), [`tool-todo`](../packages/todo/tool-todo), [`session-title`](../packages/session/session-title) | - | Domains register state-driven fold units; the eager drive keeps per-session watermark states and the Session controller serves baselines and pushes changed values. |

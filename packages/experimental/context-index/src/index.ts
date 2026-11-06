@@ -1,0 +1,402 @@
+/**
+ * Experimental context index: deterministic, addressable sections of instruction
+ * files and documentation for the working directory.
+ *
+ * `ctx.contextIndex` splits the user-global and project instruction chain plus
+ * Markdown under the documentation roots into sections with stable ids, content
+ * hashes, byte sizes, and path and heading anchors; reads bounded section bodies;
+ * and renders a bounded catalog. It makes no model calls and registers no tools.
+ *
+ * @module @deepseek-ai/dsh-experimental-context-index
+ */
+import { isAbsolute, resolve } from 'node:path'
+import { Context, Service } from '@deepseek-ai/cordis'
+import type z from '@deepseek-ai/schemastery'
+import type { FileSystem } from '@deepseek-ai/dsh-fs'
+import { renderCatalog } from './catalog.ts'
+import { ConfigSchema, resolveConfig, type ResolvedConfig } from './config.ts'
+import { ContextIndexError } from './error.ts'
+import { buildRecord, discoverCandidates, readSource, sectionsOf, type SourceRecord } from './sources.ts'
+import { truncateUtf8 } from './text.ts'
+import type {
+  Config,
+  ContextCatalog,
+  ContextCatalogBudget,
+  ContextDiagnostic,
+  ContextIndexScope,
+  ContextIndexSnapshot,
+  ContextReadBudget,
+  ContextReadResult,
+  ContextSectionBody,
+  ContextSectionId,
+  ContextSectionMeta,
+} from './types.ts'
+
+export { ContextIndexError } from './error.ts'
+export type { ContextIndexErrorCode } from './error.ts'
+export { ContextSectionIdOf } from './ids.ts'
+export type * from './types.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    contextIndex: ContextIndexService
+  }
+}
+
+/** One committed index of a working directory; never mutated after creation. */
+interface IndexState {
+  readonly snapshot: ContextIndexSnapshot
+  readonly records: ReadonlyMap<string, SourceRecord>
+  readonly signature: string
+}
+
+interface Flight {
+  readonly controller: AbortController
+  readonly promise: Promise<IndexState>
+  waiters: number
+}
+
+function asError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error(String(reason))
+}
+
+function recordKey(kind: string, path: string): string {
+  return `${kind}\u0000${path}`
+}
+
+/** Service that indexes instruction and documentation sources per working directory. */
+export class ContextIndexService extends Service {
+  static inject = ['fs']
+  static Config: z<Config> = ConfigSchema
+
+  private readonly config: ResolvedConfig
+  private readonly states = new Map<string, IndexState>()
+  private readonly flights = new Map<string, Flight>()
+  private readonly lifetime = new AbortController()
+
+  constructor(ctx: Context, config: Config = {}) {
+    super(ctx, 'contextIndex')
+    this.config = resolveConfig(config)
+  }
+
+  protected [Service.init](): void {
+    this.ctx.effect(() => () => this.shutdown(), 'contextIndex.runtime()')
+  }
+
+  /**
+   * Refresh the index for a working directory and return its section metadata.
+   * Files whose version, size, and hash are unchanged are not read again; callers
+   * arriving during a refresh share it.
+   * @param scope - the working directory.
+   * @param signal - cancels this caller's wait; the shared refresh stops when no caller is left.
+   * @returns the snapshot, which is the same object while nothing changed.
+   * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative or missing directory,
+   * `CONTEXT_INDEX_DISPOSED` after disposal, or the abort reason on cancellation.
+   */
+  async snapshot(scope: ContextIndexScope, signal?: AbortSignal): Promise<ContextIndexSnapshot> {
+    return (await this.refresh(scope, signal)).snapshot
+  }
+
+  /**
+   * Read section bodies within a byte budget.
+   * Bodies are read from the files at call time, so `hash` reflects the file now;
+   * ids stay valid across edits. Once the budget cuts a body, later ids are omitted.
+   * @param scope - the working directory.
+   * @param ids - sections to read, in the order to return them.
+   * @param budget - byte bound, lowered to the configured `maxReadBytes`.
+   * @param signal - cancellation.
+   * @returns bodies with full-section hashes, plus missing and omitted ids.
+   * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget or scope.
+   */
+  async read(
+    scope: ContextIndexScope,
+    ids: readonly ContextSectionId[],
+    budget: ContextReadBudget = {},
+    signal?: AbortSignal,
+  ): Promise<ContextReadResult> {
+    const maxBytes = this.effectiveBudget(budget.maxBytes, this.config.maxReadBytes, 'maxBytes')
+    const state = await this.refresh(scope, signal)
+    const sectionById = new Map(state.snapshot.sections.map(section => [section.id, section]))
+    const diagnostics: ContextDiagnostic[] = [...state.snapshot.diagnostics]
+    const texts = new Map<string, ReadonlyMap<ContextSectionId, string>>()
+    const bodies: ContextSectionBody[] = []
+    const missing: ContextSectionId[] = []
+    const omitted: ContextSectionId[] = []
+    let remaining = maxBytes
+    let used = 0
+    for (const id of new Set(ids)) {
+      const meta = sectionById.get(id)
+      if (meta === undefined) {
+        missing.push(id)
+        continue
+      }
+      if (remaining <= 0) {
+        omitted.push(id)
+        continue
+      }
+      let sourceTexts = texts.get(meta.sourceId)
+      if (sourceTexts === undefined) {
+        sourceTexts = await this.sourceTexts(state, meta, diagnostics, signal)
+        texts.set(meta.sourceId, sourceTexts)
+      }
+      const full = sourceTexts.get(id)
+      if (full === undefined) {
+        missing.push(id)
+        continue
+      }
+      const body = this.bodyOf(meta, full, remaining)
+      bodies.push(body)
+      used += body.bytes
+      remaining = body.truncated ? 0 : remaining - body.bytes
+    }
+    return { revision: state.snapshot.revision, sections: bodies, missing, omitted, usedBytes: used, maxBytes, diagnostics }
+  }
+
+  /**
+   * Render a compact listing of sections within a byte budget.
+   * @param sections - sections in listing order, usually from {@link snapshot}.
+   * @param budget - byte bound, lowered to the configured `maxCatalogBytes`.
+   * @returns the bounded text and how many sections it lists.
+   * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget.
+   */
+  renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBudget = {}): ContextCatalog {
+    this.assertLive()
+    return renderCatalog(sections, this.effectiveBudget(budget.maxBytes, this.config.maxCatalogBytes, 'maxBytes'))
+  }
+
+  private bodyOf(meta: ContextSectionMeta, full: string, remaining: number): ContextSectionBody {
+    const text = truncateUtf8(full, remaining)
+    const bytes = Buffer.byteLength(text, 'utf8')
+    return {
+      id: meta.id,
+      path: meta.path,
+      anchor: meta.anchor,
+      hash: meta.hash,
+      totalBytes: meta.bytes,
+      bytes,
+      truncated: text.length < full.length,
+      text,
+    }
+  }
+
+  /** Re-read one source and return its section texts as they are on disk now. */
+  private async sourceTexts(
+    state: IndexState,
+    meta: ContextSectionMeta,
+    diagnostics: ContextDiagnostic[],
+    signal: AbortSignal | undefined,
+  ): Promise<ReadonlyMap<ContextSectionId, string>> {
+    const record = state.records.get(recordKey(meta.kind, meta.path))
+    if (record === undefined) return new Map()
+    const outcome = await this.guard(signal, abort => (
+      readSource(this.ctx.fs, record.target, record.path, undefined, this.config.maxSourceBytes, abort)
+    ))
+    if (outcome.kind === 'diagnostic') {
+      diagnostics.push(outcome.diagnostic)
+      return new Map()
+    }
+    const sections = sectionsOf(record, outcome.text, this.config)
+    return new Map(sections.map(section => [section.draft.id, section.text]))
+  }
+
+  private effectiveBudget(requested: number | undefined, ceiling: number, name: string): number {
+    this.assertLive()
+    if (requested === undefined) return ceiling
+    if (!Number.isSafeInteger(requested) || requested < 1) {
+      throw new ContextIndexError(`${name} must be a positive safe integer, got ${String(requested)}`, 'CONTEXT_INDEX_INVALID_INPUT')
+    }
+    return Math.min(requested, ceiling)
+  }
+
+  private assertLive(): void {
+    if (this.lifetime.signal.aborted) throw this.lifetime.signal.reason
+  }
+
+  private directoryOf(scope: ContextIndexScope): string {
+    if (!isAbsolute(scope.workingDirectory)) {
+      throw new ContextIndexError(`workingDirectory must be an absolute path, got "${scope.workingDirectory}"`, 'CONTEXT_INDEX_INVALID_INPUT')
+    }
+    return resolve(scope.workingDirectory)
+  }
+
+  /** Run `work` with a signal that fires on the caller's abort or on disposal. */
+  private async guard<T>(signal: AbortSignal | undefined, work: (abort: AbortSignal) => Promise<T>): Promise<T> {
+    this.assertLive()
+    signal?.throwIfAborted()
+    const abort = signal === undefined ? this.lifetime.signal : AbortSignal.any([signal, this.lifetime.signal])
+    try {
+      return await work(abort)
+    } catch (error: unknown) {
+      if (abort.aborted) throw abort.reason
+      throw error
+    }
+  }
+
+  private refresh(scope: ContextIndexScope, signal: AbortSignal | undefined): Promise<IndexState> {
+    this.assertLive()
+    signal?.throwIfAborted()
+    const directory = this.directoryOf(scope)
+    let flight = this.flights.get(directory)
+    if (flight === undefined) flight = this.startFlight(directory)
+    return this.join(directory, flight, signal)
+  }
+
+  private startFlight(directory: string): Flight {
+    const controller = new AbortController()
+    const abort = AbortSignal.any([controller.signal, this.lifetime.signal])
+    const promise = this.rebuild(directory, abort).catch((error: unknown) => {
+      if (abort.aborted) throw abort.reason
+      throw error
+    })
+    const flight: Flight = { controller, promise, waiters: 0 }
+    this.flights.set(directory, flight)
+    const clear = (): void => {
+      if (this.flights.get(directory) === flight) this.flights.delete(directory)
+    }
+    // Unobserved when every waiter left; each waiter observes the rejection itself.
+    promise.then(clear, clear)
+    return flight
+  }
+
+  private join(directory: string, flight: Flight, signal: AbortSignal | undefined): Promise<IndexState> {
+    flight.waiters++
+    return new Promise<IndexState>((resolveJoin, rejectJoin) => {
+      const onAbort = (): void => {
+        flight.waiters--
+        if (flight.waiters === 0) {
+          if (this.flights.get(directory) === flight) this.flights.delete(directory)
+          flight.controller.abort(signal?.reason)
+        }
+        rejectJoin(asError(signal?.reason))
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      flight.promise.then(
+        (state) => {
+          signal?.removeEventListener('abort', onAbort)
+          resolveJoin(state)
+        },
+        (error: unknown) => {
+          signal?.removeEventListener('abort', onAbort)
+          rejectJoin(asError(error))
+        },
+      )
+    })
+  }
+
+  private async rebuild(directory: string, signal: AbortSignal): Promise<IndexState> {
+    const fs: FileSystem = this.ctx.fs
+    const config = this.config
+    let isDirectory: boolean
+    try {
+      isDirectory = (await fs.stat(await fs.resolve(directory, { signal }), signal))?.type === 'directory'
+    } catch (error: unknown) {
+      signal.throwIfAborted()
+      throw new ContextIndexError(`workingDirectory "${directory}" cannot be inspected: ${error instanceof Error ? error.message : String(error)}`, 'CONTEXT_INDEX_INVALID_INPUT', { cause: error })
+    }
+    if (!isDirectory) {
+      throw new ContextIndexError(`workingDirectory "${directory}" is not an existing directory`, 'CONTEXT_INDEX_INVALID_INPUT')
+    }
+    const prior = this.states.get(directory)
+    const discovery = await discoverCandidates(fs, config, directory, signal)
+    const diagnostics: ContextDiagnostic[] = [...discovery.diagnostics]
+    const loaded = new Map<string, SourceRecord>()
+    const ordered: SourceRecord[] = []
+    let total = 0
+    for (const candidate of discovery.candidates) {
+      signal.throwIfAborted()
+      const key = recordKey(candidate.kind, candidate.path)
+      const cached = prior?.records.get(key)
+      const unchanged = cached !== undefined
+        && cached.version === candidate.version
+        && cached.target.targetKey === candidate.target.targetKey
+        && (candidate.size === undefined || candidate.size === cached.bytes)
+      let record: SourceRecord
+      if (unchanged) {
+        record = cached
+      } else {
+        if (candidate.size !== undefined && total + candidate.size > config.maxTotalSourceBytes) {
+          diagnostics.push({ code: 'limit-exceeded', path: candidate.path, message: `total source size would exceed maxTotalSourceBytes (${config.maxTotalSourceBytes})` })
+          continue
+        }
+        const outcome = await readSource(fs, candidate.target, candidate.path, candidate.size, config.maxSourceBytes, signal)
+        if (outcome.kind === 'diagnostic') {
+          diagnostics.push(outcome.diagnostic)
+          continue
+        }
+        record = cached !== undefined && cached.hash === outcome.hash
+          ? { ...cached, version: candidate.version, target: candidate.target }
+          : buildRecord(candidate, outcome, config)
+      }
+      if (total + record.bytes > config.maxTotalSourceBytes) {
+        diagnostics.push({ code: 'limit-exceeded', path: candidate.path, message: `total source size would exceed maxTotalSourceBytes (${config.maxTotalSourceBytes})` })
+        continue
+      }
+      total += record.bytes
+      loaded.set(key, record)
+      ordered.push(record)
+    }
+    signal.throwIfAborted()
+    return this.commit(directory, prior, loaded, ordered, diagnostics)
+  }
+
+  private commit(
+    directory: string,
+    prior: IndexState | undefined,
+    loaded: ReadonlyMap<string, SourceRecord>,
+    ordered: readonly SourceRecord[],
+    diagnostics: readonly ContextDiagnostic[],
+  ): IndexState {
+    const kept: SourceRecord[] = []
+    const digests = new Map<string, Set<string>>()
+    for (const record of ordered) {
+      if (record.group !== undefined) {
+        const seen = digests.get(record.group) ?? new Set<string>()
+        digests.set(record.group, seen)
+        if (seen.has(record.trimmedHash)) continue
+        seen.add(record.trimmedHash)
+      }
+      kept.push(record)
+    }
+    const signature = JSON.stringify([kept.map(record => [record.id, record.hash]), diagnostics])
+    let snapshot: ContextIndexSnapshot
+    if (prior !== undefined && prior.signature === signature) {
+      snapshot = prior.snapshot
+    } else {
+      let order = 0
+      snapshot = {
+        scope: { workingDirectory: directory },
+        revision: (prior?.snapshot.revision ?? 0) + 1,
+        sources: kept.map((record, index) => ({
+          id: record.id,
+          kind: record.kind,
+          path: record.path,
+          bytes: record.bytes,
+          hash: record.hash,
+          order: index,
+          sectionCount: record.sections.length,
+        })),
+        sections: kept.flatMap(record => record.sections.map(section => ({ ...section, order: order++ }))),
+        diagnostics,
+      }
+    }
+    const state: IndexState = { snapshot, records: loaded, signature }
+    // Re-inserting keeps the Map in least-recently-used order.
+    this.states.delete(directory)
+    this.states.set(directory, state)
+    while (this.states.size > this.config.maxIndexedDirectories) {
+      const oldest = this.states.keys().next()
+      if (oldest.done === true) break
+      this.states.delete(oldest.value)
+    }
+    return state
+  }
+
+  private async shutdown(): Promise<void> {
+    this.lifetime.abort(new ContextIndexError('context index disposed', 'CONTEXT_INDEX_DISPOSED'))
+    await Promise.allSettled([...this.flights.values()].map(flight => flight.promise))
+    this.flights.clear()
+    this.states.clear()
+  }
+}
+
+export default ContextIndexService

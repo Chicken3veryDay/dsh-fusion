@@ -881,6 +881,50 @@ Types: [Session](session.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="ctxcontextindex--contextindexservice"></a>
+
+### `ctx.contextIndex` — `ContextIndexService`
+
+Service that indexes instruction and documentation sources per working directory.
+
+```ts cordis-catalog
+/**
+ * Refresh the index for a working directory and return its section metadata.
+ * Files whose version, size, and hash are unchanged are not read again; callers
+ * arriving during a refresh share it.
+ * @param scope - the working directory.
+ * @param signal - cancels this caller's wait; the shared refresh stops when no caller is left.
+ * @returns the snapshot, which is the same object while nothing changed.
+ * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative or missing directory,
+ * `CONTEXT_INDEX_DISPOSED` after disposal, or the abort reason on cancellation.
+ */
+async snapshot(scope: ContextIndexScope, signal?: AbortSignal): Promise<ContextIndexSnapshot>
+
+/**
+ * Read section bodies within a byte budget.
+ * Bodies are read from the files at call time, so `hash` reflects the file now;
+ * ids stay valid across edits. Once the budget cuts a body, later ids are omitted.
+ * @param scope - the working directory.
+ * @param ids - sections to read, in the order to return them.
+ * @param budget - byte bound, lowered to the configured `maxReadBytes`.
+ * @param signal - cancellation.
+ * @returns bodies with full-section hashes, plus missing and omitted ids.
+ * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget or scope.
+ */
+async read( scope: ContextIndexScope, ids: readonly ContextSectionId[], budget: ContextReadBudget = {}, signal?: AbortSignal, ): Promise<ContextReadResult>
+
+/**
+ * Render a compact listing of sections within a byte budget.
+ * @param sections - sections in listing order, usually from {@link snapshot}.
+ * @param budget - byte bound, lowered to the configured `maxCatalogBytes`.
+ * @returns the bounded text and how many sections it lists.
+ * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget.
+ */
+renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBudget = {}): ContextCatalog
+```
+
+Source: [`packages/experimental/context-index/src/index.ts`](../../packages/experimental/context-index/src/index.ts)
+
 <a id="ctxfusionconfig--fusionconfig"></a>
 
 ### `ctx.fusionConfig` — `FusionConfig`

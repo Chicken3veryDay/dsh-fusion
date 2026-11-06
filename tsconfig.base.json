@@ -378,6 +378,8 @@
       "@deepseek-ai/dsh-experimental-workstream-profile/workstream-tools": ["./packages/experimental/workstream-profile/src/workstream-tools.ts"],
       "@deepseek-ai/dsh-experimental-workstream-profile/workstream-evidence-tools": ["./packages/experimental/workstream-profile/src/workstream-evidence-tools.ts"],
       "@deepseek-ai/dsh-experimental-tool-agent-team": ["./packages/experimental/tool-agent-team/src"],
+      "@deepseek-ai/dsh-experimental-context-index": ["./packages/experimental/context-index/src"],
+      "@deepseek-ai/dsh-experimental-context-index/types": ["./packages/experimental/context-index/src/types.ts"],
       "@deepseek-ai/dsh-experimental-workstream": ["./packages/experimental/workstream/src"],
       "@deepseek-ai/dsh-experimental-workstream/types": ["./packages/experimental/workstream/src/types.ts"],
       "@deepseek-ai/dsh-experimental-workstream/client": ["./packages/experimental/workstream/src/client.ts"],

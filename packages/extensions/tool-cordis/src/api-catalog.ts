@@ -864,6 +864,34 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'contextIndex',
+    summary: 'Service that indexes instruction and documentation sources per working directory.',
+    description: 'Service that indexes instruction and documentation sources per working directory.',
+    methods: [
+      {
+        signature: 'async snapshot(scope: ContextIndexScope, signal?: AbortSignal): Promise<ContextIndexSnapshot>',
+        description: 'Refresh the index for a working directory and return its section metadata. Files whose version, size, and hash are unchanged are not read again; callers arriving during a refresh share it.',
+        parameters: [{ name: 'scope', description: 'the working directory.' }, { name: 'signal', description: 'cancels this caller\'s wait; the shared refresh stops when no caller is left.' }],
+        returns: 'the snapshot, which is the same object while nothing changed.',
+        throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative or missing directory, `CONTEXT_INDEX_DISPOSED` after disposal, or the abort reason on cancellation.'],
+      },
+      {
+        signature: 'async read( scope: ContextIndexScope, ids: readonly ContextSectionId[], budget: ContextReadBudget = {}, signal?: AbortSignal, ): Promise<ContextReadResult>',
+        description: 'Read section bodies within a byte budget. Bodies are read from the files at call time, so `hash` reflects the file now; ids stay valid across edits. Once the budget cuts a body, later ids are omitted.',
+        parameters: [{ name: 'scope', description: 'the working directory.' }, { name: 'ids', description: 'sections to read, in the order to return them.' }, { name: 'budget', description: 'byte bound, lowered to the configured `maxReadBytes`.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'bodies with full-section hashes, plus missing and omitted ids.',
+        throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget or scope.'],
+      },
+      {
+        signature: 'renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBudget = {}): ContextCatalog',
+        description: 'Render a compact listing of sections within a byte budget.',
+        parameters: [{ name: 'sections', description: 'sections in listing order, usually from {@link snapshot}.' }, { name: 'budget', description: 'byte bound, lowered to the configured `maxCatalogBytes`.' }],
+        returns: 'the bounded text and how many sections it lists.',
+        throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget.'],
+      },
+    ],
+  },
+  {
     key: 'cotTranslation',
     summary: 'Optional reasoning translation delegates Session-bound storage to the translator.',
     description: 'Optional reasoning translation delegates Session-bound storage to the translator.',
@@ -6598,8 +6626,64 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ContentBlockType = keyof ContentBlockMap;',
   },
   {
+    name: 'ContextCatalog',
+    declaration: 'export interface ContextCatalog {\n    readonly text: string;\n    readonly bytes: number;\n    readonly included: number;\n    readonly omitted: number;\n    readonly maxBytes: number;\n}',
+  },
+  {
+    name: 'ContextCatalogBudget',
+    declaration: 'export interface ContextCatalogBudget {\n    readonly maxBytes?: number;\n}',
+  },
+  {
+    name: 'ContextDiagnostic',
+    declaration: 'export interface ContextDiagnostic {\n    readonly code: ContextDiagnosticCode;\n    readonly path: string;\n    readonly message: string;\n}',
+  },
+  {
+    name: 'ContextDiagnosticCode',
+    declaration: 'export type ContextDiagnosticCode = \'unreadable\' | \'too-large\' | \'not-utf8\' | \'limit-exceeded\' | \'directory-unreadable\';',
+  },
+  {
+    name: 'ContextIndexScope',
+    declaration: 'export interface ContextIndexScope {\n    readonly workingDirectory: string;\n}',
+  },
+  {
+    name: 'ContextIndexSnapshot',
+    declaration: 'export interface ContextIndexSnapshot {\n    readonly scope: ContextIndexScope;\n    readonly revision: number;\n    readonly sources: readonly ContextSourceMeta[];\n    readonly sections: readonly ContextSectionMeta[];\n    readonly diagnostics: readonly ContextDiagnostic[];\n}',
+  },
+  {
     name: 'ContextPressureProjection',
     declaration: 'export interface ContextPressureProjection {\n    pressureTokens?: number;\n    projectedTokens?: number;\n    contextWindow?: number;\n}',
+  },
+  {
+    name: 'ContextReadBudget',
+    declaration: 'export interface ContextReadBudget {\n    readonly maxBytes?: number;\n}',
+  },
+  {
+    name: 'ContextReadResult',
+    declaration: 'export interface ContextReadResult {\n    readonly revision: number;\n    readonly sections: readonly ContextSectionBody[];\n    readonly missing: readonly ContextSectionId[];\n    readonly omitted: readonly ContextSectionId[];\n    readonly usedBytes: number;\n    readonly maxBytes: number;\n    readonly diagnostics: readonly ContextDiagnostic[];\n}',
+  },
+  {
+    name: 'ContextSectionBody',
+    declaration: 'export interface ContextSectionBody {\n    readonly id: ContextSectionId;\n    readonly path: string;\n    readonly anchor: string;\n    readonly hash: string;\n    readonly totalBytes: number;\n    readonly bytes: number;\n    readonly truncated: boolean;\n    readonly text: string;\n}',
+  },
+  {
+    name: 'ContextSectionId',
+    declaration: 'export type ContextSectionId = Branded<\'ContextSectionId\'>;',
+  },
+  {
+    name: 'ContextSectionMeta',
+    declaration: 'export interface ContextSectionMeta {\n    readonly id: ContextSectionId;\n    readonly sourceId: ContextSourceId;\n    readonly kind: ContextSourceKind;\n    readonly path: string;\n    readonly headingPath: readonly string[];\n    readonly anchor: string;\n    readonly level: number;\n    readonly part: number;\n    readonly partCount: number;\n    readonly bytes: number;\n    readonly hash: string;\n    readonly order: number;\n}',
+  },
+  {
+    name: 'ContextSourceId',
+    declaration: 'export type ContextSourceId = Branded<\'ContextSourceId\'>;',
+  },
+  {
+    name: 'ContextSourceKind',
+    declaration: 'export type ContextSourceKind = \'user-instructions\' | \'project-instructions\' | \'doc\';',
+  },
+  {
+    name: 'ContextSourceMeta',
+    declaration: 'export interface ContextSourceMeta {\n    readonly id: ContextSourceId;\n    readonly kind: ContextSourceKind;\n    readonly path: string;\n    readonly bytes: number;\n    readonly hash: string;\n    readonly order: number;\n    readonly sectionCount: number;\n}',
   },
   {
     name: 'ContinuableCreateRequest',
