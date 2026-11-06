@@ -32,9 +32,19 @@ export interface ToolBatchInput {
   readonly agent?: Agent
   /**
    * Step admission for every call in the batch, including program subcalls.
-   * Undefined admits only unconditional registrations.
+   * Undefined admits only unconditional registrations, and nothing at all while an
+   * admission policy applies to the scope, because a policy needs a step to run.
+   * Mutually exclusive with {@link ToolBatchInput.hostInternalDispatch}.
    */
   readonly toolSet?: ResolvedToolSet
+  /**
+   * Explicit opt-in for a host component dispatching its own provider tools outside a model
+   * step (an MCP, browser, or computer-use bridge). The calls skip admission policies and
+   * still reach only the scope's unconditional registrations, including nested program
+   * calls. Never set it for a call a model requested: the model path passes its step's
+   * `toolSet`. Rejected together with `toolSet`.
+   */
+  readonly hostInternalDispatch?: true
   /**
    * Committed model step receiving root call/result events; requires `agent`.
    * Undefined when `agent` is absent or for calls outside a model response, such

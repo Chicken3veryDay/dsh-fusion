@@ -8,6 +8,8 @@ import ComputerUseRegistry from '@deepseek-ai/dsh-computer-use'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { InteractionProvider } from '@deepseek-ai/dsh-interaction'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as NativeProvider from '../src/index.ts'
 import { catalog, fixture, resetFixture } from './fixtures/cua-driver.ts'
@@ -52,6 +54,18 @@ describe('Cua Driver native provider', () => {
     expect(ctx.computerUse.providerName).toBeUndefined()
     expect(fixture.shutdowns).toBe(1)
     expect(fixture.destroys).toBe(1)
+  })
+
+  it('runs a desktop interaction while an admission policy hides every tool from model steps', async () => {
+    let provider: InteractionProvider | undefined
+    ctx.provide('interaction', { register(registered: InteractionProvider) { provider = registered; return () => Promise.resolve() } })
+    await ctx.plugin(NativeProvider)
+    ctx.tools.registerAdmissionPolicy(() => [])
+    expect((await execute('click', { pid: 9, window_id: 7 })).error?.info?.code).toBe('UNKNOWN_TOOL')
+    expect(fixture.calls).toEqual([])
+    const session = await provider!.open({ id: 'interaction-agent' } as Agent, new AbortController().signal)
+    await session.execute({ domain: 'desktop', method: 'act', action: { kind: 'click', pid: 9, window_id: 7 } }, new AbortController().signal)
+    expect(fixture.calls).toMatchObject([{ name: 'click', args: { pid: 9, window_id: 7 } }])
   })
 
   it('rejects another provider before importing or creating a native runtime', async () => {

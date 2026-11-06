@@ -86,6 +86,7 @@ async function executeInteractionTool(
     calls: [{ type: 'tool-call', id: callId, name, arguments: encoded }],
     signal,
     agent,
+    hostInternalDispatch: true,
   })
   const settled = batch.results[0]?.result
   if (settled === undefined) throw new Error(`Cua Driver MCP tool "${name}" returned no result`)

@@ -475,11 +475,34 @@ export class ToolsService extends Service {
   /**
    * Delegate a raw call batch to its Agent's provider or the deployment default.
    * Select at dispatch; accepted batches settle through that provider even if it unloads.
-   * @param input - original calls, optional owning Agent, and optional logging step.
+   * @param input - original calls, optional owning Agent, optional logging step, and either a step
+   * `toolSet` or the explicit `hostInternalDispatch` opt-in.
    * @returns the selected executor's settled batch; unavailable selections reject.
+   * @throws {TypeError} when `hostInternalDispatch` is combined with a `toolSet`.
    */
   async execute(input: ToolBatchInput): Promise<ToolBatchResult> {
+    if (input.hostInternalDispatch === true) {
+      if (input.toolSet !== undefined) {
+        throw new TypeError('ToolBatchInput.hostInternalDispatch cannot be combined with a toolSet: a step selection already decides admission')
+      }
+      return this.selectExecutor(input.agent).execute({ ...input, toolSet: this.hostInternalSelection() })
+    }
     return this.selectExecutor(input.agent).execute(input)
+  }
+
+  /**
+   * Build the selection for {@link ToolBatchInput.hostInternalDispatch}: each scope's
+   * unconditional registrations as they stand when read, with no admission policy applied.
+   * @returns a selection with nothing to dispose.
+   */
+  private hostInternalSelection(): ResolvedToolSet {
+    return Object.freeze({
+      dispose: (): void => undefined,
+      view: (scope: ScopeKey | undefined): ReadonlyMap<string, ToolDefinition> => {
+        const current = this.view(scope)
+        return new Map([...current.visible].filter(([name]) => current.registrations.get(name)?.when === undefined))
+      },
+    })
   }
 
   /**

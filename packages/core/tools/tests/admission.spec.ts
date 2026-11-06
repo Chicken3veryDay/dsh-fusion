@@ -353,3 +353,43 @@ it('accepts an array, a set, an iterator, and an empty array as decisions', asyn
   }
   expect(declared).toEqual([['a'], ['a'], ['a'], []])
 })
+
+it('runs a host-internal batch past admission policies, for global and scoped registrations alike', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('global'))
+  h.scope.ctx.tools.register(h.tool('scoped'))
+  h.ctx.tools.registerAdmissionPolicy(() => [])
+  expect(h.declared(await h.resolve())).toEqual([])
+  const batch = (name: string, extra: object = {}) => h.ctx.tools.execute({
+    agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, ...extra,
+    calls: [{ type: 'tool-call' as const, id: ToolCallId(`host-${name}`), name, arguments: '{}' }],
+  })
+  expect((await batch('global')).results[0]?.result.isError).toBe(false)
+  expect((await batch('scoped')).results[0]?.result.isError).toBe(false)
+  expect(h.calls).toEqual(['global', 'scoped'])
+})
+
+it('keeps conditional registrations unavailable and refuses a host-internal batch combined with a selection', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('conditional'), { when: () => true })
+  h.ctx.tools.registerAdmissionPolicy(() => [])
+  const calls = [{ type: 'tool-call' as const, id: ToolCallId('host-conditional'), name: 'conditional', arguments: '{}' }]
+  const result = await h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, calls })
+  expect(result.results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
+  const toolSet = await h.resolve()
+  await expect(h.ctx.tools.execute({ agent: h.agent, signal: h.controller.signal, hostInternalDispatch: true, toolSet, calls }))
+    .rejects.toThrow('cannot be combined with a toolSet')
+  expect(h.calls).toEqual([])
+})
+
+it('still refuses a call without a selection and without the host-internal opt-in', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('hidden'))
+  h.ctx.tools.registerAdmissionPolicy(() => [])
+  const result = await h.ctx.tools.execute({
+    agent: h.agent, signal: h.controller.signal,
+    calls: [{ type: 'tool-call' as const, id: ToolCallId('plain'), name: 'hidden', arguments: '{}' }],
+  })
+  expect(result.results[0]?.result.error?.info?.code).toBe('UNKNOWN_TOOL')
+  expect(h.calls).toEqual([])
+})

@@ -159,6 +159,7 @@ export async function apply(ctx: Context): Promise<void> {
                 }],
                 signal: operationSignal,
                 agent: _agent,
+                hostInternalDispatch: true,
               })
               const settled = batch.results[0]?.result
               if (settled === undefined) throw new Error(`Cua Driver tool "${selected.name}" returned no result`)

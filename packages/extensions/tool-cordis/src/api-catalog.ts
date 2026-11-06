@@ -4730,8 +4730,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       {
         signature: 'async execute(input: ToolBatchInput): Promise<ToolBatchResult>',
         description: 'Delegate a raw call batch to its Agent\'s provider or the deployment default. Select at dispatch; accepted batches settle through that provider even if it unloads.',
-        parameters: [{ name: 'input', description: 'original calls, optional owning Agent, and optional logging step.' }],
+        parameters: [{ name: 'input', description: 'original calls, optional owning Agent, optional logging step, and either a step `toolSet` or the explicit `hostInternalDispatch` opt-in.' }],
         returns: 'the selected executor\'s settled batch; unavailable selections reject.',
+        throws: ['{TypeError} when `hostInternalDispatch` is combined with a `toolSet`.'],
       },
       {
         signature: 'guard(guard: ToolGuard): () => void',
@@ -11045,7 +11046,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolBatchInput',
-    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
+    declaration: 'export interface ToolBatchInput {\n    readonly calls: readonly ToolCallBlock[];\n    readonly signal: AbortSignal;\n    readonly maxParallelToolCalls?: number;\n    readonly agent?: Agent;\n    readonly toolSet?: ResolvedToolSet;\n    readonly hostInternalDispatch?: true;\n    readonly log?: {\n        readonly turn: number;\n        readonly step: number;\n    };\n}',
   },
   {
     name: 'ToolBatchResult',
