@@ -15,9 +15,23 @@ import { resolveExampleLaunch } from '@deepseek-ai/dsh-loader-smoke'
 
 const dshBinScript = fileURLToPath(new URL('../../../../apps/cli/src/bin.ts', import.meta.url))
 const tsconfigPath = fileURLToPath(new URL('../../../../tsconfig.json', import.meta.url))
-const scriptPlugin = pathToFileURL(fileURLToPath(new URL('./fixtures/context-script-llm.mjs', import.meta.url))).href
+const fixtureUrl = (name: string): string => pathToFileURL(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url))).href
+const scriptPlugin = fixtureUrl('context-script-llm.mjs')
+const mapScriptPlugin = fixtureUrl('context-map-script-llm.mjs')
 const PROFILE = '@deepseek-ai/dsh-experimental-context-profile'
 const BASE = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless']
+
+interface MapRequest {
+  readonly curator: boolean
+  readonly auxiliary: boolean
+  readonly model: string
+  readonly effort: string | null
+  readonly tools: string[]
+  readonly bytes: number
+  readonly hasNote: boolean
+  readonly hasGroupTitle: boolean
+  readonly hasCuratorText: boolean
+}
 
 interface Request {
   readonly tools: string[]
@@ -28,7 +42,10 @@ interface Request {
   readonly hasStub: boolean
 }
 
-interface LogEvent { readonly type: string; readonly data?: { readonly source?: { readonly kind?: string } } }
+interface LogEvent {
+  readonly type: string
+  readonly data?: { readonly source?: { readonly kind?: string }; readonly op?: { readonly kind?: string } }
+}
 
 async function sessionFiles(dir: string): Promise<string[]> {
   const found: string[] = []
@@ -41,7 +58,10 @@ async function sessionFiles(dir: string): Promise<string[]> {
 }
 
 /** Launch `dsh --profile headless` with the given bundle list; return the recorded requests and logged source kinds. */
-async function run(bundles: readonly string[]): Promise<{ requests: Request[]; sources: string[] }> {
+async function run(
+  bundles: readonly string[],
+  options: { readonly script?: string; readonly prompt?: string; readonly ok?: string } = {},
+): Promise<{ requests: Request[]; mapRequests: MapRequest[]; sources: string[]; sessions: LogEvent[][] }> {
   const cwd = await mkdtemp(join(tmpdir(), 'dsh-context-profile-'))
   try {
     const home = join(cwd, '.dsh')
@@ -67,13 +87,13 @@ async function run(bundles: readonly string[]): Promise<{ requests: Request[]; s
       '    retainTokens: 20',
       '- insert:',
       '    - id: context-script-llm',
-      `      name: '${scriptPlugin}'`,
+      `      name: '${options.script ?? scriptPlugin}'`,
       '',
     ].join('\n'))
     const output = join(cwd, 'requests.json')
     const launch = resolveExampleLaunch({
       srcBin: dshBinScript,
-      configArgs: ['--profile', 'headless', 'Probe the context tree.'],
+      configArgs: ['--profile', 'headless', options.prompt ?? 'Probe the context tree.'],
       tsconfigPath,
       env: {
         DSH_HOME: home,
@@ -92,15 +112,18 @@ async function run(bundles: readonly string[]): Promise<{ requests: Request[]; s
       cwd, env: launch.env, input: '', timeout: 120_000, killSignal: 'SIGKILL', reject: false,
     })
     expect(result.exitCode, `dsh exited unexpectedly.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0)
-    expect(result.stdout).toContain('CONTEXT_PROBE_OK')
+    expect(result.stdout).toContain(options.ok ?? 'CONTEXT_PROBE_OK')
     const sources: string[] = []
+    const sessions: LogEvent[][] = []
     for (const file of await sessionFiles(join(home, 'sessions'))) {
-      for (const line of (await readFile(file, 'utf8')).split('\n').filter(entry => entry.length > 0)) {
-        const event = JSON.parse(line) as LogEvent
+      const events = (await readFile(file, 'utf8')).split('\n').filter(entry => entry.length > 0).map(line => JSON.parse(line) as LogEvent)
+      sessions.push(events)
+      for (const event of events) {
         if (event.type === 'user/message' && event.data?.source?.kind !== undefined) sources.push(event.data.source.kind)
       }
     }
-    return { requests: JSON.parse(await readFile(output, 'utf8')) as Request[], sources }
+    const recorded: unknown = JSON.parse(await readFile(output, 'utf8'))
+    return { requests: recorded as Request[], mapRequests: recorded as MapRequest[], sources, sessions }
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }
@@ -140,6 +163,47 @@ describe('Context tree profile layer through the real Loader', () => {
     expect(after[0]!.tools).toEqual(first.tools)
 
     expect(sources).toEqual(expect.arrayContaining(['context-tree-catalog', 'context-activation']))
+  }, 180_000)
+
+  it('keeps map curation out of the conversation: the Session logs the map edits, the curator transcript stays in its own Session', async () => {
+    const { mapRequests: requests, sessions } = await run([...BASE, PROFILE], {
+      script: mapScriptPlugin, prompt: 'Probe the project map.', ok: 'MAP_PROBE_OK',
+    })
+    const main = requests.filter(request => !request.curator && !request.auxiliary)
+    const curator = requests.filter(request => request.curator)
+
+    // The working agent sees the one bounded note tool and none of the curator tools.
+    expect(main).toHaveLength(4)
+    for (const request of main) {
+      expect(request.tools).toContain('context_note')
+      expect(request.tools.filter(tool => tool.startsWith('map_'))).toEqual([])
+      expect(request.hasCuratorText).toBe(false)
+      expect(request.model).not.toBe('curator-small')
+    }
+    // The curator ran on the smaller route at its least effort, with the curator tools only it holds.
+    expect(curator.length).toBeGreaterThanOrEqual(3)
+    for (const request of curator) {
+      expect(request.model).toBe('curator-small')
+      expect(request.effort).toBe('low')
+      expect(request.tools).toEqual(expect.arrayContaining(['map_view', 'map_group', 'map_note', 'map_core']))
+    }
+
+    // The main context grows by the exchanged tool calls and results only: the curator's own
+    // conversation (its prompt, map_view results, edits) is several times larger and never joins it.
+    const growth = main[3]!.bytes - main[0]!.bytes
+    expect(growth).toBeLessThan(1500)
+    expect(main.every(request => request.bytes < curator[0]!.bytes)).toBe(true)
+
+    // Durable: the main Session carries the logged map edits and no curator conversation.
+    const logs = sessions.map(events => ({ events, edits: events.filter(event => event.type === 'context-map/state') }))
+    const mainLog = logs.filter(log => log.edits.length > 0)
+    expect(mainLog).toHaveLength(1)
+    const ops = mainLog[0]!.edits.map(event => event.data?.op?.kind)
+    expect(ops).toEqual(expect.arrayContaining(['note-pending', 'claim', 'group-set', 'note-file']))
+    expect(JSON.stringify(mainLog[0]!.events)).not.toContain('project map curator')
+    const curatorLog = logs.filter(log => log !== mainLog[0] && JSON.stringify(log.events).includes('project map curator'))
+    expect(curatorLog).toHaveLength(1)
+    expect(curatorLog[0]!.edits).toEqual([])
   }, 180_000)
 
   it('negative control: without the layer every tool is visible from the first request', async () => {

@@ -963,7 +963,8 @@ describe('curator seams', () => {
 
   it('grants nothing from the core when no section fits the budget', async () => {
     const w = await world({ coreBytes: 1 })
-    w.tree.registerEagerCore(async () => projectSections(w))
+    const ids = await projectSections(w)
+    w.tree.registerEagerCore(() => ids)
     expect(grants(await stepMessages(w, 1))).toHaveLength(0)
   })
 

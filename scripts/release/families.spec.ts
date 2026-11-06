@@ -73,6 +73,7 @@ describe('release families', () => {
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp',
       '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native',
       '@deepseek-ai/dsh-experimental-context-index',
+      '@deepseek-ai/dsh-experimental-context-map',
       '@deepseek-ai/dsh-experimental-context-profile',
       '@deepseek-ai/dsh-experimental-context-tree',
       '@deepseek-ai/dsh-experimental-cot-translation-bundle',

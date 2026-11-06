@@ -1,0 +1,88 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/context-map/README.md
+/:
+  en: 70ec489bdcd1b92b
+  zh: d40f8de52f1e88be
+/deepseek-ai-dsh-experimental-context-map:
+  en: fa2a07cfa88b6dc3
+  zh: 2c0ec06a3be9500d
+/deepseek-ai-dsh-experimental-context-map/summary:
+  en: d584633494024947
+  zh: 5b9ff576ffa34bf5
+/deepseek-ai-dsh-experimental-context-map/table-of-contents:
+  en: 76368b6b1da79c80
+  zh: ddafa933c150c4d1
+/deepseek-ai-dsh-experimental-context-map/use-this-package:
+  en: d7e3de3a262907b1
+  zh: 0a3ec19eb827c5b0
+/deepseek-ai-dsh-experimental-context-map/use-this-package/the-map:
+  en: 8d2371f362de2cec
+  zh: be9909b84dac2700
+/deepseek-ai-dsh-experimental-context-map/use-this-package/the-curator-role:
+  en: 85da5816a1f2da66
+  zh: 09a236fc6db4abf5
+/deepseek-ai-dsh-experimental-context-map/use-this-package/the-default-curator:
+  en: 082038db6f328ced
+  zh: 64d64b1f04b5f198
+/deepseek-ai-dsh-experimental-context-map/use-this-package/service-api:
+  en: 7325de438de9177b
+  zh: ecbe9f0b30ef0a78
+/deepseek-ai-dsh-experimental-context-map/use-this-package/tools:
+  en: 23b8d72a20ccad40
+  zh: 045fd5502cc934aa
+/deepseek-ai-dsh-experimental-context-map/use-this-package/configuration:
+  en: 441caf508dd90035
+  zh: 3bbc7b1a2d649ef5
+/deepseek-ai-dsh-experimental-context-map/use-this-package/events:
+  en: 2784fb13e4d4356e
+  zh: 8434160db7f9dacb
+/deepseek-ai-dsh-experimental-context-map/understand-the-implementation:
+  en: 3b90df5756be2697
+  zh: 1df51014883bf274
+/deepseek-ai-dsh-experimental-context-map/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-context-map/model-experience/context-note-tool:
+  en: db20d81dcf108eda
+  zh: 027a50c15a98a705
+/deepseek-ai-dsh-experimental-context-map/model-experience/context-note-tool/what-the-model-sees:
+  en: 0e88a57813bed21a
+  zh: 722d39409bec1f2e
+/deepseek-ai-dsh-experimental-context-map/model-experience/context-note-tool/token-effect:
+  en: df61bbd2183d5ced
+  zh: 1876a7f8addadef3
+/deepseek-ai-dsh-experimental-context-map/model-experience/context-note-tool/kv-cache-effect:
+  en: f86f7f3910fdfce9
+  zh: c75e9d89bc4afe92
+/deepseek-ai-dsh-experimental-context-map/model-experience/map-groups-in-the-tree:
+  en: 859e89d57bd3322b
+  zh: c63b9e5d9fa2b491
+/deepseek-ai-dsh-experimental-context-map/model-experience/map-groups-in-the-tree/what-the-model-sees:
+  en: 4c75b8357ab9741b
+  zh: c3d0c419f312f9f0
+/deepseek-ai-dsh-experimental-context-map/model-experience/map-groups-in-the-tree/token-effect:
+  en: aa6b593cb808b097
+  zh: cb9a0c89da32e869
+/deepseek-ai-dsh-experimental-context-map/model-experience/map-groups-in-the-tree/kv-cache-effect:
+  en: 4784b19c10fc0048
+  zh: fb0bfbd6bea44482
+/deepseek-ai-dsh-experimental-context-map/model-experience/curator-run:
+  en: 8c9d54be0741dde2
+  zh: f9ee6f1976912c3f
+/deepseek-ai-dsh-experimental-context-map/model-experience/curator-run/what-the-model-sees:
+  en: c8701f7adc886fc4
+  zh: 2bd9d07bbfcb3827
+/deepseek-ai-dsh-experimental-context-map/model-experience/curator-run/token-effect:
+  en: 098f6391d4126f39
+  zh: 1945c9b7d2bd8260
+/deepseek-ai-dsh-experimental-context-map/model-experience/curator-run/kv-cache-effect:
+  en: 70199cfd6012cd8f
+  zh: d77f98250390446b
+/deepseek-ai-dsh-experimental-context-map/known-limitations-and-deferred-work:
+  en: 24b1e4d74b7a3ef7
+  zh: 72f532e06c458600
+/deepseek-ai-dsh-experimental-context-map/known-limitations-and-deferred-work/dev-note:
+  en: 657dcece8214050d
+  zh: 4bcd5dc73ccd2780

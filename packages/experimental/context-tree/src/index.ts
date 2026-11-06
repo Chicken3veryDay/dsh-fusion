@@ -438,9 +438,10 @@ export class ContextTreeService extends Service {
       { maxBytes: this.config.coreBytes },
       signal,
     )
+    // A section cut by the budget is not granted: its hash would count it as held without its full text.
     return read.sections.flatMap((body) => {
       const leaf = leaves.get(body.id)
-      return leaf === undefined ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind)]
+      return leaf === undefined || body.truncated ? [] : [grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind)]
     })
   }
 

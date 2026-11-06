@@ -56,7 +56,15 @@ export function placeTools(ctx: Context) {
 }
 ```
 
-两者都返回该注册的释放函数。`registerToolPlacement` 是后续由策展者重新分组工具的接口：分配器返回一个位置或 `undefined`。服务还提供 `browse`、`load`、`activeTools`、`isBaseTool` 和 `unresolvedToolOrigins`。
+两者都返回该注册的释放函数。`registerToolPlacement` 是策展者重新分组工具的接口：分配器返回一个位置或 `undefined`。服务还提供 `browse`、`load`、`activeTools`、`isBaseTool` 和 `unresolvedToolOrigins`。
+
+### 策展者接口
+
+三个通用注册接口让策展者塑造树，而树无需导入它；[上下文地图](../context-map/README.zh.md)使用它们。
+
+- `registerCuratedGroups(provider)`：针对某个智能体返回分组（`root`、`origin`、`name`、`title`、`summary`、成员 `sections` 和 `tools`）。策展分组是带有自己标题和摘要的文件夹节点。其章节不再显示文件节点，其工具的位置优先于提示和名称。
+- `registerEagerCore(provider)`：返回树在对话开始时授予一次、压缩之后再授予一次的章节 id，作为普通的已记录授权，受 `coreBytes` 限制。预算会截断的章节被跳过，绝不只授予一部分。
+- `registerManagedTools(names, admit)`：只有 `admit` 接受的智能体才能看到的工具，在工具准入中强制执行。
 
 ### 配置
 
@@ -64,7 +72,7 @@ export function placeTools(ctx: Context) {
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `baseTools` | `read`、`read_image`、`write`、`edit`、`apply_patch`、`glob`、`grep`、`bash`、`web_search`、`web_fetch`、`todo_write`、`skill`、`context_browse`、`context_load` | 始终声明的工具；未注册的名称不会出现，且两个树工具总会被加入 |
+| `baseTools` | `read`、`read_image`、`write`、`edit`、`apply_patch`、`glob`、`grep`、`bash`、`web_search`、`web_fetch`、`todo_write`、`skill`、`context_browse`、`context_load`、`context_note` | 始终声明的工具；未注册的名称不会出现，且两个树工具总会被加入 |
 | `maxBrowseDepth` | 3 | 一次浏览可列出的最深层级 |
 | `maxBrowseNodes` | 64 | 一次列表中的节点数 |
 | `maxBrowseBytes` | 8192 | 一次列表渲染后的字节数 |
@@ -72,6 +80,8 @@ export function placeTools(ctx: Context) {
 | `maxLoadBytes` | 32768 | 一次加载加入的章节字节数 |
 | `maxActivatedTools` | 32 | 一次加载可激活的工具数 |
 | `maxSummaryBytes` | 160 | 节点摘要的字节数 |
+| `maxDroppedBytes` | 1024 | 重新发布的目录在后续压缩之间保留的已撤销章节列表的字节数 |
+| `coreBytes` | 4096 | 急切核心提供方在对话开始时可授予的章节字节数 |
 
 不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。
 
@@ -145,10 +155,11 @@ export function placeTools(ctx: Context) {
 - **技能不在树中**——`skill` 仍是基础工具。
 - **压缩请求**——执行压缩的请求仍声明已激活的工具；声明在下一步消失。修复需要让工具集在压缩 pre-step 之后解析。
 - **后续压缩**——第二次压缩会总结第一个检查点，因此更早的撤销存根被并入摘要。
-- **重复授权**——首次授权写入日志之前，同一章节被加载两次会被授权两次。
+- **重复授权**——授权已排队或已被领取但尚未写入日志的章节视为已加载，因此在这段时间内第二次加载不会再授权一次。
 - **子智能体**——子智能体只从基础工具开始；不继承激活。
 - **刷新成本**——上下文索引每一步都会重新 stat 指令和文档文件。
-- **没有策展者**——由模型对工具重新分组的功能被延期；`registerToolPlacement` 是它的接口。
+- **丢弃的章节**——第二次压缩会把更早的撤销存根并入摘要。树在投影状态中保留自己的已撤销章节列表（受 `maxDroppedBytes` 限制），并随目录重新发布，这缓解但没有修复该问题；修复属于压缩。
+- **策展者**——由上下文地图提供策展者；未挂载时，树的行为与以前相同。
 
 <a id="dev-note"></a>
 ### 开发备注

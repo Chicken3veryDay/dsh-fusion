@@ -8,6 +8,9 @@
 # context-tree base set (read, read_image, write, edit, apply_patch, glob, grep, bash,
 # web_search, web_fetch, todo_write, skill and the two context tools); a deployment changes it
 # through the context-tree `baseTools` field.
+# The project map groups the tree's nodes under curated titles and summaries and adds the
+# `context_note` tool. A background curator subagent on a cheaper route maintains the map; its
+# transcript never enters the conversation, only its logged map edits and the resulting tree.
 
 - id: agent-instructions
   config:
@@ -22,3 +25,12 @@
 
     - id: tool-context-tree
       name: '@deepseek-ai/dsh-experimental-context-profile/context-tree-tools'
+
+    - id: context-map
+      name: '@deepseek-ai/dsh-experimental-context-map'
+
+    - id: tool-context-map
+      name: '@deepseek-ai/dsh-experimental-context-profile/context-map-tools'
+
+    - id: context-curator
+      name: '@deepseek-ai/dsh-experimental-context-profile/context-curator'

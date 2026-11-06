@@ -212,6 +212,9 @@ flowchart LR
   svc_contextIndex["ctx.contextIndex<br/>Instruction and documentation section index"]
   pkg_experimental_context_tree["experimental-context-tree"]
   svc_contextTree["ctx.contextTree<br/>On-demand context tree"]
+  pkg_experimental_context_map["experimental-context-map"]
+  svc_contextMap["ctx.contextMap<br/>Agent-maintained project map"]
+  svc_contextCurator["ctx.contextCurator<br/>Background project map curator"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
   pkg_commands["commands"]
@@ -397,6 +400,8 @@ flowchart LR
   pkg_experimental_computer_use_cua_driver_mcp --> svc_interaction
   pkg_experimental_computer_use_cua_driver_native --> svc_computerUse
   pkg_experimental_context_index --> svc_contextIndex
+  pkg_experimental_context_map --> svc_contextCurator
+  pkg_experimental_context_map --> svc_contextMap
   pkg_experimental_context_tree --> svc_contextTree
   pkg_experimental_forge --> svc_forge
   pkg_experimental_forge_github --> svc_forge
@@ -765,6 +770,8 @@ flowchart LR
 | `ctx.workstreamEvidence` | `core` | [`experimental-workstream-evidence`](../packages/experimental/workstream-evidence) | - | - | - | 负责按内容寻址的证据版本及经摘要校验的读取、由保留版本构建的上下文包，以及对成员变更请求的只读聚合。 |
 | `ctx.contextIndex` | `service` | [`experimental-context-index`](../packages/experimental/context-index) | - | - | - | 把指令文件和文档拆分为具有稳定 id、内容哈希和锚点的章节，并通过 ctx.fs 渲染有界清单和章节读取。 |
 | `ctx.contextTree` | `service` | [`experimental-context-tree`](../packages/experimental/context-tree) | - | - | - | 发布可浏览的指令、来源与工具树；把章节作为可撤销授权加载，通过工具准入策略激活隐藏工具，并经由 Session 投影从日志推导两者。 |
+| `ctx.contextMap` | `service` | [`experimental-context-map`](../packages/experimental/context-map) | - | - | - | Keeps a durable, citation-checked grouping of context sections and tools that only the curator role holder edits, records short notes the working agent files, and feeds the context tree its groups and eager core. |
+| `ctx.contextCurator` | `service` | [`experimental-context-map`](../packages/experimental/context-map) | - | - | - | Claims the curator role for a subagent on a cheaper model route when the index changes or a note is filed, bounds each run, and yields the role to any other holder without letting its transcript enter the working Session. |
 | `ctx.agentPresets` | `core` | [`agent-preset-registry`](../packages/preset/agent-preset-registry) | - | - | - | 立即挂载 YAML 声明的 preset 版本，把 Agent 和冷读取绑定到作用域内的贡献，并保留已替换的版本，直到最后一个使用者释放它。 |
 | `ctx.commands` | `core` | [`commands`](../packages/interaction/commands) | - | - | - | 插件注册直接面向人的命令，而不会把调用发送给模型。 |
 | `ctx.sessionProjections` | `core` | [`session-projection`](../packages/session/session-projection) | - | [`api-session-controller`](../packages/api/session-controller), [`tool-todo`](../packages/todo/tool-todo), [`session-title`](../packages/session/session-title) | - | 各领域注册由状态驱动的折叠单元；主动驱动过程维护每个会话的水位状态，Session controller 提供 baseline 并推送发生变化的值。 |

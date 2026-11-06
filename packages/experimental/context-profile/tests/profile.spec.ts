@@ -11,12 +11,13 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const repo = resolve(root, '../../..')
 const SERVICES = [
   '@deepseek-ai/dsh-experimental-context-index',
+  '@deepseek-ai/dsh-experimental-context-map',
   '@deepseek-ai/dsh-experimental-context-tree',
 ]
 const PROFILE = '@deepseek-ai/dsh-experimental-context-profile'
 
 describe('Context tree profile bundle', () => {
-  it('declares an unlisted parseable layer that mounts the index, the tree and its tools and shrinks the eager core', () => {
+  it('declares an unlisted parseable layer that mounts the index, the tree, the map and their tools and shrinks the eager core', () => {
     const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
       private?: boolean
       dependencies?: Record<string, string>
@@ -35,8 +36,11 @@ describe('Context tree profile bundle', () => {
     expect(instructions?.config?.maxBytes).toBe(4096)
     expect(parsed.flatMap(patch => patch.insert ?? []).map(entry => [entry.id, entry.name])).toEqual([
       ['context-index', SERVICES[0]],
-      ['context-tree', SERVICES[1]],
+      ['context-tree', SERVICES[2]],
       ['tool-context-tree', `${PROFILE}/context-tree-tools`],
+      ['context-map', SERVICES[1]],
+      ['tool-context-map', `${PROFILE}/context-map-tools`],
+      ['context-curator', `${PROFILE}/context-curator`],
     ])
   })
 
@@ -44,6 +48,15 @@ describe('Context tree profile bundle', () => {
     const module = await import('../src/context-tree-tools.ts')
     expect(module.default.name).toBe('ContextTreeTools')
     expect(Object.keys(module)).toEqual(['default'])
+  })
+
+  it('exports the map tools and the default curator as the default exports the Loader mounts', async () => {
+    const tools = await import('../src/context-map-tools.ts')
+    expect(tools.default.name).toBe('ContextMapTools')
+    expect(Object.keys(tools)).toEqual(['default'])
+    const curator = await import('../src/context-curator.ts')
+    expect(curator.default.name).toBe('DefaultContextCurator')
+    expect(Object.keys(curator)).toEqual(['default'])
   })
 
   it('stays out of every shipped bundle, preset, and CLI example composition', () => {

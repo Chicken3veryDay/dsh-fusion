@@ -23,6 +23,14 @@
       "types": "./lib/types/context-tree-tools.d.ts",
       "default": "./lib/types/context-tree-tools.js"
     },
+    "./context-map-tools": {
+      "types": "./lib/types/context-map-tools.d.ts",
+      "default": "./lib/types/context-map-tools.js"
+    },
+    "./context-curator": {
+      "types": "./lib/types/context-curator.d.ts",
+      "default": "./lib/types/context-curator.js"
+    },
     "./locale/*.json": "./locale/*.json",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
@@ -43,6 +51,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-experimental-context-index": "workspace:*",
+    "@deepseek-ai/dsh-experimental-context-map": "workspace:*",
     "@deepseek-ai/dsh-experimental-context-tree": "workspace:*"
   },
   "peerDependencies": {

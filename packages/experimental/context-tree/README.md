@@ -56,7 +56,15 @@ export function placeTools(ctx: Context) {
 }
 ```
 
-Both return the disposer for the registration. `registerToolPlacement` is the seam for a later curator that regroups tools: an assigner returns a placement or `undefined`. The service also exposes `browse`, `load`, `activeTools`, `isBaseTool`, and `unresolvedToolOrigins`.
+Both return the disposer for the registration. `registerToolPlacement` is the seam for a curator that regroups tools: an assigner returns a placement or `undefined`. The service also exposes `browse`, `load`, `activeTools`, `isBaseTool`, and `unresolvedToolOrigins`.
+
+### Curator seams
+
+Three generic registrations let a curator shape the tree without the tree importing it; the [context map](../context-map/README.md) uses them.
+
+- `registerCuratedGroups(provider)`: for an agent, returns groups (`root`, `origin`, `name`, `title`, `summary`, member `sections` and `tools`). A curated group is a folder node with its own title and summary. Its sections leave their file node, and its tools are placed ahead of hints and names.
+- `registerEagerCore(provider)`: returns section ids that the tree grants once at the start of a conversation and again after compaction, as ordinary logged grants within `coreBytes`. A section the budget would cut is skipped, never granted in part.
+- `registerManagedTools(names, admit)`: tools that only the agents `admit` accepts may see, enforced in tool admission.
 
 ### Configuration
 
@@ -64,7 +72,7 @@ Every field has a default.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `baseTools` | `read`, `read_image`, `write`, `edit`, `apply_patch`, `glob`, `grep`, `bash`, `web_search`, `web_fetch`, `todo_write`, `skill`, `context_browse`, `context_load` | tools always declared; unregistered names are absent, and the two tree tools are always added |
+| `baseTools` | `read`, `read_image`, `write`, `edit`, `apply_patch`, `glob`, `grep`, `bash`, `web_search`, `web_fetch`, `todo_write`, `skill`, `context_browse`, `context_load`, `context_note` | tools always declared; unregistered names are absent, and the two tree tools are always added |
 | `maxBrowseDepth` | 3 | deepest level one browse can list |
 | `maxBrowseNodes` | 64 | nodes in one listing |
 | `maxBrowseBytes` | 8192 | rendered bytes of one listing |
@@ -72,6 +80,8 @@ Every field has a default.
 | `maxLoadBytes` | 32768 | section bytes one load adds |
 | `maxActivatedTools` | 32 | tools one load can activate |
 | `maxSummaryBytes` | 160 | bytes of a node summary |
+| `maxDroppedBytes` | 1024 | bytes of the revoked-section list a republished catalog keeps across later compactions |
+| `coreBytes` | 4096 | section bytes an eager core provider may grant at the start of a conversation |
 
 An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`.
 
@@ -144,10 +154,11 @@ Append-only growth until compaction, which replaces earlier request tokens as it
 - **Skills are not in the tree** — `skill` stays a base tool.
 - **Compaction request** — the request that compacts still declares activated tools; declarations drop on the next step. Fixing it needs the tool set to resolve after the compaction pre-step.
 - **Later compactions** — a second compaction summarizes the first checkpoint, so earlier revocation stubs fold into the summary.
-- **Duplicate grants** — a section loaded twice before its first grant is logged is granted twice.
+- **Duplicate grants** — a section whose grant is queued or claimed but not yet logged counts as loaded, so a second load in that window is not granted twice.
 - **Subagents** — a subagent starts with the base tools; activations are not inherited.
 - **Refresh cost** — the context index re-stats instruction and documentation files on every step.
-- **No curator** — regrouping tools by a model is deferred; `registerToolPlacement` is its seam.
+- **Dropped sections** — compaction folds earlier revocation stubs into its summary on a second compaction. The tree keeps its own list of revoked sections in projection state (bounded by `maxDroppedBytes`) and republishes it with the catalog, which mitigates but does not fix this; the fix belongs to compaction.
+- **Curator** — the context map provides the curator; with none mounted the tree behaves as before.
 
 <a id="dev-note"></a>
 ### Dev Note

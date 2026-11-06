@@ -715,6 +715,20 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Publishes a browsable tree of instructions, sources, and tools; loads sections as revocable grants, activates hidden tools through a tool admission policy, and derives both from the Session log through a projection.',
   },
   {
+    key: 'contextMap',
+    pkg: 'experimental-context-map',
+    title: 'Agent-maintained project map',
+    mode: 'service',
+    note: 'Keeps a durable, citation-checked grouping of context sections and tools that only the curator role holder edits, records short notes the working agent files, and feeds the context tree its groups and eager core.',
+  },
+  {
+    key: 'contextCurator',
+    pkg: 'experimental-context-map',
+    title: 'Background project map curator',
+    mode: 'service',
+    note: 'Claims the curator role for a subagent on a cheaper model route when the index changes or a note is filed, bounds each run, and yields the role to any other holder without letting its transcript enter the working Session.',
+  },
+  {
     key: 'agentPresets',
     pkg: 'agent-preset-registry',
     title: 'Per-session agent composition',

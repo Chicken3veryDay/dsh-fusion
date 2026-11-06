@@ -877,6 +877,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'contextCurator',
+    summary: 'Background default curator; mount `DefaultContextCurator` beside `ContextMapService`.',
+    description: 'Background default curator; mount `DefaultContextCurator` beside `ContextMapService`.',
+    methods: [
+      {
+        signature: 'isRunning(ownerId: SessionId): boolean',
+        description: 'Whether a run is active for a map owner.',
+        parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
+        returns: 'true while a run holds or is acquiring the role.',
+      },
+      {
+        signature: 'failureOf(ownerId: SessionId): ContextMapError | undefined',
+        description: 'The failure that kept the last start from running, such as no cheap route.',
+        parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
+        returns: 'the failure, or undefined after a successful start or before any trigger.',
+      },
+      {
+        signature: 'async idle(ownerId: SessionId): Promise<void>',
+        description: 'Wait for the active run of an owner, if any, to settle.',
+        parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
+      },
+    ],
+  },
+  {
     key: 'contextIndex',
     summary: 'Service that indexes instruction and documentation sources per working directory.',
     description: 'Service that indexes instruction and documentation sources per working directory.',
@@ -905,6 +929,129 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'contextMap',
+    summary: 'Service that keeps the project map and enforces the curator role.',
+    description: 'Service that keeps the project map and enforces the curator role.',
+    methods: [
+      {
+        signature: 'watch(listener: (change: MapChange) => void): () => void',
+        description: 'Be told when a map is committed, its index moves on, a note is filed, or a holder disappears.',
+        parameters: [{ name: 'listener', description: 'called synchronously after the change is visible; must not throw.' }],
+        returns: 'the disposer.',
+      },
+      {
+        signature: 'isCurator(agent: Agent): boolean',
+        description: 'Whether an agent holds the curator role of its map right now.',
+        parameters: [{ name: 'agent', description: 'the agent.' }],
+        returns: 'true only for the live holder.',
+      },
+      {
+        signature: 'curatorOf(owner: Agent): SessionId | null',
+        description: 'The holder of an owner\'s curator role.',
+        parameters: [{ name: 'owner', description: 'the map owner.' }],
+        returns: 'the holder id, or `null`; the holder may no longer be live.',
+      },
+      {
+        signature: 'hasLiveCurator(owner: Agent): boolean',
+        description: 'Whether the holder recorded for an owner is a live agent.',
+        parameters: [{ name: 'owner', description: 'the map owner.' }],
+        returns: 'true when a live agent holds the role.',
+      },
+      {
+        signature: 'snapshotOf(owner: Agent): MapSnapshot',
+        description: 'Read the current snapshot of an owner\'s map.',
+        parameters: [{ name: 'owner', description: 'the map owner.' }],
+        returns: 'a detached snapshot; revision 0 when nothing was committed.',
+      },
+      {
+        signature: 'async view(caller: Agent, target: MapTarget = {}, signal?: AbortSignal): Promise<MapView>',
+        description: 'Read a map as a member of its Session lineage: the owner, a direct child, or the holder.',
+        parameters: [{ name: 'caller', description: 'the exact live agent.' }, { name: 'target', description: 'which map; defaults to the caller\'s own root.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'a view within `maxViewBytes`, with stale notes flagged.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder.'],
+      },
+      {
+        signature: 'async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Take the curator role for an agent. The previous holder, live or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool calls it.',
+        parameters: [{ name: 'caller', description: 'the exact live agent; the holder, or the map owner naming another holder.' }, { name: 'request', description: 'target map, holder, and route.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.'],
+      },
+      {
+        signature: 'async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>',
+        description: 'Give up the curator role. The holder or the map owner may release it.',
+        parameters: [{ name: 'caller', description: 'the exact live holder or the owner.' }, { name: 'target', description: 'which map.' }],
+        returns: 'the committed snapshot, or the current one when nobody held the role.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.'],
+      },
+      {
+        signature: 'async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }>',
+        description: 'Record a short fact for the curator to verify and file. Any member of the lineage may; the working agent\'s context carries only this call and its one-line answer.',
+        parameters: [{ name: 'caller', description: 'the exact live agent.' }, { name: 'request', description: 'the text and optional citations.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the pending note id and how many notes now wait.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait.'],
+      },
+      {
+        signature: 'setGroup(caller: Agent, request: SetGroupRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Create or replace a group.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the group.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} for a stale revision, a bad path or member, a duplicate, or an exceeded bound.'],
+      },
+      {
+        signature: 'mergeGroups(caller: Agent, request: MergeGroupsRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Merge one group into another: members and notes move, the source group is retired.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the two group ids.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+      },
+      {
+        signature: 'retireGroup(caller: Agent, request: RetireGroupRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Remove a group and its notes.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the group id.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+      },
+      {
+        signature: 'addNote(caller: Agent, request: AddNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'File a new note under a group. A note needs at least one citation.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, group, text, and citations.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} for no citation, a citation of a note, or an unknown section.'],
+      },
+      {
+        signature: 'verifyNote(caller: Agent, request: VerifyNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Re-verify a note against the current sources: its citations take the current hashes, which clears the stale flag. The curator is asserting that it re-read the sources.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, note id, and optionally corrected text.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_NOT_FOUND` when a cited section is gone.'],
+      },
+      {
+        signature: 'retireNote(caller: Agent, request: RetireNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Remove a note.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the note id.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+      },
+      {
+        signature: 'filePending(caller: Agent, request: FilePendingRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'File a pending note under a group. Section citations whose text changed since the author wrote the note are dropped, so the curator must cite fresh sources it checked; the filed note still needs at least one citation.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, pending id, group, and optional text and extra citations.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+      },
+      {
+        signature: 'dropPending(caller: Agent, request: DropPendingRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Discard a pending note without filing it.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the pending id.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+      },
+      {
+        signature: 'setCore(caller: Agent, request: SetCoreRequest, signal?: AbortSignal): Promise<MapSnapshot>',
+        description: 'Choose the sections that are granted up front. The tree grants them within its own byte budget.',
+        parameters: [{ name: 'caller', description: 'the exact live curator.' }, { name: 'request', description: 'revision, target, and the section ids in priority order.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'the committed snapshot.',
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_LIMIT` for more than `maxCoreSections` sections.'],
+      },
+    ],
+  },
+  {
     key: 'contextTree',
     summary: 'Service that builds the context tree and loads from it.',
     description: 'Service that builds the context tree and loads from it.',
@@ -920,6 +1067,24 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'registerToolPlacement(assigner: ToolPlacementAssigner): () => Promise<void>',
         description: 'Decide where tools appear in the tree. Assigners run in registration order and the first opinion wins; tools nobody places go under Global, grouped by name. A later curator registers here to regroup tools.',
         parameters: [{ name: 'assigner', description: 'decision for one tool; must be pure and cheap, because it runs on every browse and step.' }],
+        returns: 'the disposer.',
+      },
+      {
+        signature: 'registerCuratedGroups(provider: CuratedGroupProvider): () => Promise<void>',
+        description: 'Let a curator place sections and tools in the tree. Groups apply to the agent the provider is asked about; sections in a group leave their file node and tools in a group are placed by the same first-opinion-wins rule as registerToolPlacement, ahead of the other assigners.',
+        parameters: [{ name: 'provider', description: 'the groups for one agent; must be pure and cheap, because it runs on every browse and step.' }],
+        returns: 'the disposer.',
+      },
+      {
+        signature: 'registerEagerCore(provider: EagerCoreProvider): () => Promise<void>',
+        description: 'Name sections that are granted before a step and again after each compaction, within the `coreBytes` budget. Sections the conversation already holds are not granted twice.',
+        parameters: [{ name: 'provider', description: 'the section ids for one agent, in priority order.' }],
+        returns: 'the disposer.',
+      },
+      {
+        signature: 'registerManagedTools(names: Iterable<string>, admit: (agent: Agent) => boolean): () => Promise<void>',
+        description: 'Take tools out of the tree and admit them by a role check instead of by loading. The named tools never appear as nodes, and the admission policy keeps them for agents `admit` accepts. The registrant stays responsible for refusing other callers when the tool runs.',
+        parameters: [{ name: 'names', description: 'tool names the registrant owns.' }, { name: 'admit', description: 'whether the agent may see the tools on this step.' }],
         returns: 'the disposer.',
       },
       {
@@ -6107,6 +6272,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
   {
+    name: 'AddNoteRequest',
+    declaration: 'export interface AddNoteRequest extends CurateRequest {\n    readonly groupId: MapGroupId;\n    readonly text: string;\n    readonly cites: readonly string[];\n}',
+  },
+  {
     name: 'AddWorkstreamMemberRequest',
     declaration: 'export interface AddWorkstreamMemberRequest {\n    readonly operationId: WorkstreamOperationId;\n    readonly name: string;\n    readonly description: string;\n    readonly provider: string;\n    readonly prompt: string;\n    readonly signal: AbortSignal;\n}',
   },
@@ -6531,6 +6700,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ClaimOutcome {\n    readonly claimed: number;\n    readonly skipped: number;\n}',
   },
   {
+    name: 'ClaimRequest',
+    declaration: 'export interface ClaimRequest extends MapTarget {\n    readonly holderId?: SessionId;\n    readonly route?: MapRoute;\n}',
+  },
+  {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly ctimeMs: number;\n    readonly size: number;\n}',
   },
@@ -6755,6 +6928,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ContextLoadResult {\n    readonly granted: readonly ContextGrantedSection[];\n    readonly activated: readonly ContextActivation[];\n    readonly alreadyLoaded: readonly string[];\n    readonly alreadyActive: readonly string[];\n    readonly missing: readonly string[];\n    readonly omittedSections: readonly string[];\n    readonly omittedTools: readonly string[];\n}',
   },
   {
+    name: 'ContextMapError',
+    declaration: 'export class ContextMapError extends Error {\n    constructor(message: string, readonly code: ContextMapErrorCode, options?: ErrorOptions);\n}',
+  },
+  {
+    name: 'ContextMapErrorCode',
+    declaration: 'export type ContextMapErrorCode = \'CONTEXT_MAP_INVALID_CONFIG\' | \'CONTEXT_MAP_INVALID_INPUT\' | \'CONTEXT_MAP_UNAUTHORIZED\' | \'CONTEXT_MAP_CONFLICT\' | \'CONTEXT_MAP_LIMIT\' | \'CONTEXT_MAP_NOT_FOUND\' | \'CONTEXT_MAP_NO_CHEAP_ROUTE\' | \'CONTEXT_MAP_DISPOSED\';',
+  },
+  {
     name: 'ContextNodeKind',
     declaration: 'export type ContextNodeKind = \'folder\' | \'source\' | \'section\' | \'tool-group\' | \'tool\';',
   },
@@ -6777,6 +6958,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ContextReadResult',
     declaration: 'export interface ContextReadResult {\n    readonly revision: number;\n    readonly sections: readonly ContextSectionBody[];\n    readonly missing: readonly ContextSectionId[];\n    readonly omitted: readonly ContextSectionId[];\n    readonly usedBytes: number;\n    readonly maxBytes: number;\n    readonly diagnostics: readonly ContextDiagnostic[];\n}',
+  },
+  {
+    name: 'ContextRoot',
+    declaration: 'export type ContextRoot = \'Instructions\' | \'Sources\' | \'Tools\';',
   },
   {
     name: 'ContextSectionBody',
@@ -6987,6 +7172,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CuaSystemPermissionState {\n    accessibility: boolean;\n    screenRecording: boolean;\n    helper: CuaPermissionProcess;\n    parent: CuaPermissionProcess;\n    launchApplication?: {\n        name: string;\n        path: string;\n        icon?: string | undefined;\n    } | undefined;\n}',
   },
   {
+    name: 'CuratedGroup',
+    declaration: 'export interface CuratedGroup {\n    readonly root: ContextRoot;\n    readonly origin: ContextOrigin;\n    readonly name: string;\n    readonly title: string;\n    readonly summary: string;\n    readonly sections: readonly ContextSectionId[];\n    readonly tools: readonly string[];\n}',
+  },
+  {
+    name: 'CuratedGroupProvider',
+    declaration: 'export type CuratedGroupProvider = (agent: Agent) => readonly CuratedGroup[];',
+  },
+  {
+    name: 'CurateRequest',
+    declaration: 'export interface CurateRequest extends MapTarget {\n    readonly expectedRevision: number;\n}',
+  },
+  {
     name: 'DailyInput',
     declaration: 'export interface DailyInput {\n    readonly time: string;\n    readonly time_zone: string;\n}',
   },
@@ -7123,6 +7320,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface DormantDelivery {\n    admitUser(input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>;\n    admitPeer(sender: Agent, input: TextDelivery, signal?: AbortSignal): Promise<DeliveryReceipt>;\n    reconcile(): Promise<void>;\n    snapshot(): AdmissionSnapshot;\n}',
   },
   {
+    name: 'DropPendingRequest',
+    declaration: 'export interface DropPendingRequest extends CurateRequest {\n    readonly pendingId: MapPendingId;\n}',
+  },
+  {
     name: 'DshEnvironment',
     declaration: 'export type DshEnvironment = Readonly<Record<DshEnvironmentKey, string>>;',
   },
@@ -7145,6 +7346,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DynamicCordisRunRequest',
     declaration: 'export interface DynamicCordisRunRequest {\n    requestId: ApprovalRequestId;\n    agentId: SessionId;\n    pluginId: CordisDynamicPluginId;\n    packageId: CordisDynamicPackageId;\n    mode: CordisDynamicRunMode;\n    name: string;\n    purpose: string;\n    requiresApproval: boolean;\n}',
+  },
+  {
+    name: 'EagerCoreProvider',
+    declaration: 'export type EagerCoreProvider = (agent: Agent) => readonly ContextSectionId[];',
   },
   {
     name: 'EditGoalRequest',
@@ -7257,6 +7462,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FileLocation',
     declaration: 'export interface FileLocation {\n    path: string;\n    line?: number;\n}',
+  },
+  {
+    name: 'FilePendingRequest',
+    declaration: 'export interface FilePendingRequest extends CurateRequest {\n    readonly pendingId: MapPendingId;\n    readonly groupId: MapGroupId;\n    readonly text?: string;\n    readonly cites?: readonly string[];\n}',
   },
   {
     name: 'FileReferenceCandidate',
@@ -7979,6 +8188,66 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ManualCompactAgentContext extends CompactionAgentContext {\n    runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T>;\n}',
   },
   {
+    name: 'MapChange',
+    declaration: 'export interface MapChange {\n    readonly kind: \'committed\' | \'index-changed\' | \'note-filed\' | \'holder-gone\';\n    readonly ownerSessionId: SessionId;\n    readonly holderId?: SessionId;\n}',
+  },
+  {
+    name: 'MapCite',
+    declaration: 'export type MapCite = {\n    readonly kind: \'section\';\n    readonly id: ContextSectionId;\n    readonly hash: string;\n} | {\n    readonly kind: \'evidence\';\n    readonly ref: string;\n};',
+  },
+  {
+    name: 'MapGroup',
+    declaration: 'export interface MapGroup {\n    readonly id: MapGroupId;\n    readonly path: string;\n    readonly title: string;\n    readonly summary: string;\n    readonly sections: readonly ContextSectionId[];\n    readonly tools: readonly string[];\n    readonly notes: readonly MapNote[];\n}',
+  },
+  {
+    name: 'MapGroupId',
+    declaration: 'export type MapGroupId = Branded<\'ContextMapGroupId\'>;',
+  },
+  {
+    name: 'MapGroupRequest',
+    declaration: 'export interface MapGroupRequest {\n    readonly groupId?: MapGroupId;\n    readonly path: string;\n    readonly title: string;\n    readonly summary: string;\n    readonly sections?: readonly string[];\n    readonly tools?: readonly string[];\n}',
+  },
+  {
+    name: 'MapGroupView',
+    declaration: 'export interface MapGroupView extends Omit<MapGroup, \'notes\'> {\n    readonly notes: readonly MapNoteView[];\n}',
+  },
+  {
+    name: 'MapNote',
+    declaration: 'export interface MapNote {\n    readonly id: MapNoteId;\n    readonly text: string;\n    readonly cites: readonly MapCite[];\n}',
+  },
+  {
+    name: 'MapNoteId',
+    declaration: 'export type MapNoteId = Branded<\'ContextMapNoteId\'>;',
+  },
+  {
+    name: 'MapNoteView',
+    declaration: 'export interface MapNoteView extends MapNote {\n    readonly stale: boolean;\n}',
+  },
+  {
+    name: 'MapPendingId',
+    declaration: 'export type MapPendingId = Branded<\'ContextMapPendingId\'>;',
+  },
+  {
+    name: 'MapPendingNote',
+    declaration: 'export interface MapPendingNote {\n    readonly id: MapPendingId;\n    readonly text: string;\n    readonly cites: readonly MapCite[];\n    readonly by: SessionId;\n}',
+  },
+  {
+    name: 'MapRoute',
+    declaration: 'export interface MapRoute {\n    readonly provider: string;\n    readonly model: string;\n    readonly reasoningEffort?: string;\n}',
+  },
+  {
+    name: 'MapSnapshot',
+    declaration: 'export interface MapSnapshot {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly route: MapRoute | null;\n    readonly indexDigest: string | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroup[];\n    readonly pending: readonly MapPendingNote[];\n}',
+  },
+  {
+    name: 'MapTarget',
+    declaration: 'export interface MapTarget {\n    readonly rootSessionId?: SessionId;\n}',
+  },
+  {
+    name: 'MapView',
+    declaration: 'export interface MapView {\n    readonly ownerSessionId: SessionId;\n    readonly revision: number;\n    readonly curatorId: SessionId | null;\n    readonly core: readonly ContextSectionId[];\n    readonly groups: readonly MapGroupView[];\n    readonly omittedGroups: number;\n    readonly pending: readonly MapPendingNote[];\n    readonly staleNotes: number;\n    readonly indexChanged: boolean;\n}',
+  },
+  {
     name: 'MarketCompatibility',
     declaration: 'export type MarketCompatibility = {\n    readonly compatible: true;\n} | {\n    readonly compatible: false;\n    readonly runtimeVersion: string;\n    readonly requirements: Readonly<Record<string, string>>;\n    readonly exempted: boolean;\n};',
   },
@@ -8073,6 +8342,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'Mergeability',
     declaration: 'export type Mergeability = \'mergeable\' | \'conflicting\' | \'unknown\';',
+  },
+  {
+    name: 'MergeGroupsRequest',
+    declaration: 'export interface MergeGroupsRequest extends CurateRequest {\n    readonly from: MapGroupId;\n    readonly into: MapGroupId;\n}',
   },
   {
     name: 'MergeMethod',
@@ -8269,6 +8542,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'NativeFileApplication',
     declaration: 'export interface NativeFileApplication {\n    readonly id: string;\n    readonly name: string;\n    readonly default: boolean;\n    readonly icon: string | null;\n}',
+  },
+  {
+    name: 'NoteRequest',
+    declaration: 'export interface NoteRequest extends MapTarget {\n    readonly text: string;\n    readonly cites?: readonly string[];\n}',
   },
   {
     name: 'NpmFileSource',
@@ -8981,6 +9258,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RetainedAgentSession',
     declaration: 'export interface RetainedAgentSession {\n    readonly session: Session;\n    adopt(): Promise<AgentHandle>;\n    dispose(): Promise<void>;\n}',
+  },
+  {
+    name: 'RetireGroupRequest',
+    declaration: 'export interface RetireGroupRequest extends CurateRequest {\n    readonly groupId: MapGroupId;\n}',
+  },
+  {
+    name: 'RetireNoteRequest',
+    declaration: 'export interface RetireNoteRequest extends CurateRequest {\n    readonly noteId: MapNoteId;\n}',
   },
   {
     name: 'ReviewDecision',
@@ -9865,6 +10150,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionWriterReservation',
     declaration: 'export interface SessionWriterReservation {\n    readonly signal: AbortSignal;\n    checkDispatch(): {\n        readonly kind: \'refused\';\n        readonly reason: WriterLifetimeReason;\n    } | undefined;\n    flushDurably(): Promise<WriterLifetimeFlush>;\n    release(): Promise<WriterLifetimeFlush>;\n}',
+  },
+  {
+    name: 'SetCoreRequest',
+    declaration: 'export interface SetCoreRequest extends CurateRequest {\n    readonly sections: readonly string[];\n}',
+  },
+  {
+    name: 'SetGroupRequest',
+    declaration: 'export interface SetGroupRequest extends CurateRequest {\n    readonly group: MapGroupRequest;\n}',
   },
   {
     name: 'SetRelayRequest',
@@ -11157,6 +11450,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'VerifiedWebhookDelivery',
     declaration: 'export interface VerifiedWebhookDelivery<K extends string = string> {\n    readonly kind: K;\n    readonly source: WebhookSourceId;\n    readonly deliveryId: WebhookDeliveryId;\n    readonly event: WebhookEventOf<K>;\n    readonly receivedAt: number;\n}',
+  },
+  {
+    name: 'VerifyNoteRequest',
+    declaration: 'export interface VerifyNoteRequest extends CurateRequest {\n    readonly noteId: MapNoteId;\n    readonly text?: string;\n}',
   },
   {
     name: 'WebBootBatch',

@@ -210,6 +210,9 @@ flowchart LR
   svc_contextIndex["ctx.contextIndex<br/>Instruction and documentation section index"]
   pkg_experimental_context_tree["experimental-context-tree"]
   svc_contextTree["ctx.contextTree<br/>On-demand context tree"]
+  pkg_experimental_context_map["experimental-context-map"]
+  svc_contextMap["ctx.contextMap<br/>Agent-maintained project map"]
+  svc_contextCurator["ctx.contextCurator<br/>Background project map curator"]
   pkg_agent_preset_registry["agent-preset-registry"]
   svc_agentPresets["ctx.agentPresets<br/>Per-session agent composition"]
   pkg_commands["commands"]
@@ -395,6 +398,8 @@ flowchart LR
   pkg_experimental_computer_use_cua_driver_mcp --> svc_interaction
   pkg_experimental_computer_use_cua_driver_native --> svc_computerUse
   pkg_experimental_context_index --> svc_contextIndex
+  pkg_experimental_context_map --> svc_contextCurator
+  pkg_experimental_context_map --> svc_contextMap
   pkg_experimental_context_tree --> svc_contextTree
   pkg_experimental_forge --> svc_forge
   pkg_experimental_forge_github --> svc_forge
@@ -763,6 +768,8 @@ flowchart LR
 | `ctx.workstreamEvidence` | `core` | [`experimental-workstream-evidence`](../packages/experimental/workstream-evidence) | - | - | - | Owns content-addressed evidence versions with digest-verified reads, context packets built from retained versions, and read-only aggregation of member change requests. |
 | `ctx.contextIndex` | `service` | [`experimental-context-index`](../packages/experimental/context-index) | - | - | - | Splits instruction files and documentation into sections with stable ids, content hashes, and anchors, and renders bounded catalogs and section reads through ctx.fs. |
 | `ctx.contextTree` | `service` | [`experimental-context-tree`](../packages/experimental/context-tree) | - | - | - | Publishes a browsable tree of instructions, sources, and tools; loads sections as revocable grants, activates hidden tools through a tool admission policy, and derives both from the Session log through a projection. |
+| `ctx.contextMap` | `service` | [`experimental-context-map`](../packages/experimental/context-map) | - | - | - | Keeps a durable, citation-checked grouping of context sections and tools that only the curator role holder edits, records short notes the working agent files, and feeds the context tree its groups and eager core. |
+| `ctx.contextCurator` | `service` | [`experimental-context-map`](../packages/experimental/context-map) | - | - | - | Claims the curator role for a subagent on a cheaper model route when the index changes or a note is filed, bounds each run, and yields the role to any other holder without letting its transcript enter the working Session. |
 | `ctx.agentPresets` | `core` | [`agent-preset-registry`](../packages/preset/agent-preset-registry) | - | - | - | Eagerly mounts YAML-declared preset revisions, binds Agents and cold readers to scoped contributions, and retains retired revisions until their last user releases them. |
 | `ctx.commands` | `core` | [`commands`](../packages/interaction/commands) | - | - | - | Plugins register direct human commands without sending invocations to the model. |
 | `ctx.sessionProjections` | `core` | [`session-projection`](../packages/session/session-projection) | - | [`api-session-controller`](../packages/api/session-controller), [`tool-todo`](../packages/todo/tool-todo), [`session-title`](../packages/session/session-title) | - | Domains register state-driven fold units; the eager drive keeps per-session watermark states and the Session controller serves baselines and pushes changed values. |

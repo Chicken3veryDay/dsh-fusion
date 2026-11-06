@@ -881,6 +881,36 @@ Types: [Session](session.md)
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="ctxcontextcurator--defaultcontextcurator"></a>
+
+### `ctx.contextCurator` — `DefaultContextCurator`
+
+Background default curator; mount `DefaultContextCurator` beside `ContextMapService`.
+
+```ts cordis-catalog
+/**
+ * Whether a run is active for a map owner.
+ * @param ownerId - the map owner's Session id.
+ * @returns true while a run holds or is acquiring the role.
+ */
+isRunning(ownerId: SessionId): boolean
+
+/**
+ * The failure that kept the last start from running, such as no cheap route.
+ * @param ownerId - the map owner's Session id.
+ * @returns the failure, or undefined after a successful start or before any trigger.
+ */
+failureOf(ownerId: SessionId): ContextMapError | undefined
+
+/**
+ * Wait for the active run of an owner, if any, to settle.
+ * @param ownerId - the map owner's Session id.
+ */
+async idle(ownerId: SessionId): Promise<void>
+```
+
+Source: [`packages/experimental/context-map/src/curator.ts`](../../packages/experimental/context-map/src/curator.ts)
+
 <a id="ctxcontextindex--contextindexservice"></a>
 
 ### `ctx.contextIndex` — `ContextIndexService`
@@ -925,6 +955,180 @@ renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBud
 
 Source: [`packages/experimental/context-index/src/index.ts`](../../packages/experimental/context-index/src/index.ts)
 
+<a id="ctxcontextmap--contextmapservice"></a>
+
+### `ctx.contextMap` — `ContextMapService`
+
+Service that keeps the project map and enforces the curator role.
+
+```ts cordis-catalog
+/**
+ * Be told when a map is committed, its index moves on, a note is filed, or a holder disappears.
+ * @param listener - called synchronously after the change is visible; must not throw.
+ * @returns the disposer.
+ */
+watch(listener: (change: MapChange) => void): () => void
+
+/**
+ * Whether an agent holds the curator role of its map right now.
+ * @param agent - the agent.
+ * @returns true only for the live holder.
+ */
+isCurator(agent: Agent): boolean
+
+/**
+ * The holder of an owner's curator role.
+ * @param owner - the map owner.
+ * @returns the holder id, or `null`; the holder may no longer be live.
+ */
+curatorOf(owner: Agent): SessionId | null
+
+/**
+ * Whether the holder recorded for an owner is a live agent.
+ * @param owner - the map owner.
+ * @returns true when a live agent holds the role.
+ */
+hasLiveCurator(owner: Agent): boolean
+
+/**
+ * Read the current snapshot of an owner's map.
+ * @param owner - the map owner.
+ * @returns a detached snapshot; revision 0 when nothing was committed.
+ */
+snapshotOf(owner: Agent): MapSnapshot
+
+/**
+ * Read a map as a member of its Session lineage: the owner, a direct child, or the holder.
+ * @param caller - the exact live agent.
+ * @param target - which map; defaults to the caller's own root.
+ * @param signal - cancellation.
+ * @returns a view within `maxViewBytes`, with stale notes flagged.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for a caller outside the lineage and not the holder.
+ */
+async view(caller: Agent, target: MapTarget = {}, signal?: AbortSignal): Promise<MapView>
+
+/**
+ * Take the curator role for an agent. The previous holder, live or not, is replaced and the
+ * handoff is logged. This is a plugin-level operation: no model tool calls it.
+ * @param caller - the exact live agent; the holder, or the map owner naming another holder.
+ * @param request - target map, holder, and route.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.
+ */
+async claim(caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Give up the curator role. The holder or the map owner may release it.
+ * @param caller - the exact live holder or the owner.
+ * @param target - which map.
+ * @returns the committed snapshot, or the current one when nobody held the role.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.
+ */
+async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>
+
+/**
+ * Record a short fact for the curator to verify and file. Any member of the lineage may; the
+ * working agent's context carries only this call and its one-line answer.
+ * @param caller - the exact live agent.
+ * @param request - the text and optional citations.
+ * @param signal - cancellation.
+ * @returns the pending note id and how many notes now wait.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait.
+ */
+async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }>
+
+/**
+ * Create or replace a group.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the group.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} for a stale revision, a bad path or member, a duplicate, or an exceeded bound.
+ */
+setGroup(caller: Agent, request: SetGroupRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Merge one group into another: members and notes move, the source group is retired.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the two group ids.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ */
+mergeGroups(caller: Agent, request: MergeGroupsRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Remove a group and its notes.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the group id.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ */
+retireGroup(caller: Agent, request: RetireGroupRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * File a new note under a group. A note needs at least one citation.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, group, text, and citations.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} for no citation, a citation of a note, or an unknown section.
+ */
+addNote(caller: Agent, request: AddNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Re-verify a note against the current sources: its citations take the current hashes, which
+ * clears the stale flag. The curator is asserting that it re-read the sources.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, note id, and optionally corrected text.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_NOT_FOUND` when a cited section is gone.
+ */
+verifyNote(caller: Agent, request: VerifyNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Remove a note.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the note id.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ */
+retireNote(caller: Agent, request: RetireNoteRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * File a pending note under a group. Section citations whose text changed since the author wrote
+ * the note are dropped, so the curator must cite fresh sources it checked; the filed note still
+ * needs at least one citation.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, pending id, group, and optional text and extra citations.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ */
+filePending(caller: Agent, request: FilePendingRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Discard a pending note without filing it.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the pending id.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ */
+dropPending(caller: Agent, request: DropPendingRequest, signal?: AbortSignal): Promise<MapSnapshot>
+
+/**
+ * Choose the sections that are granted up front. The tree grants them within its own byte budget.
+ * @param caller - the exact live curator.
+ * @param request - revision, target, and the section ids in priority order.
+ * @param signal - cancellation.
+ * @returns the committed snapshot.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` for more than `maxCoreSections` sections.
+ */
+setCore(caller: Agent, request: SetCoreRequest, signal?: AbortSignal): Promise<MapSnapshot>
+```
+
+Source: [`packages/experimental/context-map/src/index.ts`](../../packages/experimental/context-map/src/index.ts)
+
 <a id="ctxcontexttree--contexttreeservice"></a>
 
 ### `ctx.contextTree` — `ContextTreeService`
@@ -949,6 +1153,33 @@ registerToolGroup(hint: ToolGroupHint): () => Promise<void>
  * @returns the disposer.
  */
 registerToolPlacement(assigner: ToolPlacementAssigner): () => Promise<void>
+
+/**
+ * Let a curator place sections and tools in the tree. Groups apply to the agent the provider is
+ * asked about; sections in a group leave their file node and tools in a group are placed by the
+ * same first-opinion-wins rule as {@link registerToolPlacement}, ahead of the other assigners.
+ * @param provider - the groups for one agent; must be pure and cheap, because it runs on every browse and step.
+ * @returns the disposer.
+ */
+registerCuratedGroups(provider: CuratedGroupProvider): () => Promise<void>
+
+/**
+ * Name sections that are granted before a step and again after each compaction, within the
+ * `coreBytes` budget. Sections the conversation already holds are not granted twice.
+ * @param provider - the section ids for one agent, in priority order.
+ * @returns the disposer.
+ */
+registerEagerCore(provider: EagerCoreProvider): () => Promise<void>
+
+/**
+ * Take tools out of the tree and admit them by a role check instead of by loading. The named
+ * tools never appear as nodes, and the admission policy keeps them for agents `admit` accepts.
+ * The registrant stays responsible for refusing other callers when the tool runs.
+ * @param names - tool names the registrant owns.
+ * @param admit - whether the agent may see the tools on this step.
+ * @returns the disposer.
+ */
+registerManagedTools(names: Iterable<string>, admit: (agent: Agent) => boolean): () => Promise<void>
 
 /**
  * Whether a tool is always exposed.

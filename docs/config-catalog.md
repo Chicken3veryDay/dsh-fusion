@@ -1157,13 +1157,55 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-index -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-map -->
+<a id="deepseek-aidsh-experimental-context-map"></a>
+
+## `@deepseek-ai/dsh-experimental-context-map`
+
+- `inject`: `agents` · `sessions` · `sessionProjections` · `contextIndex` · `contextTree` · `workingDirectory`
+- `source`: [`packages/experimental/context-map/src/types.ts:158`](../packages/experimental/context-map/src/types.ts)
+
+```ts config-catalog
+/**
+ * Project map configuration. Every field has a working default, so no configuration is required;
+ * a value that cannot work makes the service fail at mount.
+ */
+export interface Config {
+  /** Most groups one map holds (default 32). */
+  maxGroups?: number
+  /** Most sections plus tools one group holds (default 32). */
+  maxGroupMembers?: number
+  /** Most filed notes one group holds (default 8). */
+  maxNotesPerGroup?: number
+  /** Most citations one note carries (default 4). */
+  maxCitesPerNote?: number
+  /** Longest note text in UTF-8 bytes (default 400). */
+  maxNoteBytes?: number
+  /** Longest evidence reference in UTF-8 bytes (default 200). */
+  maxEvidenceBytes?: number
+  /** Most notes waiting to be filed (default 16). */
+  maxPendingNotes?: number
+  /** Longest group title in UTF-8 bytes (default 80). */
+  maxTitleBytes?: number
+  /** Longest group summary in UTF-8 bytes (default 160). */
+  maxSummaryBytes?: number
+  /** Most sections in the eager core (default 8). */
+  maxCoreSections?: number
+  /** UTF-8 bytes of one logged map snapshot (default 65,536). */
+  maxSnapshotBytes?: number
+  /** UTF-8 bytes of one rendered view (default 8,192). */
+  maxViewBytes?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-map -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-tree -->
 <a id="deepseek-aidsh-experimental-context-tree"></a>
 
 ## `@deepseek-ai/dsh-experimental-context-tree`
 
 - `inject`: `tools` · `compaction` · `contextIndex` · `sessionProjections` · `workingDirectory`
-- `source`: [`packages/experimental/context-tree/src/types.ts:182`](../packages/experimental/context-tree/src/types.ts)
+- `source`: [`packages/experimental/context-tree/src/types.ts:219`](../packages/experimental/context-tree/src/types.ts)
 
 ```ts config-catalog
 /**
@@ -1187,6 +1229,10 @@ export interface Config {
   maxActivatedTools?: number
   /** Longest summary line a node shows, in UTF-8 bytes (default 160). */
   maxSummaryBytes?: number
+  /** UTF-8 bytes of the dropped-by-compaction list a republished catalog carries (default 1,024). */
+  maxDroppedBytes?: number
+  /** UTF-8 bytes of eager-core section text granted before the first step and after each compaction (default 4,096). */
+  coreBytes?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-context-tree -->
