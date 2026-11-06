@@ -21,6 +21,7 @@ import WorkstreamEvidenceService from '@deepseek-ai/dsh-experimental-workstream-
 import { MockAdapter } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/working-directory-fixture.ts'
 import { TestSessionQuery } from '../../agent-team/tests/test-session-query.ts'
+import { ticketActor } from '../../ticket/tests/ticket-actor.ts'
 import WorkstreamPanelController from '../src/index.ts'
 
 const contexts: Context[] = []
@@ -60,12 +61,12 @@ async function setup() {
   const owner = await ctx.agentLoop.create(SessionId('owner'), { provider: 'mock', model: 'mock' })
   await ctx.workstreams.open(owner, { operationId: WorkstreamOperationId('open'), title: 'Release' })
   const created = await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Ship', description: 'Ship the release' })
-  const asked = await ctx.tickets.ask(owner.session, {
+  const asked = await ticketActor(ctx, owner.id, () => ctx.tickets.ask(owner.session, {
     ticketId: created.id, expectedRevision: created.revision, actorId: owner.id, question: 'Which branch?',
-  })
-  const ticket = await ctx.tickets.attention(owner.session, {
+  }))
+  const ticket = await ticketActor(ctx, owner.id, () => ctx.tickets.attention(owner.session, {
     ticketId: asked.id, expectedRevision: asked.revision, actorId: owner.id, kind: 'decision', message: 'Pick a date',
-  })
+  }))
   return { ctx, owner, ticket, question: ticket.questions[0]!.id, attention: ticket.attentions[0]!.id }
 }
 
@@ -117,9 +118,11 @@ it('a member can close its own question on the root log, and stopped membership 
   })
   const child = ctx.agents.get(member.id)!
   // Ask as a participant of a Ticket coordinated by this child, then close through its live membership.
-  const created = await ctx.tickets.create(owner.session, { subject: 'Child question', description: '', coordinatorId: child.id })
-  const asked = await ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
-    actorId: child.id, question: 'Ready?' })
+  const created = await ticketActor(ctx, owner.id, () =>
+    ctx.tickets.create(owner.session, { subject: 'Child question', description: '', coordinatorId: child.id }))
+  const asked = await ticketActor(ctx, child.id, () =>
+    ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
+      actorId: child.id, question: 'Ready?' }))
   const peer = new Peer(ctx, { principal: { kind: 'owner' } })
   await ctx.typertGateway.invoke({ peer, namespace: 'workstreamPanel', method: 'closeQuestion', args: {
     agentId: child.id, request: { ticketId: asked.id, questionId: asked.questions[0]!.id, expectedRevision: asked.revision },
@@ -144,9 +147,11 @@ it('child-only Remote permission does not authorize a mutation of the root Sessi
     operationId: WorkstreamOperationId('child'), name: 'child', description: 'worker',
     provider: 'spawn', prompt: 'Work', signal: new AbortController().signal,
   })
-  const created = await ctx.tickets.create(owner.session, { subject: 'Child question', description: '', coordinatorId: member.id })
-  const asked = await ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
-    actorId: member.id, question: 'Ready?' })
+  const created = await ticketActor(ctx, owner.id, () =>
+    ctx.tickets.create(owner.session, { subject: 'Child question', description: '', coordinatorId: member.id }))
+  const asked = await ticketActor(ctx, member.id, () =>
+    ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
+      actorId: member.id, question: 'Ready?' }))
   const principal = { kind: 'workstream-review' } as const
   ctx.remoteAccess.registerPolicy('workstream-review', { bindings: () => [{
     role: { name: 'review:child-only', resource: 'session', actions: ['workstreamPanel/closeQuestion'] },
@@ -172,11 +177,14 @@ it.each(['answerQuestion', 'closeQuestion', 'acknowledgeAttention', 'resolveAtte
       operationId: WorkstreamOperationId('child'), name: 'child', description: 'worker',
       provider: 'spawn', prompt: 'Work', signal: new AbortController().signal,
     })
-    const created = await ctx.tickets.create(owner.session, { subject: 'Child task', description: '', coordinatorId: member.id })
-    const asked = await ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
-      actorId: member.id, question: 'Ready?' })
-    const before = await ctx.tickets.attention(owner.session, { ticketId: asked.id, expectedRevision: asked.revision,
-      actorId: member.id, kind: 'decision', message: 'Approve' })
+    const created = await ticketActor(ctx, owner.id, () =>
+      ctx.tickets.create(owner.session, { subject: 'Child task', description: '', coordinatorId: member.id }))
+    const asked = await ticketActor(ctx, member.id, () =>
+      ctx.tickets.ask(owner.session, { ticketId: created.id, expectedRevision: created.revision,
+        actorId: member.id, question: 'Ready?' }))
+    const before = await ticketActor(ctx, member.id, () =>
+      ctx.tickets.attention(owner.session, { ticketId: asked.id, expectedRevision: asked.revision,
+        actorId: member.id, kind: 'decision', message: 'Approve' }))
     let rootGranted = false
     ctx.remoteAccess.registerPolicy('workstream-review', { bindings: () => (rootGranted ? [member.id, owner.id] : [member.id]).map(id => ({
       role: { name: 'review:commands', resource: 'session', actions: [`workstreamPanel/${method}`] },
@@ -214,4 +222,22 @@ it('Changes checks every active member grant before reading the aggregate', asyn
   childGranted = true
   await invoke()
   expect(aggregate).toHaveBeenCalledOnce()
+})
+
+it('Changes checks a stopped member grant because the aggregate still reads its Session', async () => {
+  const { ctx, owner } = await setup()
+  const member = await ctx.workstreams.addMember(owner, owner.id, {
+    operationId: WorkstreamOperationId('child'), name: 'child', description: 'worker',
+    provider: 'spawn', prompt: 'Work', signal: new AbortController().signal,
+  })
+  await ctx.workstreams.stop(owner, owner.id, member.id)
+  ctx.remoteAccess.registerPolicy('workstream-review', { bindings: () => [{
+    role: { name: 'review:changes', resource: 'session', actions: ['workstreamPanel/changeRequests'] },
+    resource: { kind: 'session', id: owner.id },
+  }] })
+  const aggregate = vi.spyOn(ctx.workstreamEvidence, 'aggregateChangeRequests')
+  const peer = new Peer(ctx, { principal: { kind: 'workstream-review' } })
+  await expect(ctx.typertGateway.invoke({ peer, namespace: 'workstreamPanel', method: 'changeRequests', args: { agentId: owner.id } }))
+    .rejects.toMatchObject({ code: 'workstreamPanel/denied' })
+  expect(aggregate).not.toHaveBeenCalled()
 })

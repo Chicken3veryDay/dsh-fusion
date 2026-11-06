@@ -73,7 +73,8 @@ describe('round-1 review regressions', () => {
     try {
       await entered.promise
       // This is also the direct ticket_create tool's call, enabled by the profile.
-      const late = await ctx.tickets.create(owner.session, { subject: 'Created during handoff', description: '', coordinatorId: owner.id })
+      const late = await ctx.agents.withInitiator(owner, () =>
+        ctx.tickets.create(owner.session, { subject: 'Created during handoff', description: '', coordinatorId: owner.id }))
       release.resolve()
       await move
       expect(ctx.tickets.get(owner.session, first.id).coordinatorId).toBe(member.id)

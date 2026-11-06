@@ -18,6 +18,7 @@ import WorkstreamEvidenceService from '@deepseek-ai/dsh-experimental-workstream-
 import { MockAdapter } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/working-directory-fixture.ts'
 import { TestSessionQuery } from '../../agent-team/tests/test-session-query.ts'
+import { ticketActor } from '../../ticket/tests/ticket-actor.ts'
 import WorkstreamPanelController from '../src/index.ts'
 
 const contexts: Context[] = []
@@ -55,12 +56,12 @@ async function setup() {
   const owner = await ctx.agentLoop.create(SessionId('owner'), { provider: 'mock', model: 'mock' })
   await ctx.workstreams.open(owner, { operationId: WorkstreamOperationId('open'), title: 'Release' })
   const created = await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Ship', description: 'Ship the release' })
-  const asked = await ctx.tickets.ask(owner.session, {
+  const asked = await ticketActor(ctx, owner.id, () => ctx.tickets.ask(owner.session, {
     ticketId: created.id, expectedRevision: created.revision, actorId: owner.id, question: 'Which branch?',
-  })
-  const ticket = await ctx.tickets.attention(owner.session, {
+  }))
+  const ticket = await ticketActor(ctx, owner.id, () => ctx.tickets.attention(owner.session, {
     ticketId: asked.id, expectedRevision: asked.revision, actorId: owner.id, kind: 'decision', message: 'Pick a date',
-  })
+  }))
   return { ctx, owner, ticket, question: ticket.questions[0]!.id, attention: ticket.attentions[0]!.id }
 }
 
@@ -108,12 +109,12 @@ describe('Workstream panel Remote', () => {
     await expect(ctx.workstreamPanel.closeQuestion(owner, {
       ticketId: ticket.id, questionId: TicketQuestionId('missing'), expectedRevision: ticket.revision,
     })).rejects.toMatchObject({ code: 'workstreamPanel/rejected' })
-    const foreign = await ctx.tickets.create(owner.session, {
+    const foreign = await ticketActor(ctx, owner.id, () => ctx.tickets.create(owner.session, {
       subject: 'Foreign', description: 'Coordinated elsewhere', coordinatorId: SessionId('elsewhere'),
-    })
-    const attended = await ctx.tickets.attention(owner.session, {
+    }))
+    const attended = await ticketActor(ctx, SessionId('elsewhere'), () => ctx.tickets.attention(owner.session, {
       ticketId: foreign.id, expectedRevision: foreign.revision, actorId: SessionId('elsewhere'), kind: 'review', message: 'Review',
-    })
+    }))
     await expect(ctx.workstreamPanel.resolveAttention(owner, {
       ticketId: attended.id, attentionId: attended.attentions[0]!.id, expectedRevision: attended.revision,
     })).rejects.toMatchObject({ code: 'workstreamPanel/denied' })

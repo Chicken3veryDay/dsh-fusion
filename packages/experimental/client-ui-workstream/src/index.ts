@@ -57,11 +57,11 @@ function panelError(error: unknown): unknown {
  * Session's resource; no wire field names another Session as authority. The
  * controller derives the Workstream root from the caller's own Session header,
  * checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket
- * commands on the root's Ticket log with the caller as actor, so the Ticket
+ * commands on the root's Ticket log with the caller as actor and initiating Agent, so the Ticket
  * service applies its coordinator and author rules to the live caller.
  */
 export class WorkstreamPanelController extends TypertRemoteService {
-  static inject = ['tickets', 'workstreams', 'workstreamEvidence', 'remoteAccess']
+  static inject = ['agents', 'tickets', 'workstreams', 'workstreamEvidence', 'remoteAccess']
 
   constructor(ctx: Context) {
     super(ctx, 'workstreamPanel')
@@ -80,9 +80,8 @@ export class WorkstreamPanelController extends TypertRemoteService {
       const root = rootOf(agent)
       this.requireAccess(root)
       const { snapshot } = this.ctx.workstreams.requireMembership(agent, root)
-      for (const member of snapshot.members) {
-        if (member.phase === 'active') this.requireAccess(member.id)
-      }
+      // Aggregation reads every retained member, stopped ones included.
+      for (const member of snapshot.members) this.requireAccess(member.id)
       return this.ctx.workstreamEvidence.aggregateChangeRequests(agent, root)
     } catch (error) {
       throw panelError(error)
@@ -167,7 +166,7 @@ export class WorkstreamPanelController extends TypertRemoteService {
       const root = rootOf(agent)
       this.requireAccess(root)
       const { owner } = this.ctx.workstreams.requireMembership(agent, root)
-      await run(owner.session)
+      await this.ctx.agents.withInitiator(agent, () => run(owner.session))
     } catch (error) {
       throw panelError(error)
     }

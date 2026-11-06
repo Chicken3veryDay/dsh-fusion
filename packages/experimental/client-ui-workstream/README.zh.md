@@ -50,7 +50,7 @@ kind: "package-reference"
 <details>
 <summary>实现内部细节 — 点击展开</summary>
 
-`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个活跃成员的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；其他失败原样传播。
+`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`，并以调用者作为发起 Agent。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个保留成员（包括已停止成员）的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；其他失败原样传播。
 
 Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头 action 和 shell overlay 命令报告；释放时先撤回两个 slot，再撤回 Remote。stale-revision 失败调用 `sessions.refreshProjections(root, true)`，绕过已就绪的缓存并取消较早的读取。带序号的基线保留较新的投影帧。
 

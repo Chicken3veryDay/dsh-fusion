@@ -1590,7 +1590,7 @@ async readText( caller: Agent, rootSessionId: SessionId, artifactId: string, ver
 prepareContext( caller: Agent, rootSessionId: SessionId, request: PrepareContextRequest, ): WorkstreamContextPacket
 
 /**
- * Aggregate change request bindings across the root and active member Sessions.
+ * Aggregate change request bindings across the root and every retained member Session, including stopped members.
  * @param caller - live Workstream member.
  * @param rootSessionId - Workstream root Session id.
  * @returns Deduplicated change requests, diagnostics, and whether every Session was read.
@@ -1604,7 +1604,7 @@ Source: [`packages/experimental/workstream-evidence/src/index.ts`](../../package
 
 ### `ctx.workstreamPanel` — `WorkstreamPanelController`
 
-Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session's resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller's own Session header, checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root's Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.
+Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session's resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller's own Session header, checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root's Ticket log with the caller as actor and initiating Agent, so the Ticket service applies its coordinator and author rules to the live caller.
 
 ```ts cordis-catalog
 /**
