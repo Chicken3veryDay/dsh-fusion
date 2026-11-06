@@ -52,8 +52,7 @@ async function send(agent: Agent, text: string) {
 
 const CORE_RULE = 'Never print secret values R4CORE.'
 
-// The core capture fix owns context restoration after request-time compaction.
-it.fails.each(['switch', 'overflow'] as const)(
+it.each(['switch', 'overflow'] as const)(
   'R4-M1 the request sent after %s compaction still carries the eager core and the catalog',
   async (mode) => {
     const adapter = new WindowMockAdapter([
