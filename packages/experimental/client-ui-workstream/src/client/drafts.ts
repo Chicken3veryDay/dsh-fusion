@@ -45,8 +45,10 @@ export function retainedDrafts(drafts: AnswerDrafts, rootId: SessionId, answerab
 
 /** Plugin-owned drafts handed to the panel. */
 export interface AnswerDraftStore {
-  subscribe(listener: () => void): () => void
-  getSnapshot(): AnswerDrafts
+  /** Subscribe to every draft change; returns the unsubscribe function. */
+  readonly subscribe: (listener: () => void) => () => void
+  /** Current drafts. */
+  readonly getSnapshot: () => AnswerDrafts
   /** Record the text of a draft; empty text removes it. */
   edit(key: AnswerDraftKey, text: string, question: string): void
   /** Mark a draft as being sent. */
