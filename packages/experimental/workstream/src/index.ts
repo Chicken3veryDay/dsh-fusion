@@ -61,6 +61,8 @@ export class WorkstreamService extends Service {
   })
   private readonly config: Required<Config>
   private projection!: ProjectionHandle<WorkstreamProjectionState>
+  /** True once `projection` is registered and recovered snapshots are readable. */
+  private ready = false
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly pending = new Set<Promise<unknown>>()
   private readonly lifetime = new AbortController()
@@ -75,14 +77,21 @@ export class WorkstreamService extends Service {
   }
 
   protected async [Service.init](): Promise<void> {
-    this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
-    this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')
+    // Installed before the asynchronous projection registration and failing closed until it settles: an owner-default Ticket
+    // admitted while recovered snapshots are not yet readable would record the owner and never be reconciled.
     // A direct `tickets.create` that defaults to the owner names the sitting coordinator, so it cannot disagree with the snapshot.
     // An explicit other coordinator stays the caller's choice; `handoff` moves Tickets held by any member.
     this.ctx.effect(() => this.ctx.tickets.registerCoordinatorAuthority((session, requested) => {
+      if (!this.ready) {
+        if (requested !== session.id) return undefined
+        throw new WorkstreamError('Workstream is still loading; retry the Ticket creation', 'WORKSTREAM_NOT_READY')
+      }
       const snapshot = this.projection.stateOf(session).snapshot
       return snapshot !== null && requested === snapshot.ownerSessionId ? snapshot.coordinatorId : undefined
     }), 'workstreams.ticketCoordinator()')
+    this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
+    this.ready = true
+    this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')
   }
 
   /** Open one root-owned Workstream, idempotently for the same creation key.
@@ -219,7 +228,8 @@ export class WorkstreamService extends Service {
       if (snapshot.revision !== request.expectedRevision) throw new
       WorkstreamError('Workstream changed; refresh before handoff', 'WORKSTREAM_CONFLICT')
       this.target(snapshot, request.coordinatorId)
-      const next: WorkstreamSnapshot = { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId }
+      this.liveSuccessor(request.coordinatorId)
+      const next:WorkstreamSnapshot = { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId }
       this.fit(next)
       const moved = await this.moveTicketsAndAppend(owner, snapshot, next)
       try {
@@ -446,7 +456,15 @@ export class WorkstreamService extends Service {
         && ticket.coordinatorId !== coordinatorId && snapshot.members.some(member => member.id === ticket.coordinatorId))
       const openIds = open.map(ticket => ticket.id)
       stopIfDisposed(openIds)
-      if (open.length === 0) { this.append(owner, next); return moved.size }
+      if (open.length === 0) {
+        // Same synchronous step as the append: the successor must still be live when the snapshot names it.
+        try { this.liveSuccessor(coordinatorId) } catch (error: unknown) {
+          if (moved.size === 0) throw error
+          throw new WorkstreamPartialHandoffError([...moved], [], { cause: error })
+        }
+        this.append(owner, next)
+        return moved.size
+      }
       const pending: TicketId[] = []
       let cause: unknown
       for (const ticket of open) {
@@ -471,6 +489,13 @@ export class WorkstreamService extends Service {
     const member = snapshot.members.find(candidate => candidate.id === id && candidate.phase === 'active')
     if (member === undefined) throw new WorkstreamError('Target is not an active Workstream member', 'WORKSTREAM_INVALID_INPUT')
     return member
+  }
+  /** Durable `active` membership is not liveness: a drained or unloaded member has no Agent that can act as coordinator.
+   * Matches the registered live Agent check of `tickets.handoff`. */
+  private liveSuccessor(id: SessionId): void {
+    const agent = this.ctx.agents.get(id)
+    if (agent === undefined || this.ctx.sessions.get(agent.id) !== agent.session) throw new
+    WorkstreamError('Target is not a registered live Agent; resume it before handing it the coordinator role', 'WORKSTREAM_INVALID_INPUT')
   }
   private child(snapshot: WorkstreamSnapshot, id: SessionId): WorkstreamMember {
     const member = this.target(snapshot, id)

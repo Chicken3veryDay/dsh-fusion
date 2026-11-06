@@ -4,7 +4,7 @@ import type { TicketId } from '@deepseek-ai/dsh-experimental-ticket'
 /** Handling-relevant Workstream failure categories. */
 export type WorkstreamErrorCode = 'WORKSTREAM_UNAUTHORIZED' | 'WORKSTREAM_NOT_FOUND' | 'WORKSTREAM_CONFLICT'
   | 'WORKSTREAM_LIMIT' | 'WORKSTREAM_INVALID_INPUT' | 'WORKSTREAM_UNKNOWN' | 'WORKSTREAM_DISPOSED'
-  | 'WORKSTREAM_PARTIAL_HANDOFF'
+  | 'WORKSTREAM_PARTIAL_HANDOFF' | 'WORKSTREAM_NOT_READY'
 
 /** Domain failure; UNKNOWN means inspect the durable intent before further action. */
 export class WorkstreamError extends Error {
