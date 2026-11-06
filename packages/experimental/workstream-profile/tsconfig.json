@@ -19,6 +19,15 @@
     },
     {
       "path": "../workstream-evidence"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../core/tools"
     }
   ]
 }

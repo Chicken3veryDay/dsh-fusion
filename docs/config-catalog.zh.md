@@ -1719,6 +1719,8 @@ export interface Config {
   readonly maxContextPacketBytes?: number
   /** Maximum byte size of one evidence version returned as text to a model tool (default: 65,536). */
   readonly maxToolTextBytes?: number
+  /** Maximum byte size of the complete serialized evidence record that each publish appends (default: 1 MiB). */
+  readonly maxSnapshotBytes?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-workstream-evidence -->

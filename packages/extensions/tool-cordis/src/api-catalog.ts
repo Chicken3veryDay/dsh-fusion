@@ -6409,7 +6409,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AggregatedChangeRequestsResult',
-    declaration: 'export interface AggregatedChangeRequestsResult {\n    readonly complete: boolean;\n    readonly changeRequests: readonly AggregatedChangeRequest[];\n    readonly diagnostics: readonly string[];\n}',
+    declaration: 'export interface AggregatedChangeRequestsResult {\n    readonly complete: boolean;\n    readonly changeRequests: readonly AggregatedChangeRequest[];\n    readonly diagnostics: readonly string[];\n    readonly gaps: readonly ChangeRequestGap[];\n}',
   },
   {
     name: 'AnalyticsPreset',
@@ -6702,6 +6702,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ChangeRequestContribution',
     declaration: 'export interface ChangeRequestContribution {\n    readonly sessionId: SessionId;\n    readonly origin: SessionChangeRequest[\'origin\'];\n    readonly update: SessionChangeRequest[\'update\'];\n}',
+  },
+  {
+    name: 'ChangeRequestGap',
+    declaration: 'export type ChangeRequestGap = {\n    readonly kind: \'forge-unavailable\';\n} | {\n    readonly kind: \'session-not-loaded\';\n    readonly sessionId: SessionId;\n};',
   },
   {
     name: 'ChangeRequestKey',

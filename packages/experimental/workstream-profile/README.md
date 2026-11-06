@@ -47,6 +47,8 @@ The patch inserts three services, three tool rows, and the Web panel after `dsh-
 
 Every service limit is an explicit Config value in the patch, equal to the package default.
 
+The profile mounts `ticket_assign` with a guard: Ticket accepts any Session as an assignee, so the guard refuses an assignee that is not an active child member of the root's Workstream, the same rule as `workstream_assign_ticket`. A root with no Workstream is left to Ticket.
+
 -----
 
 <a id="understand-the-implementation"></a>
