@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { SessionListState, SessionSnapshot, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
@@ -14,10 +14,14 @@ import {
   WorkstreamAction, type ChangeRequestsRead, type WorkstreamActionInjected, type WorkstreamActionProps, type WorkstreamFailure,
 } from '../src/client/WorkstreamAction.tsx'
 import { en } from '../src/client/locales.ts'
+import { CommandNotice, createCommandReports } from '../src/client/notices.tsx'
 import { build, docs, evidence, REVIEWER, ROOT, ticket, tickets, WORKER, workstream } from './fixtures.client.ts'
+
+beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -39,7 +43,9 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
     blank: false, lastAgentError: null, promptAttempted: false, awaitingFirstTurn: false,
   })
   const changes: AggregatedChangeRequestsResult = { complete: true, changeRequests: [], diagnostics: [] }
+  const reports = createCommandReports()
   const injected = {
+    reportFailure: reports.reportFailure,
     openMember: vi.fn<WorkstreamActionInjected['openMember']>(),
     command: vi.fn<WorkstreamActionInjected['command']>(async () => null),
     changeRequests: vi.fn<WorkstreamActionInjected['changeRequests']>(async () => ({ ok: true, value: changes })),
@@ -63,7 +69,7 @@ function bench(options: { values?: Values; sessionId?: SessionId; parentSessionI
       sessions.set({ ...current, projectionsBySession: { ...current.projectionsBySession, [ROOT]: { state: 'ready', error: null, values } } })
     })
   }
-  return { props, injected, setValues }
+  return { props, injected, setValues, reports }
 }
 
 function panel(): HTMLElement {
@@ -78,7 +84,7 @@ function tab(name: RegExp): void {
 describe('WorkstreamAction', () => {
   it('stays absent until the root projects a Workstream', () => {
     const b = bench({ values: { workstream: null } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     expect(screen.queryByRole('button', { name: 'Workstream' })).toBeNull()
     b.setValues({ workstream })
     expect(screen.getByRole('button', { name: 'Workstream' })).toBeTruthy()
@@ -86,7 +92,7 @@ describe('WorkstreamAction', () => {
 
   it('lists open questions and unresolved attention of nonterminal Tickets, oldest first, with a pending badge', () => {
     const b = bench()
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     expect(screen.getByRole('button', { name: 'Workstream' }).textContent).toBe('Workstream3')
     const dialog = panel()
     const cards = within(dialog).getAllByRole('article')
@@ -106,20 +112,20 @@ describe('WorkstreamAction', () => {
     const b = bench({ values: { workstream, ticket: { tickets: [ticket('t', {
       attentions: [{ id: 'n' as never, kind, message: 'Clarify scope', status: 'open', createdAt: 0 }],
     })] } } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     expect(within(panel()).getByRole('article').querySelector('strong')?.textContent).toBe(label)
   })
 
   it('shows the empty Needs you copy when nothing waits', () => {
     const b = bench({ values: { workstream, ticket: { tickets: [docs] } } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     expect(screen.getByRole('button', { name: 'Workstream' }).textContent).toBe('Workstream')
     expect(within(panel()).getByText(en['needs.empty'])).toBeTruthy()
   })
 
   it('answers a question with the displayed revision and clears the draft', async () => {
     const b = bench()
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     const send = within(dialog).getByRole('button', { name: 'Send answer' })
     expect(send).toHaveProperty('disabled', true)
@@ -129,14 +135,14 @@ describe('WorkstreamAction', () => {
       kind: 'answer', request: { ticketId: build.id, questionId: 'q1', expectedRevision: 4, answer: 'release/2.0' },
     })
     expect(within(dialog).getByRole('textbox', { name: 'Answer' })).toHaveProperty('value', '')
-    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('shows a CAS conflict inline and retries with the refreshed revision', async () => {
+  it('reports a CAS conflict outside the panel and retries with the refreshed revision', async () => {
     const b = bench()
     let settle!: (failure: WorkstreamFailure | null) => void
     b.injected.command.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     const input = within(dialog).getByRole('textbox', { name: 'Answer' })
     fireEvent.change(input, { target: { value: 'main' } })
@@ -145,36 +151,37 @@ describe('WorkstreamAction', () => {
     // The injected command rereads projections before reporting the conflict.
     b.setValues({ workstream, ticket: { tickets: [{ ...build, revision: 5 }, docs] }, workstreamEvidence: evidence })
     await act(async () => { settle({ code: 'stale', message: 'Ticket "build" is at revision 5, expected 4' }) })
-    expect(within(dialog).getByRole('alert').textContent).toBe(en['error.stale'])
+    expect(screen.getByRole('alert').textContent).toBe(`${en['error.stale']}\nmain`)
     expect(input).toHaveProperty('value', 'main')
 
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Send answer' })) })
     expect(b.injected.command).toHaveBeenLastCalledWith(ROOT, {
       kind: 'answer', request: { ticketId: build.id, questionId: 'q1', expectedRevision: 5, answer: 'main' },
     })
-    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it.each([
+    [{ code: 'refresh-failed', message: 'projection unavailable' }, en['error.refresh']],
     [{ code: 'denied', message: 'only the current coordinator' }, en['error.denied']],
     [{ code: 'unavailable', message: 'owner not live' }, en['error.unavailable']],
     [{ code: 'rejected', message: 'question is already closed' }, 'The Ticket rejected this change: question is already closed'],
     [{ code: 'failed', message: 'socket closed' }, 'The request failed: socket closed'],
-  ] satisfies [WorkstreamFailure, string][])('closes a question and shows %o inline', async (failure, text) => {
+  ] satisfies [WorkstreamFailure, string][])('closes a question and reports %o outside the panel', async (failure, text) => {
     const b = bench()
     b.injected.command.mockResolvedValueOnce(failure)
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Close question' })) })
     expect(b.injected.command).toHaveBeenCalledWith(ROOT, {
       kind: 'closeQuestion', request: { ticketId: build.id, questionId: 'q1', expectedRevision: 4 },
     })
-    expect(within(dialog).getByRole('alert').textContent).toBe(text)
+    expect(screen.getByRole('alert').textContent).toBe(text)
   })
 
   it('acknowledges and resolves attention, reporting a thrown command as a failure', async () => {
     const b = bench()
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     const decision = within(dialog).getAllByRole('article')[0]!
     let settle!: (failure: WorkstreamFailure | null) => void
@@ -191,12 +198,12 @@ describe('WorkstreamAction', () => {
     expect(b.injected.command).toHaveBeenLastCalledWith(ROOT, {
       kind: 'resolve', request: { ticketId: build.id, attentionId: 'n1', expectedRevision: 4 },
     })
-    expect(within(decision).getByRole('alert').textContent).toBe('The request failed: Error: offline')
+    expect(screen.getByRole('alert').textContent).toBe('The request failed: Error: offline')
   })
 
   it('renders Missions, Tickets, dependencies, and assignments in Work', () => {
     const b = bench()
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Work2$/u)
     const mission = within(dialog).getByText('Launch').closest('article')!
@@ -219,7 +226,7 @@ describe('WorkstreamAction', () => {
     ['reviewing', 'ongoing'], ['waiting', 'warning'], ['blocked', 'warning'], ['completed', 'done'], ['failed', 'error'], ['cancelled', 'error'],
   ] satisfies [TicketStatus, string][])('labels a %s Ticket', (status, dot) => {
     const b = bench({ values: { workstream, ticket: { tickets: [ticket('t', { status })] } } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Work1$/u)
     const card = dialog.querySelector('[data-ticket="t"]')!
@@ -229,7 +236,7 @@ describe('WorkstreamAction', () => {
 
   it('shows empty Work and Files copy and a persisted Ticket failure', () => {
     const b = bench({ values: { workstream, ticket: { tickets: [], failure: 'bad record' }, workstreamEvidence: null } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     expect(within(dialog).getByRole('alert').textContent).toBe('Invalid persisted Ticket record: bad record')
     tab(/^Work$/u)
@@ -240,7 +247,7 @@ describe('WorkstreamAction', () => {
 
   it('renders members with role and phase and opens continuable Sessions', () => {
     const b = bench({ sessionId: WORKER, parentSessionId: ROOT })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Team5$/u)
     const owner = within(dialog).getByRole('button', { name: 'Open conversation: owner' })
@@ -265,7 +272,7 @@ describe('WorkstreamAction', () => {
     const b = bench()
     let settle!: (read: ChangeRequestsRead) => void
     b.injected.changeRequests.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Changes$/u)
     expect(within(dialog).getByRole('status').textContent).toBe(en['changes.loading'])
@@ -306,7 +313,7 @@ describe('WorkstreamAction', () => {
   it('reloads change requests after a failure and shows the empty list', async () => {
     const b = bench()
     b.injected.changeRequests.mockResolvedValueOnce({ ok: false, failure: { code: 'unavailable', message: 'owner not live' } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     await act(async () => { tab(/^Changes$/u) })
     expect(within(dialog).getByRole('alert').textContent).toBe(en['error.unavailable'])
@@ -326,7 +333,7 @@ describe('WorkstreamAction', () => {
     b.injected.changeRequests
       .mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
       .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Changes$/u)
     tab(/^Files1$/u)
@@ -341,7 +348,7 @@ describe('WorkstreamAction', () => {
 
   it('lists evidence artifacts with every version newest first', () => {
     const b = bench()
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Files1$/u)
     const card = dialog.querySelector('[data-artifact="spec"]')!
@@ -356,7 +363,7 @@ describe('WorkstreamAction', () => {
 
   it('falls back to the artifact id for an artifact without retained versions', () => {
     const b = bench({ values: { workstream, workstreamEvidence: { ...evidence, artifacts: [{ artifactId: 'empty' as never, latestVersion: 0, versions: [] }] } } })
-    render(<WorkstreamAction {...b.props} />)
+    render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const dialog = panel()
     tab(/^Files1$/u)
     expect(dialog.querySelector('[data-artifact="empty"] strong')?.textContent).toBe('empty')
@@ -364,7 +371,7 @@ describe('WorkstreamAction', () => {
 
   it('closes on Escape, returning focus to the trigger, and resets when the Session changes', () => {
     const b = bench()
-    const view = render(<WorkstreamAction {...b.props} />)
+    const view = render(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     const trigger = screen.getByRole('button', { name: 'Workstream' })
     const dialog = panel()
     tab(/^Files1$/u)
@@ -385,7 +392,7 @@ describe('WorkstreamAction', () => {
     view.rerender(<WorkstreamAction {...b.props} sessionId={WORKER} />)
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Workstream' })).toBeNull()
-    view.rerender(<WorkstreamAction {...b.props} />)
+    view.rerender(<><WorkstreamAction {...b.props} /><CommandNotice reports={b.reports} t={b.props.t} /></>)
     panel()
     expect(screen.getByRole('tab', { name: /^Needs you3$/u }).getAttribute('aria-selected')).toBe('true')
   })

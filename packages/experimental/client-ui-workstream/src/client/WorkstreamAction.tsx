@@ -24,9 +24,9 @@ export type WorkstreamCommand =
   | { readonly kind: 'acknowledge'; readonly request: WorkstreamAttentionTarget }
   | { readonly kind: 'resolve'; readonly request: WorkstreamAttentionTarget }
 
-/** Typed command or read failure shown inline; `message` is the Host diagnostic. */
+/** Typed command or read failure; `message` is the Host diagnostic. */
 export interface WorkstreamFailure {
-  readonly code: 'stale' | 'denied' | 'unavailable' | 'rejected' | 'failed'
+  readonly code: 'stale' | 'refresh-failed' | 'denied' | 'unavailable' | 'rejected' | 'failed'
   readonly message: string
 }
 
@@ -45,6 +45,8 @@ export interface WorkstreamActionInjected {
    * @returns null after the command commits, else the failure.
    */
   command: (sessionId: SessionId, command: WorkstreamCommand) => Promise<WorkstreamFailure | null>
+  /** Report a command refusal outside the panel, retaining rejected answer text. */
+  reportFailure: (failure: WorkstreamFailure | null, command: WorkstreamCommand) => void
   /** Read the change requests bound by the displayed Session's Workstream. */
   changeRequests: (sessionId: SessionId) => Promise<ChangeRequestsRead>
 }
@@ -64,6 +66,17 @@ export type WorkstreamView = 'needs' | 'work' | 'team' | 'changes' | 'files'
  */
 export function WorkstreamAction(props: WorkstreamActionProps) {
   const { sessionId, useSession, useSessions, t } = props
+  const command: WorkstreamActionInjected['command'] = async (id, request) => {
+    props.reportFailure(null, request)
+    let failure: WorkstreamFailure | null
+    try {
+      failure = await props.command(id, request)
+    } catch (error) {
+      failure = { code: 'failed', message: String(error) }
+    }
+    if (failure !== null) props.reportFailure(failure, request)
+    return failure
+  }
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<WorkstreamView>('needs')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -164,10 +177,10 @@ export function WorkstreamAction(props: WorkstreamActionProps) {
             {tickets?.failure !== undefined && (
               <div className={css.error} role="alert"><StateDot state="error" />{t('failure', { message: tickets.failure })}</div>
             )}
-            {view === 'needs' && <NeedsView {...props} items={needs} nameOf={nameOf} />}
+            {view === 'needs' && <NeedsView {...props} command={command} items={needs} nameOf={nameOf} />}
             {view === 'work' && <WorkView tickets={ticketList} nameOf={nameOf} t={t} />}
             {view === 'team' && <TeamView {...props} rootId={rootId} workstream={workstream} />}
-            {view === 'changes' && <ChangesView {...props} nameOf={nameOf} />}
+            {view === 'changes' && <ChangesView key={sessionId} {...props} nameOf={nameOf} />}
             {view === 'files' && <FilesView artifacts={artifacts} nameOf={nameOf} t={t} />}
           </div>
         </div>,

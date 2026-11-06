@@ -5338,14 +5338,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'workstreamPanel',
     summary: 'Serves the Workstream panel.',
-    description: 'Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session\'s resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller\'s own Session header, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root\'s Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.',
+    description: 'Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session\'s resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller\'s own Session header, checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root\'s Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.',
     methods: [
       {
         signature: '@Remote changeRequests(agent: Agent): AggregatedChangeRequestsResult',
         description: 'Aggregate the change requests that the caller\'s Workstream members bind.',
         parameters: [{ name: 'agent', description: 'displayed Session\'s Agent, supplied by the Gateway.' }],
         returns: 'aggregated change requests; `complete` is false when a Session or the forge service could not be read.',
-        throws: ['`workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.'],
+        throws: ['`workstreamPanel/denied` unless every contributing Session is granted for this action.', '`workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.'],
       },
       {
         signature: '@Remote async answerQuestion(agent: Agent, request: WorkstreamQuestionAnswer): Promise<void>',

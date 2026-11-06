@@ -1592,13 +1592,14 @@ Source: [`packages/experimental/workstream-evidence/src/index.ts`](../../package
 
 ### `ctx.workstreamPanel` — `WorkstreamPanelController`
 
-Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session's resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller's own Session header, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root's Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.
+Serves the Workstream panel. Every method takes the Agent of the Session the caller displays, which the Gateway resolves and access-checks as that Session's resource; no wire field names another Session as authority. The controller derives the Workstream root from the caller's own Session header, checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket commands on the root's Ticket log with the caller as actor, so the Ticket service applies its coordinator and author rules to the live caller.
 
 ```ts cordis-catalog
 /**
  * Aggregate the change requests that the caller's Workstream members bind.
  * @param agent - displayed Session's Agent, supplied by the Gateway.
  * @returns aggregated change requests; `complete` is false when a Session or the forge service could not be read.
+ * @throws `workstreamPanel/denied` unless every contributing Session is granted for this action.
  * @throws `workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.
  */
 @Remote changeRequests(agent: Agent): AggregatedChangeRequestsResult

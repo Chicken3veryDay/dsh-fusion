@@ -101,9 +101,10 @@ export interface ISessions {
   /**
    * Read projections without starting migration; retry failed or migration-deferred reads.
    * @param sessionId - Session to inspect without opening its conversation.
+   * @param force - discard cached readiness and supersede any earlier read; reject unless a sequenced baseline is received.
    * @returns completion of the current or newly started refresh.
    */
-  refreshProjections(sessionId: SessionId): Promise<void>
+  refreshProjections(sessionId: SessionId, force?: boolean): Promise<void>
 
   /**
    * Refresh the Host-authoritative Session list.

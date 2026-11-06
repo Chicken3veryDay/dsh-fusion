@@ -70,6 +70,9 @@
     },
     {
       "path": "../workstream-evidence"
+    },
+    {
+      "path": "../../client/ui-layout"
     }
   ]
 }

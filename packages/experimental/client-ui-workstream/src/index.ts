@@ -1,6 +1,7 @@
 /** Host Remote of the Workstream panel: authenticated Ticket commands and change request aggregation. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remote-access'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { TicketError } from '@deepseek-ai/dsh-experimental-ticket'
 import type { TicketErrorCode } from '@deepseek-ai/dsh-experimental-ticket'
@@ -55,12 +56,12 @@ function panelError(error: unknown): unknown {
  * caller displays, which the Gateway resolves and access-checks as that
  * Session's resource; no wire field names another Session as authority. The
  * controller derives the Workstream root from the caller's own Session header,
- * requires active membership through `ctx.workstreams`, and runs Ticket
+ * checks Remote access to the root, requires active membership through `ctx.workstreams`, and runs Ticket
  * commands on the root's Ticket log with the caller as actor, so the Ticket
  * service applies its coordinator and author rules to the live caller.
  */
 export class WorkstreamPanelController extends TypertRemoteService {
-  static inject = ['tickets', 'workstreams', 'workstreamEvidence']
+  static inject = ['tickets', 'workstreams', 'workstreamEvidence', 'remoteAccess']
 
   constructor(ctx: Context) {
     super(ctx, 'workstreamPanel')
@@ -70,12 +71,19 @@ export class WorkstreamPanelController extends TypertRemoteService {
    * Aggregate the change requests that the caller's Workstream members bind.
    * @param agent - displayed Session's Agent, supplied by the Gateway.
    * @returns aggregated change requests; `complete` is false when a Session or the forge service could not be read.
+   * @throws `workstreamPanel/denied` unless every contributing Session is granted for this action.
    * @throws `workstreamPanel/denied` or `workstreamPanel/unavailable` unless the caller is an active member of a live Workstream.
    */
   @Remote
   changeRequests(agent: Agent): AggregatedChangeRequestsResult {
     try {
-      return this.ctx.workstreamEvidence.aggregateChangeRequests(agent, rootOf(agent))
+      const root = rootOf(agent)
+      this.requireAccess(root)
+      const { snapshot } = this.ctx.workstreams.requireMembership(agent, root)
+      for (const member of snapshot.members) {
+        if (member.phase === 'active') this.requireAccess(member.id)
+      }
+      return this.ctx.workstreamEvidence.aggregateChangeRequests(agent, root)
     } catch (error) {
       throw panelError(error)
     }
@@ -146,10 +154,19 @@ export class WorkstreamPanelController extends TypertRemoteService {
     })
   }
 
+  /** Refuse access to a derived Session before reading its data or appending commands. */
+  private requireAccess(sessionId: Session['id']): void {
+    if (!this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId })) {
+      throw new RemoteError('workstreamPanel/denied', 'Access to the Workstream Session is denied', {})
+    }
+  }
+
   /** Run one Ticket command on the root Ticket log after the caller's membership is confirmed. */
   private async command(agent: Agent, run: (root: Session) => Promise<void>): Promise<void> {
     try {
-      const { owner } = this.ctx.workstreams.requireMembership(agent, rootOf(agent))
+      const root = rootOf(agent)
+      this.requireAccess(root)
+      const { owner } = this.ctx.workstreams.requireMembership(agent, root)
       await run(owner.session)
     } catch (error) {
       throw panelError(error)

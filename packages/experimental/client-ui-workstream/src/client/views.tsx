@@ -17,9 +17,16 @@ import css from './WorkstreamAction.module.css'
 type T = TranslateNS<typeof NS>
 type NameOf = (id: SessionId) => string
 
-function failureText(failure: WorkstreamFailure, t: T): string {
+/**
+ * Localize a typed operation failure.
+ * @param failure - command or query failure.
+ * @param t - Workstream dictionary.
+ * @returns localized report.
+ */
+export function failureText(failure: WorkstreamFailure, t: T): string {
   switch (failure.code) {
     case 'stale': return t('error.stale')
+    case 'refresh-failed': return t('error.refresh')
     case 'denied': return t('error.denied')
     case 'unavailable': return t('error.unavailable')
     case 'rejected': return t('error.rejected', { message: failure.message })
@@ -35,25 +42,19 @@ function Empty({ text }: { text: string }) {
   return <p className={css.empty}>{text}</p>
 }
 
-/** Pending flag and last failure of one card's command. */
+/** Pending state for one card; command outcomes are reported outside the panel. */
 function useCommand(props: Pick<WorkstreamActionProps, 'sessionId' | 'command'>) {
   const [pending, setPending] = useState(false)
-  const [failure, setFailure] = useState<WorkstreamFailure | null>(null)
   const run = async (command: WorkstreamCommand): Promise<boolean> => {
     setPending(true)
-    setFailure(null)
     try {
       const result = await props.command(props.sessionId, command)
-      setFailure(result)
       return result === null
-    } catch (error) {
-      setFailure({ code: 'failed', message: String(error) })
-      return false
     } finally {
       setPending(false)
     }
   }
-  return { pending, failure, run }
+  return { pending, run }
 }
 
 type NeedsProps = Pick<WorkstreamActionProps, 'sessionId' | 'command' | 't'> & { nameOf: NameOf }
@@ -61,7 +62,7 @@ type NeedsProps = Pick<WorkstreamActionProps, 'sessionId' | 'command' | 't'> & {
 function QuestionCard({ item, nameOf, ...props }: NeedsProps & { item: Extract<NeedsItem, { kind: 'question' }> }) {
   const { t } = props
   const [answer, setAnswer] = useState('')
-  const { pending, failure, run } = useCommand(props)
+  const { pending, run } = useCommand(props)
   const target = { ticketId: item.ticket.id, questionId: item.question.id, expectedRevision: item.ticket.revision }
   const inputId = `workstream-answer-${item.ticket.id}-${item.question.id}`
   return (
@@ -98,7 +99,6 @@ function QuestionCard({ item, nameOf, ...props }: NeedsProps & { item: Extract<N
           </Button>
         </div>
       </form>
-      {failure !== null && <FailureNotice failure={failure} t={t} />}
     </article>
   )
 }
@@ -114,7 +114,7 @@ function attentionKey(kind: TicketAttentionSnapshot['kind']): WorkstreamKey {
 
 function AttentionCard({ item, ...props }: NeedsProps & { item: Extract<NeedsItem, { kind: 'attention' }> }) {
   const { t } = props
-  const { pending, failure, run } = useCommand(props)
+  const { pending, run } = useCommand(props)
   const target = { ticketId: item.ticket.id, attentionId: item.attention.id, expectedRevision: item.ticket.revision }
   const acknowledged = item.attention.status === 'acknowledged'
   return (
@@ -136,7 +136,6 @@ function AttentionCard({ item, ...props }: NeedsProps & { item: Extract<NeedsIte
           {pending ? t('pending') : t('attention.resolve')}
         </Button>
       </div>
-      {failure !== null && <FailureNotice failure={failure} t={t} />}
     </article>
   )
 }
@@ -305,6 +304,7 @@ export function ChangesView({ sessionId, changeRequests, nameOf, t }: Pick<Works
   nameOf: NameOf
 }) {
   const [state, setState] = useState<ChangesState>({ phase: 'loading' })
+  const [retained, setRetained] = useState<Extract<ChangeRequestsRead, { ok: true }>['value'] | null>(null)
   const [reads, setReads] = useState(0)
   const reload = useCallback(() => { setReads(count => count + 1) }, [])
   useEffect(() => {
@@ -312,7 +312,11 @@ export function ChangesView({ sessionId, changeRequests, nameOf, t }: Pick<Works
     let current = true
     setState({ phase: 'loading' })
     changeRequests(sessionId).then(
-      (result) => { if (current) setState(result) },
+      (result) => {
+        if (!current) return
+        setState(result)
+        if (result.ok) setRetained(result.value)
+      },
       (error: unknown) => { if (current) setState({ ok: false, failure: { code: 'failed', message: String(error) } }) },
     )
     return () => { current = false }
@@ -322,14 +326,17 @@ export function ChangesView({ sessionId, changeRequests, nameOf, t }: Pick<Works
       <Button type="button" variant="ghost" size="sm" disabled={'phase' in state} onClick={reload}>{t('changes.reload')}</Button>
     </div>
   )
-  if ('phase' in state) {
+  if ('phase' in state && retained === null) {
     return <div className={css.notice} role="status"><StateDot state="ongoing" />{t('changes.loading')}</div>
   }
-  if (!state.ok) return <>{toolbar}<FailureNotice failure={state.failure} t={t} /></>
-  const { complete, changeRequests: entries, diagnostics } = state.value
+  const value = 'ok' in state && state.ok ? state.value : retained
+  const failure = 'ok' in state && !state.ok ? state.failure : null
+  if (value === null) return <>{toolbar}{failure !== null && <FailureNotice failure={failure} t={t} />}</>
+  const { complete, changeRequests: entries, diagnostics } = value
   return (
     <>
       {toolbar}
+      {failure !== null && <FailureNotice failure={failure} t={t} />}
       {!complete && (
         <div className={css.warningNotice} role="status" data-incomplete>
           <StateDot state="warning" />

@@ -14,7 +14,7 @@ const contribution: TypertRemoteContribution = { package: '@deepseek-ai/dsh-expe
 const ok: RemoteResult<void> = { ok: true, value: undefined }
 
 function assertActions(value: Record<string, unknown>): asserts value is Record<string, unknown> & WorkstreamActionInjected {
-  for (const key of ['openMember', 'command', 'changeRequests']) {
+  for (const key of ['openMember', 'command', 'changeRequests', 'reportFailure']) {
     if (typeof value[key] !== 'function') throw new Error(`Workstream header action lacks ${key}`)
   }
 }
@@ -35,7 +35,7 @@ async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) 
     changeRequests: vi.fn(async () => ({ ok: true, value: { complete: true, changeRequests: [], diagnostics: [] } })),
   }
   ctx.provide('remote.workstreamPanel', panel as never)
-  const refreshProjections = vi.fn(async (_id: SessionId) => {})
+  const refreshProjections = vi.fn(async (_id: SessionId, _force?: boolean) => {})
   const navigation: unknown[] = []
   ctx.provide('sessions', {
     binding: (id: SessionId) => options.addressed === true && id === WORKER
@@ -48,7 +48,10 @@ async function bench(options: { addressed?: boolean; mainView?: boolean } = {}) 
   ctx.provide('locale', new LocaleRuntime(ctx))
   await ctx.plugin(SlotRegistry)
   ctx.slots.register({
-    name: 'root', children: { 'conversation.session.header.actions': { kind: 'list', scope: 'session' } },
+    name: 'root', children: {
+      'conversation.session.header.actions': { kind: 'list', scope: 'session' },
+      'shell.overlay': { kind: 'list', scope: 'root' },
+    },
   } as never, () => null)
   const dispose = await mountWorkstreamPanel(ctx, contribution)
   const entry = () => ctx.slots.entries('conversation.session.header.actions').find(candidate => candidate.component === WorkstreamAction)
@@ -64,11 +67,13 @@ describe('Workstream panel browser plugin', () => {
   it('registers the localized header action and withdraws it before the Remote', async () => {
     const b = await bench()
     expect(inject).toEqual(['remote', 'sessions', 'uiWorkspace', 'slots', 'locale'])
+    expect(b.ctx.slots.entries('shell.overlay')).toHaveLength(1)
     expect(b.entry()).toMatchObject({ options: { id: 'workstream', order: -19 }, locale: 'workstream' })
     const t = b.ctx.locale.bind('workstream')
     expect(t('tab.needs')).toBe('Needs you')
     await b.dispose()
     expect(b.entry()).toBeUndefined()
+    expect(b.ctx.slots.entries('shell.overlay')).toHaveLength(0)
     expect(b.unmount).toHaveBeenCalledOnce()
     expect(t('tab.needs')).toBe('tab.needs')
   })
@@ -94,7 +99,7 @@ describe('Workstream panel browser plugin', () => {
       kind: 'answer', request: { ticketId: build.id, questionId: 'q1' as never, expectedRevision: 4, answer: 'main' },
     })
     expect(refreshed).toBe(true)
-    expect(b.refreshProjections).toHaveBeenCalledExactlyOnceWith(ROOT)
+    expect(b.refreshProjections).toHaveBeenCalledExactlyOnceWith(ROOT, true)
     expect(failure).toEqual({ code: 'stale', message: 'Ticket "build" is at revision 5, expected 4' })
   })
 

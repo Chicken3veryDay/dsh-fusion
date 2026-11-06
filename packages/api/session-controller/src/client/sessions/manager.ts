@@ -14,7 +14,7 @@ import type {
 import { mergeOrderedBaseline } from '../ordered-baseline.ts'
 import { isRemoteFailure } from '@deepseek-ai/dsh-api-gateway/client'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, type RemoteFailure, type RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionListEntry, TitledSessionSummary } from './lineage.ts'
 import { flattenLineage } from './lineage.ts'
 // Type-only merge edge: the title domain's client-namespace outlet declares
@@ -214,7 +214,13 @@ export class SessionManager {
     const reads = [...this.projectionInflight.values()]
     for (const { controller } of reads) controller.abort()
     this.projectionInflight.clear()
-    await Promise.all(reads.map(read => read.promise))
+    await Promise.all(reads.map(async (read) => {
+      try {
+        await read.promise
+      } catch (error) {
+        if (!isRemoteFailure(error)) throw error
+      }
+    }))
     const sessions = [...this.sessions.values()]
     this.sessions.clear()
     this.addresses.clear()
@@ -346,12 +352,18 @@ export class SessionManager {
   /**
    * Read projections without starting migration; retry failed or migration-deferred reads.
    * @param sessionId - Session to inspect without opening its conversation.
+   * @param force - discard cached readiness and supersede any earlier read; reject unless a sequenced baseline is received.
    * @returns completion of the current or newly started read.
    */
-  refreshProjections(sessionId: SessionId): Promise<void> {
+  refreshProjections(sessionId: SessionId, force = false): Promise<void> {
     const existing = this.projectionInflight.get(sessionId)
-    if (existing !== undefined) return existing.promise
-    if (this.projectionLoads.get(sessionId)?.state === 'ready') return Promise.resolve()
+    if (existing !== undefined && !force) {
+      return existing.promise.catch((error: unknown) => {
+        if (!isRemoteFailure(error)) throw error
+      })
+    }
+    if (force) existing?.controller.abort()
+    if (!force && this.projectionLoads.get(sessionId)?.state === 'ready') return Promise.resolve()
     const controller = new AbortController()
     const store = this.projectionStore(sessionId)
     const initialValues = store.values()
@@ -360,9 +372,13 @@ export class SessionManager {
     const operation = (async () => {
       try {
         const result = await this.remote.session.projections({ sessionId }, controller.signal)
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted) {
+          if (force) throw new RemoteError('session/projections-unavailable', 'The projection reread was cancelled', {})
+          return
+        }
         if (result.ok) {
           const value = result.value
+          if (force && value?.kind !== 'sequenced') throw new RemoteError('session/projections-unavailable', 'A current Session projection baseline is unavailable', {})
           if (value !== null) {
             switch (value.kind) {
               case 'sequenced':
@@ -384,11 +400,16 @@ export class SessionManager {
           })
         } else {
           this.projectionLoads.set(sessionId, { state: 'error', error: result.error })
+          if (force) throw result.error
         }
       } catch (error: unknown) {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted) {
+          if (force) throw error
+          return
+        }
         if (!isRemoteFailure(error)) throw error
         this.projectionLoads.set(sessionId, { state: 'error', error })
+        if (force) throw error
       } finally {
         if (!controller.signal.aborted) {
           this.projectionInflight.delete(sessionId)

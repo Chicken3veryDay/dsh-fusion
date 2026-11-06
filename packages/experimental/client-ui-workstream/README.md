@@ -31,15 +31,15 @@ The header action appears only in a conversation whose Workstream root projects 
 
 ### Act on questions and attention
 
-Needs you lists open questions and unresolved attention items of Tickets that have not ended, oldest first. A question card has an answer field, Send answer, and Close question. An attention card has Acknowledge until it is acknowledged, and Resolve. Each command carries the Ticket revision that the panel displayed. When another change committed first, the card shows a conflict notice, the panel rereads the root projections, and the next attempt uses the current revision. Permission, availability, and Ticket validation failures stay visible on the card that caused them.
+Needs you lists open questions and unresolved attention items of Tickets that have not ended, oldest first. A question card has an answer field, Send answer, and Close question. An attention card has Acknowledge until it is acknowledged, and Resolve. Each command carries the Ticket revision that the panel displayed. When another change committed first, the panel forces a new root projection read before reporting the conflict. A failed reread reports its error instead of claiming the current state is displayed. Command failures appear in an application toast even if the card, tab, panel, or conversation closes; rejected answer text accompanies the report and stays in any surviving answer field.
 
-The Ticket service decides who may act. Answers, acknowledgements, and resolutions require the Ticket coordinator, so a member conversation that does not coordinate the Ticket shows a permission notice. A question's author may also close it.
+The Ticket service decides who may act. Answers, acknowledgements, and resolutions require the Ticket coordinator, so a member conversation that does not coordinate the Ticket shows a permission notice. A question's author may also close it. Remote commands also require access to both the displayed Session and the derived root Session.
 
 ### Inspect Work, Team, Changes, and Files
 
 - **Work** shows Mission plans with per-milestone completion counted from Ticket statuses, then every Ticket with its status, coordinator, dependencies, and assignments.
 - **Team** shows every member with role, coordinator marker, phase, description, and diagnostic. Selecting the owner opens the owner Session; selecting another member opens its continuable child address. The current conversation and provisioning members cannot be selected.
-- **Changes** reads the aggregated change requests when the view opens and on Reload. Each entry links to its web page and lists the Sessions that bind it. When a Session or the forge service could not be read, a notice states that the list may be incomplete and gives the reasons.
+- **Changes** reads the aggregated change requests when the view opens and on Reload. The last successful list stays visible during reloads and after a reload failure, with the error beside it. Each entry links to its web page and lists the Sessions that bind it. When a Session or the forge service could not be read, a notice states that the list may be incomplete and gives the reasons.
 - **Files** shows each evidence artifact with every retained version's number, size, author, and digest prefix. The panel does not read artifact content.
 
 -----
@@ -50,9 +50,9 @@ The Ticket service decides who may act. Answers, acknowledgements, and resolutio
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-`WorkstreamPanelController` is a `TypertRemoteService` with one Agent lookup parameter per method, so the Gateway resolves the displayed Session and access-checks it as that Session's resource. No wire field names a second Session. The controller derives the Workstream root from the caller's own Session header, calls `ctx.workstreams.requireMembership` with the live caller, and runs `ctx.tickets.answer`, `closeQuestion`, `acknowledgeAttention`, or `resolveAttention` on the root's Ticket log with the caller as actor. `changeRequests` returns `ctx.workstreamEvidence.aggregateChangeRequests` for the same caller and root. Ticket and Workstream failures become `workstreamPanel/stale-revision`, `workstreamPanel/denied`, `workstreamPanel/unavailable`, or `workstreamPanel/rejected`; other failures propagate unchanged.
+`WorkstreamPanelController` is a `TypertRemoteService` with one Agent lookup parameter per method, so the Gateway resolves the displayed Session and access-checks it as that Session's resource. No wire field names a second Session. The controller derives the Workstream root from the caller's own Session header, calls `ctx.workstreams.requireMembership` with the live caller, and runs `ctx.tickets.answer`, `closeQuestion`, `acknowledgeAttention`, or `resolveAttention` on the root's Ticket log with the caller as actor. `changeRequests` checks access to the root and every active member before reading `ctx.workstreamEvidence.aggregateChangeRequests`; insufficient access rejects the entire read. Ticket commands check root access before reading membership or appending to its log. Ticket and Workstream failures become `workstreamPanel/stale-revision`, `workstreamPanel/denied`, `workstreamPanel/unavailable`, or `workstreamPanel/rejected`; other failures propagate unchanged.
 
-The Client export mounts the generated Remote, then registers its locale dictionaries and one conversation-header slot; disposal withdraws the slot before the Remote. A stale-revision failure calls `sessions.refreshProjections` on the root before the card shows the conflict.
+The Client export mounts the generated Remote, then registers its locale dictionaries, conversation-header action, and shell-overlay command reports; disposal withdraws both slots before the Remote. A stale-revision failure calls `sessions.refreshProjections(root, true)` to bypass a ready cache and cancel any older read. The sequenced baseline preserves newer projection frames.
 
 | File | Role |
 |---|---|

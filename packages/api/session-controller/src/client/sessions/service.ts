@@ -348,9 +348,10 @@ export class ClientSessions implements ISessions {
   /**
    * Read projections without starting migration; retry failed or migration-deferred reads.
    * @param sessionId - Session to inspect without opening its conversation.
+   * @param force - discard cached readiness and supersede any earlier read; reject unless a sequenced baseline is received.
    */
-  refreshProjections(sessionId: SessionId): Promise<void> {
-    return this.manager.refreshProjections(sessionId)
+  refreshProjections(sessionId: SessionId, force = false): Promise<void> {
+    return this.manager.refreshProjections(sessionId, force)
   }
 
   /**

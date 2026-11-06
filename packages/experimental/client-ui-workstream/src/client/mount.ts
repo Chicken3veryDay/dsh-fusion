@@ -5,12 +5,14 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {} from '@deepseek-ai/dsh-experimental-client-ui-workstream/remote'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RemoteErrorCode, RemoteResult, TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { WorkstreamAction, type WorkstreamActionInjected, type WorkstreamCommand, type WorkstreamFailure } from './WorkstreamAction.tsx'
+import { CommandNotice, createCommandReports } from './notices.tsx'
 import { de, en, es, fr, ja, NS, pt, ru, zh, type WorkstreamKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -40,6 +42,10 @@ export function failureOf(error: { readonly code: RemoteErrorCode; readonly mess
 
 function registerUi(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'client-ui-workstream: dictionaries')
+  const reports = createCommandReports()
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay', id: 'workstream.command-notice', locale: NS, inject: () => ({ reports }),
+  }, CommandNotice))
   const { sessions } = ctx
   const rootOf = (sessionId: SessionId): SessionId =>
     sessions.binding(sessionId)?.session.getSnapshot().subagent?.address.parentSessionId ?? sessionId
@@ -54,6 +60,7 @@ function registerUi(ctx: Context): void {
   }
 
   const actions: WorkstreamActionInjected = {
+    reportFailure: reports.reportFailure,
     openMember(sessionId, memberId) {
       if ((sessions.retainInfo(sessionId).getSnapshot().retainedBy.mainView ?? 0) === 0) return
       const parentSessionId = rootOf(sessionId)
@@ -64,11 +71,18 @@ function registerUi(ctx: Context): void {
       ctx.uiWorkspace.openSession({ parentSessionId, childSessionId: memberId, mode: 'continuable' })
     },
     async command(sessionId, command) {
+      const rootSessionId = rootOf(sessionId)
       const result = await send(sessionId, command)
       if (result.ok) return null
       const failure = failureOf(result.error)
       // The projection frame may lag the rejected command; reread so the next attempt carries the current revision.
-      if (failure.code === 'stale') await sessions.refreshProjections(rootOf(sessionId))
+      if (failure.code === 'stale') {
+        try {
+          await sessions.refreshProjections(rootSessionId, true)
+        } catch (error) {
+          return { code: 'refresh-failed', message: String(error) }
+        }
+      }
       return failure
     },
     async changeRequests(sessionId) {

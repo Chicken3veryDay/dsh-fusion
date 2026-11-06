@@ -31,15 +31,15 @@ kind: "package-reference"
 
 ### 处理问题与关注事项
 
-待你处理按时间顺序列出尚未结束的工单中打开的问题和未解决的关注事项。问题卡片包含回答输入框、发送回答与关闭问题。关注卡片在确认前提供确认，并始终提供解决。每条命令携带面板显示时的工单 revision。若其他更改先提交，卡片显示冲突提示，面板重新读取根投影，下一次尝试使用当前 revision。权限、可用性和工单校验失败会保留在引发失败的卡片上。
+待你处理按时间顺序列出尚未结束的工单中打开的问题和未解决的关注事项。问题卡片包含回答输入框、发送回答与关闭问题。关注卡片在确认前提供确认，并始终提供解决。每条命令携带面板显示时的工单 revision。若其他更改先提交，面板会在报告冲突前强制重新读取根投影。重新读取失败时会报告错误，而不声称已显示当前状态。命令失败通过应用级 toast 显示，即使卡片、标签页、面板或会话已关闭；报告包含被拒绝的回答文本，仍存在的回答输入框也会保留该文本。
 
-工单服务决定谁可以执行操作。回答、确认和解决需要工单协调者，因此不协调该工单的成员会话会显示权限提示。问题作者也可以关闭自己的问题。
+工单服务决定谁可以执行操作。回答、确认和解决需要工单协调者，因此不协调该工单的成员会话会显示权限提示。问题作者也可以关闭自己的问题。Remote 命令还要求对当前显示的 Session 和推导出的根 Session 都有访问权限。
 
 ### 查看工作、成员、变更与文件
 
 - **工作** 显示 Mission 计划及按工单状态计算的各里程碑完成数，然后列出每个工单的状态、协调者、依赖与分派。
 - **成员** 显示每个成员的角色、协调者标记、阶段、描述与诊断。选择所有者会打开所有者 Session；选择其他成员会打开其 continuable 子会话地址。当前会话与准备中的成员不可选择。
-- **变更** 在视图打开和点击重新加载时读取聚合的变更请求。每一项链接到其网页并列出绑定它的 Session。当某个 Session 或 forge 服务无法读取时，提示说明列表可能不完整并给出原因。
+- **变更** 在视图打开和点击重新加载时读取聚合的变更请求。重新加载期间及失败后保留上次成功读取的列表，并在旁边显示错误。每一项链接到其网页并列出绑定它的 Session。当某个 Session 或 forge 服务无法读取时，提示说明列表可能不完整并给出原因。
 - **文件** 显示每个证据产物及其每个保留版本的编号、大小、作者与摘要前缀。面板不读取产物内容。
 
 -----
@@ -50,9 +50,9 @@ kind: "package-reference"
 <details>
 <summary>实现内部细节 — 点击展开</summary>
 
-`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`。`changeRequests` 为同一调用者和根返回 `ctx.workstreamEvidence.aggregateChangeRequests`。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；其他失败原样传播。
+`WorkstreamPanelController` 是 `TypertRemoteService`，每个方法都有一个 Agent lookup 参数，因此 Gateway 解析当前显示的 Session，并按该 Session 资源进行访问检查。没有 wire 字段可以指定第二个 Session。控制器从调用者自身的 Session header 推导 Workstream 根，以实时调用者调用 `ctx.workstreams.requireMembership`，并以调用者为 actor 在根的工单日志上执行 `ctx.tickets.answer`、`closeQuestion`、`acknowledgeAttention` 或 `resolveAttention`。`changeRequests` 在读取 `ctx.workstreamEvidence.aggregateChangeRequests` 前检查根和每个活跃成员的访问权限；权限不足会拒绝整个读取。工单命令在读取成员资格或追加根日志前检查根访问权限。Ticket 与 Workstream 失败转换为 `workstreamPanel/stale-revision`、`workstreamPanel/denied`、`workstreamPanel/unavailable` 或 `workstreamPanel/rejected`；其他失败原样传播。
 
-Client export 先挂载生成的 Remote，再注册 locale 字典和一个会话页头 slot；释放时先撤回 slot，再撤回 Remote。stale-revision 失败会在卡片显示冲突前对根调用 `sessions.refreshProjections`。
+Client export 先挂载生成的 Remote，再注册 locale 字典、会话页头 action 和 shell overlay 命令报告；释放时先撤回两个 slot，再撤回 Remote。stale-revision 失败调用 `sessions.refreshProjections(root, true)`，绕过已就绪的缓存并取消较早的读取。带序号的基线保留较新的投影帧。
 
 | 文件 | 作用 |
 |---|---|

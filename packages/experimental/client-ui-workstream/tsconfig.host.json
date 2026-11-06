@@ -30,6 +30,9 @@
     },
     {
       "path": "../workstream-evidence"
+    },
+    {
+      "path": "../../api/remote-access/tsconfig.host.json"
     }
   ]
 }

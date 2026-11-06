@@ -1,6 +1,7 @@
 /** The panel Remote runs Ticket commands as the live caller on its Workstream root and types every domain refusal. */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import RemoteAccessService from '@deepseek-ai/dsh-api-remote-access'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -37,6 +38,7 @@ function scratch(prefix: string): string {
 async function setup() {
   const ctx = new Context()
   contexts.push(ctx)
+  await ctx.plugin(RemoteAccessService)
   await mountAgentLoopTestDependencies(ctx)
   await mountWorkingDirectoryFixture(ctx)
   await ctx.plugin(JsonlSessionPersistence, { root: scratch('workstream-panel-sessions-') })
