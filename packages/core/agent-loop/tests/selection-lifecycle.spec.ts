@@ -73,6 +73,6 @@ it.each(['short-circuit', 'reject-before', 'reject-after', 'throw-after', 'abort
   await send(h.agent, 'check selection lifetime')
   const endings = h.agent.session.snapshotEvents().filter(event => event.type === 'turn/end').map(event => event.data.reason.kind)
   expect(endings).toEqual([path.startsWith('abort-') ? 'aborted' : path.startsWith('reject-') ? 'blocked' : path.startsWith('throw-') ? 'error' : 'completed'])
-  expect(disposals).toEqual(['reject-before', 'abort-condition', 'abort-policy'].includes(path) ? [] : [1])
+  expect(disposals).toEqual(['reject-before', 'abort-condition', 'abort-policy'].includes(path) ? [] : ['short-circuit', 'success'].includes(path) ? [1, 1] : [1])
   expect(adapter.requests).toHaveLength(['short-circuit', 'success'].includes(path) ? 1 : 0)
 })

@@ -713,7 +713,7 @@ describe('tool execution', () => {
     }
   })
 
-  it.each(['value', 'renderer'] as const)('keeps a dispatch %s replacement instead of prepared images', async (replacement) => {
+  it.each(['value', 'renderer'] as const)('normalizes dispatch %s changes with the accepted output definition', async (replacement) => {
     const rich = await mountRichRegistry()
     try {
       const client = createMockClient(
@@ -741,7 +741,15 @@ describe('tool execution', () => {
       })
       expect(result.isError).toBe(false)
       expect(rich.attachments.saved).toHaveLength(1)
-      expect(result.content).toEqual([{ type: 'text', text: 'dispatch replacement' }])
+      expect(result.content).toEqual(replacement === 'value'
+        ? [{ type: 'text', text: 'dispatch replacement' }]
+        : [{
+          type: 'image',
+          attachment: {
+            attachmentId: AttachmentId(`sha256:${'1'.padStart(64, '0')}`),
+            mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+          },
+        }])
     } finally {
       await rich.ctx.fiber.dispose()
     }

@@ -19,6 +19,14 @@ export interface ToolExecutionSource {
    * retained registry's executable lookup, which applies the call's step admission.
    */
   get?(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
+  /**
+   * Recheck a retained definition before its body starts; omitted checks registry admission by identity.
+   * @param definition - exact definition accepted before policy.
+   * @param scope - calling scope; omitted checks global admission.
+   * @param toolSet - admitted set; omitted checks unconditional registrations.
+   * @returns whether the same definition remains executable.
+   */
+  has?(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean
   /** Reject an otherwise visible invocation before policy; omitted permits it. */
   reject?(name: string, nested: boolean): Error | undefined
 }
@@ -129,6 +137,7 @@ export class ToolExecutionPipeline {
     const concludingExecutions = this.concludingExecutions
     const base = {
       token,
+      ...visible === undefined ? {} : { definition: visible },
       callId,
       rootCallId,
       name,
@@ -155,6 +164,7 @@ export class ToolExecutionPipeline {
         throw new TypeError('tool execution arguments must be losslessly JSON-serializable')
       }
       const execution: MutableToolRunContext = { ...base, arguments: deepFreeze(detached) }
+      Object.defineProperty(execution, 'definition', { value: visible, enumerable: true, writable: false, configurable: false })
       this.deferredContexts.set(execution, deferredContexts)
       this.contentFinalizers.set(execution, finalizerFor())
       if (!rejected) this.contentProjectors.set(execution, capturedProjector)
@@ -269,8 +279,9 @@ export class ToolExecutionPipeline {
     }
     exec.signal = signal
     try {
-      const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined, exec.toolSet)
-      if (!tool) throw new ToolNotFoundError(exec.name)
+      const tool = exec.definition
+      if (tool === undefined || !(this.source.has?.(tool, exec.agent, exec.toolSet)
+        ?? this.tools.isExecutable(tool, exec.agent, exec.toolSet))) throw new ToolNotFoundError(exec.name)
       state.bodyInvoked = true
       const returned = await tool.execute(exec.arguments, exec)
       const result = this.createSuccessResult(exec, tool, returned)
@@ -509,7 +520,7 @@ export class ToolExecutionPipeline {
       if (result.isError) {
         throw new TypeError('tools/post-execute cannot replace the value of a failed result')
       }
-      const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined, exec.toolSet)
+      const tool = exec.definition
       if (tool === undefined) throw new ToolNotFoundError(exec.name)
       const replaced = this.createSuccessResult(exec, tool, decision.value)
       return this.markCanonical(exec, {
@@ -578,7 +589,7 @@ export class ToolExecutionPipeline {
         ...result.additionalContexts !== undefined ? { additionalContexts: result.additionalContexts } : {},
       })
     }
-    const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined, exec.toolSet)
+    const tool = exec.definition
     if (tool === undefined) throw new ToolNotFoundError(exec.name)
     const normalized = this.createSuccessResult(exec, tool, result.value)
     return this.markCanonical(exec, {

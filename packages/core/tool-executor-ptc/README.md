@@ -49,7 +49,7 @@ Shared dispatch events and the `ptc-mode` message-source declaration live in `@d
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The executor receives the entire raw call batch and owns parsing, scheduling, cancellation, and optional model-step logging. It reuses the shared invocation pipeline for policy, tool bodies, and result notifications. After abort, it waits for started work and returns ordered error results for skipped calls. Unloading the executor aborts active sandboxed programs and waits for their nested calls to settle. Accepted batches still settle through that executor, potentially with cancellation errors.
+The executor receives the entire raw call batch and owns parsing, scheduling, cancellation, and optional model-step logging. It reuses the shared invocation pipeline for policy, tool bodies, and result notifications. After abort, it waits for started work and returns ordered error results for skipped calls. Unloading the executor aborts active sandboxed programs and waits for their nested calls to settle. Accepted batches still settle through that executor, potentially with cancellation errors. The shared pipeline retains `exec.definition` for nested policy and result normalization, and rechecks that definition by identity before starting its body.
 
 ### PTC mode
 

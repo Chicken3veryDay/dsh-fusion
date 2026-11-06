@@ -430,7 +430,7 @@ interface ToolExecutor {
 
 ## 执行：可扩展的 waterfall（瀑布式事件）加单调策略
 
-内置执行器把解析后的 `ToolExecutionInput` 交给共享 `ToolExecutionPipeline`。流水线负责参数快照、执行身份、策略瀑布、工具分发和最终结果通知，每次返回一个 `ToolExecutionResult`。自定义执行器可以独立实现这些行为；公开的 `ToolExecutor` 只要求工具描述和批次执行方法。
+内置执行器把解析后的 `ToolExecutionInput` 交给共享 `ToolExecutionPipeline`。流水线负责参数快照、执行身份、策略瀑布、工具分发和最终结果通知，每次返回一个 `ToolExecutionResult`。自定义执行器可以独立实现这些行为；公开的 `ToolExecutor` 只要求工具描述和批次执行方法。 `ToolExecution.definition` 为策略与结果规范化保留被接受的精确定义；未知调用没有定义。仅在调用主体前按身份重新检查存活状态，因此调用后的注销不会改变完成结果。
 
 ```ts type-equiv
 /** Opaque call identity that permits correlation without exposing mutable execution state. */
@@ -554,6 +554,9 @@ interface PtcDispatchLog {
  * observers run.
  */
 interface ToolExecution extends ToolExecutionInput {
+  /** Exact definition accepted before policy; absent for an unknown tool. Retained through settlement. */
+  readonly definition?: ToolDefinition
+
   /** Root model-requested call, resolved for every root and nested execution. */
   readonly rootCallId: ToolCallId
   /** Executor-assigned identity shared with nested calls only as their opaque `parent` token. */
@@ -832,6 +835,15 @@ originOf(name: string, scope?: ScopeKey): ToolOrigin
 executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
 
 /**
+ * Check a retained definition before body invocation without resolving a name again.
+ * @param definition - exact definition accepted before execution policy.
+ * @param scope - calling agent; omitted checks the global scope.
+ * @param toolSet - step admission; omitted requires an unconditional registration and no admission policy.
+ * @returns whether this definition remains admitted and visible to the caller.
+ */
+isExecutable(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean
+
+/**
  * Resolve conditions once for this step without changing shared registrations,
  * then narrow the result by the registered admission policies.
  * Cancellation, a rejected condition, or a failing policy publishes no partial
@@ -865,6 +877,13 @@ schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[]
  * @returns the effect disposer. Unloading leaves the selection unavailable until it is replaced.
  */
 setExecutor(executor: ToolExecutor): () => void
+
+/**
+ * Resolve the nearest scoped provider, or the deployment default.
+ * @param scope - Agent or preset scope; omitted selects only the root contribution.
+ * @returns the selected executor; throws when it is missing or unloaded.
+ */
+selectExecutor(scope?: ScopeKey): ToolExecutor
 
 /**
  * Delegate a raw call batch to its Agent's provider or the deployment default.

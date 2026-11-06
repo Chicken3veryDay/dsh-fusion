@@ -600,7 +600,7 @@ describe('ToolRuntime', () => {
     expect(result.error?.message).toBe('tools/post-execute cannot replace the value of a failed result')
   })
 
-  it('fails value replacement when the owning tool disappears before post-policy resolves', async () => {
+  it('retains the output definition when the owning tool disappears before post-policy resolves', async () => {
     const ctx = await setup()
     const dispose = ctx.tools.register(echoTool)
     ctx.on('tools/post-execute', async () => {
@@ -609,9 +609,10 @@ describe('ToolRuntime', () => {
     })
 
     const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('post-disposed'), name: 'echo', arguments: {} })
-    expect(result.error).toEqual({
-      message: 'unknown tool "echo"',
-      info: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+    expect(result).toEqual({
+      isError: false,
+      value: 'replacement',
+      content: [{ type: 'text', text: 'replacement' }],
     })
   })
 
@@ -643,7 +644,7 @@ describe('ToolRuntime', () => {
     })
   })
 
-  it('fails wrapper-authored success normalization when the owning tool disappears', async () => {
+  it('retains the output definition for wrapper-authored success after disposal', async () => {
     const ctx = await setup()
     const dispose = ctx.tools.register(echoTool)
     ctx.on('tools/execute', async () => {
@@ -652,9 +653,10 @@ describe('ToolRuntime', () => {
     })
 
     const result = await executeToolFixture(ctx, { signal: testToolSignal, callId: ToolCallId('wrapper-disposed'), name: 'echo', arguments: {} })
-    expect(result.error).toEqual({
-      message: 'unknown tool "echo"',
-      info: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+    expect(result).toEqual({
+      isError: false,
+      value: 'replacement',
+      content: [{ type: 'text', text: 'replacement' }],
     })
   })
 

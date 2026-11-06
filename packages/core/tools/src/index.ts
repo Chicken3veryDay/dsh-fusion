@@ -322,6 +322,21 @@ export class ToolsService extends Service {
     return view.registrations.get(name)?.when === undefined ? view.visible.get(name) : undefined
   }
 
+  /**
+   * Check a retained definition before body invocation without resolving a name again.
+   * @param definition - exact definition accepted before execution policy.
+   * @param scope - calling agent; omitted checks the global scope.
+   * @param toolSet - step admission; omitted requires an unconditional registration and no admission policy.
+   * @returns whether this definition remains admitted and visible to the caller.
+   */
+  isExecutable(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean {
+    if (toolSet !== undefined) return [...toolSet.view(scope).values()].includes(definition)
+    if (this.hasAdmissionPolicy(scope)) return false
+    const view = this.view(scope)
+    return [...view.visible.values()].includes(definition)
+      && [...view.registrations.values()].some(registration => registration.definition === definition && registration.when === undefined)
+  }
+
   /** Whether a global policy or one in the scope's chain would run when this scope resolves a step. */
   private hasAdmissionPolicy(scope: ScopeKey | undefined): boolean {
     return !this.admission.global.isEmpty() || this.admission.chainLayers(scope).some(layer => !layer.isEmpty())
@@ -473,7 +488,7 @@ export class ToolsService extends Service {
    * @param scope - Agent or preset scope; omitted selects only the root contribution.
    * @returns the selected executor; throws when it is missing or unloaded.
    */
-  private selectExecutor(scope?: ScopeKey): ToolExecutor {
+  selectExecutor(scope?: ScopeKey): ToolExecutor {
     let record: Registration | undefined
     for (const key of scopeChainOf(scope)) {
       record = this.scoped.get(key)

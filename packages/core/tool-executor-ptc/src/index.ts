@@ -32,6 +32,8 @@ export class PtcExecutor implements ToolExecutor {
     ]
     this.pipeline = new ToolExecutionPipeline(ctx, {
       get: (name, scope, toolSet) => name === RUN_CODE_NAME ? this.requirePtcTransport() : tools.executable(name, scope, toolSet),
+      has: (definition, scope, toolSet) => definition === this.requirePtcTransport()
+        || tools.isExecutable(definition, scope, toolSet),
       reject: (name, nested) => !nested && name !== RUN_CODE_NAME
         ? new ToolNotFoundError(name, `only \`${RUN_CODE_NAME}\` is callable directly — call \`${name}\` from inside a \`${RUN_CODE_NAME}\` program instead`)
         : undefined,

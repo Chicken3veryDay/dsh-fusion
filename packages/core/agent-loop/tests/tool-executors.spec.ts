@@ -127,7 +127,7 @@ it('shares the registry and selects an independent executor through the preset s
   })
 })
 
-it('dispatches through the current Agent scope after prompt listeners rebuild the assembly', async () => {
+it('retains the declared executor when a nearer scope selects another during the response', async () => {
   const trace: string[] = []
   const adapter = new MockAdapter([
     () => { selectNearer(); return toolCallResponse('held', 'first_eval', {}) },
@@ -152,7 +152,7 @@ it('dispatches through the current Agent scope after prompt listeners rebuild th
   await run(ctx, agent)
   expect(adapter.requests[0]?.tools?.map(tool => tool.name)).toEqual(['first_eval'])
   expect(adapter.requests[1]?.tools?.map(tool => tool.name)).toEqual(['first_eval'])
-  expect(trace).toEqual(['nearer', 'first_eval:execute'])
+  expect(trace).toEqual(['first_eval:execute'])
 })
 
 it('rejects new batches after unload while an accepted batch settles on its original executor', async () => {

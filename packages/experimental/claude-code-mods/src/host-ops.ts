@@ -93,7 +93,7 @@ export interface HostOpsOptions {
   /** Names of commands mods registered, for `$.command.list` sources. */
   readonly modCommands: Set<string>
   /** Full names of tools mods registered, whose calls a `tool.call` hook may answer with a successful result. */
-  readonly modTools: Set<string>
+  readonly modTools: Set<ToolDefinition>
   /** Redraw a session's band after a `$.ui` call that changes what it shows; absent when no surface is drawn. */
   readonly redraw?: (sessionId: string) => void
   /** Note a prompt a mod submitted, so the `prompt.submit` it raises carries the mod as its origin. */
@@ -343,7 +343,7 @@ export function createHostOps(options: HostOpsOptions): OpTable<AgentBinding> {
         },
       }
       track(registry.register(definition), binding.agent)
-      options.modTools.add(fullName)
+      options.modTools.add(definition)
     },
     'tool.call': async (input, context) => {
       const agent = context.binding.agent

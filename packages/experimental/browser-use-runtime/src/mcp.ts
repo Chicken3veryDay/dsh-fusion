@@ -268,7 +268,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
           scope.ctx.on('tools/execute', async (exec, next) => {
             if (!exec.name.startsWith(toolPrefix)) return next()
             if (exec.agent !== agent) {
-              if (ctx.tools.get(exec.name, exec.agent) !== ctx.tools.get(exec.name, agent)) return next()
+              if (!ctx.tools.definitions(agent).some(definition => definition === exec.definition)) return next()
               throw new Error(`${options.name}: browser tool belongs to another Session`)
             }
             return next()

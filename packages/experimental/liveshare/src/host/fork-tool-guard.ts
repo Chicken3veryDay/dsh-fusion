@@ -13,6 +13,8 @@ import type { ForkCeiling } from './fork-policy.ts'
 
 /** One tool execution as the runtime presents it to a guard. */
 export interface ForkToolExecution {
+  /** Exact accepted definition supplied by the tool pipeline; absent for an unknown tool. */
+  readonly definition?: object
   /** Tool being dispatched, as the harness names it. */
   readonly name: string
   /** Parsed arguments the tool will receive. */
@@ -44,7 +46,7 @@ export interface ForkToolGuardPorts {
    * host vouches for the deployment's own definition and for the ones it installed into this child's
    * scope itself; anything else is refused before the ceiling considers the name.
    */
-  readonly toolIsTrusted: (childSessionId: string, tool: string) => boolean
+  readonly toolIsTrusted: (childSessionId: string, tool: string, definition: object | undefined) => boolean
   /**
    * Whether this exact execution already had that path authorized.
    *
@@ -57,6 +59,8 @@ export interface ForkToolGuardPorts {
 
 /** Ceiling decision for one tool name, and the paths its arguments name. */
 export interface ForkToolGuardRequest {
+  /** Retained definition whose identity the host must authorize. */
+  readonly definition?: object
   /** Child the execution belongs to. */
   readonly childSessionId: string
   /** Tool name. */
@@ -101,7 +105,7 @@ export function decideForkToolUse(
     tool: request.tool,
   })
   if (!decision.ok) return decision
-  if (!ports.toolIsTrusted(request.childSessionId, request.tool)) {
+  if (!ports.toolIsTrusted(request.childSessionId, request.tool, request.definition)) {
     return {
       ok: false,
       code: 'fork-tool-not-permitted',
@@ -162,6 +166,7 @@ export function forkToolGuard(
     const decision = decideForkToolUse(ceilingOf(childSessionId), {
       childSessionId,
       tool: execution.name,
+      ...execution.definition === undefined ? {} : { definition: execution.definition },
       ...describe(execution),
       ...(execution.token === undefined ? {} : { token: execution.token }),
     }, ports)

@@ -232,15 +232,15 @@ describe('confined fork tools', () => {
     h.forks.enforcedCeiling.mockReturnValue(READ_ONLY_FORK_CEILING)
     const guard = h.guard() as (execution: Record<string, unknown>) => string | undefined
     expect(guard).toBeDefined()
-    expect(guard?.({ name: 'read', arguments: { file_path: 'inside.ts' }, agent: { id: 'other' } }))
+    expect(guard?.({ name: 'read', definition: h.registered.get('read'), arguments: { file_path: 'inside.ts' }, agent: { id: 'other' } }))
       .toContain('without a child session')
 
     h.target.authorized = () => false
-    expect(guard?.({ name: 'read', arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' }, token: Symbol('t') }))
+    expect(guard?.({ name: 'read', definition: h.registered.get('read'), arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' }, token: Symbol('t') }))
       .toContain('which this host did not install')
 
     h.target.authorized = () => true
-    expect(guard?.({ name: 'read', arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' } }))
+    expect(guard?.({ name: 'read', definition: h.registered.get('read'), arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' } }))
       .toContain('may only read inside the workspace')
 
     // A definition visible from both registries is trusted even though this host did not install it.
@@ -248,7 +248,7 @@ describe('confined fork tools', () => {
     installForkEnforcement(visible.target as never, visible.failure)
     visible.forks.enforcedCeiling.mockReturnValue(READ_ONLY_FORK_CEILING)
     const visibleGuard = visible.guard()
-    expect(visibleGuard?.({ name: 'read', arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' } }))
+    expect(visibleGuard?.({ name: 'read', definition: visible.registered.get('read'), arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' } }))
       .toContain('may only read inside the workspace')
     expect(visibleGuard?.({ name: 'write', arguments: {}, agent: { id: 'child-1' } }))
       .toContain('may not use write')
@@ -272,7 +272,7 @@ describe('confined fork tools', () => {
     const preExecute = visible.listeners.get('tools/pre-execute') as
       ((value: Record<string, unknown>, next: () => unknown) => Promise<unknown>) | undefined
     await preExecute?.({ token, arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' } }, () => 'next')
-    expect(h.guard()?.({ name: 'read', arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' }, token }))
+    expect(h.guard()?.({ name: 'read', definition: h.registered.get('read'), arguments: { file_path: 'inside.ts' }, agent: { id: 'child-1' }, token }))
       .toContain('may only read inside the workspace')
   })
 
@@ -284,7 +284,7 @@ describe('confined fork tools', () => {
     h.forks.enforcedCeiling.mockReturnValue(READ_ONLY_FORK_CEILING)
     h.describe.mockReturnValue({ paths: [], noFileEffect: true })
     const guard = h.guard() as (execution: Record<string, unknown>) => string | undefined
-    const call = () => guard({ name: 'todo_write', arguments: {}, agent: { id: 'child-1' } })
+    const call = () => guard({ name: 'todo_write', definition: h.registered.get('todo_write'), arguments: {}, agent: { id: 'child-1' } })
     // The deployment's own definition is the one the limit vouched for, so the no-effect tool runs.
     expect(call()).toBeUndefined()
     // A different definition answering to the same name is not the one this host installed or vouched
@@ -524,10 +524,11 @@ describe('source-session sandbox', () => {
         .map(profile => profile.name).sort(),
     )
 
-    const guard = h.guardFunction() as (execution: { readonly name: string }) => string | undefined
-    for (const name of sharedToolNames('view')) expect(guard({ name })).toBeUndefined()
+    const guard = h.guardFunction() as
+      (execution: { readonly name: string; readonly definition?: object | undefined }) => string | undefined
+    for (const name of sharedToolNames('view')) expect(guard({ name, definition: h.installed.get(name) ?? h.registered.get(name) })).toBeUndefined()
     for (const name of ['write', 'edit', 'bash', 'pwsh', 'cua', 'plugin_manager', 'schedule_create', 'ghost']) {
-      expect(guard({ name })).toContain('may not use')
+      expect(guard({ name, definition: h.installed.get(name) ?? h.registered.get(name) })).toContain('may not use')
       expect(h.installed.has(name)).toBe(false)
     }
   })
@@ -638,9 +639,10 @@ describe('source-session sandbox', () => {
     const installed = installSourceSessionAccess(h.target as never)
     expect(installed).toMatchObject({ readConfined: true, registrationFailure: { tool: 'glob' } })
     expect(h.installed.has('glob')).toBe(false)
-    const guard = h.guardFunction() as (execution: { readonly name: string }) => string | undefined
-    expect(guard({ name: 'glob' })).toContain('may not use')
-    expect(guard({ name: 'grep' })).toBeUndefined()
+    const guard = h.guardFunction() as
+      (execution: { readonly name: string; readonly definition?: object | undefined }) => string | undefined
+    expect(guard({ name: 'glob', definition: h.installed.get('glob') ?? h.registered.get('glob') })).toContain('may not use')
+    expect(guard({ name: 'grep', definition: h.installed.get('grep') ?? h.registered.get('grep') })).toBeUndefined()
   })
 
   it('leaves a view tool the deployment does not ship uninstalled and refused', () => {
@@ -648,7 +650,8 @@ describe('source-session sandbox', () => {
     installSourceSessionAccess(h.target as never)
     // Nothing casts the deployment's missing present tool into a permit: the guard only knows registered
     // names.
-    const guard = h.guardFunction() as (execution: { readonly name: string }) => string | undefined
+    const guard = h.guardFunction() as
+      (execution: { readonly name: string; readonly definition?: object | undefined }) => string | undefined
     expect(guard({ name: 'present' })).toContain('may not use')
     expect(h.installed.has('present')).toBe(false)
   })
@@ -747,20 +750,22 @@ describe('source-session sandbox', () => {
     })
     const installed = installSourceSessionAccess(h.target as never)
     expect(installed).toMatchObject({ readConfined: true, writeConfined: true, registrationFailure: { tool: 'edit' } })
-    const guard = h.guardFunction() as (execution: { readonly name: string }) => string | undefined
-    expect(guard({ name: 'edit' })).toContain('may not use')
-    expect(guard({ name: 'write' })).toBeUndefined()
+    const guard = h.guardFunction() as
+      (execution: { readonly name: string; readonly definition?: object | undefined }) => string | undefined
+    expect(guard({ name: 'edit', definition: h.installed.get('edit') ?? h.registered.get('edit') })).toContain('may not use')
+    expect(guard({ name: 'write', definition: h.installed.get('write') ?? h.registered.get('write') })).toBeUndefined()
   })
 
   it('refuses a no-effect tool once another definition answers to its name', () => {
     const h = sourceHarness({ tools: [...sharedToolNames('view')] })
     installSourceSessionAccess(h.target as never)
-    const guard = h.guardFunction() as (execution: { readonly name: string }) => string | undefined
+    const guard = h.guardFunction() as
+      (execution: { readonly name: string; readonly definition?: object | undefined }) => string | undefined
     // The definition the installation found at install time is the one it vouches for.
-    expect(guard({ name: 'todo_write' })).toBeUndefined()
+    expect(guard({ name: 'todo_write', definition: h.installed.get('todo_write') ?? h.registered.get('todo_write') })).toBeUndefined()
     // A scope registration that replaces it later is a different tool under a permitted name.
     h.registered.set('todo_write', deploymentTool('todo_write'))
-    expect(guard({ name: 'todo_write' })).toContain('may not use')
+    expect(guard({ name: 'todo_write', definition: h.installed.get('todo_write') ?? h.registered.get('todo_write') })).toContain('may not use')
   })
 
   it('guards every tool but this installation’s replacements', () => {
@@ -770,7 +775,7 @@ describe('source-session sandbox', () => {
     expect(provider).toBeDefined()
     expect(provider?.({ arguments: {} })).toContain('may not use')
     expect(provider?.({ arguments: {}, name: 'other' })).toContain('may not use')
-    expect(provider?.({ arguments: {}, name: 'read' })).toBeUndefined()
+    expect(provider?.({ arguments: {}, name: 'read', definition: h.installed.get('read') })).toBeUndefined()
     // A view Session installs no write or edit name, so the guard refuses the deployment's own.
     expect(provider?.({ arguments: {}, name: 'write' })).toContain('may not use')
     expect(provider?.({ arguments: {}, name: 'edit' })).toContain('may not use')
@@ -781,7 +786,7 @@ describe('source-session sandbox', () => {
     const writable = sourceHarness({ tools: ['read', 'write'], writeGate: { mayWrite: () => true } })
     installSourceSessionAccess(writable.target as never)
     const writableGuard = writable.guardFunction() as ((execution: unknown) => unknown) | undefined
-    expect(writableGuard?.({ arguments: {}, name: 'write' })).toBeUndefined()
+    expect(writableGuard?.({ arguments: {}, name: 'write', definition: writable.installed.get('write') })).toBeUndefined()
     expect(writableGuard?.({ arguments: {}, name: 'edit' })).toContain('may not use')
   })
 })

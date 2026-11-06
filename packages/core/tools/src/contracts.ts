@@ -315,6 +315,9 @@ export type ToolExecutionMode =
  * observers run.
  */
 export interface ToolExecution extends ToolExecutionInput {
+  /** Exact definition accepted before policy; absent for an unknown tool. Retained through settlement. */
+  readonly definition?: ToolDefinition
+
   /** Root model-requested call, resolved for every root and nested execution. */
   readonly rootCallId: ToolCallId
   /** Executor-assigned identity shared with nested calls only as their opaque `parent` token. */

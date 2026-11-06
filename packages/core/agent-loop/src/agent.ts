@@ -4,6 +4,7 @@
  * @module dsh-agent-loop/agent
  */
 
+import { createHash } from 'node:crypto'
 import type {
   Agent,
   AgentCancelCause,
@@ -34,8 +35,8 @@ import type { EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnE
 import { canonicalHeader, headerEquals, ToolCallRecovery } from '@deepseek-ai/dsh-session'
 import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
-import { ToolActivationError, ToolBatchExecutionError } from '@deepseek-ai/dsh-tools'
-import type { ResolvedToolSet } from '@deepseek-ai/dsh-tools'
+import { ToolActivationError, ToolAdmissionError, ToolBatchExecutionError } from '@deepseek-ai/dsh-tools'
+import type { ResolvedToolSet, ToolDefinition, ToolExecutor } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { ReactLoopInbox } from './inbox.ts'
 import { RuntimeContextProjection } from './runtime-context.ts'
@@ -60,12 +61,16 @@ type Phase =
   }
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
-/**
- * One step's admitted tools with the prompt assembled from exactly that selection, and the Session
- * surface's content generation read before resolution began. A later generation means history was
- * replaced since, which can revoke an admitted tool, so the pair is no longer current.
- */
-type PreparedTools = { readonly toolSet: ResolvedToolSet; readonly assembly: PromptAssembly; readonly generation: number }
+/** Immutable inputs that produced one accepted prompt and declaration sequence. */
+interface RequestInputs {
+  readonly definitions: readonly ToolDefinition[]
+  readonly executor: ToolExecutor
+  readonly ordered: boolean
+  readonly contexts: readonly string[]
+}
+
+/** One step's live admission and the immutable evidence for its accepted assembly. */
+type PreparedTools = { readonly toolSet: ResolvedToolSet; readonly assembly: PromptAssembly; readonly inputs: RequestInputs }
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
 
@@ -78,7 +83,7 @@ type PreparedStep =
     selection: Readonly<ModelSelection>
     /**
      * Admission shared by the step's declarations and dispatch, with its prompt. The step replaces the
-     * pair, disposing the old selection, when history changed before a request attempt; the turn
+     * pair, disposing the old selection, when its captured inputs differ before an attempt; the turn
      * disposes the current one after the step.
      */
     tools: PreparedTools
@@ -355,67 +360,79 @@ export class ReactLoopAgent implements Agent {
     }
   }
 
-  /**
-   * Resolve the step's tools and assemble the prompt from that one selection.
-   * @param selection - the step's fixed model selection.
-   * @param signal - turn cancellation.
-   * @returns the pair with the content generation read before resolution; the caller disposes its selection.
-   */
+  /** Resolve and assemble one step's initial tool selection. */
   private async selectTools(selection: Readonly<ModelSelection>, signal: AbortSignal): Promise<PreparedTools> {
-    const generation = this.session.surface.contentGeneration
     const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: selection, signal })
-    return this.assembleFor(toolSet, selection, generation, signal)
+    return this.assembleFor(toolSet, selection, signal)
   }
 
-  /** Assemble the prompt from one resolved selection, disposing the selection if assembly fails. */
+  /** Assemble from one selection, disposing it on failure and capturing immutable request inputs. */
   private async assembleFor(
-    toolSet: ResolvedToolSet, selection: Readonly<ModelSelection>, generation: number, signal: AbortSignal,
+    toolSet: ResolvedToolSet, selection: Readonly<ModelSelection>, signal: AbortSignal,
   ): Promise<PreparedTools> {
     try {
+      const definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet))
+      const executor = this.loopCtx.tools.selectExecutor(this)
       const assembly = await this.loopCtx.systemPrompt.assemble({
         ...assembleContextFor(this, signal), modelSelection: selection, toolSet,
       })
       signal.throwIfAborted()
-      return { toolSet, assembly, generation }
+      return { toolSet, assembly, inputs: this.requestInputs(toolSet, assembly, definitions, executor) }
     } catch (error: unknown) {
       toolSet.dispose()
       throw error
     }
   }
 
-  /**
-   * Bring the step's tools and prompt up to date with the last history replacement. Called after
-   * request preparation, the last point before a request attempt that can change history (pre-step
-   * work after `next()`, model-switch compaction, overflow-recovery compaction); nothing awaits between
-   * this and the request, so the declarations sent and the selection dispatched agree with the surviving
-   * history. Tools are resolved again; when they admit exactly the definitions, order, and ordering mode
-   * of the current selection, that selection and its assembly stay (a retry keeps its accepted prompt)
-   * and the new one is disposed. Otherwise the prompt is assembled from the new selection and the old
-   * selection is disposed. A failure leaves the current selection in place for the turn to dispose.
-   * @param decision - the entered step whose `tools` may be replaced.
-   * @param signal - turn cancellation.
-   */
-  private async reselectAfterHistoryChange(decision: Extract<PreparedStep, { kind: 'enter' }>, signal: AbortSignal): Promise<void> {
-    while (decision.tools.generation !== this.session.surface.contentGeneration) {
-      const generation = this.session.surface.contentGeneration
-      const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: decision.selection, signal })
-      const previous = decision.tools
-      if (this.sameAdmission(previous.toolSet, toolSet)) {
-        toolSet.dispose()
-        decision.tools = { ...previous, generation }
-        continue
-      }
-      decision.tools = await this.assembleFor(toolSet, decision.selection, generation, signal)
-      previous.toolSet.dispose()
-    }
+  /** Capture identities and rendered context hashes without retaining a mutable registry view. */
+  private requestInputs(
+    toolSet: ResolvedToolSet, assembly: PromptAssembly,
+    definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
+    executor = this.loopCtx.tools.selectExecutor(this),
+  ): RequestInputs {
+    return Object.freeze({
+      definitions,
+      executor,
+      ordered: toolSet.ordered === true,
+      contexts: Object.freeze(renderContextSections(assembly).map(section =>
+        createHash('sha256').update(JSON.stringify([section.name, section.text])).digest('hex'))),
+    })
   }
 
-  /** Whether two selections admit the same definitions in the same order and ordering mode. */
-  private sameAdmission(current: ResolvedToolSet, next: ResolvedToolSet): boolean {
-    const before = this.loopCtx.tools.definitions(this, current)
-    const after = this.loopCtx.tools.definitions(this, next)
-    return (current.ordered === true) === (next.ordered === true)
-      && before.length === after.length && before.every((definition, index) => after[index] === definition)
+  /**
+   * Resolve once after every preparation, including retries and appended history. An unchanged tuple
+   * keeps the accepted prompt and cache prefix; changed definitions, executor, or context reassemble.
+   * Claiming listeners never rerun, and bookkeeping appends cannot drive a reselection loop.
+   */
+  private async reselectForRequest(decision: Extract<PreparedStep, { kind: 'enter' }>, signal: AbortSignal): Promise<void> {
+    const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: decision.selection, signal })
+    const previous = decision.tools
+    try {
+      const assembly = this.loopCtx.systemPrompt.refreshContext(previous.assembly, {
+        ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet,
+      })
+      const inputs = this.requestInputs(toolSet, assembly)
+      signal.throwIfAborted()
+      if (this.sameRequestInputs(previous.inputs, inputs)) {
+        decision.tools = { ...previous, toolSet }
+        previous.toolSet.dispose()
+        return
+      }
+    } catch (error: unknown) {
+      toolSet.dispose()
+      throw error
+    }
+    decision.tools = await this.assembleFor(toolSet, decision.selection, signal)
+    previous.toolSet.dispose()
+  }
+
+  /** Compare new inputs with the captured sequence, never with the previous selection's live view. */
+  private sameRequestInputs(before: RequestInputs, after: RequestInputs): boolean {
+    return before.executor === after.executor && before.ordered === after.ordered
+      && before.definitions.length === after.definitions.length
+      && before.definitions.every((definition, index) => after.definitions[index] === definition)
+      && before.contexts.length === after.contexts.length
+      && before.contexts.every((hash, index) => after.contexts[index] === hash)
   }
 
   /** Whether the assembled tool schemas differ from the logged request header's. */
@@ -515,7 +532,7 @@ export class ReactLoopAgent implements Agent {
         kind: 'error',
         error: error instanceof LlmError
           ? error.failure
-          : { message: errorChain(error), code: error instanceof ToolActivationError ? error.code : 'UNKNOWN' },
+          : { message: errorChain(error), code: error instanceof ToolActivationError || error instanceof ToolAdmissionError ? error.code : 'UNKNOWN' },
       }
       this.throwError(error)
     } finally {
@@ -543,14 +560,13 @@ export class ReactLoopAgent implements Agent {
     let firstAttempt = true
     while (true) {
       const { config, preparedCall } = await this.prepareRequest(turn, step, decision.selection, signal)
-      // Nothing below awaits before the request is sent, so this selection is the one the request declares.
-      await this.reselectAfterHistoryChange(decision, signal)
+      const requestContext = await this.loopCtx.systemPrompt.requestContext({
+        ...assembleContextFor(this, signal), modelSelection: decision.selection,
+      }, firstAttempt ? decision.messages : [])
+      await this.reselectForRequest(decision, signal)
       const { assembly } = decision.tools
       const renderedPrompt = renderPrompt(assembly)
-      const currentContext = this.loopCtx.systemPrompt.refreshContext(assembly, {
-        ...assembleContextFor(this, signal), modelSelection: decision.selection,
-      })
-      const sections = renderContextSections(currentContext)
+      const sections = renderContextSections(assembly)
       const context = this.runtimeContext.project(joinContextSections(sections), sections)
       signal.throwIfAborted()
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
@@ -575,6 +591,9 @@ export class ReactLoopAgent implements Agent {
             this.session.append('user/message', message, { surfaceOp: 'append' })
           }
         }
+      }
+      for (const message of requestContext) {
+        this.session.append('user/message', message, { surfaceOp: 'append' })
       }
       if (context !== undefined && !contextAdmitted) {
         this.session.append('user/message', context, { surfaceOp: 'append' })
@@ -691,7 +710,7 @@ export class ReactLoopAgent implements Agent {
         if (toolCalls.length === 0) return { kind: 'completed' }
         const maxParallelToolCalls = this.loopCtx.agentLoop.config.maxParallelToolCalls.get()
         try {
-          const result = await this.loopCtx.tools.execute({
+          const result = await decision.tools.inputs.executor.execute({
             calls: toolCalls, signal, agent: this, log: { turn, step },
             maxParallelToolCalls, toolSet: decision.tools.toolSet,
           })

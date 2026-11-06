@@ -68,11 +68,11 @@ ctx.tools.register(defineTool({
 <a id="conditional-tools"></a>
 ### 条件工具
 
-`register(definition, { when })` 为每个模型步骤计算一次同步或异步条件。条件接收 `{ agent, modelSelection, signal }`；`modelSelection` 是步骤准备时为该步骤所有请求尝试捕获的提供方、模型与推理强度，与 `AssembleContext.modelSelection` 相同。返回 false 会从执行器的描述、PTC 绑定和执行集合中排除工具。条件抛错会以 `TOOL_ACTIVATION_FAILED` 中止步骤准备，不会被当成正常不可用。条件必须响应取消，不得改变注册或执行工具操作。
+`register(definition, { when })` 在每次工具选择时计算同步或异步条件，包括每次请求准备完成后的重新选择。条件接收 `{ agent, modelSelection, signal }`；`modelSelection` 是步骤准备时为该步骤所有请求尝试捕获的提供方、模型与推理强度，与 `AssembleContext.modelSelection` 相同。返回 false 会从执行器的描述、PTC 绑定和执行集合中排除工具。条件抛错会以 `TOOL_ACTIVATION_FAILED` 中止步骤准备，不会被当成正常不可用。条件必须响应取消，不得改变注册或执行工具操作。
 
-`resolve({ agent, modelSelection, signal })` 返回步骤拥有的 `ResolvedToolSet`。将它作为 `toolSet` 传给提示词组装以及该步骤的 `ctx.tools.execute()` 批次，批次结束后释放；同一步骤内的重试复用它。执行器把批次的集合应用到每次调用，包括 PTC 程序的子调用。注册仍由 effect 持有；每份集合只准入原 agent scope 中的原注册。注销、新的限制或同名替换会阻止尚未开始的调用继续使用它；取消之后，调用以共享 pipeline 的取消结果结束。已经开始的操作保留协作取消义务。批次没有已解析集合时，条件工具调用返回 `UNKNOWN_TOOL`。
+`resolve({ agent, modelSelection, signal })` 返回步骤拥有的 `ResolvedToolSet`。将它作为 `toolSet` 传给提示词组装以及该步骤的 `ctx.tools.execute()` 批次，被替换或批次结束后释放。循环在每次请求准备后重新解析；只有捕获的定义身份、执行器与已渲染上下文哈希一致时，才保留已接受的提示词。执行器把批次的集合应用到每次调用，包括 PTC 程序的子调用。注册仍由 effect 持有；每份集合只准入原 agent scope 中的原注册。注销、新的限制或同名替换会阻止尚未开始的调用继续使用它；取消之后，调用以共享 pipeline 的取消结果结束。已经开始的操作保留协作取消义务。批次没有已解析集合时，条件工具调用返回 `UNKNOWN_TOOL`。
 
-`get(name, scope, toolSet)`、`definitions(scope, toolSet)` 和 `schemas(scope, toolSet)` 读取已准入集合；省略 `toolSet` 时只查看已注册定义，不计算条件。`executable(name, scope, toolSet)` 是执行时的查找：它应用集合，没有集合时排除条件注册。执行器的描述与分区通过 `AssembleContext.toolSet` 接收同一集合。展示变换不能增删可调用工具。
+`get(name, scope, toolSet)`、`definitions(scope, toolSet)` 和 `schemas(scope, toolSet)` 读取已准入集合；省略 `toolSet` 时只查看已注册定义，不计算条件。`executable(name, scope, toolSet)` 是执行时的查找：它应用集合，没有集合时排除条件注册。执行器的描述与分区通过 `AssembleContext.toolSet` 接收同一集合。展示变换不能增删可调用工具。 `isExecutable(definition, scope, toolSet)` 在主体开始前按身份检查保留的定义；没有集合时，条件注册和带准入策略的 scope 均不可执行。
 
 <a id="admission-policies"></a>
 ### 准入策略
@@ -118,7 +118,7 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 
 ### 设计理念
 
-注册表在作用域层中持有类型化 `ToolDefinition`，并在请求时把它们投影为面向模型的 `ToolSchema` 集合——`output`、`execute`、`finalizeContent`、`timeoutMs` 与呈现回调绝不会泄漏到协议上。每次调用都运行一条固定流水线：`tools/pre-execute`（可扩展的允许／拒绝／询问）→ 已注册单调守卫 → `tools/execute`（环绕分发包装层）→ `tools/post-execute`（检查／替换、附加上下文）→ 由定义持有的 `finalizeContent` → 仅观测的 `tools/result` 事件。只有 `tools/execute` 视图可以替换必填信号，注册表会在调用主体前重新融合调用方信号。
+注册表在作用域层中持有类型化 `ToolDefinition`，并在请求时把它们投影为面向模型的 `ToolSchema` 集合——`output`、`execute`、`finalizeContent`、`timeoutMs` 与呈现回调绝不会泄漏到协议上。每次调用都运行一条固定流水线：`tools/pre-execute`（可扩展的允许／拒绝／询问）→ 已注册单调守卫 → `tools/execute`（环绕分发包装层）→ `tools/post-execute`（检查／替换、附加上下文）→ 由定义持有的 `finalizeContent` → 仅观测的 `tools/result` 事件。只有 `tools/execute` 视图可以替换必填信号，注册表会在调用主体前重新融合调用方信号。所有策略与结果转换均读取 `exec.definition`，即被接受的精确定义。主体开始前按身份检查存活状态；之后的注销不会改变输出校验、限时元数据或成功完成结果。
 
 ### 源码地图
 

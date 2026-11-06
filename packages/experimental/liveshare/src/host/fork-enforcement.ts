@@ -153,7 +153,7 @@ export function installSourceSessionAccess(target: SourceSessionAccess): SourceS
    * A name the deployment registers is not evidence that the constrained definition is the one that would
    * run, so the guard permits only what this installation put in the Session's scope itself.
    */
-  const installed = new Set<string>()
+  const installed = new Map<string, ToolDefinition>()
   /**
    * Deployment definitions this installation vouches for without replacing them.
    *
@@ -200,8 +200,9 @@ export function installSourceSessionAccess(target: SourceSessionAccess): SourceS
    */
   const register = (name: string, deployment: ToolDefinition, execute: ToolDefinition['execute']): boolean => {
     try {
-      disposers.push(context.tools.register({ ...deployment, execute }))
-      installed.add(name)
+      const definition = { ...deployment, execute }
+      disposers.push(context.tools.register(definition))
+      installed.set(name, definition)
       return true
     } catch (error: unknown) {
       // The guard is still installed: a name this host could not register is refused rather than served
@@ -329,11 +330,8 @@ export function installSourceSessionAccess(target: SourceSessionAccess): SourceS
   // belongs to the turn the viewer drives.
   const guard = context.tools.guard((execution) => {
     if (!confined(execution)) return undefined
-    if (installed.has(execution.name)) return undefined
-    // A no-effect tool keeps the deployment's own definition, which this installation vouches for by
-    // identity. A name answering to a different definition — a scope-registered shadow — is refused.
-    const deployment = passthrough.get(execution.name)
-    if (deployment !== undefined && deploymentOf(execution.name) === deployment) return undefined
+    if (execution.definition !== undefined
+      && [...installed.values(), ...passthrough.values()].some(definition => definition === execution.definition)) return undefined
     return `a shared session may not use ${execution.name}`
   })
   disposers.push(guard)
@@ -696,7 +694,7 @@ export function installForkEnforcement(
    * A name is not evidence that the constrained definition is the one that would run: the guard permits
    * only what this installation registered, so a definition that failed to register stays refused.
    */
-  const vouchedNames = new Set<string>()
+  const vouchedNames = new Map<string, ToolDefinition>()
   /**
    * Deployment definitions this installation vouches for without replacing them.
    *
@@ -731,8 +729,9 @@ export function installForkEnforcement(
     execute: ToolDefinition['execute'],
   ): (() => void) | undefined => {
     try {
-      const dispose = childContext.tools.register({ ...deployment, execute })
-      vouchedNames.add(name)
+      const definition = { ...deployment, execute }
+      const dispose = childContext.tools.register(definition)
+      vouchedNames.set(name, definition)
       const release = (): void => {
         vouchedNames.delete(name)
         dispose()
@@ -924,11 +923,10 @@ export function installForkEnforcement(
       // Only definitions this installation vouched for are executable: its own replacements, and the
       // exact deployment objects of the tools it left in place because they touch no workspace file.
       // A name whose replacement failed, or that anything else now answers to, is refused.
-      toolIsTrusted: (_id, tool) => {
+      toolIsTrusted: (_id, tool, definition) => {
         if (target.authorized?.(tool) === false) return false
-        if (vouchedNames.has(tool)) return true
-        const deployment = passthrough.get(tool)
-        return deployment !== undefined && deploymentOf(tool) === deployment
+        return definition !== undefined
+          && [...vouchedNames.values(), ...passthrough.values()].some(trusted => trusted === definition)
       },
       authorizeReadPath: (_id, path, token) => {
         if (token === undefined) return false

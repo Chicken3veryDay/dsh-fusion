@@ -126,7 +126,7 @@ The diagnostic creates 20,000 unrelated files and six matches, then measures fiv
 
 ### Two budgets, two artifacts
 
-Raw stdout and stderr are internal transport details; the tools always collect the complete result in memory, and only the inline page is capped. When a call yields more logical results than the inline cap, a best-effort spill saves the complete formatted preview to the spill store and the page carries its locator, while dispatches whose full value never enters model context skip the spill. Missing or failed spill keeps the inline page and reports that the complete result could not be saved — never an error. The collection and spill handoff live in `src/search-core.ts` and `src/presentation.ts`.
+Raw stdout and stderr are internal transport details; the tools always collect the complete result in memory, and only the inline page is capped. When a call yields more logical results than the inline cap, a best-effort spill saves the complete formatted preview to the spill store and the page carries its locator, while dispatches whose full value never enters model context skip the spill. Missing or failed spill keeps the inline page and reports that the complete result could not be saved — never an error. The collection and spill handoff live in `src/search-core.ts` and `src/presentation.ts`. Spill post-processing identifies its accepted operation by `exec.definition`, so registration replacement cannot substitute another tool or suppress a completed result.
 
 </details>
 

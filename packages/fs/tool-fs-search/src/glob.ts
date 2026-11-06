@@ -369,7 +369,7 @@ export function applyGlobTool(ctx: Context, caps: GlobToolCaps): void {
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    const value = acceptedDirectCallValue(ctx, tool, exec, result, decision) as { root: string; paths: string[] } | undefined
+    const value = acceptedDirectCallValue(tool, exec, result, decision) as { root: string; paths: string[] } | undefined
     if (value === undefined) return decision
     const paths = value.paths
     if (paths.length <= caps.maxResults) return decision

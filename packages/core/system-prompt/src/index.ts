@@ -8,7 +8,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { AnonymousEntries, NamedEntries, ScopedLayers, scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { ScopeKey, ScopeLayer, Scoped } from '@deepseek-ai/dsh-scope'
-import type { ContextSnapshotSection, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ContextSnapshotSection, ToolSchema, UserMessage } from '@deepseek-ai/dsh-llm'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -16,6 +16,15 @@ declare module '@deepseek-ai/cordis' {
   }
 
   interface Events {
+    /**
+     * Publish pending context messages after request preparation on every attempt. Providers must not
+     * claim inbox input or commit these messages; the loop logs them before sending the request.
+     * Return only context absent from the surviving Session history. Retries invoke providers again.
+     * @param context - requesting scope, model selection, and cancellation.
+     * @param pending - accepted messages not yet logged on the first attempt; empty on retries.
+     * @mode waterfall
+     */
+    'system-prompt/request-context'(this: Scoped<SystemPrompt>, context: AssembleContext, pending: readonly UserMessage[], next: () => Promise<UserMessage[]>): Promise<UserMessage[]>
     /**
      * Presentation waterfall over assembled sections, contexts, and variables.
      * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): scoped listeners
@@ -586,6 +595,20 @@ export class SystemPrompt extends Service {
       this.ctx,
       layer => layer.variables.insert(name, provider),
       { label: 'systemPrompt.variable()' },
+    )
+  }
+
+  /**
+   * Collect pending durable context after request preparation, independently of inbox claiming.
+   * Providers must respect cancellation and may return messages with their own source metadata.
+   * @param context - requesting scope and plugin-defined assembly fields; omitted uses global providers.
+   * @param pending - accepted messages awaiting logging; omitted or empty on retries.
+   * @returns additional messages the caller must log before deriving the model request.
+   */
+  async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]> {
+    return this.ctx.waterfall(
+      scopeTarget(this, context.scope), 'system-prompt/request-context', context, pending,
+      () => Promise.resolve([]),
     )
   }
 

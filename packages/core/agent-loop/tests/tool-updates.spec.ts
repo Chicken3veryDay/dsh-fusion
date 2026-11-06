@@ -143,8 +143,8 @@ describe('step-time tool activation', () => {
     agent.model.select({ provider: 'mock', model: 'disabled' })
     await send(agent, 'try the historical name')
     expect(calls).toBe(1)
-    expect(selectedModels).toEqual(['enabled', 'enabled', 'disabled', 'disabled'])
-    expect(adapter.requests.map(request => request.model)).toEqual(selectedModels)
+    expect(selectedModels).toEqual(['enabled', 'enabled', 'enabled', 'enabled', 'disabled', 'disabled', 'disabled', 'disabled'])
+    expect(adapter.requests.map(request => request.model)).toEqual(['enabled', 'enabled', 'disabled', 'disabled'])
     expect(developerEvents(agent).at(-1)?.data.message.content)
       .toEqual([{ type: 'tool-removal', toolName: 'conditional' }])
     expect(agent.session.snapshotEvents().find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'removed')?.data)
@@ -169,7 +169,7 @@ describe('step-time tool activation', () => {
     expect(agent.session.snapshotEvents().filter(event => ['request/header', 'system/message', 'user/message'].includes(event.type))).toEqual([])
   })
 
-  it('keeps one model selection, tool set, and prompt across retries without admitting users again', async () => {
+  it('keeps the model selection but refreshes changed admission and prompt across retries without admitting users again', async () => {
     const adapter = new MockAdapter([
       [{ type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', message: 'retry', status: 503 } } }],
       textResponse('done'),
@@ -195,10 +195,10 @@ describe('step-time tool activation', () => {
     })
     await send(agent, 'retry once')
     expect(adapter.requests.map(request => request.model)).toEqual(['first', 'first'])
-    expect(adapter.requests.map(request => request.tools ?? [])).toEqual([[], []])
+    expect(adapter.requests.map(request => request.tools?.map(tool => tool.name) ?? [])).toEqual([[], ['conditional']])
     expect(adapter.requests.map(request => request.messages.find(message => message.role === 'system')?.content))
-      .toEqual([[{ type: 'text', text: 'first:' }], [{ type: 'text', text: 'first:' }]])
-    expect(counts).toEqual({ conditions: 1, admissions: 1 })
+      .toEqual([[{ type: 'text', text: 'first:' }], [{ type: 'text', text: 'first:conditional' }]])
+    expect(counts).toEqual({ conditions: 3, admissions: 1 })
     expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.source.kind === 'user')).toHaveLength(1)
   })
 

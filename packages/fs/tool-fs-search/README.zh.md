@@ -126,7 +126,7 @@ node tests/.dsh-build/glob-native.perf.mjs
 
 ### 两类预算、两类产物
 
-原始 stdout 与 stderr 是内部传输细节；工具始终把完整结果收集到内存中，只有内联页面设有上限。当调用产生超过内联上限的逻辑结果时，尽力而为的 spill 会把完整格式化预览保存到 spill 存储，页面携带其 locator；完整值不会进入模型上下文的分派则跳过 spill。spill 缺失或失败时保留内联页面，并报告完整结果无法保存——绝不会成为错误。收集与 spill 交接位于 `src/search-core.ts` 与 `src/presentation.ts`。
+原始 stdout 与 stderr 是内部传输细节；工具始终把完整结果收集到内存中，只有内联页面设有上限。当调用产生超过内联上限的逻辑结果时，尽力而为的 spill 会把完整格式化预览保存到 spill 存储，页面携带其 locator；完整值不会进入模型上下文的分派则跳过 spill。spill 缺失或失败时保留内联页面，并报告完整结果无法保存——绝不会成为错误。收集与 spill 交接位于 `src/search-core.ts` 与 `src/presentation.ts`。溢出后处理通过 `exec.definition` 识别被接受的操作，因此注册替换既不能代入另一工具，也不会抑制已完成的结果。
 
 </details>
 

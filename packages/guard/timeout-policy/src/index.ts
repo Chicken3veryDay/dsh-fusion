@@ -27,7 +27,7 @@ export const TOOL_TIMEOUT = 'TOOL_TIMEOUT'
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'timeout-policy'
 
-/** The tool registry service this plugin wraps (`tools/execute`) and reads (`get`). */
+/** The tool registry service this plugin wraps (`tools/execute`) and observes. */
 export const inject = ['tools']
 
 /**
@@ -48,13 +48,13 @@ function toolTimeoutResult(timeoutMs: number): ToolExecutionResult {
 }
 
 /**
- * Register the timeout wrapper. It resolves the caller-visible tool definition,
+ * Register the timeout wrapper. It reads the retained execution definition,
  * temporarily replaces `exec.signal`, delegates, restores the upstream signal,
  * and replaces the result only when this wrapper's own timer fired.
  */
 export function apply(ctx: Context): void {
   ctx.on('tools/execute', async (exec, next): Promise<ToolExecutionResult> => {
-    const timeoutMs = ctx.tools.get(exec.name, exec.agent)?.timeoutMs
+    const timeoutMs = exec.definition?.timeoutMs
     // A tool that declares no budget: no deadline, delegate unchanged.
     if (timeoutMs === undefined) return next()
 

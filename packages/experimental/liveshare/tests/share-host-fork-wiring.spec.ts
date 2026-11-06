@@ -296,6 +296,7 @@ describe('share-host fork wiring', () => {
       arguments: { file_path: '/workspace/file.txt' },
       agent: { id: 'fork-child' },
       token: Symbol('execution'),
+      definition: fixture.toolDefinition('read'),
       signal: new AbortController().signal,
     }
 

@@ -18,9 +18,8 @@ import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { AssistantMessage, ContentBlock, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import { scopeOf } from '@deepseek-ai/dsh-scope'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
-import type { PostToolDecision, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, ToolDefinition, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { LoadedMod } from './chain.ts'
 import { RewriteRefusedError } from './chain.ts'
 import { ModsEngine } from './engine.ts'
@@ -227,7 +226,7 @@ export class ClaudeCodeMods extends TypertRemoteService {
     const aliases = createToolNameAliases(config.toolAliases)
     const callOrigins = new Map<string, LoadedMod>()
     const modCommands = new Set<string>()
-    const modTools = new Set<string>()
+    const modTools = new Set<ToolDefinition>()
     const report = (line: string): void => { ctx.logger.warn(`claude-code-mods: ${line}`) }
     const agentOf = (sessionId: string): Agent | undefined => ctx.get('agents')?.get(SessionId(sessionId))
     const detached = new DetachedRuns(report)
@@ -423,10 +422,10 @@ export class ClaudeCodeMods extends TypertRemoteService {
         return beneath
       }
       if (answer.isError === true) return modAnswered(text, 'MOD_ANSWERED')
-      if (modTools.has(exec.name)) return { isError: false, value: text, content: [{ type: 'text', text }] }
+      if (exec.definition !== undefined && modTools.has(exec.definition)) return { isError: false, value: text, content: [{ type: 'text', text }] }
       // A built-in tool's success value must satisfy its own output schema: a
       // conforming answer is the tool's result, any other is error-shaped.
-      const definition = ctx.get('tools')?.get(exec.name, agent === undefined ? undefined : scopeOf(agent.ctx))
+      const definition = exec.definition
       const value = jsonValueOf(answer.result)
       if (definition !== undefined && value !== undefined && validateJsonSchemaValue(definition.output.schema, value).length === 0) {
         return { isError: false, value, content: definition.output.render(exec.arguments, value) }

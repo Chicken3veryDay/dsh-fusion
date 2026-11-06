@@ -343,7 +343,7 @@ export function applyGrepTool(ctx: Context, caps: GrepToolCaps): void {
 
   ctx.on('tools/post-execute', async (exec, result, next) => {
     const decision = await next()
-    const value = acceptedDirectCallValue(ctx, tool, exec, result, decision) as { matches: GrepMatch[] } | undefined
+    const value = acceptedDirectCallValue(tool, exec, result, decision) as { matches: GrepMatch[] } | undefined
     if (value === undefined) return decision
     const matches = value.matches
     if (matches.length <= caps.maxMatches) return decision

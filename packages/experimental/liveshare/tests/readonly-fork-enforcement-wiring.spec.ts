@@ -65,7 +65,7 @@ function childContext() {
         captured.guard = guard
         return () => { delete captured.guard }
       },
-      get: (): ToolDefinition | undefined => readDefinition,
+      get: (name: string): ToolDefinition | undefined => name === 'read' ? readDefinition : undefined,
       register: (definition: ToolDefinition) => {
         captured.definitions.set(definition.name, definition)
         return () => { captured.definitions.delete(definition.name) }
@@ -134,7 +134,7 @@ const fs: ForkEnforcementFs = {
 }
 
 /** The tool registry half: one definition per name, shared by the host and an unshadowed child view. */
-const trusted: ForkToolRegistry = { get: (_name: string): ToolDefinition | undefined => readDefinition }
+const trusted: ForkToolRegistry = { get: (name: string): ToolDefinition | undefined => name === 'read' ? readDefinition : undefined }
 
 describe('fork resume preflight', () => {
   /** A host context whose session query answers one stored child and whose filesystem is the caller's. */
@@ -318,11 +318,14 @@ describe('fork enforcement wiring', () => {
     // The child's own read is this host's: the deployment's definition is shadowed by a confined one.
     expect(captured.definitions.get('read')?.name).toBe('read')
     expect(captured.definitions.get('read')).not.toBe(readDefinition)
+    const definition = captured.definitions.get('read')
+    if (definition === undefined) throw new Error('read replacement was not registered')
     const inside: ForkToolExecution = {
       name: 'read',
       arguments: { file_path: `${grantedRoot}/a.ts` },
       agent: { id: child },
       token: Symbol('inside'),
+      definition,
     }
     await captured.preExecute?.(inside, () => Promise.resolve({ kind: 'allow' }))
     // The verdict comes from the host's resolve/contains pair, not from the guard reading the string.
@@ -335,6 +338,7 @@ describe('fork enforcement wiring', () => {
       arguments: { file_path: `${grantedRoot}/a.ts` },
       agent: { id: child },
       token: Symbol('another-execution'),
+      definition,
     }
     expect(captured.guard?.(other)).toMatch(/workspace/u)
 

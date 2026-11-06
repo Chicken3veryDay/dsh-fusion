@@ -430,7 +430,7 @@ interface ToolExecutor {
 
 ## Execution: extensible waterfalls plus monotonic policy
 
-Built-in executors pass parsed `ToolExecutionInput` values to the shared `ToolExecutionPipeline`. The pipeline owns argument snapshots, execution identities, policy waterfalls, dispatch, and final-result notification, returning one `ToolExecutionResult` per invocation. Custom executors can implement their own execution; the public `ToolExecutor` requires only descriptions and batch execution.
+Built-in executors pass parsed `ToolExecutionInput` values to the shared `ToolExecutionPipeline`. The pipeline owns argument snapshots, execution identities, policy waterfalls, dispatch, and final-result notification, returning one `ToolExecutionResult` per invocation. `ToolExecution.definition` retains the exact accepted definition for policy and result normalization; unknown calls have no definition. Liveness is rechecked by identity only before body invocation, so disposal after invocation cannot change completion. Custom executors can implement their own execution; the public `ToolExecutor` requires only descriptions and batch execution.
 
 ```ts type-equiv
 /** Opaque call identity that permits correlation without exposing mutable execution state. */
@@ -554,6 +554,9 @@ interface PtcDispatchLog {
  * observers run.
  */
 interface ToolExecution extends ToolExecutionInput {
+  /** Exact definition accepted before policy; absent for an unknown tool. Retained through settlement. */
+  readonly definition?: ToolDefinition
+
   /** Root model-requested call, resolved for every root and nested execution. */
   readonly rootCallId: ToolCallId
   /** Executor-assigned identity shared with nested calls only as their opaque `parent` token. */
@@ -832,6 +835,15 @@ originOf(name: string, scope?: ScopeKey): ToolOrigin
 executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined
 
 /**
+ * Check a retained definition before body invocation without resolving a name again.
+ * @param definition - exact definition accepted before execution policy.
+ * @param scope - calling agent; omitted checks the global scope.
+ * @param toolSet - step admission; omitted requires an unconditional registration and no admission policy.
+ * @returns whether this definition remains admitted and visible to the caller.
+ */
+isExecutable(definition: ToolDefinition, scope?: ScopeKey, toolSet?: ResolvedToolSet): boolean
+
+/**
  * Resolve conditions once for this step without changing shared registrations,
  * then narrow the result by the registered admission policies.
  * Cancellation, a rejected condition, or a failing policy publishes no partial
@@ -865,6 +877,13 @@ schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[]
  * @returns the effect disposer. Unloading leaves the selection unavailable until it is replaced.
  */
 setExecutor(executor: ToolExecutor): () => void
+
+/**
+ * Resolve the nearest scoped provider, or the deployment default.
+ * @param scope - Agent or preset scope; omitted selects only the root contribution.
+ * @returns the selected executor; throws when it is missing or unloaded.
+ */
+selectExecutor(scope?: ScopeKey): ToolExecutor
 
 /**
  * Delegate a raw call batch to its Agent's provider or the deployment default.

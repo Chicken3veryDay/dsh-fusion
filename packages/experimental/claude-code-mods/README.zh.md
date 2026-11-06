@@ -123,7 +123,7 @@ Blast Radius 的 DSH 包装使用当前运行的可执行文件提供 Node 计�
 
 ### 映射到 harness
 
-[`index.ts`](src/index.ts) 注册监听器。`tool.call` 包裹 `tools/execute`，因此 harness 的权限决定先于链；`{ deny }` 成为带原因的错误结果，`{ result }` 在工具为模组注册或值满足工具输出 schema 时成为成功结果，否则为错误形态的结果。钩子在 `next` 之后改写的结果经 `tools/post-execute` 作为替换内容安装。向 `next` 传入改写参数的钩子会被跳过并报告，因为调用参数已经写入日志。[`host-ops.ts`](src/host-ops.ts) 持有每个 `$` 调用基于 `ctx.get(...)` 服务的引擎行为；目录所有者为必需服务，其他服务按需读取。[`surfaces.ts`](src/surfaces.ts) 为每个会话保留一条横幅：触发 `ui.render`，用 [`elements.ts`](src/elements.ts) 校验并序列化树，把每个 `Button` 的 `onPress` 保存在按绘制分配的动作 id 之后，让横幅订阅该次绘制读取的 `$.state` 槽位，并通过 `claudeCodeMods` Remote（`watchBand`、`pressBand`）把各代推流给 Client。
+[`index.ts`](src/index.ts) 注册监听器。`tool.call` 包裹 `tools/execute`，因此 harness 的权限决定先于链；`{ deny }` 成为带原因的错误结果，`{ result }` 在工具为模组注册或值满足工具输出 schema 时成为成功结果，否则为错误形态的结果。钩子在 `next` 之后改写的结果经 `tools/post-execute` 作为替换内容安装。向 `next` 传入改写参数的钩子会被跳过并报告，因为调用参数已经写入日志。[`host-ops.ts`](src/host-ops.ts) 持有每个 `$` 调用基于 `ctx.get(...)` 服务的引擎行为；目录所有者为必需服务，其他服务按需读取。[`surfaces.ts`](src/surfaces.ts) 为每个会话保留一条横幅：触发 `ui.render`，用 [`elements.ts`](src/elements.ts) 校验并序列化树，把每个 `Button` 的 `onPress` 保存在按绘制分配的动作 id 之后，让横幅订阅该次绘制读取的 `$.state` 槽位，并通过 `claudeCodeMods` Remote（`watchBand`、`pressBand`）把各代推流给 Client。钩子应答使用保留的 `exec.definition` 判断 mod 所有权、校验输出并渲染，包括注册替换之后。
 
 ### 源码地图
 
