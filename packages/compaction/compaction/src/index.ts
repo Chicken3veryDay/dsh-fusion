@@ -154,9 +154,8 @@ export abstract class CompactionEngine extends Service {
     const registered = (source: MessageSource): RevocableSourceStub => render(source as Extract<MessageSource, { kind: K }>)
     return this.ctx.effect(() => {
       this.revocableSources.set(kind, registered)
-      return () => {
-        if (this.revocableSources.get(kind) === registered) this.revocableSources.delete(kind)
-      }
+      // Effect disposers run once, and a kind registers once, so this entry is still the registered one.
+      return () => { this.revocableSources.delete(kind) }
     }, `compaction.registerRevocableSource(${kind})`)
   }
 

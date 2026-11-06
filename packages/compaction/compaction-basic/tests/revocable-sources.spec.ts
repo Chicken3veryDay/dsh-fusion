@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import { resolveRevocationStubBytes } from '@deepseek-ai/dsh-compaction-basic/src/config.ts'
+import { renderStubBlock } from '@deepseek-ai/dsh-compaction-basic/src/revocation.ts'
 import type { SummarizationInput } from '@deepseek-ai/dsh-compaction-basic/src/summarizer.ts'
 import type { RevocableSourceStub } from '@deepseek-ai/dsh-compaction'
 import LlmRuntime, {
@@ -314,6 +315,33 @@ describe('revocable message sources', () => {
     if (end.type !== 'compaction/end') throw new Error('unreachable')
     expect(end.data.error).toContain('renderer exploded')
     expect(engine.calls).toHaveLength(0)
+  })
+
+  describe('renderStubBlock', () => {
+    const stub = (text: string): RevocableSourceStub => ({ key: text, text })
+
+    it('emits nothing for no stubs or a non-positive budget', () => {
+      expect(renderStubBlock([], 100)).toBeUndefined()
+      expect(renderStubBlock([stub('a')], 0)).toBeUndefined()
+    })
+
+    it('truncates a single oversized stub within the limit without an overflow line', () => {
+      const block = renderStubBlock([stub('x'.repeat(500))], 100)!
+      expect(Buffer.byteLength(block, 'utf8')).toBeLessThanOrEqual(100)
+      expect(block).toMatch(/x…$/)
+      expect(block).not.toContain('more revoked')
+    })
+
+    it('keeps only the header and the count when no stub fits even truncated', () => {
+      const block = renderStubBlock([stub('Q'.repeat(500)), stub('y')], 90)!
+      expect(Buffer.byteLength(block, 'utf8')).toBeLessThanOrEqual(90)
+      expect(block).toContain('2 more revoked')
+      expect(block).not.toContain('Q')
+    })
+
+    it('emits nothing when not even the header and the count fit', () => {
+      expect(renderStubBlock([stub('x'.repeat(500)), stub('y')], 30)).toBeUndefined()
+    })
   })
 
   describe('stub budget', () => {
