@@ -3,7 +3,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import TicketService from '../src/index.ts'
+import TicketService, { TicketError } from '../src/index.ts'
 import { ticketActor } from './ticket-actor.ts'
 
 async function harness() {
@@ -64,5 +64,50 @@ describe('Ticket coordinator authority', () => {
       .rejects.toMatchObject({ message: 'Ticket coordinator authority failed', cause: { message: 'authority unavailable' } })
     expect(ctx.tickets.list(session)).toEqual([])
     expect(session.snapshotEvents().filter(event => event.type === 'ticket/state')).toEqual([])
+  })
+})
+
+describe('Ticket assignment authority', () => {
+  it('refuses inside the queue at the append, and stops refusing after disposal', async () => {
+    const { ctx, session } = await harness()
+    const worker = SessionId('assignment-worker')
+    await ticketActor(ctx, worker, async () => {})
+    const ticket = await ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Assign', description: '' }))
+    const assign = (revision: number) => ticketActor(ctx, session.id, () => ctx.tickets.assign(session,
+      { ticketId: ticket.id, expectedRevision: revision, actorId: session.id, ownerId: worker, subject: 'Do it' }))
+    const consulted: SessionId[] = []
+    let refuse = false
+    const dispose = ctx.tickets.registerAssignmentAuthority((candidate, assigneeId) => {
+      expect(candidate).toBe(session)
+      consulted.push(assigneeId)
+      if (refuse) throw new TicketError('assignee is gone', 'TICKET_AUTHORITY')
+    })
+    // The decision is read when the queued mutation runs, not when assign was called.
+    refuse = true
+    const queued = assign(ticket.revision)
+    await expect(queued).rejects.toMatchObject({ code: 'TICKET_AUTHORITY', message: 'assignee is gone' })
+    expect(ctx.tickets.get(session, ticket.id)).toMatchObject({ revision: ticket.revision, assignments: [] })
+    refuse = false
+    expect((await assign(ticket.revision)).assignments).toHaveLength(1)
+    expect(consulted).toEqual([worker, worker])
+    refuse = true
+    dispose()
+    const released = ctx.tickets.get(session, ticket.id)
+    expect((await ticketActor(ctx, session.id, () => ctx.tickets.assign(session,
+      { ticketId: ticket.id, expectedRevision: released.revision, actorId: session.id, ownerId: worker, subject: 'Again' }))).assignments).toHaveLength(2)
+    expect(consulted).toHaveLength(2)
+  })
+
+  it('wraps a non-Ticket failure of the authority and appends nothing', async () => {
+    const { ctx, session } = await harness()
+    const worker = SessionId('wrapped-worker')
+    await ticketActor(ctx, worker, async () => {})
+    const ticket = await ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Wrap', description: '' }))
+    const cause = new Error('broken authority')
+    ctx.tickets.registerAssignmentAuthority(() => { throw cause })
+    await expect(ticketActor(ctx, session.id, () => ctx.tickets.assign(session,
+      { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: worker, subject: 'Do it' })))
+      .rejects.toMatchObject({ code: 'TICKET_RECOVERY_FAILED', cause })
+    expect(ctx.tickets.get(session, ticket.id).assignments).toEqual([])
   })
 })

@@ -190,6 +190,7 @@ export class TicketService extends Service {
   private readonly recoveryFailures = new Set<SessionId>()
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly coordinatorAuthorities = new Set<(session: Session, requested: SessionId) => SessionId | undefined>()
+  private readonly assignmentAuthorities = new Set<(session: Session, assigneeId: SessionId) => void>()
   /** Execution-admitted attempts this service owns until a durable flush shows them settled, keyed like scope reservations. */
   private readonly settlements = new Map<string, Settlement>()
   /** Roots live when this service activated; their attempts may still belong to the previous service generation's producers. */
@@ -246,6 +247,21 @@ export class TicketService extends Service {
   registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void {
     this.coordinatorAuthorities.add(authority)
     return () => { this.coordinatorAuthorities.delete(authority) }
+  }
+
+  /** Register an owner of assignment admission that may refuse an assignee.
+   *
+   * `assign` consults every authority inside the Session's command queue, in the same synchronous step that follows the
+   * actor and CAS checks and precedes the append, so a refusal reflects the assignee's standing at the moment the
+   * assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.
+   * @param authority - synchronous decision for `assigneeId` in `session`; it throws a `TicketError` to refuse, which fails
+   * the assignment with that error unchanged and appends nothing. Any other exception returns `TICKET_RECOVERY_FAILED`
+   * with the original cause.
+   * @returns disposer that removes the authority.
+   */
+  registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void {
+    this.assignmentAuthorities.add(authority)
+    return () => { this.assignmentAuthorities.delete(authority) }
   }
 
   /** Read all Tickets recovered from one Session's durable log.
@@ -340,6 +356,7 @@ export class TicketService extends Service {
       this.assertCoordinator(ticket, request.actorId)
       if (ticket.assignments.length >= this.config.maxAssignments) throw new TicketError('Assignment limit exhausted', 'TICKET_LIMIT')
       const subject = nonEmpty('assignment subject', request.subject)
+      this.authorizeAssignee(session, request.ownerId)
       const assignmentId = AssignmentId(`assignment-${ticket.id}-${String(ticket.assignments.length + 1)}`)
       const slotId = ExecutionSlotId(`slot-${ticket.id}-${String(ticket.executionSlots.length + 1)}`)
       const mode = request.executionMode ?? 'dedicated-process'
@@ -1290,6 +1307,15 @@ export class TicketService extends Service {
       if (coordinatorId !== undefined) return coordinatorId
     }
     return requested
+  }
+
+  private authorizeAssignee(session: Session, assigneeId: SessionId): void {
+    for (const authority of this.assignmentAuthorities) {
+      try { authority(session, assigneeId) } catch (cause: unknown) {
+        if (cause instanceof TicketError) throw cause
+        throw new TicketError('Ticket assignment authority failed', 'TICKET_RECOVERY_FAILED', { cause })
+      }
+    }
   }
 
   private assertCaller(actorId: SessionId | undefined): Agent {

@@ -102,6 +102,19 @@ export class WorkstreamService extends Service {
       const snapshot = this.projection.stateOf(session).snapshot
       return snapshot !== null && requested === snapshot.ownerSessionId ? snapshot.coordinatorId : undefined
     }), 'workstreams.ticketCoordinator()')
+    // The same active-child rule as `assignTicket`, checked where Ticket appends, so a stop that completes while an assignment
+    // waits in Ticket's queue refuses it. The owner and inactive members are refused; a root without a Workstream is not governed.
+    this.ctx.effect(() => this.ctx.tickets.registerAssignmentAuthority((session, assigneeId) => {
+      if (!this.ready) {
+        const message = 'Workstream is still loading; retry the Ticket assignment'
+        throw new TicketError(message, 'TICKET_COORDINATOR_UNAVAILABLE', { cause: new WorkstreamError(message, 'WORKSTREAM_NOT_READY') })
+      }
+      const snapshot = this.projection.stateOf(session).snapshot
+      if (snapshot === null) return
+      const member = snapshot.members.find(candidate => candidate.id === assigneeId)
+      if (member?.phase === 'active' && member.id !== snapshot.ownerSessionId) return
+      throw new TicketError(`${assigneeId} is not an active member of this Workstream; assign an active child member`, 'TICKET_AUTHORITY')
+    }), 'workstreams.ticketAssignment()')
     this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
     this.ready = true
     this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')

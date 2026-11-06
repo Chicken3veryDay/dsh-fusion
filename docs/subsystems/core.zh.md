@@ -1363,6 +1363,18 @@ Durable Ticket commands require a registered live Agent in the initiator scope; 
  */
 registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void
 
+/** Register an owner of assignment admission that may refuse an assignee.
+ *
+ * `assign` consults every authority inside the Session's command queue, in the same synchronous step that follows the
+ * actor and CAS checks and precedes the append, so a refusal reflects the assignee's standing at the moment the
+ * assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.
+ * @param authority - synchronous decision for `assigneeId` in `session`; it throws a `TicketError` to refuse, which fails
+ * the assignment with that error unchanged and appends nothing. Any other exception returns `TICKET_RECOVERY_FAILED`
+ * with the original cause.
+ * @returns disposer that removes the authority.
+ */
+registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void
+
 /** Read all Tickets recovered from one Session's durable log.
  * @param session - Session whose log is replayed.
  * @returns recovered Ticket views.

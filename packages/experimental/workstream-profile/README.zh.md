@@ -47,7 +47,7 @@ patch 在 `dsh-base` 之后插入三个服务、三个工具行和 Web 面板：
 
 patch 中每个服务限制都是显式 Config 值，与包默认值相同。
 
-本层为 `ticket_assign` 挂载一个守卫：Ticket 接受任何 Session 作为受派人，因此守卫拒绝不是该根 Workstream 活跃子成员的受派人，规则与 `workstream_assign_ticket` 相同。没有 Workstream 的根交给 Ticket 处理。
+本层不为 `ticket_assign` 添加守卫。Ticket 接受任何 Session 作为受派人，因此 Workstream 注册了 Ticket 分配授权方，在 Ticket 队列内的分配提交时拒绝不是该根 Workstream 活跃子成员的受派人（`TICKET_AUTHORITY`），规则与 `workstream_assign_ticket` 相同。因此，停止操作在分配排队等待期间完成时，该分配仍会被拒绝。没有 Workstream 的根交给 Ticket 处理。
 
 -----
 
