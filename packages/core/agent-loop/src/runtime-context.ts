@@ -46,6 +46,8 @@ export interface SystemPromptDecisionInput {
    * on a route without tool-update support.
    */
   startsSeries: boolean
+  /** This attempt's own unsent system node, eligible for replacement within a continuing series. */
+  unsent?: SessionSeq
 }
 
 /** Committed events from the newest backward; the restore scans stop at the first match. */
@@ -104,6 +106,7 @@ export class SystemPromptProjection {
       return updates
     }
     if (latest.text === rendered) return []
+    if (input.unsent === latest.seq) return [this.replace(latest.seq, rendered)]
     return [{ message: createSystemMessage(rendered), intent: { surfaceOp: 'append' } }]
   }
 

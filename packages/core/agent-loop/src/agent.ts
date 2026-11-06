@@ -69,6 +69,9 @@ interface RequestInputs {
   readonly contexts: readonly string[]
 }
 
+/** Loop-owned nodes committed in this attempt but not yet sent to a model. */
+type UnsentRequestMessages = { readonly system?: SessionSeq; readonly context?: SessionSeq }
+
 /** One step's live admission and the immutable evidence for its accepted assembly. */
 type PreparedTools = { readonly toolSet: ResolvedToolSet; readonly assembly: PromptAssembly; readonly inputs: RequestInputs }
 
@@ -566,30 +569,35 @@ export class ReactLoopAgent implements Agent {
     startsRequestSeries: boolean,
     position: { turn: number; step: number },
     signal: AbortSignal,
-  ): void {
+    unsent?: UnsentRequestMessages,
+  ): UnsentRequestMessages {
     const { turn, step } = position
+    let system: SessionSeq | undefined
+    let runtime: SessionSeq | undefined
     const renderedPrompt = renderPrompt(assembly)
     const sections = renderContextSections(assembly)
     const context = this.runtimeContext.project(joinContextSections(sections), sections)
     signal.throwIfAborted()
     const commits = this.systemPrompt.project(renderedPrompt, {
       inHistory: preparedCall?.systemPromptUpdate === 'in-history',
+      ...unsent?.system === undefined ? {} : { unsent: unsent.system },
       startsSeries: startsRequestSeries
         || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
-        || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+        || (unsent !== undefined && preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
     })
     for (const { message, intent } of commits) {
-      this.session.append('system/message', { turn, step, message }, intent)
+      system = this.session.append('system/message', { turn, step, message }, intent).seq
     }
-    let contextAdmitted = false
+    const commitContext = (message: UserMessage): void => {
+      const seq = unsent?.context
+      runtime = this.session.append('user/message', message,
+        seq !== undefined && this.session.surface.nodes.includes(seq)
+          ? { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] }
+          : { surfaceOp: 'append' }).seq
+    }
     if (firstAttempt) {
       for (const message of decision.messages) {
-        if (message.source.kind === 'runtime-context') {
-          if (context !== undefined && !contextAdmitted) {
-            this.session.append('user/message', context, { surfaceOp: 'append' })
-            contextAdmitted = true
-          }
-        } else {
+        if (message.source.kind !== 'runtime-context') {
           this.session.append('user/message', message, { surfaceOp: 'append' })
         }
       }
@@ -597,9 +605,8 @@ export class ReactLoopAgent implements Agent {
     for (const message of requestContext) {
       this.session.append('user/message', message, { surfaceOp: 'append' })
     }
-    if (context !== undefined && !contextAdmitted) {
-      this.session.append('user/message', context, { surfaceOp: 'append' })
-    }
+    if (context !== undefined) commitContext(context)
+    return { ...system === undefined ? {} : { system }, ...runtime === undefined ? {} : { context: runtime } }
   }
 
   private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
@@ -618,13 +625,15 @@ export class ReactLoopAgent implements Agent {
       const before = this.loopCtx.systemPrompt.refreshContext(decision.tools.assembly, {
         ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet: decision.tools.toolSet,
       })
-      this.commitRequestMessages(before, decision, preparedCall, requestContext, firstAttempt, startsRequestSeries, { turn, step }, signal)
+      const unsent = this.commitRequestMessages(
+        before, decision, preparedCall, requestContext, firstAttempt, startsRequestSeries, { turn, step }, signal,
+      )
       firstAttempt = false
       await this.reselectForRequest(decision, signal)
       const admittedNodes = [...this.session.surface.nodes]
       const admittedGeneration = this.session.surface.contentGeneration
       const { assembly, toolSet } = decision.tools
-      this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal)
+      this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal, unsent)
       const request = await this.buildRequest(
         config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, async () => {
           const nodes = [...this.session.surface.nodes]
