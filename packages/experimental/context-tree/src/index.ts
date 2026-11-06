@@ -132,6 +132,16 @@ export class ContextTreeService extends Service {
       const added = [...catalog === undefined ? [] : [catalog], ...core]
       return added.length === 0 ? decision : { ...decision, messages: [...decision.messages, ...added] }
     })
+    this.ctx.on('system-prompt/request-context', async ({ agent, signal }, pending, next): Promise<UserMessage[]> => {
+      const messages = await next()
+      if (agent === undefined || signal === undefined) return messages
+      if (this.ctx.tools.get('context_browse', agent) === undefined) return messages
+      const catalog = await this.pendingCatalog(agent, signal)
+      const core = await this.pendingCore(agent, signal)
+      const added = [...catalog === undefined ? [] : [catalog], ...core]
+      return [...messages, ...added.filter(message => ![...pending, ...messages].some(existing =>
+        existing.source.kind === message.source.kind && JSON.stringify(existing.content) === JSON.stringify(message.content)))]
+    })
   }
 
   /**

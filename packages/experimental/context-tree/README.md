@@ -87,7 +87,7 @@ An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse kee
 
 ### Events
 
-The package adds no event type. It uses the existing `user/message` event with three source kinds: `context-tree-catalog` (the published tree), `context-grant` (loaded section text), and `context-activation` (tools made callable). The kinds `context-grant` and `context-activation` are registered as revocable compaction sources.
+The package adds no event type. It uses the existing `user/message` event with three source kinds: `context-tree-catalog` (the published tree), `context-grant` (loaded section text), and `context-activation` (tools made callable). The kinds `context-grant` and `context-activation` are registered as revocable compaction sources. The pre-step publisher and `system-prompt/request-context` share these messages: after request-time compaction, missing catalog and eager-core messages are restored before sending, without duplicating accepted pending messages. The loop commits every addition to the Session log before deriving the request.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation

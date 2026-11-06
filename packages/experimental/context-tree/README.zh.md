@@ -87,7 +87,7 @@ export function placeTools(ctx: Context) {
 
 ### 事件
 
-本包不新增事件类型。它使用现有的 `user/message` 事件和三种来源类型：`context-tree-catalog`（已发布的树）、`context-grant`（已加载的章节文本）和 `context-activation`（已可调用的工具）。`context-grant` 和 `context-activation` 被注册为可撤销的压缩来源。
+本包不新增事件类型。它使用现有的 `user/message` 事件和三种来源类型：`context-tree-catalog`（已发布的树）、`context-grant`（已加载的章节文本）和 `context-activation`（已可调用的工具）。`context-grant` 和 `context-activation` 被注册为可撤销的压缩来源。pre-step 发布器与 `system-prompt/request-context` 共用这些消息：请求阶段压缩后，在发送前恢复缺失的目录与急切核心消息，不重复已接受的待提交消息。循环在派生请求前把所有新增消息提交到 Session 日志。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现
