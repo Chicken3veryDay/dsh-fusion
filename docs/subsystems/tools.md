@@ -223,6 +223,30 @@ interface ToolRegistrationOptions {
 ```
 
 ```ts type-equiv
+/**
+ * One tool registration. Its object identity, not its name, designates the registration: a
+ * same-named registration elsewhere, including a scoped shadow, is a different object.
+ */
+interface RegisteredTool {
+  /** The definition passed to `tools.register()`. */
+  readonly definition: ToolDefinition
+}
+```
+
+```ts type-equiv
+/**
+ * What `tools.register()` returns: the disposer that unregisters the tool, carrying the identity
+ * of the registration it removes. After disposal the identity designates no live registration.
+ */
+interface ToolRegistrationHandle {
+  /** Unregister the tool; a second call does nothing. */
+  (): void
+  /** The registration this handle removes. */
+  readonly registration: RegisteredTool
+}
+```
+
+```ts type-equiv
 /** One step's admitted registrations, also used by nested PTC calls. */
 interface ResolvedToolSet {
   /** Close admission after the step's tool batch settles. */
@@ -730,9 +754,9 @@ Concrete tool registry and scoped executor dispatcher.
  * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
  * @param options - optional step-time activation condition and the producer-recorded origin;
  * a registration without an origin reads back as `unknown`.
- * @returns the exact disposer that unregisters the tool.
+ * @returns the exact disposer that unregisters the tool, carrying the registration's identity.
  */
-register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void
+register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle
 
 /**
  * Restrict global tools for the calling agent scope. Empty filters, unknown

@@ -872,6 +872,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   ToolActivationContext: 'tools.md',
   ToolAdmissionPolicy: 'tools.md',
   ToolRegistrationOptions: 'tools.md',
+  ToolRegistrationHandle: 'tools.md',
+  RegisteredTool: 'tools.md',
   ToolOrigin: 'tools.md',
   ResolvedToolSet: 'tools.md',
   ToolSchema: 'tools.md',

@@ -136,6 +136,26 @@ export interface ToolRegistrationOptions {
   readonly when?: (context: ToolActivationContext) => boolean | Promise<boolean>
 }
 
+/**
+ * One tool registration. Its object identity, not its name, designates the registration: a
+ * same-named registration elsewhere, including a scoped shadow, is a different object.
+ */
+export interface RegisteredTool {
+  /** The definition passed to `tools.register()`. */
+  readonly definition: ToolDefinition
+}
+
+/**
+ * What `tools.register()` returns: the disposer that unregisters the tool, carrying the identity
+ * of the registration it removes. After disposal the identity designates no live registration.
+ */
+export interface ToolRegistrationHandle {
+  /** Unregister the tool; a second call does nothing. */
+  (): void
+  /** The registration this handle removes. */
+  readonly registration: RegisteredTool
+}
+
 /** Inputs for a tool admission policy: the step's activation inputs plus the surviving candidates. */
 export interface ToolAdmissionContext extends ToolActivationContext {
   /**

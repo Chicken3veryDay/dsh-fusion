@@ -13,6 +13,7 @@ import { RUN_CODE_NAME, ToolActivationError, ToolAdmissionError } from './contra
 import type {
   ToolDefinition, ToolRestriction, ToolExecution, ToolGuard,
   ResolvedToolSet, ToolActivationContext, ToolAdmissionDecision, ToolAdmissionPolicy, ToolOrigin, ToolRegistrationOptions,
+  RegisteredTool, ToolRegistrationHandle,
 } from './contracts.ts'
 
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -41,9 +42,8 @@ interface CompiledToolRestriction {
   readonly deny?: ReadonlySet<string>
 }
 
-/** One registered definition and its step-time activation condition. */
-interface ToolRegistration {
-  readonly definition: ToolDefinition
+/** One registered definition and its step-time activation condition; the object is its public {@link RegisteredTool} identity. */
+interface ToolRegistration extends RegisteredTool {
   readonly when: ToolRegistrationOptions['when']
   readonly origin: ToolOrigin
 }
@@ -147,9 +147,9 @@ export class ToolsService extends Service {
    * @param definition - tool schema, execution, and optional finalization/presentation callbacks.
    * @param options - optional step-time activation condition and the producer-recorded origin;
    * a registration without an origin reads back as `unknown`.
-   * @returns the exact disposer that unregisters the tool.
+   * @returns the exact disposer that unregisters the tool, carrying the registration's identity.
    */
-  register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void {
+  register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle {
     const name = definition.name
     const output = (definition as Partial<ToolDefinition>).output
     if (output === undefined || typeof output !== 'object'
@@ -169,11 +169,13 @@ export class ToolsService extends Service {
     if (name === RUN_CODE_NAME) {
       throw new Error(`tool name "${RUN_CODE_NAME}" is reserved for the PTC mode presentation transport and cannot be registered or shadowed`)
     }
-    return this.layers.effect(
+    const registration: ToolRegistration = Object.freeze({ definition, when: options.when, origin: options.origin ?? 'unknown' })
+    const dispose = this.layers.effect(
       this.ctx,
-      layer => layer.tools.insert(name, { definition, when: options.when, origin: options.origin ?? 'unknown' }),
+      layer => layer.tools.insert(name, registration),
       { label: 'tools.register()' },
     )
+    return Object.assign(dispose, { registration })
   }
 
   /**

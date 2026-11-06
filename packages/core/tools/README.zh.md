@@ -63,6 +63,8 @@ ctx.tools.register(defineTool({
 
 统一 schema DSL 支持 `string`、`number`、`integer`、`boolean`、`null`、`array`、`object`、仅供作者使用的 `json` 与恰好匹配一个分支的 `oneOf`；`InferValue` 在 16 层容器内保留精确类型，之后加宽为 `JsonValue`。原始 JSON Schema（`JsonSchemaNode`）是与 subagent、工作流和 MCP 共享的协议级对应类型。
 
+`register()` 返回 `ToolRegistrationHandle`：调用它会注销该工具，其 `registration` 属性是标识这一次注册的 `RegisteredTool` 对象。标识是这个对象而不是名称，因此其他作用域中的同名注册（包括作用域遮蔽）是另一个注册。注销之后，该对象不再指向任何有效注册。
+
 <a id="conditional-tools"></a>
 ### 条件工具
 

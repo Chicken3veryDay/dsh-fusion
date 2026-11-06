@@ -63,6 +63,8 @@ ctx.tools.register(defineTool({
 
 The unified schema DSL supports `string`, `number`, `integer`, `boolean`, `null`, `array`, `object`, author-only `json`, and exact-one `oneOf`; `InferValue` preserves exact types through 16 container levels before widening to `JsonValue`. A raw JSON Schema (`JsonSchemaNode`) is the wire-level counterpart shared with subagents, workflows, and MCP.
 
+`register()` returns a `ToolRegistrationHandle`: calling it unregisters the tool, and its `registration` property is the `RegisteredTool` object that identifies this one registration. The identity is the object, not the name, so a same-named registration in another scope, including a scoped shadow, is a different registration. After disposal the object designates no live registration.
+
 <a id="conditional-tools"></a>
 ### Conditional tools
 

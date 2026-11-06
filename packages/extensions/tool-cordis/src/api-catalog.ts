@@ -4680,10 +4680,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Concrete tool registry and scoped executor dispatcher.',
     methods: [
       {
-        signature: 'register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void',
+        signature: 'register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle',
         description: 'Register globally or in the calling agent scope. Scoped tools shadow globals; duplicates within one layer and the reserved `run_code` name fail.',
         parameters: [{ name: 'definition', description: 'tool schema, execution, and optional finalization/presentation callbacks.' }, { name: 'options', description: 'optional step-time activation condition and the producer-recorded origin; a registration without an origin reads back as `unknown`.' }],
-        returns: 'the exact disposer that unregisters the tool.',
+        returns: 'the exact disposer that unregisters the tool, carrying the registration\'s identity.',
       },
       {
         signature: 'restrict(filter: ToolRestriction): () => void',
@@ -9069,6 +9069,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RedactedSecret {\n    path: string[];\n    set: boolean;\n}',
   },
   {
+    name: 'RegisteredTool',
+    declaration: 'export interface RegisteredTool {\n    readonly definition: ToolDefinition;\n}',
+  },
+  {
     name: 'Registry',
     declaration: 'export type Registry = string | null;',
   },
@@ -11185,6 +11189,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ToolProviderResult {\n    readonly schemas: readonly ToolSchema[];\n    readonly knownNames?: readonly string[];\n    readonly ordered?: boolean;\n}',
   },
   {
+    name: 'ToolRegistrationHandle',
+    declaration: 'export interface ToolRegistrationHandle {\n    (): void;\n    readonly registration: RegisteredTool;\n}',
+  },
+  {
     name: 'ToolRegistrationOptions',
     declaration: 'export interface ToolRegistrationOptions {\n    readonly origin?: ToolOrigin;\n    readonly when?: (context: ToolActivationContext) => boolean | Promise<boolean>;\n}',
   },
@@ -11222,7 +11230,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): ToolRegistrationHandle;\n    restrict(filter: ToolRestriction): () => void;\n    registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    originOf(name: string, scope?: ScopeKey): ToolOrigin;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',
