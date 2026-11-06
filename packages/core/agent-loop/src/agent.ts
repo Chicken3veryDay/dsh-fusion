@@ -428,11 +428,16 @@ export class ReactLoopAgent implements Agent {
 
   /** Compare new inputs with the captured sequence, never with the previous selection's live view. */
   private sameRequestInputs(before: RequestInputs, after: RequestInputs): boolean {
+    return this.sameToolInputs(before, after)
+      && before.contexts.length === after.contexts.length
+      && before.contexts.every((hash, index) => after.contexts[index] === hash)
+  }
+
+  /** Compare admission identities and ordering without rereading ordinary runtime facts. */
+  private sameToolInputs(before: RequestInputs, after: RequestInputs): boolean {
     return before.executor === after.executor && before.ordered === after.ordered
       && before.definitions.length === after.definitions.length
       && before.definitions.every((definition, index) => after.definitions[index] === definition)
-      && before.contexts.length === after.contexts.length
-      && before.contexts.every((hash, index) => after.contexts[index] === hash)
   }
 
   /** Whether the assembled tool schemas differ from the logged request header's. */
@@ -629,10 +634,7 @@ export class ReactLoopAgent implements Agent {
             // One reconciliation may publish changed context or tool notices. Verify its fixed point
             // without another resolution or assembly; an unstable selection must never reach dispatch.
             await toolSet.validate()
-            const refreshed = this.loopCtx.systemPrompt.refreshContext(assembly, {
-              ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet,
-            })
-            if (!this.sameRequestInputs(decision.tools.inputs, this.requestInputs(toolSet, refreshed))
+            if (!this.sameToolInputs(decision.tools.inputs, this.requestInputs(toolSet, assembly))
               || generation !== this.session.surface.contentGeneration
               || nodes.length !== this.session.surface.nodes.length
               || nodes.some((seq, index) => seq !== this.session.surface.nodes[index])) {
