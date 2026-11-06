@@ -3,10 +3,11 @@
 import { isAbsolute } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { JobHandle, JobHooks, JobId } from '@deepseek-ai/dsh-jobs'
+import type { JobHandle, JobHooks, JobId, JobOutcome } from '@deepseek-ai/dsh-jobs'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SubagentActivation, SubagentResult } from '@deepseek-ai/dsh-subagent'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import { TicketError } from './errors.ts'
 import {
   TicketOperationId,
   type AssignmentSnapshot, type BeginTicketAttemptRequest, type TicketAttemptSnapshot,
@@ -72,6 +73,7 @@ interface LiveHandle {
   readonly workspace: TicketExecutionWorkspace
   readonly activation: SubagentActivation | undefined
   readonly jobs: JobId[]
+  readonly listeners: Set<() => void>
   queue: Promise<void>
   closing: boolean
   disposal?: Promise<void>
@@ -82,12 +84,13 @@ export class TicketExecutionService extends Service {
   static inject = ['tickets', 'jobs', 'worktrees', 'sessions', 'agents', 'subagents', 'workingDirectory']
   private readonly reservations = new Map<string, Reservation>()
   private readonly handles = new Set<LiveHandle>()
+  private readonly writes = new Map<string, Promise<void>>()
   private closing = false
 
   constructor(ctx: Context, private readonly config: TicketExecutionConfig) {
     super(ctx, 'ticketExecution')
     if (!Number.isSafeInteger(config.settlementTimeoutMs) || config.settlementTimeoutMs <= 0) {
-      throw new Error('Ticket execution settlementTimeoutMs must be a positive safe integer')
+      throw new TicketError('Ticket execution settlementTimeoutMs must be a positive safe integer', 'TICKET_INVALID_INPUT')
     }
   }
 
@@ -109,27 +112,27 @@ export class TicketExecutionService extends Service {
   prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle> {
     try {
       this.assertCaller(caller)
-      if (this.closing) throw new Error('Ticket execution admission is closed')
+      if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
       request.signal?.throwIfAborted()
       const root = this.ctx.sessions.get(request.rootSessionId)
-      if (root === undefined) throw new Error('Ticket technical root Session is not live')
+      if (root === undefined) throw new TicketError('Ticket technical root Session is not live', 'TICKET_NOT_FOUND')
       const current = this.ctx.tickets.get(root, request.ticketId)
       const assignment = current.assignments.find(item => item.id === request.assignmentId)
-      if (assignment === undefined) throw new Error('Ticket assignment was not found')
-      if (caller.id !== assignment.ownerId && caller.id !== current.coordinatorId) throw new Error('Ticket execution requires the assigned owner or coordinator')
+      if (assignment === undefined) throw new TicketError('Ticket assignment was not found', 'TICKET_ASSIGNMENT_NOT_FOUND')
+      if (caller.id !== assignment.ownerId && caller.id !== current.coordinatorId) throw new TicketError('Ticket execution requires the assigned owner or coordinator', 'TICKET_AUTHORITY')
       const { signal: _signal, ...facts } = request
       const fingerprint = JSON.stringify(facts)
       const key = JSON.stringify([root.id, current.id, assignment.id])
       const retained = this.reservations.get(key)
       if (retained !== undefined) {
         if (retained.caller === caller && retained.fingerprint === fingerprint) return retained.preparation
-        if (current.attempts.some(item => item.assignmentId === assignment.id && item.status !== 'settled')) throw new Error('Ticket assignment already has a different execution reservation')
+        if (current.attempts.some(item => item.assignmentId === assignment.id && item.status !== 'settled')) throw new TicketError('Ticket assignment already has a different execution reservation', 'TICKET_ATTEMPT_STATE')
         this.reservations.delete(key)
       }
-      if (current.revision !== request.expectedRevision) throw new Error('Ticket execution revision is stale')
-      if (current.terminalOutcome !== undefined) throw new Error('Terminal Ticket cannot execute')
+      if (current.revision !== request.expectedRevision) throw new TicketError('Ticket execution revision is stale', 'TICKET_STALE_REVISION')
+      if (current.terminalOutcome !== undefined) throw new TicketError('Terminal Ticket cannot execute', 'TICKET_TERMINAL')
       if (current.attempts.some(item => item.id === request.attemptId || (item.assignmentId === assignment.id && item.status !== 'settled'))) {
-        throw new Error('Recovered Ticket attempt requires settlement reconciliation before execution')
+        throw new TicketError('Recovered Ticket attempt requires settlement reconciliation before execution', 'TICKET_ATTEMPT_STATE')
       }
       this.preflight(request)
       const preparation = this.prepareHandle(caller, root, assignment, request)
@@ -142,21 +145,21 @@ export class TicketExecutionService extends Service {
 
   private assertCaller(caller: Agent): void {
     if (this.ctx.agents.get(caller.id) !== caller || this.ctx.sessions.get(caller.id) !== caller.session) {
-      throw new Error('Ticket execution requires the exact live caller Agent')
+      throw new TicketError('Ticket execution requires the exact live caller Agent', 'TICKET_AUTHORITY')
     }
   }
 
   private preflight(request: PrepareTicketExecutionRequest): void {
-    if (!isAbsolute(request.workspace.directory)) throw new Error('Ticket workspace directory must be absolute')
-    if (request.workspace.kind === 'shared-workspace' && request.workspace.baseCommit === undefined) throw new Error('Shared Ticket workspace requires its immutable base commit')
+    if (!isAbsolute(request.workspace.directory)) throw new TicketError('Ticket workspace directory must be absolute', 'TICKET_INVALID_INPUT')
+    if (request.workspace.kind === 'shared-workspace' && request.workspace.baseCommit === undefined) throw new TicketError('Shared Ticket workspace requires its immutable base commit', 'TICKET_INVALID_INPUT')
     if (request.executor.kind === 'in-process') return
     const provider = this.ctx.subagents.getProvider(request.executor.provider)
-    if (provider === undefined) throw new Error('Ticket execution provider is not registered')
-    if (provider.execution?.kind !== request.executor.kind) throw new Error('Ticket execution provider does not support the requested placement')
+    if (provider === undefined) throw new TicketError('Ticket execution provider is not registered', 'TICKET_INVALID_INPUT')
+    if (provider.execution?.kind !== request.executor.kind) throw new TicketError('Ticket execution provider does not support the requested placement', 'TICKET_INVALID_INPUT')
     if (request.executor.kind === 'remote' && (provider.execution.kind !== 'remote' || provider.execution.world !== request.executor.world)) {
-      throw new Error('Ticket execution provider does not match the requested remote world')
+      throw new TicketError('Ticket execution provider does not match the requested remote world', 'TICKET_INVALID_INPUT')
     }
-    if (request.modelSelection !== undefined && !provider.capabilities.agentOptions) throw new Error('Ticket execution provider cannot select agent model options')
+    if (request.modelSelection !== undefined && !provider.capabilities.agentOptions) throw new TicketError('Ticket execution provider cannot select agent model options', 'TICKET_INVALID_INPUT')
   }
 
   private async prepareHandle(
@@ -165,23 +168,23 @@ export class TicketExecutionService extends Service {
   ): Promise<TicketExecutionHandle> {
     const signal = request.signal ?? new AbortController().signal
     const technicalRoot = this.ctx.agents.get(root.id)
-    if (technicalRoot === undefined) throw new Error('Ticket technical root Agent is not live')
+    if (technicalRoot === undefined) throw new TicketError('Ticket technical root Agent is not live', 'TICKET_AUTHORITY')
     const worker = request.executor.kind === 'in-process' ? this.ctx.agents.get(assignment.ownerId) : undefined
-    if (request.executor.kind === 'in-process' && worker === undefined) throw new Error('In-process Ticket execution requires a live assigned worker')
+    if (request.executor.kind === 'in-process' && worker === undefined) throw new TicketError('In-process Ticket execution requires a live assigned worker', 'TICKET_AUTHORITY')
     const workspaceAgent = worker ?? caller
     if (request.workspace.kind === 'isolated-worktree' || worker !== undefined) {
       const directory = await this.ctx.workingDirectory.ensure(workspaceAgent, signal)
-      if (directory !== request.workspace.directory) throw new Error('Ticket workspace differs from the live worker directory')
+      if (directory !== request.workspace.directory) throw new TicketError('Ticket workspace differs from the live worker directory', 'TICKET_INVALID_INPUT')
     }
     this.assertCaller(caller)
-    if (this.closing) throw new Error('Ticket execution admission is closed')
-    await this.ctx.tickets.beginAttempt(root, {
+    if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
+    await this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.beginAttempt(root, {
       ticketId: request.ticketId, expectedRevision: request.expectedRevision, actorId: caller.id,
       assignmentId: request.assignmentId, attemptId: request.attemptId, operationId: request.operationId,
       workspace: request.workspace, executor: request.executor,
       ...request.assignmentRevision === undefined ? {} : { assignmentRevision: request.assignmentRevision },
       ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
-    })
+    }))
     let workspace: TicketWorkspaceReceipt | undefined
     let activation: SubagentActivation | undefined
     let retainedHandle: LiveHandle | undefined
@@ -193,13 +196,13 @@ export class TicketExecutionService extends Service {
         }, signal)
         workspace = { directory: worktree.path, baseCommit: worktree.baseCommit, worktree }
       } else {
-        if (request.workspace.baseCommit === undefined) throw new Error('Ticket shared workspace requires a baseCommit receipt')
+        if (request.workspace.baseCommit === undefined) throw new TicketError('Ticket shared workspace requires a baseCommit receipt', 'TICKET_INVALID_INPUT')
         workspace = { directory: request.workspace.directory, baseCommit: request.workspace.baseCommit }
       }
       await this.update(root, caller, request, 'workspace', { status: 'running', workspaceReceipt: workspace })
       signal.throwIfAborted()
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- shutdown can set `closing` during the awaited workspace update.
-      if (this.closing) throw new Error('Ticket execution admission is closed')
+      if (this.closing) throw new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
       if (request.executor.kind !== 'in-process') {
         activation = await this.ctx.subagents.startActivation({
           provider: request.executor.provider,
@@ -225,7 +228,7 @@ export class TicketExecutionService extends Service {
       }
       const handle: LiveHandle = {
         root, caller, worker, request, workspace, activation,
-        jobs: [], queue: Promise.resolve(), closing: false,
+        jobs: [], listeners: new Set(), queue: Promise.resolve(), closing: false,
       }
       retainedHandle = handle
       this.handles.add(handle)
@@ -233,7 +236,7 @@ export class TicketExecutionService extends Service {
       const ticket = this.ctx.tickets.get(root, request.ticketId)
       const attempt = ticket.attempts.find(item => item.id === request.attemptId)
       const nextAssignment = ticket.assignments.find(item => item.id === assignment.id)
-      if (attempt === undefined || nextAssignment === undefined) throw new Error('Ticket execution lost its committed attempt')
+      if (attempt === undefined || nextAssignment === undefined) throw new TicketError('Ticket execution lost its committed attempt', 'TICKET_RECOVERY_FAILED')
       return {
         ticket, assignment: nextAssignment, attempt, workspace,
         ...activation === undefined ? {} : { activation, result: activation.result },
@@ -260,31 +263,86 @@ export class TicketExecutionService extends Service {
   }
 
   private async update(root: Session, caller: Agent, request: PrepareTicketExecutionRequest, stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<void> {
-    const current = this.ctx.tickets.get(root, request.ticketId)
-    await this.ctx.tickets.updateAttempt(root, { ticketId: request.ticketId, expectedRevision: current.revision, actorId: caller.id, attemptId: request.attemptId, operationId: TicketOperationId(`${request.operationId}:${stage}`), ...facts })
+    await this.write(root, request, async () => {
+      const current = this.ctx.tickets.get(root, request.ticketId)
+      await this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.updateAttempt(root, {
+        ticketId: request.ticketId, expectedRevision: current.revision, actorId: caller.id,
+        attemptId: request.attemptId, operationId: TicketOperationId(request.operationId + ':' + stage), ...facts,
+      }))
+    })
+  }
+
+  private async write<T>(root: Session, request: PrepareTicketExecutionRequest, operation: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([root.id, request.ticketId])
+    const prior = this.writes.get(key) ?? Promise.resolve()
+    const next = prior.then(operation, operation)
+    const tail = next.then(() => {}, () => {})
+    this.writes.set(key, tail)
+    try { return await next } finally {
+      if (this.writes.get(key) === tail) this.writes.delete(key)
+    }
   }
 
   private startJob(handle: LiveHandle, label: string, run: (job: JobHandle) => JobHooks, signal?: AbortSignal): Promise<JobId> {
-    if (handle.closing || this.closing) return Promise.reject(new Error('Ticket execution handle is closing'))
+    if (handle.closing || this.closing) return Promise.reject(new TicketError('Ticket execution handle is closing', 'TICKET_ATTEMPT_STATE'))
     const operation = handle.queue.then(async () => {
       this.assertCaller(handle.caller)
       signal?.throwIfAborted()
       const ticket = this.ctx.tickets.get(handle.root, handle.request.ticketId)
       const attempt = ticket.attempts.find(item => item.id === handle.request.attemptId)
-      if (ticket.terminalOutcome !== undefined || attempt?.status !== 'running') throw new Error('Ticket attempt cannot start background work')
-      await this.update(handle.root, handle.caller, handle.request, `job-${handle.jobs.length}-admit`, { status: 'running' })
-      const id = this.ctx.jobs.start({ kind: 'ticket', label, owner: handle.caller.id, run })
+      if (ticket.terminalOutcome !== undefined || attempt?.status !== 'running') throw new TicketError('Ticket attempt cannot start background work', 'TICKET_ATTEMPT_STATE')
+      const done = Promise.withResolvers<JobOutcome>()
+      const producer: {
+        hooks?: JobHooks
+        job?: JobHandle
+        cancelled: boolean
+        reason?: string
+      } = { cancelled: false }
+      const id = this.ctx.jobs.start({ kind: 'ticket', label, owner: handle.caller.id,
+        run: (job) => {
+          producer.job = job
+          return {
+            cancel(message) {
+              producer.cancelled = true
+              if (message !== undefined) producer.reason = message
+              producer.hooks?.cancel(message)
+            },
+            done: done.promise,
+          }
+        },
+      })
       handle.jobs.push(id)
+      try {
+        await this.write(handle.root, handle.request, async () => {
+          const current = this.ctx.tickets.get(handle.root, handle.request.ticketId)
+          const receipt = current.attempts.find(item => item.id === handle.request.attemptId)?.runtimeReceipt
+          if (receipt === undefined) throw new TicketError('Job admission requires a runtime receipt', 'TICKET_ATTEMPT_STATE')
+          await this.ctx.agents.withInitiator(handle.caller, () => this.ctx.tickets.updateAttempt(handle.root, {
+            ticketId: current.id, expectedRevision: current.revision, actorId: handle.caller.id,
+            attemptId: handle.request.attemptId, operationId: TicketOperationId(handle.request.operationId + ':job-' + id),
+            status: 'running', runtimeReceipt: { ...receipt, jobIds: [...receipt.jobIds ?? [], id] },
+          }))
+        })
+        if (signal?.aborted || producer.cancelled) {
+          done.resolve({ status: 'killed' })
+        } else {
+          if (producer.job === undefined) throw new TicketError('Job registration did not supply its producer handle', 'TICKET_RECOVERY_FAILED')
+          producer.hooks = run(producer.job)
+          void producer.hooks.done.then(done.resolve, done.reject)
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- producer startup can synchronously request cancellation.
+          if (producer.cancelled) producer.hooks.cancel(producer.reason)
+        }
+      } catch (error: unknown) {
+        done.resolve({ status: 'failed', detail: 'Ticket job admission or producer startup failed' })
+        throw error
+      }
       if (signal !== undefined) {
         const cancel = () => this.ctx.jobs.kill(id, handle.caller.id, 'Ticket execution caller cancelled')
+        const cleanup = () => { signal.removeEventListener('abort', cancel); handle.listeners.delete(cleanup) }
+        handle.listeners.add(cleanup)
         if (signal.aborted) cancel()
-        else {
-          signal.addEventListener('abort', cancel, { once: true })
-          void this.ctx.jobs.wait(id, this.config.settlementTimeoutMs, handle.caller.id)
-            .finally(() => { signal.removeEventListener('abort', cancel) })
-            // Listener cleanup only: job failures and timeouts settle through the attempt, not this wait.
-            .catch((_error: unknown) => undefined)
-        }
+        else signal.addEventListener('abort', cancel, { once: true })
+        void done.promise.then(cleanup, cleanup)
       }
       return id
     })
@@ -309,26 +367,31 @@ export class TicketExecutionService extends Service {
       if (handle.activation !== undefined) {
         if (cancel) await this.bounded(handle.activation.dispose())
         const result = await this.bounded(handle.activation.result)
-        outcome = result.stopReason === 'completed' ? 'succeeded' : result.stopReason === 'aborted' ? 'cancelled' : 'failed'
+        if (result.stopReason !== 'completed') outcome = result.stopReason === 'aborted' ? 'cancelled' : 'failed'
       } else if (handle.worker !== undefined) {
         if (cancel) handle.worker.cancel({ kind: 'parent' })
         await this.bounded(handle.worker.whenIdle())
       }
       for (const id of handle.jobs) {
         const result = await this.ctx.jobs.wait(id, this.config.settlementTimeoutMs, caller.id)
-        if (result.status === 'running' || result.status === 'stopping') throw new Error('Ticket background producer did not settle')
+        if (result.status === 'running' || result.status === 'stopping') throw new TicketError('Ticket background producer did not settle', 'TICKET_ATTEMPT_STATE')
         if (result.status === 'failed') outcome = 'failed'
+        else if (result.status === 'killed' && outcome !== 'failed') outcome = 'cancelled'
       }
-      const current = this.ctx.tickets.get(root, request.ticketId)
-      await this.ctx.tickets.settleAttempt(root, { ticketId: request.ticketId, expectedRevision: current.revision, actorId: caller.id, attemptId: request.attemptId, operationId: TicketOperationId(`${request.operationId}:settled`), outcome })
-      const settled = this.ctx.tickets.get(root, request.ticketId)
-      const assignment = settled.assignments.find(item => item.id === request.assignmentId)
-      if (assignment?.status === 'running' || assignment?.status === 'claimed' || assignment?.status === 'assigned') {
-        await this.ctx.tickets.release(root, {
-          ticketId: request.ticketId, expectedRevision: settled.revision,
-          actorId: caller.id, assignmentId: request.assignmentId,
-        })
-      }
+      await this.write(root, request, async () => {
+        const current = this.ctx.tickets.get(root, request.ticketId)
+        await this.ctx.agents.withInitiator(caller, () =>
+          this.ctx.tickets.settleAttempt(root, { ticketId: request.ticketId, expectedRevision: current.revision, actorId: caller.id, attemptId: request.attemptId, operationId: TicketOperationId(`${request.operationId}:settled`), outcome }))
+        const settled = this.ctx.tickets.get(root, request.ticketId)
+        const assignment = settled.assignments.find(item => item.id === request.assignmentId)
+        if (assignment?.status === 'running' || assignment?.status === 'claimed' || assignment?.status === 'assigned') {
+          await this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.release(root, {
+            ticketId: request.ticketId, expectedRevision: settled.revision,
+            actorId: caller.id, assignmentId: request.assignmentId,
+          }))
+        }
+      })
+      for (const cleanup of handle.listeners) cleanup()
       this.handles.delete(handle)
     } catch (error: unknown) {
       await this.update(root, caller, request, 'stop-unknown', { status: 'unknown', diagnostics: ['Cancellation did not establish producer settlement; reservation retained'] })
@@ -340,7 +403,7 @@ export class TicketExecutionService extends Service {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => { reject(new Error('Ticket producer settlement timed out')) }, this.config.settlementTimeoutMs)
+        timer = setTimeout(() => { reject(new TicketError('Ticket producer settlement timed out', 'TICKET_ATTEMPT_STATE')) }, this.config.settlementTimeoutMs)
       })])
     } finally { clearTimeout(timer) }
   }

@@ -329,6 +329,7 @@ function upgradeLegacy(ticket: TicketSnapshotV1): TicketSnapshot {
   return {
     ...ticket,
     assignments: ticket.assignments.map(assignment => ({ ...assignment, contribution: assignment.role === 'observer' ? 'advisory' : 'required' })),
+    reports: ticket.reports.map(report => ({ ...report, specRevision: 1 })),
     specification: { revision: 1, acceptanceCriteria: [], dependencies: [] },
     attempts: [], candidates: [], checks: [], operations: [], missionPlans: [],
   }

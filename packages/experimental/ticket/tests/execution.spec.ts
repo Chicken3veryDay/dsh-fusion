@@ -1,3 +1,4 @@
+import { ticketActor } from './ticket-actor.ts'
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -106,17 +107,17 @@ describe('Ticket execution adapter', () => {
   it('claims a direct worker attempt, owns Jobs, and settles then releases on cleanup', async () => {
     const { ctx, root, worker } = await harness()
     await ctx.agents.register(worker)
-    const ticket = await ctx.tickets.create(root, {
+    const ticket = await ticketActor(ctx, (root).id, () => ctx.tickets.create(root, {
       id: TicketId('execution-ticket'), subject: 'Run work', description: 'exercise execution',
-    })
-    const assigned = await ctx.tickets.assign(root, {
+    }))
+    const assigned = await ticketActor(ctx, root.id, () => ctx.tickets.assign(root, {
       ticketId: ticket.id,
       expectedRevision: ticket.revision,
       actorId: root.id,
       ownerId: worker.id,
       subject: 'Worker task',
       executionMode: 'shared-workspace',
-    })
+    }))
     const assignmentId = assigned.assignments[0]!.id
     const handle = await ctx.ticketExecution.prepare(worker, {
       rootSessionId: root.id,
@@ -155,17 +156,17 @@ describe('Ticket execution adapter', () => {
   it('retains an unknown attempt when isolated Worktree preparation fails', async () => {
     const { ctx, root, worker } = await harness()
     await ctx.agents.register(worker)
-    const ticket = await ctx.tickets.create(root, {
+    const ticket = await ticketActor(ctx, (root).id, () => ctx.tickets.create(root, {
       id: TicketId('rollback-ticket'), subject: 'Prepare worktree', description: 'retain unknown attempt',
-    })
-    const assigned = await ctx.tickets.assign(root, {
+    }))
+    const assigned = await ticketActor(ctx, root.id, () => ctx.tickets.assign(root, {
       ticketId: ticket.id,
       expectedRevision: ticket.revision,
       actorId: root.id,
       ownerId: worker.id,
       subject: 'Isolated task',
       executionMode: 'isolated-worktree',
-    })
+    }))
     const assignmentId = assigned.assignments[0]!.id
     const failure = new Error('worktree unavailable')
     StubWorktreeService.failure = failure
@@ -195,13 +196,13 @@ describe('Ticket execution adapter', () => {
   it('keeps an unknown attempt through host-driven service replacement and never dispatches it again', async () => {
     const { ctx, root, worker, tickets, execution } = await harness()
     await ctx.agents.register(worker)
-    const ticket = await ctx.tickets.create(root, {
+    const ticket = await ticketActor(ctx, (root).id, () => ctx.tickets.create(root, {
       id: TicketId('restart-ticket'), subject: 'Restart during an attempt', description: 'unknown stays unknown',
-    })
-    const assigned = await ctx.tickets.assign(root, {
+    }))
+    const assigned = await ticketActor(ctx, root.id, () => ctx.tickets.assign(root, {
       ticketId: ticket.id, expectedRevision: ticket.revision, actorId: root.id, ownerId: worker.id,
       subject: 'Isolated task', executionMode: 'isolated-worktree',
-    })
+    }))
     StubWorktreeService.failure = new Error('connection lost')
     const request = {
       rootSessionId: root.id, ticketId: ticket.id, assignmentId: assigned.assignments[0]!.id,

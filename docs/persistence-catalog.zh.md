@@ -5965,7 +5965,7 @@ SHA-256: `eac8ccbf3a07e306b078c969db5bf2a35e793d4af86570c1c22e34d46614e3e4`
 
 SHA-256: `5baa86311c96b74049fb0d215fe56aa52b21566fcfec63215d81ba4697873159`
 
-来源：[`packages/experimental/ticket/src/types.ts:486`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:487`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -5990,7 +5990,7 @@ SHA-256: `df623deb86bdec5062ec81e21a09e6ec093dc49d464f2733c017d3045654e343`
 
 SHA-256: `6b043c51b7ad63b1c6c7e85cf35331a3c3bf644766c11082d0dfffd2a35d26a4`
 
-来源：[`packages/experimental/ticket/src/types.ts:488`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:489`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -6854,7 +6854,7 @@ SHA-256: `bdd964eb327e5e0d0c48194101135a9a8e8cc52a81f8a29b7c28ffb24da473bb`
 
 SHA-256: `b34f2217ecf4e02da815a030635a81e326eb1e35ea72629a8a7c0b6914d9114b`
 
-来源：[`packages/experimental/ticket/src/types.ts:454`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:455`](../packages/experimental/ticket/src/types.ts)
 
 以下类型之一：
 
@@ -6964,7 +6964,7 @@ SHA-256: `22a545c3c43c3adb57a688afcc9278533c76ca94d11047566d4086739a636275`
 
 SHA-256: `39abdc7c12d49c0d13efc953d8e77ef386d53c639ff136bba6710bb3e5a3b3fb`
 
-来源：[`packages/experimental/ticket/src/types.ts:459`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:460`](../packages/experimental/ticket/src/types.ts)
 
 | kind | form 属性 | 其他必需字段 | 完整定义 |
 |---|---|---|---|
@@ -6981,7 +6981,7 @@ SHA-256: `39abdc7c12d49c0d13efc953d8e77ef386d53c639ff136bba6710bb3e5a3b3fb`
 
 SHA-256: `a410db286b528d43c5fd9687846962803b44965c74a2c5fad7b90f0c7be26c10`
 
-来源：[`packages/experimental/ticket/src/types.ts:463`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:464`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7011,7 +7011,7 @@ SHA-256: `e351604bb64415adc3e8e09d664b828492391e229ac42bec68f44e0ef43310c7`
 
 SHA-256: `5434949a870873c48db03407aeb716adfb2b785bf788fa70b8b58e07ff901460`
 
-来源：[`packages/experimental/ticket/src/types.ts:473`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:474`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7059,7 +7059,7 @@ SHA-256: `1b4804e114ca0f36caac59069776ba1b6bf9da9bafbdfd3df4d506c406bd78af`
 
 SHA-256: `e4007e240057912c2fd0319ba0eae15fdca1511fac69eb67e1c58fd3181849c4`
 
-来源：[`packages/experimental/ticket/src/types.ts:484`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:485`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7222,7 +7222,7 @@ SHA-256: `509cfb51ef0393fddcc86eaa1c34dbfceec2d4da5b0855a24a2c6234ded25366`
 
 SHA-256: `2b48f836c890718b253e615b9810a44c17c1e0ed8ec6d015c0394c118ed5e33b`
 
-来源：[`packages/experimental/ticket/src/types.ts:502`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:503`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -7353,7 +7353,7 @@ SHA-256: `d12ff0d4e65200ac475b265ff94f967fb863a7800b65147585b0d8737a1e9c86`
 
 SHA-256: `59fec16debd7c28a956a53a7797235e64122ec55641c3b8a5d1bf9061f683144`
 
-来源：[`packages/experimental/ticket/src/types.ts:433`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:434`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -9486,7 +9486,7 @@ SHA-256: `3247e566f4340029325b70e4366b56fa9719977f1e39033b769a2ec221ab22a9`
 
 SHA-256: `cd27c1b1c4f293a1dce0afa0a3bc2ca43f8b1d5982ef42f16bdd01326d3131e7`
 
-来源：[`packages/experimental/ticket/src/types.ts:461`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:462`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -9512,7 +9512,7 @@ SHA-256: `023a355b2be0d688fb6e4df8388dadb942761d46cfe96d0f499aae9631a159d4`
 
 SHA-256: `6d45d3e78277b772991ba7de44f457314441d1905014a6c4a9966cc52f08faa7`
 
-来源：[`packages/experimental/ticket/src/types.ts:460`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:461`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -10998,7 +10998,7 @@ SHA-256: `9890113e97dd3541787bfe6704f2b223d3a890b5325ca0acae2b0398909b413e`
 
 SHA-256: `8e56cefa6cd4dd5e1683af2f714816519f79e3f1bb296d5765265a6e4cfb15e9`
 
-来源：[`packages/experimental/ticket/src/types.ts:446`](../packages/experimental/ticket/src/types.ts)
+来源：[`packages/experimental/ticket/src/types.ts:447`](../packages/experimental/ticket/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

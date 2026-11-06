@@ -1311,7 +1311,7 @@ Source: [`packages/experimental/ticket/src/execution.ts`](../../packages/experim
 
 ### `ctx.tickets` — `TicketService`
 
-Standalone durable Ticket domain service.
+Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent.
 
 ```ts cordis-catalog
 /** Read all Tickets recovered from one Session's durable log.
@@ -1687,9 +1687,8 @@ async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamM
 /** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.
  *
  * Tickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the
- * Tickets have not yet followed. Each move is authenticated by the Ticket's own current coordinator, which the Workstream
- * has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous
- * coordinator as the handing-off actor.
+ * Tickets have not yet followed. Each move is authenticated by the immutable technical owner after Workstream verifies
+ * the caller's authority.
  * @param caller - current coordinator or immutable owner.
  * @param rootSessionId - explicit technical owner.
  * @param request - CAS revision and active new coordinator.

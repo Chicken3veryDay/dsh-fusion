@@ -26,16 +26,16 @@ import {
 /** Cordis plugin name. */
 export const name = 'ticket-tools'
 /** Services required by the Ticket tool plugin. */
-export const inject = ['tools', 'tickets', 'sessions', 'systemPrompt']
+export const inject = ['tools', 'tickets', 'sessions', 'systemPrompt', 'agents']
 
 function agentOf(agent: Agent | undefined, tool: string): Agent {
-  if (agent === undefined) throw new Error(`${tool} requires a calling Agent`)
+  if (agent === undefined) throw new TicketError(`${tool} requires a calling Agent`, 'TICKET_AUTHORITY')
   return agent
 }
 
 function sessionOf(ctx: Context, id: string | undefined, agent: Agent): import('@deepseek-ai/dsh-session').Session {
   const session = ctx.sessions.get(SessionId(id ?? agent.id))
-  if (session === undefined) throw new Error(`Ticket Session "${id ?? agent.id}" is not live`)
+  if (session === undefined) throw new TicketError(`Ticket Session "${id ?? agent.id}" is not live`, 'TICKET_NOT_FOUND')
   return session
 }
 
@@ -67,7 +67,7 @@ function workScopes(value: readonly Record<string, JsonValue>[] | undefined): Wo
     const exclusive = row.exclusive
     if (typeof path !== 'string' || (access !== 'read' && access !== 'write')
       || exclusive !== undefined && typeof exclusive !== 'boolean') {
-      throw new Error('work_scopes must contain path, access, and optional exclusive fields')
+      throw new TicketError('work_scopes must contain path, access, and optional exclusive fields', 'TICKET_INVALID_INPUT')
     }
     return { path, access, ...exclusive === undefined ? {} : { exclusive } }
   })
@@ -166,12 +166,12 @@ export class TicketTools extends Service {
         if (session.id !== agent.id || (args.coordinator_id !== undefined && args.coordinator_id !== agent.id)) {
           throw new TicketError('create Tickets in the calling Session with the caller as coordinator; use handoff to transfer authority', 'TICKET_AUTHORITY')
         }
-        return asJson(await this.ctx.tickets.create(session, {
+        return asJson(await this.ctx.agents.withInitiator(agent, () => this.ctx.tickets.create(session, {
           subject: args.subject,
           description: args.description,
           ...args.coordinator_id === undefined ? {} : { coordinatorId: SessionId(args.coordinator_id) },
           ...args.work_scopes === undefined ? {} : { workScopes: workScopes(args.work_scopes) },
-        }))
+        })))
       },
     }))
     register(defineTool({
@@ -191,14 +191,15 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_assign')
-        return asJson(await this.ctx.tickets.assign(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
-          ownerId: SessionId(args.owner_id), subject: args.subject,
-          ...args.instructions === undefined ? {} : { instructions: args.instructions },
-          ...args.role === undefined ? {} : { role: args.role },
-          ...args.execution_mode === undefined ? {} : { executionMode: args.execution_mode },
-          ...args.work_scopes === undefined ? {} : { workScopes: workScopes(args.work_scopes) },
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.assign(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
+            ownerId: SessionId(args.owner_id), subject: args.subject,
+            ...args.instructions === undefined ? {} : { instructions: args.instructions },
+            ...args.role === undefined ? {} : { role: args.role },
+            ...args.execution_mode === undefined ? {} : { executionMode: args.execution_mode },
+            ...args.work_scopes === undefined ? {} : { workScopes: workScopes(args.work_scopes) },
+          })))
       },
     }))
     register(defineTool({
@@ -213,12 +214,13 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_claim')
-        return asJson(await this.ctx.tickets.claim(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          assignmentId: AssignmentId(args.assignment_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.claim(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            assignmentId: AssignmentId(args.assignment_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+          })))
       },
     }))
     register(defineTool({
@@ -233,12 +235,13 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_release')
-        return asJson(await this.ctx.tickets.release(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          assignmentId: AssignmentId(args.assignment_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.release(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            assignmentId: AssignmentId(args.assignment_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+          })))
       },
     }))
     register(defineTool({
@@ -258,17 +261,18 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_report')
-        return asJson(await this.ctx.tickets.report(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          assignmentId: AssignmentId(args.assignment_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-          kind: args.kind,
-          summary: args.summary,
-          ...args.attempt_id === undefined ? {} : { attemptId: TicketAttemptId(args.attempt_id) },
-          ...args.evidence === undefined ? {} : { evidence: args.evidence },
-          ...args.next_steps === undefined ? {} : { nextSteps: args.next_steps },
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.report(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            assignmentId: AssignmentId(args.assignment_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+            kind: args.kind,
+            summary: args.summary,
+            ...args.attempt_id === undefined ? {} : { attemptId: TicketAttemptId(args.attempt_id) },
+            ...args.evidence === undefined ? {} : { evidence: args.evidence },
+            ...args.next_steps === undefined ? {} : { nextSteps: args.next_steps },
+          })))
       },
     }))
     register(defineTool({
@@ -284,13 +288,14 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_ask')
-        return asJson(await this.ctx.tickets.ask(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-          question: args.question,
-          ...args.assignment_id === undefined ? {} : { assignmentId: AssignmentId(args.assignment_id) },
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.ask(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+            question: args.question,
+            ...args.assignment_id === undefined ? {} : { assignmentId: AssignmentId(args.assignment_id) },
+          })))
       },
     }))
     register(defineTool({
@@ -306,10 +311,11 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_answer')
-        return asJson(await this.ctx.tickets.answer(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
-          expectedRevision: args.expected_revision, actorId: agent.id, answer: args.answer,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.answer(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
+            expectedRevision: args.expected_revision, actorId: agent.id, answer: args.answer,
+          })))
       },
     }))
     register(defineTool({
@@ -324,10 +330,11 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_close_question')
-        return asJson(await this.ctx.tickets.closeQuestion(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
-          expectedRevision: args.expected_revision, actorId: agent.id,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.closeQuestion(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), questionId: TicketQuestionId(args.question_id),
+            expectedRevision: args.expected_revision, actorId: agent.id,
+          })))
       },
     }))
     for (const [toolName, action] of [['ticket_acknowledge_attention', 'acknowledgeAttention'], ['ticket_resolve_attention', 'resolveAttention']] as const) {
@@ -345,10 +352,11 @@ export class TicketTools extends Service {
         output: jsonOutput(),
         execute: async (args, exec) => {
           const agent = agentOf(exec.agent, toolName)
-          return asJson(await this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
-            ticketId: TicketId(args.ticket_id), attentionId: TicketAttentionId(args.attention_id),
-            expectedRevision: args.expected_revision, actorId: agent.id,
-          }))
+          return asJson(await this.ctx.agents.withInitiator(agent, () =>
+            this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
+              ticketId: TicketId(args.ticket_id), attentionId: TicketAttentionId(args.attention_id),
+              expectedRevision: args.expected_revision, actorId: agent.id,
+            })))
         },
       }))
     }
@@ -366,14 +374,15 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_attention')
-        return asJson(await this.ctx.tickets.attention(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-          kind: args.kind,
-          message: args.message,
-          ...args.assignment_id === undefined ? {} : { assignmentId: AssignmentId(args.assignment_id) },
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.attention(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+            kind: args.kind,
+            message: args.message,
+            ...args.assignment_id === undefined ? {} : { assignmentId: AssignmentId(args.assignment_id) },
+          })))
       },
     }))
     register(defineTool({
@@ -388,12 +397,13 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_block')
-        return asJson(await this.ctx.tickets.block(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-          reason: args.reason,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.block(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+            reason: args.reason,
+          })))
       },
     }))
     register(defineTool({
@@ -408,12 +418,13 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_handoff')
-        return asJson(await this.ctx.tickets.handoff(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id),
-          expectedRevision: args.expected_revision,
-          actorId: agent.id,
-          newCoordinatorId: SessionId(args.new_coordinator_id),
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.handoff(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id),
+            expectedRevision: args.expected_revision,
+            actorId: agent.id,
+            newCoordinatorId: SessionId(args.new_coordinator_id),
+          })))
       },
     }))
     register(defineTool({
@@ -434,12 +445,12 @@ export class TicketTools extends Service {
         const agent = agentOf(exec.agent, 'ticket_revise')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
         const ticket = this.ctx.tickets.get(session, TicketId(args.ticket_id))
-        return asJson(await this.ctx.tickets.revise(session, {
+        return asJson(await this.ctx.agents.withInitiator(agent, () => this.ctx.tickets.revise(session, {
           ticketId: ticket.id, expectedRevision: args.expected_revision, actorId: agent.id,
           acceptanceCriteria: criteria(args.acceptance_criteria),
           dependencies: ticket.specification.dependencies,
           ...ticket.specification.parent === undefined ? {} : { parent: ticket.specification.parent },
-        }))
+        })))
       },
     }))
     register(defineTool({
@@ -461,11 +472,12 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_submit_candidate')
-        return asJson(await this.ctx.tickets.submitCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
-          candidateId: TicketCandidateId(args.candidate_id), specRevision: args.spec_revision,
-          content: candidateContent(args.content), assignmentIds: args.assignment_ids.map(AssignmentId),
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.submitCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
+            candidateId: TicketCandidateId(args.candidate_id), specRevision: args.spec_revision,
+            content: candidateContent(args.content), assignmentIds: args.assignment_ids.map(AssignmentId),
+          })))
       },
     }))
     register(defineTool({
@@ -486,12 +498,13 @@ export class TicketTools extends Service {
       output: jsonOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_check_candidate')
-        return asJson(await this.ctx.tickets.checkCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
-          ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
-          checkId: TicketCheckId(args.check_id), candidateId: TicketCandidateId(args.candidate_id),
-          criterionId: TicketCriterionId(args.criterion_id), specRevision: args.spec_revision,
-          outcome: args.outcome, evidence: args.evidence,
-        }))
+        return asJson(await this.ctx.agents.withInitiator(agent, () =>
+          this.ctx.tickets.checkCandidate(sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), expectedRevision: args.expected_revision, actorId: agent.id,
+            checkId: TicketCheckId(args.check_id), candidateId: TicketCandidateId(args.candidate_id),
+            criterionId: TicketCriterionId(args.criterion_id), specRevision: args.spec_revision,
+            outcome: args.outcome, evidence: args.evidence,
+          })))
       },
     }))
     for (const [toolName, action] of [['ticket_complete', 'complete'], ['ticket_fail', 'fail'], ['ticket_cancel', 'cancel'] as const]) {
@@ -514,9 +527,10 @@ export class TicketTools extends Service {
             actorId: agent.id,
             summary: args.summary,
           }
-          if (action === 'complete') return asJson(await this.ctx.tickets.complete(session, request))
-          if (action === 'fail') return asJson(await this.ctx.tickets.fail(session, request))
-          return asJson(await this.ctx.tickets.cancel(session, request))
+          if (action === 'complete') return asJson(await this.ctx.agents.withInitiator(agent, () =>
+            this.ctx.tickets.complete(session, request)))
+          if (action === 'fail') return asJson(await this.ctx.agents.withInitiator(agent, () => this.ctx.tickets.fail(session, request)))
+          return asJson(await this.ctx.agents.withInitiator(agent, () => this.ctx.tickets.cancel(session, request)))
         },
       }))
     }

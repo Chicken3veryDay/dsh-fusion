@@ -132,7 +132,13 @@ export function validateCurrentTicketChange(previous: TicketSnapshot | undefined
         || !same(next.workspace, old.workspace) || !same(next.executor, old.executor)
         || !same(next.modelSelection, old.modelSelection)) reject('attempt selection and identity are immutable')
       if (old.workspaceReceipt !== undefined && !same(old.workspaceReceipt, next.workspaceReceipt)) reject('workspace receipt cannot be replaced')
-      if (old.runtimeReceipt !== undefined && !same(old.runtimeReceipt, next.runtimeReceipt)) reject('runtime receipt cannot be replaced')
+      if (old.runtimeReceipt !== undefined) {
+        const { jobIds: oldJobs = [], ...identity } = old.runtimeReceipt
+        const { jobIds: nextJobs = [], ...nextIdentity } = next.runtimeReceipt ?? {}
+        if (!same(identity, nextIdentity)) reject('runtime identity cannot be replaced')
+        retained(oldJobs, nextJobs, 'runtime job')
+        unique(nextJobs, 'runtime job')
+      }
       if ((old.status === 'stopping' || old.status === 'unknown') && next.status === 'running') reject('uncertain or stopping attempt cannot resume running')
     }
     for (const old of previous.missionPlans) {

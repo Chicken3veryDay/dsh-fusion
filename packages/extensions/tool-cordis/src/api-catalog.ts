@@ -4362,8 +4362,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'tickets',
-    summary: 'Standalone durable Ticket domain service.',
-    description: 'Standalone durable Ticket domain service.',
+    summary: 'Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent.',
+    description: 'Durable Ticket commands require a registered live Agent in the initiator scope; actor ids must match that Agent.',
     methods: [
       {
         signature: 'recover(session: Session): TicketView[]',
@@ -5410,7 +5410,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>',
-        description: 'Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.\n\nTickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the Tickets have not yet followed. Each move is authenticated by the Ticket\'s own current coordinator, which the Workstream has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous coordinator as the handing-off actor.',
+        description: 'Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.\n\nTickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the Tickets have not yet followed. Each move is authenticated by the immutable technical owner after Workstream verifies the caller\'s authority.',
         parameters: [{ name: 'caller', description: 'current coordinator or immutable owner.' }, { name: 'rootSessionId', description: 'explicit technical owner.' }, { name: 'request', description: 'CAS revision and active new coordinator.' }],
         returns: 'committed next snapshot.',
         throws: ['WorkstreamPartialHandoffError when some Tickets could not move; the coordinator is unchanged and the same call may be retried.'],

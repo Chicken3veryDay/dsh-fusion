@@ -1566,7 +1566,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-experimental-ticket`
 
-- `inject`: `sessions` · `sessionProjections`
+- `inject`: `sessions` · `sessionProjections` · `agents`
 - `source`: [`packages/experimental/ticket/src/types.ts:196`](../packages/experimental/ticket/src/types.ts)
 
 ```ts config-catalog

@@ -117,11 +117,13 @@ describe('durable Workstream authority and delivery', () => {
       ownerId: memberA.id, subject: 'Stale coordinator' })).rejects.toMatchObject({ code: 'WORKSTREAM_UNAUTHORIZED' })
     await expect(ctx.workstreams.endTicket(agentA, owner.id, { ticketId: ticket.id, expectedRevision: handed.revision,
       summary: 'Stale coordinator' })).rejects.toMatchObject({ code: 'WORKSTREAM_UNAUTHORIZED' })
-    const reported = await ctx.tickets.report(owner.session, { ticketId: ticket.id, expectedRevision: handed.revision,
-      actorId: memberA.id, assignmentId: assigned.assignments[0]!.id, kind: 'result', summary: 'Built' })
-    const candidate = await ctx.tickets.submitCandidate(owner.session, { ticketId: ticket.id, expectedRevision: reported.revision,
-      actorId: memberB.id, candidateId: TicketCandidateId('candidate-1'), specRevision: reported.specification.revision,
-      content: { kind: 'commit', repository: 'repo', commit: 'a'.repeat(40) }, assignmentIds: [assigned.assignments[0]!.id] })
+    const reported = await ctx.agents.withInitiator(agentA, () =>
+      ctx.tickets.report(owner.session, { ticketId: ticket.id, expectedRevision: handed.revision,
+        actorId: memberA.id, assignmentId: assigned.assignments[0]!.id, kind: 'result', summary: 'Built' }))
+    const candidate = await ctx.agents.withInitiator(agentB, () =>
+      ctx.tickets.submitCandidate(owner.session, { ticketId: ticket.id, expectedRevision: reported.revision,
+        actorId: memberB.id, candidateId: TicketCandidateId('candidate-1'), specRevision: reported.specification.revision,
+        content: { kind: 'commit', repository: 'repo', commit: 'a'.repeat(40) }, assignmentIds: [assigned.assignments[0]!.id] }))
     const ended = await ctx.workstreams.endTicket(agentB, owner.id, { ticketId: ticket.id, expectedRevision: candidate.revision,
       summary: 'Closed by the new coordinator' })
     expect(ended.terminalOutcome).toMatchObject({ kind: 'completed', actorId: memberB.id })

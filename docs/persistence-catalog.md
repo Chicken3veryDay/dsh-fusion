@@ -5963,7 +5963,7 @@ Array of [`Message`](#persistence-type-sha256-ac4689bebe6b86b52b61db9ad86b589810
 
 SHA-256: `5baa86311c96b74049fb0d215fe56aa52b21566fcfec63215d81ba4697873159`
 
-Sources: [`packages/experimental/ticket/src/types.ts:486`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:487`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -5988,7 +5988,7 @@ Array of [`MissionMilestone`](#persistence-type-sha256-5baa86311c96b74049fb0d215
 
 SHA-256: `6b043c51b7ad63b1c6c7e85cf35331a3c3bf644766c11082d0dfffd2a35d26a4`
 
-Sources: [`packages/experimental/ticket/src/types.ts:488`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:489`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -6852,7 +6852,7 @@ Sources: [`packages/experimental/ticket/src/types.ts:419`](../packages/experimen
 
 SHA-256: `b34f2217ecf4e02da815a030635a81e326eb1e35ea72629a8a7c0b6914d9114b`
 
-Sources: [`packages/experimental/ticket/src/types.ts:454`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:455`](../packages/experimental/ticket/src/types.ts)
 
 One of:
 
@@ -6962,7 +6962,7 @@ One of:
 
 SHA-256: `39abdc7c12d49c0d13efc953d8e77ef386d53c639ff136bba6710bb3e5a3b3fb`
 
-Sources: [`packages/experimental/ticket/src/types.ts:459`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:460`](../packages/experimental/ticket/src/types.ts)
 
 | kind | Form property | Other required fields | Full definition |
 |---|---|---|---|
@@ -6979,7 +6979,7 @@ Sources: [`packages/experimental/ticket/src/types.ts:459`](../packages/experimen
 
 SHA-256: `a410db286b528d43c5fd9687846962803b44965c74a2c5fad7b90f0c7be26c10`
 
-Sources: [`packages/experimental/ticket/src/types.ts:463`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:464`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -7009,7 +7009,7 @@ Array of [`TicketCandidateSnapshot`](#persistence-type-sha256-a410db286b528d43c5
 
 SHA-256: `5434949a870873c48db03407aeb716adfb2b785bf788fa70b8b58e07ff901460`
 
-Sources: [`packages/experimental/ticket/src/types.ts:473`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:474`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -7057,7 +7057,7 @@ One of:
 
 SHA-256: `e4007e240057912c2fd0319ba0eae15fdca1511fac69eb67e1c58fd3181849c4`
 
-Sources: [`packages/experimental/ticket/src/types.ts:484`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:485`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -7220,7 +7220,7 @@ Sources: [`packages/experimental/ticket/src/types.ts:424`](../packages/experimen
 
 SHA-256: `2b48f836c890718b253e615b9810a44c17c1e0ed8ec6d015c0394c118ed5e33b`
 
-Sources: [`packages/experimental/ticket/src/types.ts:502`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:503`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -7351,7 +7351,7 @@ Sources: [`packages/experimental/ticket/src/types.ts:153`](../packages/experimen
 
 SHA-256: `59fec16debd7c28a956a53a7797235e64122ec55641c3b8a5d1bf9061f683144`
 
-Sources: [`packages/experimental/ticket/src/types.ts:433`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:434`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -9484,7 +9484,7 @@ SHA-256: `3247e566f4340029325b70e4366b56fa9719977f1e39033b769a2ec221ab22a9`
 
 SHA-256: `cd27c1b1c4f293a1dce0afa0a3bc2ca43f8b1d5982ef42f16bdd01326d3131e7`
 
-Sources: [`packages/experimental/ticket/src/types.ts:461`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:462`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -9510,7 +9510,7 @@ Sources: [`packages/core/session/src/types.ts:211`](../packages/core/session/src
 
 SHA-256: `6d45d3e78277b772991ba7de44f457314441d1905014a6c4a9966cc52f08faa7`
 
-Sources: [`packages/experimental/ticket/src/types.ts:460`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:461`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|
@@ -10996,7 +10996,7 @@ Sources: [`packages/sandbox/sandbox-policy/src/session-mode.ts:33`](../packages/
 
 SHA-256: `8e56cefa6cd4dd5e1683af2f714816519f79e3f1bb296d5765265a6e4cfb15e9`
 
-Sources: [`packages/experimental/ticket/src/types.ts:446`](../packages/experimental/ticket/src/types.ts)
+Sources: [`packages/experimental/ticket/src/types.ts:447`](../packages/experimental/ticket/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|

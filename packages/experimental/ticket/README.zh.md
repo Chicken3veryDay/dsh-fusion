@@ -24,15 +24,15 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 <a id="use-this-package"></a>
 ## 使用本包
 
-将 `@deepseek-ai/dsh-experimental-ticket` 与持久化 Session 和 `@deepseek-ai/dsh-session-projection` 一起挂载。包会注册 `ctx.tickets` 和 `ticket` Session 投影。它以一个 Session 作为持久化权威，不建立第二个数据库。
+将 `@deepseek-ai/dsh-experimental-ticket` 与持久化 Session 和 `@deepseek-ai/dsh-session-projection` 一起挂载。包会注册 `ctx.tickets` 和 `ticket` Session 投影。Session 拥有持久化状态；每个公开修改操作都要求在 `ctx.agents.withInitiator` 中使用已注册的确切 Agent，并在提供 `actorId` 时与之匹配。创建操作要求技术所有者调用；该所有者也可通过 `handoff` 收回协调权。缺失、过期或冒用的调用者返回 `TICKET_AUTHORITY`。
 
-服务提供 `create`、`assign`、`claim`、`release`、`report`、`ask`、`answer`、`closeQuestion`、`attention`、`acknowledgeAttention`、`resolveAttention`、`block`、`handoff`、`complete`、`fail` 和 `cancel`。修改命令携带 `expectedRevision`；过期版本返回 `TICKET_STALE_REVISION`，不会覆盖更新后的状态。Worker 是执行适配器提供的直接 Session 身份。当前协调者可以回答未解决的问题，并确认或解决关注项；问题作者也可关闭自己未解决或已回答的问题。确认关注项不会解除阻塞。Worker 的进度、认领和释放操作会保留未解决的问题及关注项；解除最后一项阻塞后，根据分配状态重新计算就绪状态。已结束或已释放的分配拒绝报告。
+服务提供 `create`、`assign`、`claim`、`release`、`report`、`ask`、`answer`、`closeQuestion`、`attention`、`acknowledgeAttention`、`resolveAttention`、`block`、`handoff`、`complete`、`fail` 和 `cancel`。修改命令携带 `expectedRevision`；过期版本返回 `TICKET_STALE_REVISION`，不会覆盖更新后的状态。Worker 是执行适配器提供的直接 Session 身份。当前协调者可以回答未解决的问题，并确认或解决关注项；问题作者也可关闭自己未解决或已回答的问题。确认关注项不会解除阻塞。Worker 的进度、认领和释放操作会保留未解决的问题及关注项；解除最后一项阻塞后，根据分配状态重新计算就绪状态。已结束或已释放的分配拒绝报告。 规格编辑会重新开放没有尝试历史的已完成贡献，供模型提交新报告，同时保留旧报告历史。有尝试历史的分配需要宿主准入新尝试；旧式认领不能重新开放它们。
 
-需要让模型协调时挂载 `TicketTools`，它注册 `ticket_*` 命令。需要共享目录、隔离 Worktree 或由 Worker Session 所有的后台任务时，和 Jobs、Worktree 提供者一起挂载 `TicketExecutionService`。执行适配器会认领持久化 Assignment、检查直接 Worker 身份、在该 Session 下启动任务，并在清理时释放仍在运行的 Assignment。
+当模型需要通过 `ticket_*` 命令协调时挂载 `TicketTools`。当分配需要共享工作区、隔离 worktree或自有后台任务时，挂载 `TicketExecutionService` 并提供 Jobs 和 Worktree 服务。执行适配器准入持久化尝试，检查直接 Worker 身份，并跨句柄串行化内部 Ticket 更新。启动生产者前，它保持运行时身份不变，并把每个 job id 追加到回执中。调用者取消监听保留到生产者结算或句柄成功清理；失败 Job 优先于已取消 Job，二者均阻止成功。清理仅在结算后释放活动分配。
 
-[Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。命令准入和重放共用语义验证；无效命令不会追加事件。提议状态的 Ticket 不能直接完成。持久化刷新可能在追加后失败，重试前应读取当前版本。
+[Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。命令准入和重放共用语义验证；无效命令不会追加事件。提议状态的 Ticket 不能直接完成。持久化刷新可能在追加后失败，重试前应读取当前版本。 旧版 v1 报告投影到合成的初始规格，因此保留的结果可以进入 v2 候选而无需改写旧事件。
 
-工作范围将斜杠分隔的相对路径规范化，折叠 `.` 和 `..`，并拒绝越出工作区的路径、绝对路径、驱动器前缀及反斜杠。分配范围必须包含于声明的 Ticket 范围内，且不能把只读权限提升为写权限；Ticket 未声明范围时，分配的范围声明不受此限制。范围声明和 `exclusive` 用于协调 Worker 所有权，不会限制文件系统访问，也不通过锁强制互斥。
+工作范围规范化以斜杠分隔的相对路径，折叠 `.` 和 `..`，并拒绝工作区逃逸、绝对路径、驱动器前缀和反斜杠。分配范围必须位于声明的 Ticket 范围内，且不能从读权限提升为写权限；未声明范围的 Ticket 不限制分配声明。尝试准入会在同一共享执行环境中原子排斥重叠写范围，只要任一声明为独占。预留覆盖所属 Session 中的所有 Ticket，并在停止或未知状态下保留到结算。隔离 worktree和不同执行环境相互独立；范围不会限制文件系统访问。
 
 <a id="understand-the-implementation"></a>
 ## 实现原理

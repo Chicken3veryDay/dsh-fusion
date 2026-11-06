@@ -197,9 +197,8 @@ export class WorkstreamService extends Service {
   /** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.
    *
    * Tickets move first and the Workstream snapshot commits last, so the Workstream coordinator never names a member the
-   * Tickets have not yet followed. Each move is authenticated by the Ticket's own current coordinator, which the Workstream
-   * has already verified as a member; the technical owner may force the handoff but the Ticket then records the previous
-   * coordinator as the handing-off actor.
+   * Tickets have not yet followed. Each move is authenticated by the immutable technical owner after Workstream verifies
+   * the caller's authority.
    * @param caller - current coordinator or immutable owner.
    * @param rootSessionId - explicit technical owner.
    * @param request - CAS revision and active new coordinator.
@@ -366,7 +365,8 @@ export class WorkstreamService extends Service {
   async createTicket(caller: Agent, rootSessionId: SessionId, request: Omit<CreateTicketRequest, 'coordinatorId'>): Promise<TicketView> {
     return this.enqueue(rootSessionId, async () => {
       const { owner, snapshot } = this.requireMembership(caller, rootSessionId)
-      return this.ctx.tickets.create(owner.session, { ...request, coordinatorId: snapshot.coordinatorId })
+      return this.ctx.agents.withInitiator(owner, () =>
+        this.ctx.tickets.create(owner.session, { ...request, coordinatorId: snapshot.coordinatorId }))
     })
   }
 
@@ -380,7 +380,7 @@ export class WorkstreamService extends Service {
     return this.enqueue(rootSessionId, async () => {
       const { owner, snapshot } = this.actingCoordinator(caller, rootSessionId)
       this.child(snapshot, request.ownerId)
-      return this.ctx.tickets.assign(owner.session, { ...request, actorId: caller.id })
+      return this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.assign(owner.session, { ...request, actorId: caller.id }))
     })
   }
 
@@ -393,7 +393,7 @@ export class WorkstreamService extends Service {
   async endTicket(caller: Agent, rootSessionId: SessionId, request: Omit<EndTicketRequest, 'actorId'>): Promise<TicketView> {
     return this.enqueue(rootSessionId, async () => {
       const { owner } = this.actingCoordinator(caller, rootSessionId)
-      return this.ctx.tickets.complete(owner.session, { ...request, actorId: caller.id })
+      return this.ctx.agents.withInitiator(caller, () => this.ctx.tickets.complete(owner.session, { ...request, actorId: caller.id }))
     })
   }
 
@@ -429,8 +429,9 @@ export class WorkstreamService extends Service {
       let cause: unknown
       for (const ticket of open) {
         try {
-          await this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
-            actorId: ticket.coordinatorId, newCoordinatorId: coordinatorId })
+          await this.ctx.agents.withInitiator(owner, () =>
+            this.ctx.tickets.handoff(owner.session, { ticketId: ticket.id, expectedRevision: ticket.revision,
+              actorId: owner.id, newCoordinatorId: coordinatorId }))
           moved.push(ticket.id)
         } catch (error: unknown) { pending.push(ticket.id); cause ??= error }
       }

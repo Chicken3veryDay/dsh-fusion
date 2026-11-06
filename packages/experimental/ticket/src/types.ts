@@ -425,6 +425,7 @@ export interface TicketRuntimeReceipt {
   readonly runtimeId: string
   readonly providerId: string
   readonly childSessionId?: SessionId
+  /** Append-only Job identities persisted before their producers start; absent when no Jobs were admitted. */
   readonly jobIds?: readonly JobId[]
   readonly transportId?: string
   readonly world?: string

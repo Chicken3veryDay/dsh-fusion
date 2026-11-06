@@ -1617,14 +1617,14 @@
   en: 2ac3b771b844a9fb
   zh: 1a3f1be1e3424763
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone:
-  en: 2431b674e49a37d4
-  zh: 6e48211c5598f199
+  en: 87278179f1989b3c
+  zh: ebd08eb77cb15c73
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone~2:
   en: f93e2223c296924d
   zh: bd1df4a53540c07d
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot:
-  en: 94c5729f146cf3b9
-  zh: 5b6ba0d3e35de24e
+  en: 734dc842c8b2caf6
+  zh: c049d986f79a9586
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot~2:
   en: 22f0e54758741f5c
   zh: 3a1db959f9f95f38
@@ -1764,8 +1764,8 @@
   en: 4eb789c8098c06e4
   zh: ba976f0ae9b2fa33
 /session-persistence-event-catalog/resolved-persistence-types/ticketattemptsnapshot:
-  en: 39317729d65e4a94
-  zh: 692f39424c3b5b43
+  en: e4fea85adb64fc2c
+  zh: 50a0e04688346df9
 /session-persistence-event-catalog/resolved-persistence-types/ticketattemptsnapshot~2:
   en: e02bb15dd531c7e4
   zh: fbff38ba482dc260
@@ -1785,17 +1785,17 @@
   en: 5cdfb01371c84407
   zh: c95f0e849891e358
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatecontent:
-  en: a016608cb62435c4
-  zh: b30b315ee125ee37
+  en: 23a86fc3cadd1d6f
+  zh: f613629422a5e447
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatesnapshot:
-  en: 2d2d70696de60a23
-  zh: 1101712ad2f013fa
+  en: b685a1592fafbe5f
+  zh: bcddba34d3171ad9
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatesnapshot~2:
   en: 70347af3f452d930
   zh: 3b56c4325a52e4db
 /session-persistence-event-catalog/resolved-persistence-types/ticketchecksnapshot:
-  en: 393c47b00fdb83e9
-  zh: 75f4119d71455ea2
+  en: 2ab5e093b6b38608
+  zh: 7f83b11e4fd9e877
 /session-persistence-event-catalog/resolved-persistence-types/ticketchecksnapshot~2:
   en: 9238e788d5792ad5
   zh: d9977cac3b8cf05a
@@ -1803,8 +1803,8 @@
   en: 38d91b92b2e86cc5
   zh: 5eae43c18864e62b
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot:
-  en: 2f77afb945ee48ec
-  zh: ae5011c7d5e89930
+  en: 50074c8f09d07ddf
+  zh: f4d3fcd24b9e83e6
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot~2:
   en: 947c620dfe961058
   zh: 1c1eaa51acf32e4f
@@ -1833,8 +1833,8 @@
   en: d2b875e305ca24e7
   zh: 9acb44dcbb098104
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshot:
-  en: 082d4effc7c065ab
-  zh: d4e518f0ef5eb7c7
+  en: 2b264d24660c53e9
+  zh: a958c9bedf1e9ec0
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshotv1:
   en: 7d1c17d31d97c885
   zh: 1752c602792e4105
@@ -1848,8 +1848,8 @@
   en: 67bb2d87aa3839ef
   zh: 7b0e3937442cb9ce
 /session-persistence-event-catalog/resolved-persistence-types/ticketworkspacereceipt:
-  en: df38b9497bcb355e
-  zh: 9856df449181463e
+  en: 4f0e38797de9786c
+  zh: 6f2dac2ded0bcebb
 /session-persistence-event-catalog/resolved-persistence-types/todoitem:
   en: ee24f9407df530ac
   zh: 310bedf3ac730d77
@@ -2277,14 +2277,14 @@
   en: 201534f235a32769
   zh: 4b785ede6ab2403c
 /session-persistence-event-catalog/resolved-persistence-types/kind-artifact:
-  en: 72e78fcaa12c57f7
-  zh: b04812102d737a35
+  en: 972dcd4461cbd821
+  zh: 3149a5de30109789
 /session-persistence-event-catalog/resolved-persistence-types/kind-blocked:
   en: 66dc1ef779f439e9
   zh: a532f8f5d45ca42e
 /session-persistence-event-catalog/resolved-persistence-types/kind-commit:
-  en: 918851f324efe2c3
-  zh: eb1a34a869fb0cc6
+  en: 5fbce95e50ccbc4a
+  zh: 121573a7330bf920
 /session-persistence-event-catalog/resolved-persistence-types/kind-completed:
   en: 9affe5d5dac75c57
   zh: 8db62dcb41e804c8
@@ -2664,8 +2664,8 @@
   en: fca2f6101b952069
   zh: 7491ee7f778a22f4
 /session-persistence-event-catalog/resolved-persistence-types/model-provider-settings:
-  en: c06641ffe31268bc
-  zh: 4c9851bf2cb92d41
+  en: a2b133f83eaae792
+  zh: 2410e713ef2d992b
 /session-persistence-event-catalog/resolved-persistence-types/op-snapshot-version:
   en: a87838fefd330e48
   zh: 4db93298c854467e
