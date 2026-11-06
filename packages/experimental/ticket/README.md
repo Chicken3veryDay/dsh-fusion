@@ -68,7 +68,7 @@ Cells: `—` keeps the phase, `✗` rejects with `TICKET_ATTEMPT_STATE`, and `ab
 | `launched` | launched(aborted); aborted: — | launched(aborted); aborted: — | launched(aborted); aborted: — | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | stopping(cancel) | running; aborted: stopping(cancel) | ✗ | ✗ | ✗ | ✗ | ✗ |
 | `running` | — | stopping(cancel) | stopping(cancel) | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | stopping(natural) | stopping(cancel) | ✗ | ✗ | ✗ |
 | `stopping` | — | natural: stopping(cancel); cancel: — | natural: stopping(cancel); cancel: — | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | — | natural: stopping(cancel); cancel: — | natural: handed(succeeded); cancel: handed(cancelled) | natural: unknown(natural); cancel: unknown(cancel) | ✗ |
-| `unknown` | — | — | stopping(cancel) | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | natural: stopping(natural); cancel: stopping(cancel) | stopping(cancel) | ✗ | ✗ | ✗ |
+| `unknown` | — | — | stopping(cancel) | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | natural: stopping(natural); cancel: stopping(cancel) | stopping(cancel) | ✗ | ✗ | released |
 | `uncertain` | — | — | — | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | released |
 | `handed` | — | — | — | ✗ | ✗ | ✗ | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | — | — | ✗ | ✗ | ✗ |
 | `released` | — | — | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
