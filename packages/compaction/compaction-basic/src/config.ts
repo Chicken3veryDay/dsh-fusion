@@ -15,6 +15,7 @@ import type {
   ResolvedRetention,
   ResolvedTargetPolicy,
 } from './types.ts'
+import { DEFAULT_REVOCATION_STUB_BYTES } from './revocation.ts'
 
 /** Default request-pressure fraction for every routed model. */
 const DEFAULT_THRESHOLD_RATIO = 0.8
@@ -40,6 +41,7 @@ const BASIC_COMPACT_CONFIG_KEYS: ReadonlySet<string> = new Set([
   ...POLICY_CONFIG_KEYS,
   'modelPolicies',
   'auto',
+  'revocationStubBytes',
 ])
 
 /** Complete exact-target override key set. */
@@ -107,6 +109,18 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     modelPolicies,
     auto: config.auto ?? true,
   })
+}
+
+/**
+ * Resolve the byte bound on the revoked-context stubs of one checkpoint.
+ * The bound is service-wide, so it stays outside {@link ResolvedConfig}.
+ * @param config - untrusted plugin configuration; unknown keys are rejected by {@link resolveConfig}.
+ * @returns the configured non-negative integer, or {@link DEFAULT_REVOCATION_STUB_BYTES}.
+ */
+export function resolveRevocationStubBytes(config: BasicCompactionConfig): number {
+  const bytes = config.revocationStubBytes ?? DEFAULT_REVOCATION_STUB_BYTES
+  assertNonNegativeInteger('BasicCompactionConfig.revocationStubBytes', bytes)
+  return bytes
 }
 
 /**

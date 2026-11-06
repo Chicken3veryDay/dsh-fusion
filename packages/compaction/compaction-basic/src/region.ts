@@ -14,19 +14,25 @@ import {
   toolPairingBalancedAfter,
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
-import type { CompactionResult } from '@deepseek-ai/dsh-compaction'
+import type { CompactionResult, RevocableSourceStub } from '@deepseek-ai/dsh-compaction'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
-import type { Message, UserMessage } from '@deepseek-ai/dsh-llm'
+import type { Message, MessageSource, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { planRevocation, renderStubBlock } from './revocation.ts'
+import type { RevocationPlan } from './revocation.ts'
 import { frameSummary } from './summarizer.ts'
 import type { SummarizationInput, SummaryResult } from './summarizer.ts'
 interface RegionDependencies {
   readonly meter: TokenMeter
   summarize(input: SummarizationInput, agent: Agent, signal?: AbortSignal): Promise<SummaryResult>
   recover(error: unknown, agent: Agent, sourceEventSeqs: readonly SessionSeq[], signal?: AbortSignal): boolean
+  /** Stub of a revocable message source, or `undefined` for ordinary history. */
+  stubFor(source: MessageSource): RevocableSourceStub | undefined
+  /** Byte bound on the stub block that follows a checkpoint. */
+  readonly revocationStubBytes: number
 }
 
 /** One validated inclusive span of current surface positions. */
@@ -46,6 +52,10 @@ interface PreparedCompaction extends SurfaceSelection {
   /** Route-priced total of the selected span; the shrink comparison's unit. */
   readonly shadowedRouteTokenCount: number
   readonly input: SummarizationInput
+  /** Revocable messages omitted from `input`, and their stubs. */
+  readonly revocation: RevocationPlan
+  /** Whether `input` carries no conversation content, so no summary can be requested. */
+  readonly inputEmpty: boolean
 }
 
 type SummarizedCompaction = PreparedCompaction & SummaryResult & {
@@ -364,11 +374,13 @@ function prepareCompaction(
   selection: SurfaceSelection,
 ): PreparedCompaction {
   const measurement = dependencies.meter.measure(session)
+  const revocation = planRevocation(session, selection.shadowedSeqs, source => dependencies.stubFor(source))
   const selectedNodes = measurement.nodes.slice(selection.startIdx, selection.endIdx + 1)
   if (selectedNodes.length !== selection.shadowedSeqs.length
     || selectedNodes.some((node, index) => node.seq !== selection.shadowedSeqs[index])) {
     throw new SurfaceChangedError('compaction: selected surface changed before summarization began')
   }
+  const input = buildSummarizationInput(session, selection.shadowedSeqs, revocation.revokedSeqs)
   return {
     ...selection,
     measurement,
@@ -379,9 +391,21 @@ function prepareCompaction(
     // route-priced `tokens` instead.
     shadowedTokenCount: selectedNodes.reduce((total, node) => total + node.heuristicTokens, 0),
     shadowedRouteTokenCount: selectedNodes.reduce((total, node) => total + node.tokens, 0),
-    input: buildSummarizationInput(session, selection.shadowedSeqs),
+    input,
+    revocation,
+    inputEmpty: revocation.revokedSeqs.size > 0 && input.messages.every(message => message.role === 'system'),
   }
 }
+
+/**
+ * Summary of a span whose every message was revoked: no model call is made, so
+ * the log names a non-model origin instead of a provider route.
+ */
+const REVOCATION_ONLY_SUMMARY: SummaryResult = Object.freeze({
+  summary: [{ type: 'text' as const, text: '(The compacted span held only revoked context.)' }],
+  provider: 'compaction-basic',
+  model: 'revocation-only',
+})
 
 /** Run the summarizer and frame its replacement checkpoint. */
 async function summarizeCompaction(
@@ -396,6 +420,10 @@ async function summarizeCompaction(
   let summaryResult: SummaryResult
   for (;;) {
     signal?.throwIfAborted()
+    if (prepared.inputEmpty) {
+      summaryResult = REVOCATION_ONLY_SUMMARY
+      break
+    }
     try {
       summaryResult = await dependencies.summarize(prepared.input, agent, signal)
       break
@@ -407,8 +435,9 @@ async function summarizeCompaction(
         validateSurfaceRegion(agent.session, prepared.start, prepared.end))
     }
   }
+  const stubBlock = renderStubBlock(prepared.revocation.stubs, dependencies.revocationStubBytes)
   const checkpointMessage = createUserMessage({
-    content: frameSummary(summaryResult.summary),
+    content: frameSummary(summaryResult.summary, stubBlock),
     source: compactCheckpointSource(compactionId, sourceCommandId),
   })
   // The checkpoint is text-only, so its fixed-heuristic price IS its route
@@ -539,11 +568,13 @@ function completeCompaction(
  * message, contributes no leading system message.
  * @param session - session supplying the surface head, request header, and per-node projection.
  * @param shadowedSeqs - the surface-node seqs, in order, being compacted.
+ * @param revokedSeqs - revocable messages left out of the prefix; their stubs ride on the checkpoint.
  * @returns the replayed conversation prefix to condense.
  */
 function buildSummarizationInput(
   session: Session,
   shadowedSeqs: readonly SessionSeq[],
+  revokedSeqs: ReadonlySet<SessionSeq>,
 ): SummarizationInput {
   const header = session.requestHeader()
   // shadowedSeqs are current surface seqs, so the surface has a node 0.
@@ -551,6 +582,7 @@ function buildSummarizationInput(
   const head = systemHead(session, session.surface.nodes[0]!)
   const system = head === undefined ? null : session.deriveEventMessage(head)
   const regionMessages = shadowedSeqs
+    .filter(seq => !revokedSeqs.has(seq))
     // shadowedSeqs are current surface seqs, so each is a valid log index.
     // Existing Session history read; migration deferred.
     // oxlint-disable-next-line typescript/no-non-null-assertion, typescript/no-deprecated

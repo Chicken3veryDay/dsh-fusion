@@ -19,6 +19,7 @@ import type {} from '@deepseek-ai/dsh-compaction-tool-result-pruner'
 import {
   resolveCompactSpec,
   resolveConfig,
+  resolveRevocationStubBytes,
   resolveTargetPolicy,
   TargetPressureConfigError,
 } from './config.ts'
@@ -86,6 +87,7 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+const revocationStubBytesSchema = z.number().step(1).min(0)
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -124,10 +126,14 @@ export class BasicCompactionEngine extends CompactionEngine {
     maxOverflowRetries: maxOverflowRetriesSchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
+    revocationStubBytes: revocationStubBytesSchema,
   })
 
   /** Resolved and validated compaction configuration. */
   readonly config: ResolvedConfig
+
+  /** Byte bound on the revoked-context stubs of one checkpoint. */
+  readonly revocationStubBytes: number
 
   private readonly warnedPressureConfigTargets = new Set<string>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
@@ -136,6 +142,7 @@ export class BasicCompactionEngine extends CompactionEngine {
   constructor(ctx: Context, config: BasicCompactionConfig = {}) {
     super(ctx)
     this.config = resolveConfig(config)
+    this.revocationStubBytes = resolveRevocationStubBytes(config)
     if (this.config.auto) this._registerAutomaticCompaction()
   }
 
@@ -463,6 +470,8 @@ export class BasicCompactionEngine extends CompactionEngine {
     return {
       meter: this.ctx.tokenMeter,
       summarize: (input, owner, abort) => this.summarize(input, owner, abort),
+      stubFor: source => this.revocableSourceStub(source),
+      revocationStubBytes: this.revocationStubBytes,
       recover: (error, agent, sourceEventSeqs, signal) => this.ctx.waterfall('compaction/summary-error', {
         session: agent.session,
         sourceEventSeqs,

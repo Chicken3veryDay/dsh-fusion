@@ -27,8 +27,11 @@
   en: 8213b79c776f1a75
   zh: 481c0dffd342426a
 /deepseek-ai-dsh-compaction/use-this-package/implementing-a-backend:
-  en: 280b5fda4c9b9c8b
-  zh: 764ca79fccf98279
+  en: 8b40aa54e577ae51
+  zh: 6caa7e364616def2
+/deepseek-ai-dsh-compaction/use-this-package/revoking-injected-context:
+  en: 42844e9ebc6d0b4d
+  zh: d777d5546edf15a5
 /deepseek-ai-dsh-compaction/use-this-package/recognizing-condensed-history:
   en: 35502487f2850f05
   zh: 333d2b86cc1d6eb0
@@ -75,8 +78,8 @@
   en: be91f4a4bbb9338b
   zh: 2b5de31d4d7caff1
 /deepseek-ai-dsh-compaction/model-experience/conversation-history-when-a-backend-is-invoked/kv-cache-effect:
-  en: 40ba838a2309c44a
-  zh: c609fc1587a0d666
+  en: 329fde394050c210
+  zh: d929805bb68b8c04
 /deepseek-ai-dsh-compaction/known-limitations-and-deferred-work:
   en: fee9ba06d3e5f35c
   zh: 2bb5241e2447d15d

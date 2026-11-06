@@ -102,6 +102,37 @@ Pressure compaction runs at `agent/pre-step` against the committed request heade
 
 The Service Definition exports `toolPairingBalancedBefore(session, seq)` and `toolPairingBalancedAfter(session, seq)` for the tool-call/result pairing checks before and after a seq. Both validate current surface membership and reject missing seqs and orphan results; the [package contract](../../packages/compaction/compaction/README.md#tool-pairing-boundaries) defines their cache behavior.
 
+## Revocable sources
+
+A plugin that injects on-demand material (a loaded instruction section, a fetched reference) calls `ctx.compaction.registerRevocableSource(kind, render)` to mark its user messages of one source `kind` as revocable. Human input (`user`) and `compact-checkpoint` cannot be registered, a kind registers once, and the registration is a Cordis effect: it ends with the registering fiber or its returned disposer.
+
+```ts type-equiv
+/**
+ * One revoked message's replacement, produced by a registered renderer.
+ * Stubs sharing a `key` within one source kind collapse to the first in span
+ * order.
+ */
+interface RevocableSourceStub {
+  /** Identity of the revoked material; equal keys of one source kind render once per checkpoint. */
+  readonly key: string
+  /** One short line telling the model what was removed and how to get it back; whitespace is collapsed and the backend bounds the total. */
+  readonly text: string
+}
+```
+
+```ts type-equiv
+/**
+ * Pure renderer from a revoked message's source metadata to its stub. It must
+ * be deterministic and cheap and must not read the message body; a throw
+ * fails the compaction before any summary is requested.
+ */
+type RevocableSourceRenderer<K extends MessageSource['kind']> = (
+  source: Extract<MessageSource, { kind: K }>,
+) => RevocableSourceStub
+```
+
+A backend that summarizes history omits every revocable user message in the compacted span from its summarizer input and appends the rendered stubs to the checkpoint `user/message`, one per distinct `(kind, key)` in span order. Messages in the retained tail stay verbatim, and an unregistered kind is ordinary history. The stubs are content of the logged replacement message, so replay needs no registry and derives the identical request. `revocableSourceStub(source)` resolves a stub for a backend; [compaction-basic](../../packages/compaction/compaction-basic/README.md#revoking-injected-context) bounds the stub bytes and defines the span-of-only-revoked-context case.
+
 ## Tool-result pruning outcomes
 
 The optional tool-result pruning service reports each durable content replacement and the aggregate Unicode-code-point reduction. Its public result types live in [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts).
@@ -147,6 +178,31 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Abstract compaction service. Implementations own trigger policy, retention, and summarization, and may consume a separate measurement service. A successful run replaces the selected surface span with one summary node and prevents concurrent compaction of the same session. The replacement user message uses compactCheckpointSource with the transaction identity so consumers recognize and correlate it independently of the backend. Load one implementation per context as `ctx.compaction`.
 
 ```ts cordis-catalog
+/**
+ * Mark injected user messages of one source kind as revocable. A backend
+ * that summarizes history omits every matching message in the compacted
+ * span from its summarizer input and follows the checkpoint with the stub
+ * the renderer returns; matching messages in the retained tail are
+ * untouched. The registration belongs to the calling context's fiber and
+ * ends when that fiber is disposed or the returned disposer runs.
+ *
+ * Human input (`user`) and checkpoints (`compact-checkpoint`) cannot be
+ * revoked.
+ * @param kind - message source kind whose user messages become revocable.
+ * @param render - pure stub renderer for one message's source metadata.
+ * @returns idempotent Cordis effect disposer that settles after removal; later compactions treat the kind as ordinary history.
+ * @throws when `kind` cannot be revoked or already has a registration.
+ */
+registerRevocableSource<K extends MessageSource['kind']>( kind: K, render: RevocableSourceRenderer<K>, ): () => Promise<void>
+
+/**
+ * Resolve the stub for a message source, for backends that honor revocable
+ * registrations.
+ * @param source - source of a surface user message in a compacted span.
+ * @returns the registered renderer's stub, or `undefined` when the kind is not revocable.
+ */
+revocableSourceStub(source: MessageSource): RevocableSourceStub | undefined
+
 /**
  * Consider automatic compaction for one explicit trigger. Pressure policy
  * uses the latest durable routed request, while context-overflow policy may
@@ -205,7 +261,7 @@ abstract compactNow( agent: ManualCompactAgentContext, signal: AbortSignal, sour
 abstract compactRegion( start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal?: AbortSignal, ): Promise<CompactionResult>
 ```
 
-Types: [CommandId](commands.md) · [SessionSeq](session.md)
+Types: [CommandId](commands.md) · [MessageSource](llm-streaming.md) · [SessionSeq](session.md)
 
 Source: [`packages/compaction/compaction/src/index.ts`](../../packages/compaction/compaction/src/index.ts)
 

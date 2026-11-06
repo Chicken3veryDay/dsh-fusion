@@ -1488,6 +1488,16 @@
     },
     {
       "doc": "docs/subsystems/compaction.md",
+      "symbol": "RevocableSourceStub",
+      "source": "packages/compaction/compaction/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/compaction.md",
+      "symbol": "RevocableSourceRenderer",
+      "source": "packages/compaction/compaction/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/compaction.md",
       "symbol": "PrunedEntry",
       "source": "packages/compaction/compaction-tool-result-pruner/src/types.ts"
     },

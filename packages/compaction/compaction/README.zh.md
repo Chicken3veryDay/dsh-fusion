@@ -50,6 +50,11 @@ kind: "package-reference"
 
 继承提供的基类并实现三个操作：一个针对自动触发决定并执行压缩，一个按需压缩，一个压缩对话的显式范围。把你的类作为插件加载，它就会成为该组合的压缩服务。精确签名、失败规则以及每个后端必须生成的检查点标记，见下方实现章节与[压缩子系统参考](../../../docs/subsystems/compaction.zh.md)。
 
+<a id="revoking-injected-context"></a>
+### 撤销注入的上下文
+
+注入按需材料（例如已加载的指令章节）的插件，用这些 user 消息的来源 `kind` 和一个纯渲染器调用 `ctx.compaction.registerRevocableSource(kind, render)`；渲染器把消息的来源元数据转换成一行 `{ key, text }` stub。做摘要的后端会把被压缩 span 中匹配的消息从摘要器输入中省略，并在检查点末尾追加它们的 stub，每个不同的 `key` 一条；保留尾部中匹配的消息不受影响，没人注册的 kind 属于普通历史。注册是 Cordis effect，随注册它的 fiber 或其 disposer 结束，之后的压缩重新把该 kind 当作普通历史。人类输入（`user`）与检查点不可注册，每个 kind 只能注册一次。stub 是已记录的检查点消息的内容，因此重放不需要注册表。类型见[压缩子系统参考](../../../docs/subsystems/compaction.zh.md#revocable-sources)；[compaction-basic](../compaction-basic/README.zh.md#revoking-injected-context)定义 stub 字节上限。
+
 ### 识别压缩后的历史
 
 后端写入的摘要消息带有稳定标记，因此任何消费方都能在持久化或克隆后识别压缩历史，而无需知道是哪个后端生成的。该标记从包根导出，也从一个无 Cordis 依赖的子路径导出，客户端与 wire 程序均可导入。
@@ -147,7 +152,7 @@ kind: "package-reference"
 
 #### KV Cache 影响
 
-成功的后端替换会使从第一个被遮蔽的历史 token 起的复用失效；seam 本身不会改变请求。
+成功的后端替换会使从第一个被遮蔽的历史 token 起的复用失效；seam 本身不会改变请求。注册可撤销 kind 只改变后端写入检查点的内容。
 
 ## 已知限制与延期工作
 

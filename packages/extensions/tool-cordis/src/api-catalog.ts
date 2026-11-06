@@ -735,6 +735,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Abstract compaction service. Implementations own trigger policy, retention, and summarization, and may consume a separate measurement service. A successful run replaces the selected surface span with one summary node and prevents concurrent compaction of the same session. The replacement user message uses compactCheckpointSource with the transaction identity so consumers recognize and correlate it independently of the backend. Load one implementation per context as `ctx.compaction`.',
     methods: [
       {
+        signature: 'registerRevocableSource<K extends MessageSource[\'kind\']>( kind: K, render: RevocableSourceRenderer<K>, ): () => Promise<void>',
+        description: 'Mark injected user messages of one source kind as revocable. A backend that summarizes history omits every matching message in the compacted span from its summarizer input and follows the checkpoint with the stub the renderer returns; matching messages in the retained tail are untouched. The registration belongs to the calling context\'s fiber and ends when that fiber is disposed or the returned disposer runs.\n\nHuman input (`user`) and checkpoints (`compact-checkpoint`) cannot be revoked.',
+        parameters: [{ name: 'kind', description: 'message source kind whose user messages become revocable.' }, { name: 'render', description: 'pure stub renderer for one message\'s source metadata.' }],
+        returns: 'idempotent Cordis effect disposer that settles after removal; later compactions treat the kind as ordinary history.',
+        throws: ['when `kind` cannot be revoked or already has a registration.'],
+      },
+      {
+        signature: 'revocableSourceStub(source: MessageSource): RevocableSourceStub | undefined',
+        description: 'Resolve the stub for a message source, for backends that honor revocable registrations.',
+        parameters: [{ name: 'source', description: 'source of a surface user message in a compacted span.' }],
+        returns: 'the registered renderer\'s stub, or `undefined` when the kind is not revocable.',
+      },
+      {
         signature: 'abstract compactIfNeeded( agent: CompactionAgentContext, trigger: CompactionTrigger, signal: AbortSignal, ): Promise<CompactionResult | null>',
         description: 'Consider automatic compaction for one explicit trigger. Pressure policy uses the latest durable routed request, while context-overflow policy may force a useful balanced reduction even below the normal threshold. Return `null` when no safe range can be compacted. A single oversized retained unit or request envelope cannot be repaired through surface compaction.',
         parameters: [{ name: 'agent', description: 'agent context owning the session surface and routing options.' }, { name: 'trigger', description: 'normal pressure or provider-confirmed context overflow.' }, { name: 'signal', description: 'cancellation signal; model-backed implementations must forward it.' }],
@@ -8054,6 +8067,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MessageRoleMap {\n    system: SystemMessage;\n    developer: DeveloperMessage;\n    user: UserMessage;\n    assistant: AssistantMessage;\n    tool: ToolResultMessage;\n}',
   },
   {
+    name: 'MessageSource',
+    declaration: 'export type MessageSource = MessageSourceMap[keyof MessageSourceMap];',
+  },
+  {
     name: 'MessageSourceMap',
     declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n    \'system-prompt\': SystemPromptMessageSource;\n}',
   },
@@ -8864,6 +8881,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ReviseTicketRequest',
     declaration: 'export interface ReviseTicketRequest extends TicketMutationRequest {\n    readonly acceptanceCriteria: readonly TicketAcceptanceCriterion[];\n    readonly dependencies: readonly TicketId[];\n    readonly parent?: TicketParent;\n}',
+  },
+  {
+    name: 'RevocableSourceRenderer',
+    declaration: 'export type RevocableSourceRenderer<K extends MessageSource[\'kind\']> = (source: Extract<MessageSource, {\n    kind: K;\n}>) => RevocableSourceStub;',
+  },
+  {
+    name: 'RevocableSourceStub',
+    declaration: 'export interface RevocableSourceStub {\n    readonly key: string;\n    readonly text: string;\n}',
   },
   {
     name: 'Roster',

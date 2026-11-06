@@ -183,13 +183,15 @@ export async function summarizeWithLlm(
 /**
  * Wrap raw summary blocks in the durable checkpoint framing.
  * @param summary - safe text-only model output.
+ * @param stubBlock - revoked-context stubs placed after the closing tag, when any were rendered.
  * @returns content for the synthesized replacement user message.
  */
-export function frameSummary(summary: readonly ContentBlock[]): ContentBlock[] {
+export function frameSummary(summary: readonly ContentBlock[], stubBlock?: string): ContentBlock[] {
   return [
     { type: 'text', text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` },
     ...summary,
     { type: 'text', text: SUMMARY_CLOSE_TAG },
+    ...stubBlock === undefined ? [] : [{ type: 'text' as const, text: stubBlock }],
   ]
 }
 

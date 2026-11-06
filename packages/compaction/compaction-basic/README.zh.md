@@ -76,6 +76,7 @@ kind: "package-reference"
 | `maxOverflowRetries` | `1` | 已确认上下文窗口溢出后的最大重试次数；`0` 只禁用恢复。 |
 | `modelPolicies` | `[]` | 针对个别模型路由的精确 `{ provider, model, ...partialPolicy }` 覆盖。 |
 | `auto` | `true` | 启用自动压缩与溢出恢复；设为 `false` 则仅手动执行。 |
+| `revocationStubBytes` | `2048` | 检查点之后[被撤销上下文](#revoking-injected-context)的整个 stub 块的字节上限；非负整数，`0` 表示不输出 stub。 |
 
 配置错误会快速失败：未知设置、重复的按模型覆盖、无效 token 数、两种保留形式同时出现，或保留比例不小于阈值比例，都会在加载时拒绝插件。模型首次使用时，`W − O − B` 必须为正，且解析出的保留预算必须低于触发阈值。余量为零时，必须在全局或对应模型策略中显式设置正数 `maxTokens`。小窗口部署必须配置适合其容量的余量；降低 `thresholdRatio` 可以提早压缩。
 
@@ -92,6 +93,11 @@ kind: "package-reference"
 ### 通过 /compact 按需压缩
 
 挂载 `dsh-command-compact` 后，在聊天 UI 中输入 `/compact` 即可立即压缩，即使未达到压力阈值。命令会报告压缩了多少历史项以及估算节省的 token 数。当 agent 正在轮次中或压缩已在运行时，`/compact` 会报告压缩暂不可用；运行期间你发送的提示词会被接受，并在压缩结束后才开始。
+
+<a id="revoking-injected-context"></a>
+### 撤销注入的上下文
+
+注入按需材料的插件通过 `ctx.compaction.registerRevocableSource(kind, render)` 注册自己的来源 kind（[契约](../compaction/README.zh.md#revoking-injected-context)）。压缩运行时，被压缩 span 内每条已注册 kind 的 user 消息都会从摘要器输入中省略，因此摘要不会转述它；检查点消息末尾为每个不同的渲染器 `key` 追加一行 stub（`Revoked context (reload if needed):` 加各行）。stub 会折叠空白，总量（含标题和 `… N more revoked` 计数）不超过 `revocationStubBytes`；第一条 stub 超出上限时会被截断，上限小到容不下标题和一行时不输出该块。保留的近期尾部中该 kind 的消息保持原样，未注册的 kind 与以前一样被压缩。只含被撤销消息的 span 不调用模型：检查点带一句固定的摘要，`compaction/summary` 把来源记为 `compaction-basic` / `revocation-only`。渲染器抛出错误会使压缩失败，错误记录在 `compaction/end` 上。
 
 ### 修剪超大工具输出
 
@@ -144,6 +150,7 @@ kind: "package-reference"
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：`BasicCompactionEngine`、自动 listener、入口点分发 |
 | [`src/region.ts`](src/region.ts) | 保留选择与共享的先记录标记压缩事务 |
+| [`src/revocation.ts`](src/revocation.ts) | 可撤销消息的选择与有界 stub 渲染 |
 | [`src/summarizer.ts`](src/summarizer.ts) | 默认 `ctx.llm.stream()` 摘要、检查点框定、安全摘要投影 |
 | [`src/config.ts`](src/config.ts) | 加载时验证与路由模型策略解析 |
 | [`src/types.ts`](src/types.ts) | `BasicCompactionConfig` 与已解析策略词汇 |
@@ -175,7 +182,7 @@ kind: "package-reference"
 
 #### 模型看到的内容
 
-成功步骤越过阈值后，如果已加载可选修剪器，超大工具结果会先被改写。如果仍需摘要，下一个请求会收到下方检查点前导、一个空行、`<compacted-summary>`、根据数据生成的摘要以及 `</compacted-summary>`。溢出恢复会根据使表层前进的任何替换重建立即重试。检查点会替换已选较早范围，后面跟随已保留的近期单元。
+成功步骤越过阈值后，如果已加载可选修剪器，超大工具结果会先被改写。如果仍需摘要，下一个请求会收到下方检查点前导、一个空行、`<compacted-summary>`、根据数据生成的摘要以及 `</compacted-summary>`。溢出恢复会根据使表层前进的任何替换重建立即重试。检查点会替换已选较早范围，后面跟随已保留的近期单元。如果有插件注册了可撤销来源，检查点消息末尾还会带一个 stub 块（`Revoked context (reload if needed):` 加每个被撤销项一行），模型不再看到这些被撤销消息的正文或其转述。
 
 ##### 会话检查点前导
 
@@ -185,7 +192,7 @@ This is an automatically generated checkpoint condensing an earlier span of the 
 
 #### Token 影响
 
-不依赖模型的剪枝可以完全避免辅助调用；否则它会在摘要替换较早范围之前缩减该调用的 transcript（文本记录）。替换会缩减未来输入历史，而非追加第二份副本。摘要会保留到后续压缩将其替换，但不可分的非工具单元仍可能超出预算。
+不依赖模型的剪枝可以完全避免辅助调用；否则它会在摘要替换较早范围之前缩减该调用的 transcript（文本记录）。替换会缩减未来输入历史，而非追加第二份副本。摘要会保留到后续压缩将其替换，但不可分的非工具单元仍可能超出预算。被撤销的消息不进入摘要器输入，作为 stub 至多占用 `revocationStubBytes`。
 
 #### KV Cache 影响
 
@@ -256,6 +263,7 @@ Rules:
 - **部分不可分单元与仅 envelope 溢出仍不在表层压缩范围内**——恢复无法缩减系统／工具／前缀、拆分不可分的非工具节点，或修复不可剪枝剩余部分仍超出窗口的工具单元。可选 pruner 可以缩减原本不可分工具对内的文本型工具结果主体。
 - **`compactRegion` 要求存在未结束的轮次**——在完全关闭的会话上手动调用会抛出异常（「no open turn」），而不是执行压缩。
 - **摘要失败会保留最新持久表层**——步前压力检查会记录警告并继续；模型切换压力检查会拒绝目标请求。两种失败都会保留已完成的剪枝与之前的检查点。因达到 `maxTokens` 而发生的摘要截断（隐藏推理 token 可能会耗尽该额度）遵循同一规则。
+- **撤销会移除内容，直到重新加载**——检查点只保留已注册的 stub，因此撤销某个 kind 的插件必须给模型提供重新加载它的途径；超出 `revocationStubBytes` 的 stub 只以计数保留。
 - **跨模型图片定价可能拒绝有效摘要**——切换时按目标定价选择范围，但按已提交路由验证缩减。不同的图片价格可能使摘要未通过缩减验证，即使它能降低目标压力。
 
 <a id="dev-note"></a>

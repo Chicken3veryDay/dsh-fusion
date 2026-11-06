@@ -7,7 +7,7 @@
  * @module @deepseek-ai/dsh-compaction/types
  */
 
-import type { ContentBlock, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageSource, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { CompactionId } from './brand.ts'
@@ -118,3 +118,24 @@ export interface CompactionResult {
   /** Estimated token count of the shadowed content. */
   shadowedTokenCount: number
 }
+
+/**
+ * One revoked message's replacement, produced by a registered renderer.
+ * Stubs sharing a `key` within one source kind collapse to the first in span
+ * order.
+ */
+export interface RevocableSourceStub {
+  /** Identity of the revoked material; equal keys of one source kind render once per checkpoint. */
+  readonly key: string
+  /** One short line telling the model what was removed and how to get it back; whitespace is collapsed and the backend bounds the total. */
+  readonly text: string
+}
+
+/**
+ * Pure renderer from a revoked message's source metadata to its stub. It must
+ * be deterministic and cheap and must not read the message body; a throw
+ * fails the compaction before any summary is requested.
+ */
+export type RevocableSourceRenderer<K extends MessageSource['kind']> = (
+  source: Extract<MessageSource, { kind: K }>,
+) => RevocableSourceStub

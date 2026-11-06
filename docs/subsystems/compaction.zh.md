@@ -102,6 +102,38 @@ type ManualCompactionErrorCode =
 
 该 Service Definition 导出 `toolPairingBalancedBefore(session, seq)` 与 `toolPairingBalancedAfter(session, seq)`，用于检查 seq 之前与之后的工具调用/结果配对。两者都会验证当前 surface 成员关系，并拒绝缺失的 seq 与遗留结果；[包约定](../../packages/compaction/compaction/README.zh.md#tool-pairing-boundaries)定义其缓存行为。
 
+<a id="revocable-sources"></a>
+## 可撤销来源
+
+注入按需材料（已加载的指令章节、取回的参考资料）的插件，调用 `ctx.compaction.registerRevocableSource(kind, render)`，把自己某一来源 `kind` 的 user 消息标记为可撤销。人类输入（`user`）与 `compact-checkpoint` 不可注册，每个 kind 只能注册一次；注册是 Cordis effect，随注册它的 fiber 或其返回的 disposer 结束。
+
+```ts type-equiv
+/**
+ * One revoked message's replacement, produced by a registered renderer.
+ * Stubs sharing a `key` within one source kind collapse to the first in span
+ * order.
+ */
+interface RevocableSourceStub {
+  /** Identity of the revoked material; equal keys of one source kind render once per checkpoint. */
+  readonly key: string
+  /** One short line telling the model what was removed and how to get it back; whitespace is collapsed and the backend bounds the total. */
+  readonly text: string
+}
+```
+
+```ts type-equiv
+/**
+ * Pure renderer from a revoked message's source metadata to its stub. It must
+ * be deterministic and cheap and must not read the message body; a throw
+ * fails the compaction before any summary is requested.
+ */
+type RevocableSourceRenderer<K extends MessageSource['kind']> = (
+  source: Extract<MessageSource, { kind: K }>,
+) => RevocableSourceStub
+```
+
+对历史做摘要的后端，会把被压缩 span 内每条可撤销 user 消息从摘要输入中省略，并把渲染出的 stub 追加到检查点 `user/message` 之后，按 span 顺序每个不同的 `(kind, key)` 一条。保留尾部中的消息保持原样，未注册的 kind 属于普通历史。stub 是已记录的替换消息的内容，因此重放不需要注册表，并推导出相同的请求。后端通过 `revocableSourceStub(source)` 解析 stub；[compaction-basic](../../packages/compaction/compaction-basic/README.zh.md#revoking-injected-context) 约束 stub 字节数，并定义 span 内只有可撤销上下文的情形。
+
 ## 工具结果剪枝产出
 
 可选的工具结果剪枝服务会报告每次持久内容替换以及 Unicode code point 的总减少量。其公开结果类型位于 [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts)。
@@ -147,6 +179,31 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 Abstract compaction service. Implementations own trigger policy, retention, and summarization, and may consume a separate measurement service. A successful run replaces the selected surface span with one summary node and prevents concurrent compaction of the same session. The replacement user message uses compactCheckpointSource with the transaction identity so consumers recognize and correlate it independently of the backend. Load one implementation per context as `ctx.compaction`.
 
 ```ts cordis-catalog
+/**
+ * Mark injected user messages of one source kind as revocable. A backend
+ * that summarizes history omits every matching message in the compacted
+ * span from its summarizer input and follows the checkpoint with the stub
+ * the renderer returns; matching messages in the retained tail are
+ * untouched. The registration belongs to the calling context's fiber and
+ * ends when that fiber is disposed or the returned disposer runs.
+ *
+ * Human input (`user`) and checkpoints (`compact-checkpoint`) cannot be
+ * revoked.
+ * @param kind - message source kind whose user messages become revocable.
+ * @param render - pure stub renderer for one message's source metadata.
+ * @returns idempotent Cordis effect disposer that settles after removal; later compactions treat the kind as ordinary history.
+ * @throws when `kind` cannot be revoked or already has a registration.
+ */
+registerRevocableSource<K extends MessageSource['kind']>( kind: K, render: RevocableSourceRenderer<K>, ): () => Promise<void>
+
+/**
+ * Resolve the stub for a message source, for backends that honor revocable
+ * registrations.
+ * @param source - source of a surface user message in a compacted span.
+ * @returns the registered renderer's stub, or `undefined` when the kind is not revocable.
+ */
+revocableSourceStub(source: MessageSource): RevocableSourceStub | undefined
+
 /**
  * Consider automatic compaction for one explicit trigger. Pressure policy
  * uses the latest durable routed request, while context-overflow policy may
@@ -205,7 +262,7 @@ abstract compactNow( agent: ManualCompactAgentContext, signal: AbortSignal, sour
 abstract compactRegion( start: SessionSeq, end: SessionSeq, agent: CompactionAgentContext, signal?: AbortSignal, ): Promise<CompactionResult>
 ```
 
-Types: [CommandId](commands.zh.md) · [SessionSeq](session.zh.md)
+Types: [CommandId](commands.zh.md) · [MessageSource](llm-streaming.zh.md) · [SessionSeq](session.zh.md)
 
 Source: [`packages/compaction/compaction/src/index.ts`](../../packages/compaction/compaction/src/index.ts)
 

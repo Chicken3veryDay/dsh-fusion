@@ -600,6 +600,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   PtcRunSandbox: 'ptc-runtime.md',
   PtcRunResult: 'ptc-runtime.md',
   CompactionResult: 'compaction.md',
+  RevocableSourceRenderer: 'compaction.md',
+  RevocableSourceStub: 'compaction.md',
   CompactionTrigger: 'compaction.md',
   PruneResult: 'compaction.md',
   FileReadOutcome: 'filesystem.md',

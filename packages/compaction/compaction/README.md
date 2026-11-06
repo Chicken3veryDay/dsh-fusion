@@ -50,6 +50,11 @@ With these two rows the feature is on: the conversation condenses automatically 
 
 Extend the provided base class and implement three operations: one that decides and performs condensation for an automatic trigger, one that condenses on demand, and one that condenses an explicit range of the conversation. Load your class as a plugin and it becomes the condensation service for the composition. The exact signatures, the failure rules, and the checkpoint marker every backend must produce are in the implementation section below and in the [compaction subsystem reference](../../../docs/subsystems/compaction.md).
 
+<a id="revoking-injected-context"></a>
+### Revoking injected context
+
+A plugin that injects on-demand material, such as a loaded instruction section, calls `ctx.compaction.registerRevocableSource(kind, render)` with the source `kind` of those user messages and a pure renderer from the message's source metadata to a one-line `{ key, text }` stub. A summarizing backend omits matching messages in the condensed span from its summarizer input and ends the checkpoint with their stubs, one per distinct `key`; matching messages in the retained tail are untouched, and a kind nobody registered is ordinary history. The registration is a Cordis effect, so it ends with the registering fiber or its disposer, and later condensation treats the kind as ordinary history again. Human input (`user`) and checkpoints cannot be registered, and a kind registers once. Stubs are content of the logged checkpoint message, so replay needs no registry. The [compaction subsystem reference](../../../docs/subsystems/compaction.md#revocable-sources) holds the types; [compaction-basic](../compaction-basic/README.md#revoking-injected-context) defines the bound on stub bytes.
+
 ### Recognizing condensed history
 
 Messages a backend wrote as summaries carry a stable marker, so any consumer can recognize condensed history after persistence or cloning without knowing which backend produced it. The marker is exported from the package root and from a Cordis-free subpath that client and wire programs can import.
@@ -147,7 +152,7 @@ Zero direct tokens from this Service Definition. A backend trades many retained 
 
 #### KV Cache effect
 
-A successful backend replacement invalidates reuse from the first shadowed history token; the seam itself does not alter a request.
+A successful backend replacement invalidates reuse from the first shadowed history token; the seam itself does not alter a request. Registering a revocable kind changes only what a backend writes into its checkpoint.
 
 ## Known Limitations and Deferred Work
 

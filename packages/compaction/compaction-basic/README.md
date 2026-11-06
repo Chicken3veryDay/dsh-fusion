@@ -76,6 +76,7 @@ All settings are optional. With context window `W`, effective request output cap
 | `maxOverflowRetries` | `1` | Maximum retries after a confirmed context-window overflow; `0` disables recovery only. |
 | `modelPolicies` | `[]` | Exact `{ provider, model, ...partialPolicy }` overrides for individual model routes. |
 | `auto` | `true` | Enable automatic condensation and overflow recovery; set `false` for manual-only operation. |
+| `revocationStubBytes` | `2048` | Byte bound on the whole stub block that follows a checkpoint for [revoked context](#revoking-injected-context); a non-negative integer, `0` omits stubs. |
 
 Misconfiguration fails fast: unknown settings, duplicate per-model overrides, invalid token counts, both retention forms together, or a retention ratio at least as large as the threshold ratio reject the plugin at load. When the model is first used, `W − O − B` must be positive and the resolved retained budget must be below the trigger. Zero headroom requires an explicit positive `maxTokens`, globally or in that model policy. Small-window deployments must configure headroom that fits their capacity; lower `thresholdRatio` to compact earlier.
 
@@ -92,6 +93,11 @@ The destination must have a registered adapter, declared context capacity, and a
 ### On-demand condensation with /compact
 
 With `dsh-command-compact` mounted, type `/compact` in a chat UI to condense immediately, even below the pressure threshold. The command reports how many history items were condensed and the estimated tokens saved. While the agent is mid-turn or condensation is already running, `/compact` reports that condensation is unavailable; prompts you send while it runs are accepted and start after it finishes.
+
+<a id="revoking-injected-context"></a>
+### Revoking injected context
+
+A plugin that injects on-demand material registers its source kind through `ctx.compaction.registerRevocableSource(kind, render)` ([contract](../compaction/README.md#revoking-injected-context)). When condensation runs, every user message of a registered kind inside the condensed span is left out of the summarizer's input, so the summary never paraphrases it, and the checkpoint message ends with one stub line per distinct renderer `key` (`Revoked context (reload if needed):` plus the lines). Stubs are whitespace-collapsed and fit `revocationStubBytes` in total, header and the `… N more revoked` count included; a first stub longer than the bound is truncated, and a bound too small for the header and one line emits no block. Messages of the registered kind in the retained recent tail stay verbatim, and unregistered kinds are condensed as before. A span holding only revoked messages makes no model call: the checkpoint carries a fixed one-line summary, and `compaction/summary` records `compaction-basic` / `revocation-only` as its origin. A renderer that throws fails the compaction with the error recorded on `compaction/end`.
 
 ### Trimming oversized tool outputs
 
@@ -144,6 +150,7 @@ The transaction validates the surface span and the durable lock, appends `compac
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: `BasicCompactionEngine`, automatic listeners, entry-point dispatch |
 | [`src/region.ts`](src/region.ts) | Retention selection and the shared bracket-first compaction transaction |
+| [`src/revocation.ts`](src/revocation.ts) | Revocable-message selection and bounded stub rendering |
 | [`src/summarizer.ts`](src/summarizer.ts) | Default `ctx.llm.stream()` summarization, checkpoint framing, safe-summary projection |
 | [`src/config.ts`](src/config.ts) | Load-time validation and routed-model policy resolution |
 | [`src/types.ts`](src/types.ts) | `BasicCompactionConfig` and resolved policy vocabulary |
@@ -175,7 +182,7 @@ Read these pages when the package-level contract is not enough; they move from t
 
 #### What the model sees
 
-After a successful step crosses the threshold, oversized tool results are first rewritten when the optional pruner is loaded. If summarization remains necessary, the next request receives the checkpoint preamble below, a blank line, `<compacted-summary>`, the data-dependent summary, and `</compacted-summary>`. Overflow recovery rebuilds the immediate retry from whatever replacement advanced the surface. A checkpoint replaces the selected older range and is followed by the retained recent units.
+After a successful step crosses the threshold, oversized tool results are first rewritten when the optional pruner is loaded. If summarization remains necessary, the next request receives the checkpoint preamble below, a blank line, `<compacted-summary>`, the data-dependent summary, and `</compacted-summary>`. Overflow recovery rebuilds the immediate retry from whatever replacement advanced the surface. A checkpoint replaces the selected older range and is followed by the retained recent units. When a plugin registered revocable sources, the checkpoint message also ends with a stub block (`Revoked context (reload if needed):` and one line per revoked item), and the model no longer sees the revoked messages' bodies or a paraphrase of them.
 
 ##### Conversation checkpoint preamble
 
@@ -185,7 +192,7 @@ This is an automatically generated checkpoint condensing an earlier span of the 
 
 #### Token effect
 
-Model-free pruning can avoid the auxiliary call entirely; otherwise it reduces that call's transcript before the summary replaces an older range. The replacement reduces future input history rather than appending a second copy. A summary remains until a later compaction replaces it, while an indivisible non-tool unit can still exceed the budget.
+Model-free pruning can avoid the auxiliary call entirely; otherwise it reduces that call's transcript before the summary replaces an older range. The replacement reduces future input history rather than appending a second copy. A summary remains until a later compaction replaces it, while an indivisible non-tool unit can still exceed the budget. Revoked messages leave the summarizer's input and cost at most `revocationStubBytes` as stubs.
 
 #### KV Cache effect
 
@@ -256,6 +263,7 @@ These limits define when automatic condensation is a poor fit or needs special c
 - **Some indivisible-unit and envelope-only overflow remains outside surface compaction** — recovery cannot shrink system/tools/prefix, split an indivisible non-tool node, or repair a tool unit whose non-prunable remainder still exceeds the window. The optional pruner can shrink text-bearing tool-result bulk inside an otherwise indivisible pair.
 - **`compactRegion` requires an open turn** — a manual call on a fully-closed session throws ("no open turn") rather than compacting.
 - **Summarization failure preserves the latest durable surface** — pre-step pressure logs a warning and continues; model-switch pressure rejects the destination request. Completed pruning and earlier checkpoints survive either failure. Summarization truncation at `maxTokens`, which hidden reasoning tokens can consume, follows the same rule.
+- **Revocation removes content until it is reloaded** — the checkpoint keeps only the registered stub, so a plugin that revokes a kind must offer the model a way to load it again; stubs past `revocationStubBytes` survive only as a count.
 - **Cross-model image pricing can reject a useful summary** — switch range selection uses destination pricing, while shrink validation uses the committed route. Different image prices can make a summary fail shrink validation even when it would reduce destination pressure.
 
 <a id="dev-note"></a>

@@ -10,10 +10,11 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
-import type { CompactionResult } from './types.ts'
+import type { MessageSource } from '@deepseek-ai/dsh-llm'
+import type { CompactionResult, RevocableSourceRenderer, RevocableSourceStub } from './types.ts'
 import type { CompactionCheckpointSource } from './checkpoint.ts'
 
-export type { CompactionResult } from './types.ts'
+export type { CompactionResult, RevocableSourceRenderer, RevocableSourceStub } from './types.ts'
 export { CompactionId } from './brand.ts'
 export { toolPairingBalancedAfter, toolPairingBalancedBefore } from './tool-pairing.ts'
 // The checkpoint source constructor and predicate are declared on the cordis-free
@@ -117,8 +118,56 @@ declare module '@deepseek-ai/cordis' {
  * one implementation per context as `ctx.compaction`.
  */
 export abstract class CompactionEngine extends Service {
+  /** Registered renderers by message source kind; entries leave with their registering fiber. */
+  private readonly revocableSources = new Map<string, (source: MessageSource) => RevocableSourceStub>()
+
   constructor(ctx: Context) {
     super(ctx, 'compaction')
+  }
+
+  /**
+   * Mark injected user messages of one source kind as revocable. A backend
+   * that summarizes history omits every matching message in the compacted
+   * span from its summarizer input and follows the checkpoint with the stub
+   * the renderer returns; matching messages in the retained tail are
+   * untouched. The registration belongs to the calling context's fiber and
+   * ends when that fiber is disposed or the returned disposer runs.
+   *
+   * Human input (`user`) and checkpoints (`compact-checkpoint`) cannot be
+   * revoked.
+   * @param kind - message source kind whose user messages become revocable.
+   * @param render - pure stub renderer for one message's source metadata.
+   * @returns idempotent Cordis effect disposer that settles after removal; later compactions treat the kind as ordinary history.
+   * @throws when `kind` cannot be revoked or already has a registration.
+   */
+  registerRevocableSource<K extends MessageSource['kind']>(
+    kind: K,
+    render: RevocableSourceRenderer<K>,
+  ): () => Promise<void> {
+    if (kind === 'user' || kind === 'compact-checkpoint') {
+      throw new Error(`compaction: messages of source kind "${kind}" cannot be revoked`)
+    }
+    if (this.revocableSources.has(kind)) {
+      throw new Error(`compaction: source kind "${kind}" is already registered as revocable`)
+    }
+    // The kind check in `revocableSourceStub` makes the narrowing sound.
+    const registered = (source: MessageSource): RevocableSourceStub => render(source as Extract<MessageSource, { kind: K }>)
+    return this.ctx.effect(() => {
+      this.revocableSources.set(kind, registered)
+      return () => {
+        if (this.revocableSources.get(kind) === registered) this.revocableSources.delete(kind)
+      }
+    }, `compaction.registerRevocableSource(${kind})`)
+  }
+
+  /**
+   * Resolve the stub for a message source, for backends that honor revocable
+   * registrations.
+   * @param source - source of a surface user message in a compacted span.
+   * @returns the registered renderer's stub, or `undefined` when the kind is not revocable.
+   */
+  revocableSourceStub(source: MessageSource): RevocableSourceStub | undefined {
+    return this.revocableSources.get(source.kind)?.(source)
   }
 
   /**
