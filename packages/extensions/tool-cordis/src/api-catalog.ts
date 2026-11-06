@@ -4681,7 +4681,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'registerAdmissionPolicy(policy: ToolAdmissionPolicy): () => void',
-        description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that returns orderedAdmission also sets the declaration sequence: the last such policy\'s sequence orders the surviving tools, which is the order of declarations and of `definitions()`. Plain returns never reorder, so with no ordering policy the admitted set keeps registration order. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls. With no policy registered, admission is unchanged.',
+        description: 'Register a policy that may hide admitted tools from the calling scope\'s agents on each step, after every tool\'s own `when` condition. Policies only remove tools, compose by intersection (global policies first, then the scope chain from the farthest ancestor, each layer in registration order), and see the candidates earlier policies kept. A policy that returns orderedAdmission also sets the declaration sequence: the last such policy\'s sequence orders the surviving tools, which is the order of declarations and of `definitions()`. Plain returns never reorder, so with no ordering policy the admitted set keeps registration order. A policy that throws or names a non-candidate fails step preparation as `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and rejected at dispatch, including nested PTC calls; while a policy applies to a scope, a call without a step selection executes nothing. With no policy registered, admission is unchanged.',
         parameters: [{ name: 'policy', description: 'removal-only decision, optionally ordered, evaluated once per step.' }],
         returns: 'the exact disposer; later steps see the tools again.',
       },
@@ -4699,7 +4699,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined',
-        description: 'Resolve the definition a call may execute. With a step\'s admitted set, the set decides; without one, conditional registrations are unavailable.',
+        description: 'Resolve the definition a call may execute. With a step\'s admitted set, the set decides; without one, conditional registrations are unavailable, and so is every tool while an admission policy applies to the scope, because a policy needs a step to run.',
         parameters: [{ name: 'name', description: 'the tool name as registered.' }, { name: 'scope', description: 'the calling agent; omitted = the global view.' }, { name: 'toolSet', description: 'step admission, or omitted for a call outside a model step.' }],
         returns: 'the executable definition, or undefined when the call must fail as `UNKNOWN_TOOL`.',
       },
@@ -11037,7 +11037,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolAdmissionDecision',
-    declaration: 'export type ToolAdmissionDecision = Iterable<string> | OrderedAdmission;',
+    declaration: 'export type ToolAdmissionDecision = readonly string[] | ReadonlySet<string> | IterableIterator<string> | OrderedAdmission;',
   },
   {
     name: 'ToolAdmissionPolicy',

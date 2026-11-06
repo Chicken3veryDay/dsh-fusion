@@ -11,6 +11,7 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ContextIndexService, { ContextIndexError, ContextSectionIdOf, type Config, type ContextSectionId } from '../src/index.ts'
 import { ConfigSchema, resolveConfig } from '../src/config.ts'
+import { contentHash } from '../src/ids.ts'
 
 /** Local filesystem with call recording, failure injection, and a barrier on reads. */
 class ProbeFileSystem extends LocalFileSystem {
@@ -472,6 +473,81 @@ describe('read', () => {
     w.fs.failRead.clear()
     const fresh = await w.index.read(scopeOf(w), [ids[0] as ContextSectionId])
     expect(fresh.sections[0]?.text).toBe('# First\nchanged\n')
+  })
+
+  it('describes a body edited after the refresh by that body, not by the indexed text', async () => {
+    const w = await world()
+    const path = join(w.project, 'AGENTS.md')
+    write(path, '# Rules\nold\n')
+    const id = (await w.index.snapshot(scopeOf(w))).sections[0]!.id
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    w.fs.entered = () => { entered.resolve(undefined) }
+    w.fs.gate = release.promise
+    const pending = w.index.read(scopeOf(w), [id])
+    await entered.promise
+    write(path, '# Rules\nnew and longer\n')
+    release.resolve(undefined)
+    const body = (await pending).sections[0]!
+    expect(body.text).toBe('# Rules\nnew and longer\n')
+    expect({ hash: body.hash, totalBytes: body.totalBytes }).toEqual({
+      hash: contentHash(body.text),
+      totalBytes: Buffer.byteLength(body.text),
+    })
+  })
+})
+
+describe('disposal', () => {
+  it('waits for an accepted section-body read to settle before it completes', async () => {
+    const w = await world()
+    write(join(w.project, 'AGENTS.md'), '# Rules\nbody\n')
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const originalRead = w.fs.readBytes.bind(w.fs)
+    let activeReads = 0
+    vi.spyOn(w.fs, 'readBytes').mockImplementation(async (target, signal, maxBytes) => {
+      activeReads++
+      entered.resolve(undefined)
+      try {
+        // Physical I/O acknowledges cancellation only after it settles.
+        await release.promise
+        return await originalRead(target, signal, maxBytes)
+      } finally { activeReads-- }
+    })
+    const settled = w.index.read(scopeOf(w), [snapshot.sections[0]!.id]).catch(() => undefined)
+    await entered.promise
+    const disposed = w.ctx.fiber.dispose()
+    // Disposal only awaits promise chains, so the timer fires after it would have completed without a drain.
+    setTimeout(() => { release.resolve(undefined) }, 0)
+    const activeWhenDisposed = await disposed.then(() => activeReads)
+    await settled
+    expect(activeWhenDisposed).toBe(0)
+  })
+
+  it('waits for a refresh whose last waiter was cancelled', async () => {
+    const w = await world()
+    write(join(w.project, 'AGENTS.md'), '# Rules\nbody\n')
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const originalRead = w.fs.readBytes.bind(w.fs)
+    let activeReads = 0
+    vi.spyOn(w.fs, 'readBytes').mockImplementation(async (target, signal, maxBytes) => {
+      activeReads++
+      entered.resolve(undefined)
+      try {
+        await release.promise
+        return await originalRead(target, signal, maxBytes)
+      } finally { activeReads-- }
+    })
+    const caller = new AbortController()
+    const cancelled = w.index.snapshot(scopeOf(w), caller.signal).catch(() => undefined)
+    await entered.promise
+    caller.abort(new Error('caller left'))
+    await cancelled
+    const disposed = w.ctx.fiber.dispose()
+    setTimeout(() => { release.resolve(undefined) }, 0)
+    expect(await disposed.then(() => activeReads)).toBe(0)
   })
 })
 

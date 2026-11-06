@@ -12,7 +12,7 @@ import { assertSupportedJsonSchema } from './json-schema.ts'
 import { RUN_CODE_NAME, ToolActivationError, ToolAdmissionError } from './contracts.ts'
 import type {
   ToolDefinition, ToolRestriction, ToolExecution, ToolGuard,
-  ResolvedToolSet, ToolActivationContext, OrderedAdmission, ToolAdmissionDecision, ToolAdmissionPolicy, ToolOrigin, ToolRegistrationOptions,
+  ResolvedToolSet, ToolActivationContext, ToolAdmissionDecision, ToolAdmissionPolicy, ToolOrigin, ToolRegistrationOptions,
 } from './contracts.ts'
 
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -96,9 +96,16 @@ class GuardLayer {
   isEmpty(): boolean { return this.guards.isEmpty() }
 }
 
-/** Whether a policy decision carries a declaration sequence rather than a plain kept-name iterable. */
-function isOrderedAdmission(decision: ToolAdmissionDecision): decision is OrderedAdmission {
-  return !(Symbol.iterator in decision)
+/**
+ * Read a policy decision as kept names plus an optional declaration sequence. A string is itself
+ * iterable but names no tool list, so it fails like any other non-collection result.
+ */
+function readAdmissionDecision(decision: ToolAdmissionDecision): { kept: Set<string>; ordered: boolean } {
+  if (Object(decision) !== decision) {
+    throw new TypeError(`policy returned ${typeof decision}; return an array, a set, an iterator of tool names, or orderedAdmission(names)`)
+  }
+  if (Symbol.iterator in decision) return { kept: new Set(decision), ordered: false }
+  return { kept: new Set(decision.ordered), ordered: true }
 }
 
 class AdmissionLayer {
@@ -213,7 +220,8 @@ export class ToolsService extends Service {
    * ordering policy the admitted set keeps registration order. A policy that
    * throws or names a non-candidate fails step preparation as
    * `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and
-   * rejected at dispatch, including nested PTC calls. With no policy
+   * rejected at dispatch, including nested PTC calls; while a policy applies to a scope, a call
+   * without a step selection executes nothing. With no policy
    * registered, admission is unchanged.
    * @param policy - removal-only decision, optionally ordered, evaluated once per step.
    * @returns the exact disposer; later steps see the tools again.
@@ -290,7 +298,8 @@ export class ToolsService extends Service {
 
   /**
    * Resolve the definition a call may execute. With a step's admitted set, the
-   * set decides; without one, conditional registrations are unavailable.
+   * set decides; without one, conditional registrations are unavailable, and so is every tool
+   * while an admission policy applies to the scope, because a policy needs a step to run.
    * @param name - the tool name as registered.
    * @param scope - the calling agent; omitted = the global view.
    * @param toolSet - step admission, or omitted for a call outside a model step.
@@ -298,8 +307,14 @@ export class ToolsService extends Service {
    */
   executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined {
     if (toolSet !== undefined) return toolSet.view(scope).get(name)
+    if (this.hasAdmissionPolicy(scope)) return undefined
     const view = this.view(scope)
     return view.registrations.get(name)?.when === undefined ? view.visible.get(name) : undefined
+  }
+
+  /** Whether a global policy or one in the scope's chain would run when this scope resolves a step. */
+  private hasAdmissionPolicy(scope: ScopeKey | undefined): boolean {
+    return !this.admission.global.isEmpty() || this.admission.chainLayers(scope).some(layer => !layer.isEmpty())
   }
 
   /**
@@ -364,9 +379,9 @@ export class ToolsService extends Service {
       let kept: Set<string>
       try {
         const decision = await policy({ ...context, candidates: new Map(admitted) })
-        const ordered = isOrderedAdmission(decision)
-        kept = new Set(ordered ? decision.ordered : decision)
-        if (ordered) sequence = [...kept]
+        const read = readAdmissionDecision(decision)
+        kept = read.kept
+        if (read.ordered) sequence = [...kept]
         const unknown = [...kept].filter(name => !admitted.has(name))
         if (unknown.length > 0) {
           throw new TypeError(`policy named ${unknown.map(name => `"${name}"`).join(', ')}, which ${unknown.length > 1 ? 'are' : 'is'} not an admitted candidate; policies may only remove tools`)

@@ -165,13 +165,16 @@ export function orderedAdmission(names: Iterable<string>): OrderedAdmission {
   return { ordered: [...new Set(names)] }
 }
 
-/** What a {@link ToolAdmissionPolicy} returns: kept names, optionally ordered. */
-export type ToolAdmissionDecision = Iterable<string> | OrderedAdmission
+/**
+ * What a {@link ToolAdmissionPolicy} returns: kept names as an array, a set, or an iterator such
+ * as `candidates.keys()`, or an {@link orderedAdmission} result. A bare string is rejected.
+ */
+export type ToolAdmissionDecision = readonly string[] | ReadonlySet<string> | IterableIterator<string> | OrderedAdmission
 
 /**
  * Hide registered tools from one agent step, optionally ordering the rest. A policy runs after
  * each tool's own `when` condition and may only remove: it returns the names of
- * {@link ToolAdmissionContext.candidates} to keep. A plain iterable keeps the candidates'
+ * {@link ToolAdmissionContext.candidates} to keep. A plain array, set, or iterator keeps the candidates'
  * registration order whatever order it lists them in; an {@link orderedAdmission} result also
  * sets the declaration sequence. Returning a name that is not a candidate fails step
  * preparation. Policies must observe cancellation and must not change registrations or start

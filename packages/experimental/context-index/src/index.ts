@@ -50,6 +50,9 @@ interface IndexState {
   readonly signature: string
 }
 
+/** A section re-read from disk: its text and the metadata derived from that same text. */
+type FreshSection = ReturnType<typeof sectionsOf>[number]
+
 interface Flight {
   readonly controller: AbortController
   readonly promise: Promise<IndexState>
@@ -72,6 +75,8 @@ export class ContextIndexService extends Service {
   private readonly config: ResolvedConfig
   private readonly states = new Map<string, IndexState>()
   private readonly flights = new Map<string, Flight>()
+  /** Every accepted refresh and body read until it settles, independent of which flight is still joinable. */
+  private readonly inflight = new Set<Promise<unknown>>()
   private readonly lifetime = new AbortController()
 
   constructor(ctx: Context, config: Config = {}) {
@@ -118,7 +123,7 @@ export class ContextIndexService extends Service {
     const state = await this.refresh(scope, signal)
     const sectionById = new Map(state.snapshot.sections.map(section => [section.id, section]))
     const diagnostics: ContextDiagnostic[] = [...state.snapshot.diagnostics]
-    const texts = new Map<string, ReadonlyMap<ContextSectionId, string>>()
+    const texts = new Map<string, ReadonlyMap<ContextSectionId, FreshSection>>()
     const bodies: ContextSectionBody[] = []
     const missing: ContextSectionId[] = []
     const omitted: ContextSectionId[] = []
@@ -139,12 +144,12 @@ export class ContextIndexService extends Service {
         sourceTexts = await this.sourceTexts(state, meta, diagnostics, signal)
         texts.set(meta.sourceId, sourceTexts)
       }
-      const full = sourceTexts.get(id)
-      if (full === undefined) {
+      const fresh = sourceTexts.get(id)
+      if (fresh === undefined) {
         missing.push(id)
         continue
       }
-      const body = this.bodyOf(meta, full, remaining)
+      const body = this.bodyOf(fresh, remaining)
       bodies.push(body)
       used += body.bytes
       remaining = body.truncated ? 0 : remaining - body.bytes
@@ -164,7 +169,8 @@ export class ContextIndexService extends Service {
     return renderCatalog(sections, this.effectiveBudget(budget.maxBytes, this.config.maxCatalogBytes, 'maxBytes'))
   }
 
-  private bodyOf(meta: ContextSectionMeta, full: string, remaining: number): ContextSectionBody {
+  /** Build a body from the section as just re-read, so its hash and size describe the returned text. */
+  private bodyOf({ draft: meta, text: full }: FreshSection, remaining: number): ContextSectionBody {
     const text = truncateUtf8(full, remaining)
     const bytes = Buffer.byteLength(text, 'utf8')
     return {
@@ -179,13 +185,13 @@ export class ContextIndexService extends Service {
     }
   }
 
-  /** Re-read one source and return its section texts as they are on disk now. */
+  /** Re-read one source and return its sections, with metadata derived from that read, as they are on disk now. */
   private async sourceTexts(
     state: IndexState,
     meta: ContextSectionMeta,
     diagnostics: ContextDiagnostic[],
     signal: AbortSignal | undefined,
-  ): Promise<ReadonlyMap<ContextSectionId, string>> {
+  ): Promise<ReadonlyMap<ContextSectionId, FreshSection>> {
     const record = state.records.get(recordKey(meta.kind, meta.path))
     if (record === undefined) return new Map()
     const outcome = await this.guard(signal, abort => (
@@ -196,7 +202,7 @@ export class ContextIndexService extends Service {
       return new Map()
     }
     const sections = sectionsOf(record, outcome.text, this.config)
-    return new Map(sections.map(section => [section.draft.id, section.text]))
+    return new Map(sections.map(section => [section.draft.id, section]))
   }
 
   private effectiveBudget(requested: number | undefined, ceiling: number, name: string): number {
@@ -225,7 +231,7 @@ export class ContextIndexService extends Service {
     signal?.throwIfAborted()
     const abort = signal === undefined ? this.lifetime.signal : AbortSignal.any([signal, this.lifetime.signal])
     try {
-      return await work(abort)
+      return await this.track(work(abort))
     } catch (error: unknown) {
       if (abort.aborted) throw abort.reason
       throw error
@@ -244,10 +250,10 @@ export class ContextIndexService extends Service {
   private startFlight(directory: string): Flight {
     const controller = new AbortController()
     const abort = AbortSignal.any([controller.signal, this.lifetime.signal])
-    const promise = this.rebuild(directory, abort).catch((error: unknown) => {
+    const promise = this.track(this.rebuild(directory, abort).catch((error: unknown) => {
       if (abort.aborted) throw abort.reason
       throw error
-    })
+    }))
     const flight: Flight = { controller, promise, waiters: 0 }
     this.flights.set(directory, flight)
     const clear = (): void => {
@@ -391,9 +397,17 @@ export class ContextIndexService extends Service {
     return state
   }
 
+  /** Keep an operation in the disposal drain until it settles. */
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.inflight.add(operation)
+    const done = (): void => { this.inflight.delete(operation) }
+    operation.then(done, done)
+    return operation
+  }
+
   private async shutdown(): Promise<void> {
     this.lifetime.abort(new ContextIndexError('context index disposed', 'CONTEXT_INDEX_DISPOSED'))
-    await Promise.allSettled([...this.flights.values()].map(flight => flight.promise))
+    await Promise.allSettled([...this.inflight])
     this.flights.clear()
     this.states.clear()
   }

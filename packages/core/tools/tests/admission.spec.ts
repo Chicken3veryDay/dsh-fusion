@@ -304,3 +304,52 @@ it('fails step preparation when an ordering policy names a tool it was not given
   expect(h.declared(toolSet)).toEqual(['a'])
   expect(h.ctx.tools.get('a', h.agent, toolSet)).not.toBe(original)
 })
+
+it('rejects a public batch call without a selection while an admission policy applies', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('hidden'))
+  h.ctx.tools.registerAdmissionPolicy(() => [])
+  expect(h.declared(await h.resolve())).toEqual([])
+  const result = await executeModelToolFixture(h.ctx, h.input('hidden'))
+  expect({ isError: result.isError, code: result.error?.info?.code, calls: h.calls }).toEqual({ isError: true, code: 'UNKNOWN_TOOL', calls: [] })
+})
+
+it('rejects a selection-less call while a policy registered in the caller scope applies, and runs it again after disposal', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  const dispose = h.scope.ctx.tools.registerAdmissionPolicy(() => [])
+  expect(h.ctx.tools.executable('a', h.agent)).toBeUndefined()
+  dispose()
+  expect(h.ctx.tools.executable('a', h.agent)?.name).toBe('a')
+})
+
+it('rejects a string decision as a failed admission instead of treating it as a list of names', async () => {
+  const h = await setup()
+  h.ctx.tools.register(h.tool('a'))
+  for (const decision of ['a', '']) {
+    // @ts-expect-error a string is not a ToolAdmissionDecision
+    const dispose = h.ctx.tools.registerAdmissionPolicy(() => decision)
+    const failure = await h.resolve().then(() => undefined, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(ToolAdmissionError)
+    expect(((failure as ToolAdmissionError).cause as Error).message).toContain('returned string')
+    dispose()
+  }
+})
+
+it('accepts an array, a set, an iterator, and an empty array as decisions', async () => {
+  const h = await setup()
+  for (const name of ['a', 'b']) h.ctx.tools.register(h.tool(name))
+  const decisions: (() => readonly string[] | ReadonlySet<string> | IterableIterator<string>)[] = [
+    () => ['a'],
+    () => new Set(['a']),
+    () => ['a'][Symbol.iterator](),
+    () => [],
+  ]
+  const declared: string[][] = []
+  for (const decision of decisions) {
+    const dispose = h.ctx.tools.registerAdmissionPolicy(decision)
+    declared.push(h.declared(await h.resolve()))
+    dispose()
+  }
+  expect(declared).toEqual([['a'], ['a'], ['a'], []])
+})

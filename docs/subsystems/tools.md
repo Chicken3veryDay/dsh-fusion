@@ -267,15 +267,18 @@ interface OrderedAdmission {
 ```
 
 ```ts type-equiv
-/** What a {@link ToolAdmissionPolicy} returns: kept names, optionally ordered. */
-type ToolAdmissionDecision = Iterable<string> | OrderedAdmission
+/**
+ * What a {@link ToolAdmissionPolicy} returns: kept names as an array, a set, or an iterator such
+ * as `candidates.keys()`, or an {@link orderedAdmission} result. A bare string is rejected.
+ */
+type ToolAdmissionDecision = readonly string[] | ReadonlySet<string> | IterableIterator<string> | OrderedAdmission
 ```
 
 ```ts type-equiv
 /**
  * Hide registered tools from one agent step, optionally ordering the rest. A policy runs after
  * each tool's own `when` condition and may only remove: it returns the names of
- * {@link ToolAdmissionContext.candidates} to keep. A plain iterable keeps the candidates'
+ * {@link ToolAdmissionContext.candidates} to keep. A plain array, set, or iterator keeps the candidates'
  * registration order whatever order it lists them in; an {@link orderedAdmission} result also
  * sets the declaration sequence. Returning a name that is not a candidate fails step
  * preparation. Policies must observe cancellation and must not change registrations or start
@@ -737,7 +740,8 @@ restrict(filter: ToolRestriction): () => void
  * ordering policy the admitted set keeps registration order. A policy that
  * throws or names a non-candidate fails step preparation as
  * `TOOL_ADMISSION_FAILED`. Hidden tools are absent from declarations and
- * rejected at dispatch, including nested PTC calls. With no policy
+ * rejected at dispatch, including nested PTC calls; while a policy applies to a scope, a call
+ * without a step selection executes nothing. With no policy
  * registered, admission is unchanged.
  * @param policy - removal-only decision, optionally ordered, evaluated once per step.
  * @returns the exact disposer; later steps see the tools again.
@@ -766,7 +770,8 @@ originOf(name: string, scope?: ScopeKey): ToolOrigin
 
 /**
  * Resolve the definition a call may execute. With a step's admitted set, the
- * set decides; without one, conditional registrations are unavailable.
+ * set decides; without one, conditional registrations are unavailable, and so is every tool
+ * while an admission policy applies to the scope, because a policy needs a step to run.
  * @param name - the tool name as registered.
  * @param scope - the calling agent; omitted = the global view.
  * @param toolSet - step admission, or omitted for a call outside a model step.

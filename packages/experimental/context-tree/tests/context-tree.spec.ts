@@ -24,7 +24,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { executeModelToolFixture } from '@deepseek-ai/dsh-tool-testkit'
-import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ContextTreeService, { ContextTreeError, ContextTreeTools, DEFAULT_BASE_TOOLS, type Config } from '../src/index.ts'
 import { catalogMessage } from '../src/messages.ts'
@@ -815,8 +815,11 @@ describe('tools without a caller', () => {
     expect(textOf(browsed)).toContain('Context tree at Tools, depth 2')
     expect(textOf(await call(w, 'context_browse', { path: 'Tools' }))).toContain('Context tree at Tools, depth 1')
     const result = await executeModelToolFixture(w.ctx, { name: 'context_browse', arguments: {}, callId: ToolCallId('no-agent'), signal: SIGNAL })
+    // The context-tree admission policy applies, so a call outside any step never reaches the tool body.
     expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('require a live calling Agent')
+    expect(result.error?.info?.code).toBe('UNKNOWN_TOOL')
+    const body = w.ctx.tools.get('context_browse')
+    await expect(body?.execute({}, { signal: SIGNAL } as ToolRunContext)).rejects.toThrow('require a live calling Agent')
   })
 })
 
