@@ -481,7 +481,7 @@ export interface TicketCheckSnapshot {
   readonly evidence: readonly string[]
   readonly createdAt: number
 }
-/** Durable deduplication record; request excludes the CAS revision. */
+/** Durable deduplication record; request is canonical JSON or a SHA-256 fingerprint, excluding CAS revision. */
 export interface TicketOperationSnapshot { readonly id: TicketOperationId; readonly request: string }
 /** A Mission milestone references Ticket completion, never a second mutable status. */
 export interface MissionMilestone { readonly title: string; readonly ticketIds: readonly TicketId[] }
@@ -567,4 +567,19 @@ export interface PlanTicketMissionRequest extends TicketMutationRequest {
   readonly expectedPlanRevision: number
   readonly title: string
   readonly milestones: readonly MissionMilestone[]
+}
+
+/** Attempt-bound execution recorder granted only by successful admission; it survives caller disposal and handoff. */
+export interface TicketAttemptController {
+  /** Record execution facts in the Ticket queue without a caller revision race.
+   * @param stage - Stable stage suffix; repeated stages must carry identical facts.
+   * @param facts - Observed runtime state and receipts.
+   * @returns The committed Ticket.
+   */
+  update(stage: string, facts: Pick<UpdateTicketAttemptRequest, 'status' | 'workspaceReceipt' | 'runtimeReceipt' | 'diagnostics'>): Promise<TicketView>
+  /** Record actual producer settlement and release a live assignment.
+   * @param outcome - Observed terminal outcome.
+   * @returns The committed Ticket.
+   */
+  settle(outcome: 'succeeded' | 'failed' | 'cancelled'): Promise<TicketView>
 }

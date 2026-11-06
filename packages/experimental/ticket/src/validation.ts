@@ -30,7 +30,7 @@ export function validateTicketReferences(tickets: readonly TicketSnapshot[]): vo
       const children = edges.get(parent.ticketId)
       if (children === undefined) reject(`unknown parent "${parent.ticketId}"`)
       children.push(ticket.id)
-      if (parent.required && byId.get(parent.ticketId)?.terminalOutcome !== undefined && ticket.terminalOutcome?.kind !== 'completed') reject('accepted parent cannot acquire unfinished required children')
+      if (parent.required && byId.get(parent.ticketId)?.terminalOutcome?.kind === 'completed' && ticket.terminalOutcome?.kind !== 'completed') reject('accepted parent cannot acquire unfinished required children')
     }
     for (const plan of ticket.missionPlans) {
       for (const milestone of plan.milestones) {

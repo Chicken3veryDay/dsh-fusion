@@ -92,6 +92,7 @@ describe('Ticket service', () => {
     }))
     expect(waiting).toMatchObject({ revision: 7, status: 'waiting', attentions: [{ status: 'open', kind: 'review' }] })
 
+    await ticketActor(ctx, SessionId('reviewer'), async () => {})
     const handedOff = await ticketActor(ctx, root, () => ctx.tickets.handoff(session, {
       ticketId: waiting.id,
       expectedRevision: 7,
