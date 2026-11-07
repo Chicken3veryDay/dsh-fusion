@@ -98,6 +98,8 @@ it.each([
   } finally {
     release.resolve(undefined)
     outcome = await preparation
+    // A preparation that rejects at its deadline returns before the write it left to the ledger; join that write.
+    await ctx.tickets.whenIdle(root.session)
     vi.useRealTimers()
   }
   const attempt = ctx.tickets.get(root.session, ticket.id).attempts[0]
