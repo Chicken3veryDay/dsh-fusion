@@ -11,6 +11,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { lastAssistantStreamChunk } from '@deepseek-ai/dsh-llm/assistant-stream'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 
 /** Default per-string and per-key cap applied to every bounded projected payload. */
 export const MAX_STRING_BYTES = 8 * 1024
@@ -296,6 +297,26 @@ export function projectJsonRun(
           callId: event.data.callId,
           tool: event.data.name,
           input: parseArguments(event.data.arguments),
+        })
+        return
+      case 'tool/ptc-dispatch-start':
+        // A call made inside a `run_code` program: same shape as a top-level call, tied to the program by `parentCallId`.
+        write({
+          type: 'tool_call',
+          callId: event.data.subCallId,
+          parentCallId: event.data.parentCallId,
+          tool: event.data.name,
+          input: event.data.arguments,
+        })
+        return
+      case 'tool/ptc-dispatch':
+        write({
+          type: 'tool_result',
+          callId: event.data.subCallId,
+          parentCallId: event.data.parentCallId,
+          status: event.data.isError ? 'error' : 'completed',
+          result: resultText(event.data.content),
+          ...event.data.error === undefined ? {} : { error: event.data.error },
         })
         return
       case 'tool/result': {
