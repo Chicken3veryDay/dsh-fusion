@@ -41,6 +41,8 @@ kind: "package-reference"
 
 共享分派事件与 `ptc-mode` 消息来源声明位于 `@deepseek-ai/dsh-tool-executor-ptc/types`；Client 代码通过 `@deepseek-ai/dsh-tool-executor-ptc/client` 导入同一组声明。两个入口都不引入 Host 服务声明。Host 策略扩展通过包主入口的 `import type` 获取 `PtcDispatchLog` 与 `tools/ptc-dispatch-log`，无需挂载执行器。
 
+在 Session 日志中按名称跟踪工具的消费方，通过可在 Client 使用的 `@deepseek-ai/dsh-tool-executor-ptc/tool-calls` 入口读取调用的两种形式。`effectiveToolCall` 对 `tool/call` 或嵌套的 `tool/ptc-dispatch-start` 返回 `{ callId, parentCallId?, name, arguments }`，其中 `arguments` 为 JSON 文本。`effectiveToolResult` 对 `tool/result` 或嵌套的 `tool/ptc-dispatch` 返回 `{ callId, parentCallId?, name?, content, isError, meta?, error? }`。两者对其他事件返回 `undefined`。嵌套事件不带 `turn`：Host 折叠使用当前轮次，Client 轮次 Definition 返回按轮次定位的匹配。
+
 [配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-tool-executor-ptc)
 
 -----

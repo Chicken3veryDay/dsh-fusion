@@ -4,9 +4,8 @@ import type {
   ConversationGroupData, ConversationGroupedView, ConversationGroupInput,
 } from './groups.ts'
 
-/** Definition-local identity; start permits initialization when no earlier start is present. */
-export interface ConversationMatchResult {
-  readonly id: string
+/** Lifecycle role and target claim shared by every match result; start permits initialization when no earlier start is present. */
+interface ConversationMatchRouting {
   readonly role: 'start' | 'update'
   /**
    * Claim this event on the Definition's target: no other Definition of the
@@ -19,6 +18,26 @@ export interface ConversationMatchResult {
    */
   readonly exclusive?: true
 }
+
+/** Match addressed by a Definition-local identity taken from the event. */
+export interface ConversationIdMatchResult extends ConversationMatchRouting {
+  readonly id: string
+}
+
+/**
+ * Match addressed by the event's resolved Turn, for an event whose payload
+ * names no Turn, such as a nested `run_code` dispatch. The Context id is the
+ * decimal Turn number of the event's Location, which is the same id a
+ * Turn-keyed Definition derives from `turn/start`. An event whose Location has
+ * no Turn matches nothing; when a later older page resolves its Turn, the
+ * engine routes it then.
+ */
+export interface ConversationTurnMatchResult extends ConversationMatchRouting {
+  readonly located: 'turn'
+}
+
+/** Definition-local identity, or the event's resolved Turn, with a lifecycle role. */
+export type ConversationMatchResult = ConversationIdMatchResult | ConversationTurnMatchResult
 
 /** Merge-extensible business values published against one Turn. */
 export interface ConversationTurnDataMap {}
@@ -217,7 +236,8 @@ export interface ConversationNodeDefinition<State = unknown> {
   /**
    * Extract this Definition's stable business identity from one event.
    * @param event - standard or compact Client history event; no Context or history access is available.
-   * @returns identity and lifecycle role, or null when unrelated.
+   * @returns identity and lifecycle role, or null when unrelated. A
+   * {@link ConversationTurnMatchResult} lets the engine supply the event's resolved Turn as the identity.
    */
   match(event: SessionEventLike): ConversationMatchResult | null
   /**

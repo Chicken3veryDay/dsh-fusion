@@ -1211,7 +1211,7 @@ describe('conversation Definitions', () => {
       [transient(12, 3, delta).event, '12:3'],
     ]
     for (const [fixture, id] of cases) {
-      expect(step.match(fixture)?.id).toBe(id)
+      expect(step.match(fixture)).toMatchObject({ id })
     }
     expect(step.match(event('developer/message', { turn: 12, step: 3 }))).toBeNull()
     expect(step.match(event('user/message', { role: 'user', id: 'u', content: [], source: { kind: 'user' } }))).toBeNull()

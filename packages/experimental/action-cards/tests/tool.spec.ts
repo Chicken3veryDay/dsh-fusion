@@ -76,7 +76,7 @@ it('declares nothing for other skills and stops declaring when the kind unregist
   expect(f.ctx.tools.get('propose_action')).toBeUndefined()
 })
 
-it('refuses unknown actions, a skill not loaded in this turn, blank fields, invalid details and nested calls', async () => {
+it('refuses unknown actions, a skill not loaded in this turn, blank fields and invalid details', async () => {
   const f = await fixture()
   f.agent.session.append('turn/start', { turn: 1 })
   await call(f, 'skill', { name: SKILL }, 'load')
@@ -85,8 +85,6 @@ it('refuses unknown actions, a skill not loaded in this turn, blank fields, inva
   expect(text(await call(f, 'propose_action', { ...proposal, brief: '' }, 'blank-brief'))).toBe('Error: Write a title and a brief.')
   expect(text(await call(f, 'propose_action', { ...proposal, details: { value: 1 } }, 'invalid')))
     .toBe('Error: Invalid details: details.value: Invalid input: expected string, received number')
-  expect(text(await call(f, 'propose_action', proposal, 'nested', f.agent, Symbol('outer') as ToolExecutionToken)))
-    .toBe('Error: Call propose_action directly, not from code.')
   f.agent.session.append('turn/start', { turn: 2 })
   expect(text(await call(f, 'propose_action', proposal, 'stale'))).toBe('Error: Load skill test-skill first, then call propose_action.')
   await f.kindFiber.dispose()
@@ -120,15 +118,15 @@ it('accepts one card per turn, admits a retry after a failed result and names th
   expect(await declared(f)).toBe(false)
 })
 
-it('activates nothing for a skill load dispatched from code, so a PTC preset never declares the tool', async () => {
+it('activates the tool for a skill load dispatched from run_code and accepts a call dispatched from it', async () => {
   const f = await fixture()
   f.agent.session.append('turn/start', { turn: 1 })
   const outer = Symbol('outer') as ToolExecutionToken
-  expect((await call(f, 'skill', { name: SKILL }, 'nested-load', f.agent, outer)).isError).toBe(false)
   expect(await declared(f)).toBe(false)
-  expect((await call(f, 'propose_action', proposal, 'unadmitted')).isError).toBe(true)
-  expect((await call(f, 'skill', { name: SKILL }, 'direct-load')).isError).toBe(false)
+  expect((await call(f, 'skill', { name: SKILL }, 'nested-load', f.agent, outer)).isError).toBe(false)
   expect(await declared(f)).toBe(true)
+  const accepted = await call(f, 'propose_action', proposal, 'nested-card', f.agent, outer)
+  expect(accepted).toMatchObject({ isError: false, value: { action: ACTION, title: proposal.title, invitation: INVITATION } })
 })
 
 it('offers cards in the main conversation only: subagent skill loads activate nothing and non-root calls are refused', async () => {

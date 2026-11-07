@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { pluginRecordOf, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import { effectiveToolCall, effectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import type { ActionCardDecision } from './types.ts'
 
 /** Model-facing name of the card tool. */
@@ -69,6 +70,8 @@ const stateSchema = z.object({
   /** Fork-inherited prefix length; inherited events create no proposals or decisions. */
   inheritedEventCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionLogOffset),
   view: viewSchema,
+  /** Open turn; a call nested in `run_code` names no turn and belongs to it. Null before the first turn. */
+  turn: z.number().int().nonnegative().nullable(),
   /** `propose_action` calls of the open turn still waiting for their result. */
   calls: recordByCallId(proposalSchema.omit({ callId: true })),
   /** Turn of the latest admitted proposal; later calls of that turn create no card. */
@@ -88,21 +91,23 @@ export type ActionCardProjectionDefinition = Omit<ProjectionDefinition<'actionCa
 }
 
 /**
- * Full-Session fold. A successful `propose_action` result admits the call as a card, at most one per turn;
- * the first admitted call of a turn wins. A newer card of any kind replaces every unstarted earlier card.
+ * Full-Session fold. A successful `propose_action` result, model-issued or nested in `run_code`, admits the call as a card,
+ * at most one per turn; the first admitted call of a turn wins. A newer card of any kind replaces every unstarted earlier card.
  * Events inherited by a forked Session create no proposals or decisions.
  */
 export const actionCardProjection: ActionCardProjectionDefinition = {
-  key: 'actionCards', stateVersion: 3, stateSchema,
+  key: 'actionCards', stateVersion: 4, stateSchema,
   init: (_header, inheritedEventCount) => ({
-    inheritedEventCount, view: { proposals: {}, decisions: {} }, calls: {}, admittedTurn: null, pendingStatus: {}, queued: 0,
+    inheritedEventCount, view: { proposals: {}, decisions: {} }, turn: null, calls: {}, admittedTurn: null, pendingStatus: {}, queued: 0,
   }),
   apply: (state, event) => {
     if (event.seq < state.inheritedEventCount) return state
     switch (event.type) {
       case 'turn/start':
         // A turn's calls settle inside it; a call left without a result never becomes a card.
-        return Object.keys(state.calls).length === 0 ? state : { ...state, calls: {} }
+        return state.turn === event.data.turn && Object.keys(state.calls).length === 0
+          ? state
+          : { ...state, turn: event.data.turn, calls: {} }
       case 'agent/inbox/spliced':
         if (event.data.target !== 'next-turn') return state
         return { ...state, queued: Math.max(0, state.queued - (event.data.removedCount ?? 0) + event.data.inserted.length) }
@@ -111,21 +116,26 @@ export const actionCardProjection: ActionCardProjectionDefinition = {
         const through = event.data.source.through
         return { ...state, pendingStatus: Object.fromEntries(Object.entries(state.pendingStatus).filter(([, seq]) => seq > through)) }
       }
-      case 'tool/call': {
-        if (event.data.name !== PROPOSE_ACTION) return state
+      case 'tool/call':
+      case 'tool/ptc-dispatch-start': {
+        const started = effectiveToolCall(event)
+        const turn = event.type === 'tool/call' ? event.data.turn : state.turn
+        if (started.name !== PROPOSE_ACTION || turn === null) return state
         let raw: unknown
-        try { raw = JSON.parse(event.data.arguments) }
+        try { raw = JSON.parse(started.arguments) }
         catch { return state } // Malformed model JSON failed in the tool too and creates no card.
         const parsed = argumentsSchema.safeParse(raw)
         if (!parsed.success) return state
-        return { ...state, calls: { ...state.calls, [event.data.callId]: { turn: event.data.turn, ...parsed.data } } }
+        return { ...state, calls: { ...state.calls, [started.callId]: { turn, ...parsed.data } } }
       }
-      case 'tool/result': {
-        const callId = event.data.message.toolCallId
+      case 'tool/result':
+      case 'tool/ptc-dispatch': {
+        const result = effectiveToolResult(event)
+        const callId = result.callId
         const call = Object.hasOwn(state.calls, callId) ? state.calls[callId] : undefined
         if (call === undefined) return state
         const calls = Object.fromEntries(Object.entries(state.calls).filter(([id]) => id !== callId))
-        if (event.data.message.isError === true || state.admittedTurn === call.turn) return { ...state, calls }
+        if (result.isError || state.admittedTurn === call.turn) return { ...state, calls }
         // A newer card supersedes every unstarted card; the model made that choice, so no status is reported.
         // Entries are built, not assigned: `decisions[id] = …` with id `__proto__` would call the inherited setter.
         const replaced = Object.values(state.view.proposals).filter(earlier => !Object.hasOwn(state.view.decisions, earlier.callId))

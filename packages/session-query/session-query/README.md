@@ -96,7 +96,7 @@ The decision history lives in the [unified service decision](../../../.agents/no
 | [`src/types.ts`](src/types.ts) | Public records, filters, requests, and page types |
 | [`src/config.ts`](src/config.ts) | Inherited config and the closed `SessionQueryError` taxonomy |
 | [`src/filters.ts`](src/filters.ts) | Provider-independent predicates and the literal text scan |
-| [`src/extraction.ts`](src/extraction.ts) | First-party semantic text extraction per event type |
+| [`src/extraction.ts`](src/extraction.ts) | First-party semantic text extraction per event type; a call nested in `run_code` is extracted like a model-issued call |
 | [`src/documents.ts`](src/documents.ts) | Surface-aware semantic document projection |
 | [`src/tracing.ts`](src/tracing.ts) | One-shot session-lineage and event-relationship tracing |
 | [`src/sources.ts`](src/sources.ts) | Immutable-header compatibility check |

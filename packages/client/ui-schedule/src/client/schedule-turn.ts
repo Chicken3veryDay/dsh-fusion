@@ -11,6 +11,7 @@
  */
 import { isAppendSurfaceEvent } from '@deepseek-ai/dsh-session/surface'
 import { PartialArguments } from '@deepseek-ai/dsh-util-values'
+import { effectiveToolCall, effectiveToolResult, type EffectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import type {
   ConversationMatch, ConversationNodeDefinition, ToolResultNode, TurnLocation,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -46,7 +47,7 @@ export interface ScheduleTurnOwner {
   readonly openFile: (path: string) => void
 }
 
-/** One in-window root call head, kept to build its result node. */
+/** One in-window call head, model-issued or nested in `run_code`, kept to build its result node. */
 interface ScheduleCall {
   readonly name: string
   readonly argsRaw: string
@@ -95,29 +96,28 @@ export function selectScheduleTasks(owner: ScheduleTurnOwner): ScheduleTurnData 
 }
 
 /**
- * Build the card's result node for one settled root call, or undefined when
- * the result is not a complete created task. Malformed and failed results fall
+ * Build the card's result node for one settled call, or undefined when the
+ * result is not a complete created task. Malformed and failed results fall
  * through: with no task identity the Turn tail renders no card.
- * @param match - the settling `tool/result` update match.
+ * @param match - the settling `tool/result` or `tool/ptc-dispatch` update match.
+ * @param result - the settlement read from that match.
  * @param call - paired in-window call head.
  * @returns the settled node, or undefined when it names no task.
  */
-function createdTask(match: ConversationMatch, call: ScheduleCall): ToolResultNode | undefined {
-  /* v8 ignore next -- The only call site reaches this after narrowing the same event to `tool/result`. */
-  if (match.event.type !== 'tool/result') return undefined
-  const message = match.event.data.message
+function createdTask(match: ConversationMatch, result: EffectiveToolResult, call: ScheduleCall): ToolResultNode | undefined {
   // A failed creation names no task, so its Turn renders no card.
-  if (message.isError === true) return undefined
+  if (result.isError) return undefined
   const settled: ToolResultNode = {
     kind: 'tool-result',
     seq: match.event.seq,
     time: match.event.time,
-    callId: String(match.event.data.message.source.callId),
+    callId: String(result.callId),
+    ...result.parentCallId === undefined ? {} : { parentCallId: String(result.parentCallId) },
     name: call.name,
     args: PartialArguments.fromText(call.argsRaw),
     call: { name: call.name, argsRaw: call.argsRaw },
     callTime: call.time,
-    content: message.content,
+    content: [...result.content],
     isError: false,
     subCalls: [],
   }
@@ -133,6 +133,8 @@ export const scheduleTurnDefinition: ConversationNodeDefinition<ScheduleTurnStat
     if (event.type === 'tool/result' && isAppendSurfaceEvent(event)) {
       return { id: String(event.data.turn), role: 'update' }
     }
+    // Nested `run_code` calls name no Turn; they belong to the Turn of their enclosing call.
+    if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') return { located: 'turn', role: 'update' }
     return null
   },
   start: (_context, match) => {
@@ -140,19 +142,18 @@ export const scheduleTurnDefinition: ConversationNodeDefinition<ScheduleTurnStat
     return { turn: match.event.data.turn, calls: new Map(), created: [] }
   },
   update: (context, match) => {
-    if (match.event.type === 'tool/call') {
+    const started = effectiveToolCall(match.event)
+    if (started !== undefined) {
       const calls = new Map(context.state.calls)
-      calls.set(String(match.event.data.callId), {
-        name: match.event.data.name,
-        argsRaw: match.event.data.arguments,
-        time: match.event.seq,
-      })
+      calls.set(String(started.callId), { name: started.name, argsRaw: started.arguments, time: match.event.seq })
       return { ...context.state, calls }
     }
-    if (match.event.type !== 'tool/result') return context.state
-    const call = context.state.calls.get(String(match.event.data.message.source.callId))
+    const result = effectiveToolResult(match.event)
+    /* v8 ignore next -- match admits only Turn starts, calls, and settlements; a repeated Turn start changes nothing. */
+    if (result === undefined) return context.state
+    const call = context.state.calls.get(String(result.callId))
     if (call?.name !== SCHEDULE_CREATE_TOOL) return context.state
-    const block = createdTask(match, call)
+    const block = createdTask(match, result, call)
     return block === undefined
       ? context.state
       : { ...context.state, created: [...context.state.created, block] }

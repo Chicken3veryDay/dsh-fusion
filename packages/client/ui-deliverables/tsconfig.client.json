@@ -71,6 +71,9 @@
     },
     {
       "path": "../ui-context-menu"
+    },
+    {
+      "path": "../../core/tool-executor-ptc"
     }
   ]
 }

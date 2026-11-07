@@ -38,7 +38,7 @@ kind: "package-reference"
 
 注册入口接受原有可调用的 `match`，或只读的事件类型到处理函数表。Registry 在注册关系变化时复制表条目并预计算有序候选 Set。函数形式的 Definition 保持原有可调用 API，接收全部事件；表中的处理函数只接收已声明类型。修改表需要注销后重新注册。只有 `entries()` 与 `fallbackEntry()` 的旧 assembler 适配器保留原有分发路径。
 
-所有接受的 Match 按顺序更新 State。两次 flush 之间，同一 Context 的重复更新合批发布。kind 和 id 相同时，Context 保持原有 key；传给 Definition 的 Context 快照仍为独立对象。fallback 只处理其目标上没有普通 Definition 匹配的输入。Definition 可以从 `match()` 返回 `exclusive: true`，在其目标上认领一个事件：该目标的其他 Definition 收不到这个事件，该目标的 fallback 也不运行（[语义](../../../docs/subsystems/conversation.zh.md#definition-and-typed-chat-payload)）。
+所有接受的 Match 按顺序更新 State。两次 flush 之间，同一 Context 的重复更新合批发布。kind 和 id 相同时，Context 保持原有 key；传给 Definition 的 Context 快照仍为独立对象。fallback 只处理其目标上没有普通 Definition 匹配的输入。Definition 可以从 `match()` 返回 `exclusive: true`，在其目标上认领一个事件：该目标的其他 Definition 收不到这个事件，该目标的 fallback 也不运行（[语义](../../../docs/subsystems/conversation.zh.md#definition-and-typed-chat-payload)）。Definition 返回 `{ located: 'turn', role }`，即可在该事件已解析 Turn 的 Context 中接收不含 Turn 的事件，例如嵌套的 `run_code` 派发。
 
 Location 查询按 Turn 和 Step 编号索引 Step，因此非边界 append 不扫描 Turn 的 Step 数组。每个输入的数值坐标与解析出的 Location 共用一条私有索引记录；已发布的 Location 值保持不可变。边界更新、完整替换和向前补页使这些索引与当前时间线保持一致。
 

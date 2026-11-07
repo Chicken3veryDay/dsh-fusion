@@ -27,6 +27,10 @@
       "types": "./lib/types/client.d.ts",
       "default": "./lib/types/client.js"
     },
+    "./tool-calls": {
+      "types": "./lib/types/tool-calls.d.ts",
+      "default": "./lib/types/tool-calls.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"

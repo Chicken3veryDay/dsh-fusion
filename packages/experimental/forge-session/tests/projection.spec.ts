@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createToolResultMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import { forgeChangeRequestsProjection } from '../src/projection.ts'
 import type { ForgeChangeRequestsState } from '../src/index.ts'
 import { pullUrl, pushOutput, shellTurn } from './fixtures.ts'
@@ -19,6 +20,26 @@ function created(number: number): string {
 }
 
 describe('forgeChangeRequests projection', () => {
+  it('binds and records pushes from shell commands a run_code program ran', () => {
+    const session = Session.create(SessionId('nested'))
+    session.append('turn/start', { turn: 1 })
+    session.append('tool/call', { turn: 1, step: 1, callId: ToolCallId('prog'), name: 'run_code', arguments: '{}' })
+    const nested = (n: number, command: string, output: string, isError = false) => {
+      const ids = { rootCallId: ToolCallId('prog'), parentCallId: ToolCallId('prog'), subCallId: ToolCallId(`prog:ptc:${n}`), name: 'bash', arguments: { command } }
+      session.append('tool/ptc-dispatch-start', ids)
+      session.append('tool/ptc-dispatch', { ...ids, isError, content: [{ type: 'text', text: output }] })
+    }
+    nested(1, 'gh pr create --fill', created(1))
+    nested(2, 'git push -u origin feat', pushOutput('feat'))
+    nested(3, 'gh pr create --fill', created(3), true)
+    session.append('tool/result', { turn: 1, step: 1, message: createToolResultMessage({ callId: ToolCallId('prog'), content: [], isError: false }) },
+      { surfaceOp: 'append' })
+    const state = fold(session)
+    expect(state.bindings).toEqual([{ url: pullUrl(1), origin: 'created', dismissed: false }])
+    expect(state.pushes.map(push => push.branch)).toEqual(['feat'])
+    expect(state.pending).toEqual([])
+  })
+
   it('shows clients every binding, hidden ones included, and keeps that view while only pending calls and pushes change', () => {
     const session = Session.create(SessionId('client-view'))
     const { view, viewSchema } = forgeChangeRequestsProjection.wire

@@ -71,6 +71,28 @@ it.each([false, true])('reports native Script parse errors with their source pos
   expect(result.error?.message).not.toContain('node:vm')
 })
 
+it.each([false, true])('reports immediate detached rejection before a Script exception and runs the next program with retention %s', async (scriptPersistence) => {
+  const { runtime } = await mountRuntime(new Context(), { executionMode: 'vm-script', scriptPersistence })
+  const stateOwner = {}
+  const run = (program: string) => runtime.run(runtime.resolve({ program, bindings: [], stateOwner }))
+  const failure = await run('void Promise.reject(new Error("immediate detached rejection")); throw new Error("thrown")')
+  expect(failure.error?.kind).toBe('worker-exit')
+  expect(failure.error?.message).toContain('immediate detached rejection')
+  const next = await run('1 + 1')
+  expect(next.error).toBeUndefined()
+  expect(next.value).toBe(2)
+})
+
+it('keeps a persistent REPL after a program throws beside a detached rejection', async () => {
+  const { runtime } = await mountRuntime(new Context(), { executionMode: 'persistent-in-memory' })
+  const stateOwner = {}
+  const run = (program: string) => runtime.run(runtime.resolve({ program, bindings: [], stateOwner }))
+  const failure = await run('void Promise.reject(new Error("immediate detached rejection")); throw new Error("thrown")')
+  expect(failure.error?.kind).toBe('exception')
+  expect(failure.error?.message).toContain('thrown')
+  expect((await run('1 + 1')).value).toBe(2)
+})
+
 it.each([false, true])('reports immediate detached rejection before Script success with retention %s', async (scriptPersistence) => {
   const { runtime } = await mountRuntime(new Context(), { executionMode: 'vm-script', scriptPersistence })
   const stateOwner = {}

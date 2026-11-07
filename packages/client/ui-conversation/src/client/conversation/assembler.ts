@@ -341,6 +341,13 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
     for (const entry of fresh) {
       publication = maximumPublication(publication, this.collectInput(entry, pending))
     }
+    // An older page only resolves Turns that were unresolved, so Turn-located matches dropped before route now.
+    const freshSeqs = new Set(fresh.map(entry => entry.event.seq))
+    for (const seq of changedLocations) {
+      const input = this.inputs.get(seq)
+      if (input === undefined || freshSeqs.has(seq)) continue
+      publication = maximumPublication(publication, this.collectInput(input, pending, true))
+    }
     this.applyPendingMatches(pending, affected)
     this.replayContexts(affected)
     if ((this.revised.size > 0 || previousHasMore !== hasMore) && this.replayDependencies()) {
@@ -461,14 +468,15 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
 
   private matchInput(input: SessionEventLikeEntry): ConversationPublication {
     // oxlint-disable-next-line typescript/unbound-method -- dispatchInput supplies the assembler receiver
-    return this.dispatchInput(input, this.acceptMatch)
+    return this.dispatchInput(input, false, this.acceptMatch)
   }
 
   private collectInput(
     input: SessionEventLikeEntry,
     pending: Map<string, PendingMatch[]>,
+    relocated = false,
   ): ConversationPublication {
-    return this.dispatchInput(input, (definition, id, match) => {
+    return this.dispatchInput(input, relocated, (definition, id, match) => {
       const key = conversationContextKey(definition.kind, id)
       const matches = pending.get(key) ?? []
       matches.push({ definition, id, match })
@@ -477,8 +485,16 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
     })
   }
 
+  /**
+   * Route one event to every matching Definition.
+   * @param input - event entry to route.
+   * @param relocated - route only Turn-located matches the event did not route before, because its Turn was unresolved then.
+   * @param accept - acceptance strategy for each routed match.
+   * @returns highest requested publication cadence.
+   */
   private dispatchInput(
     input: SessionEventLikeEntry,
+    relocated: boolean,
     accept: (
       this: ConversationNodeAssembler,
       definition: ConversationNodeDefinition,
@@ -495,6 +511,13 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
       return role === 'start'
         ? startMatch ??= conversationMatch(input, role, location)
         : updateMatch ??= conversationMatch(input, role, location)
+    }
+    // An unresolved Turn-located match still claims and occupies its target, so a later resolution
+    // routes the event exactly where a complete window would have.
+    const idOf = (result: ConversationMatchResult): string | undefined => {
+      if (!('located' in result)) return relocated ? undefined : result.id
+      location ??= this.locationIndex.locationOf(event)
+      return location.kind === 'turn' || location.kind === 'step' ? String(location.turn.turn) : undefined
     }
     const definitions = this.matchedDefinitions
     const results = this.matchedResults
@@ -546,15 +569,20 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
         else if (secondTarget === undefined) secondTarget = target
         else (otherTargets ??= new Set()).add(target)
       }
-      publication = maximumPublication(publication, accept.call(this, definition, result.id, matchFor(result.role)))
+      const id = idOf(result)
+      if (id === undefined) continue
+      if (relocated && this.contextsBySeq.get(event.seq)?.some(context => context.definition === definition) === true) continue
+      publication = maximumPublication(publication, accept.call(this, definition, id, matchFor(result.role)))
     }
+    if (relocated) return publication
     const fallback = this.eventDefinitions.fallbackEntry()
     const target = fallback?.target
     if (fallback !== undefined && target !== undefined
       && target !== firstTarget && target !== secondTarget && otherTargets?.has(target) !== true) {
       const result = fallback.match(event)
-      if (result !== null) {
-        publication = maximumPublication(publication, accept.call(this, fallback, result.id, matchFor(result.role)))
+      const id = result === null ? undefined : idOf(result)
+      if (result !== null && id !== undefined) {
+        publication = maximumPublication(publication, accept.call(this, fallback, id, matchFor(result.role)))
       }
     }
     return publication

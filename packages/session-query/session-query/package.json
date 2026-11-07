@@ -60,6 +60,7 @@
     "@deepseek-ai/cordis": "workspace:~"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-session-format-catalog": "workspace:*"
+    "@deepseek-ai/dsh-session-format-catalog": "workspace:*",
+    "@deepseek-ai/dsh-tool-executor-ptc": "workspace:*"
   }
 }

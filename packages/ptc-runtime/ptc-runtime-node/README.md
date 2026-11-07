@@ -25,7 +25,7 @@ Execute model-written TypeScript with host-provided async functions. The default
 <a id="use-this-package"></a>
 ## Use this package
 
-Successful evaluations are published after Node’s current-turn unhandled-rejection checkpoint. An immediate detached rejection fails that run and discards retained state; asynchronous work must still be awaited.
+Evaluation results, successful or failed, are published after Node’s current-turn unhandled-rejection checkpoint. An immediate detached rejection fails that run, even one that also threw, and discards retained state, so the next run starts in a fresh process; asynchronous work must still be awaited.
 
 Mount this provider in a composition that supplies `fs`, `subprocess`, `sandbox` and `sandboxPolicy`. `dsh-tool-executor-ptc` supplies the calling Session's directory and standing policy; direct runtime consumers resolve those options before execution.
 

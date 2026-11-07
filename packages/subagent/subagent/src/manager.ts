@@ -19,6 +19,7 @@ import type { SessionId, SessionEvent, UserMessage } from '@deepseek-ai/dsh-sess
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import type { ObjectJsonSchema } from '@deepseek-ai/dsh-tools'
+import { isToolCallStartEvent } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import {
   appendDelegatedPolicyOverrides, applyChildComposition, captureDelegatedPolicyOverrides,
   childSessionMeta, resolveChildAgentOptions, resolveChildDepth,
@@ -1119,11 +1120,12 @@ export class SubagentManager {
           wakeSettlement()
         })
         activation.handle.agent.ctx.on('agent/inbox/discarded', wakeSettlement)
-        // A tool call logged after the message also voids it; logged calls
-        // cannot be skipped by tool policy. `send_message` is not concurrency
-        // safe, so a later call in its step is logged after it executes.
+        // A tool call logged after the message also voids it, including one a
+        // `run_code` program makes; logged calls cannot be skipped by tool
+        // policy. `send_message` is not concurrency safe, so a later call in its
+        // step or program is logged after it executes.
         activation.handle.agent.ctx.on('session/event', (_session, event) => {
-          if (event.type === 'tool/call') activation.omitClosingText = false
+          if (isToolCallStartEvent(event)) activation.omitClosingText = false
         })
       }
       observer.start(activationAgent(activation))

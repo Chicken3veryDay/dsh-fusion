@@ -4374,6 +4374,9 @@ importers:
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:*
         version: link:../../core/system-prompt
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       '@deepseek-ai/dsh-tool-present':
         specifier: workspace:*
         version: link:../../deliverables/tool-present
@@ -5506,6 +5509,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../../core/session
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       '@deepseek-ai/dsh-util-time':
         specifier: workspace:*
         version: link:../../util/time
@@ -8341,6 +8347,9 @@ importers:
 
   packages/experimental/action-cards:
     dependencies:
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -8363,6 +8372,12 @@ importers:
       '@deepseek-ai/dsh-llm':
         specifier: workspace:*
         version: link:../../llm/llm
+      '@deepseek-ai/dsh-ptc-runtime-node':
+        specifier: workspace:*
+        version: link:../../ptc-runtime/ptc-runtime-node
+      '@deepseek-ai/dsh-sandbox-local':
+        specifier: workspace:*
+        version: link:../../sandbox/sandbox-local
       '@deepseek-ai/dsh-sandbox-policy':
         specifier: workspace:*
         version: link:../../sandbox/sandbox-policy
@@ -8375,6 +8390,9 @@ importers:
       '@deepseek-ai/dsh-skill':
         specifier: workspace:*
         version: link:../../skill/skill
+      '@deepseek-ai/dsh-subprocess-local':
+        specifier: workspace:*
+        version: link:../../subprocess/subprocess-local
       '@deepseek-ai/dsh-tool-skill':
         specifier: workspace:*
         version: link:../../skill/tool-skill
@@ -10518,6 +10536,9 @@ importers:
       '@deepseek-ai/dsh-timeout':
         specifier: workspace:*
         version: link:../../util/timeout
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       '@deepseek-ai/dsh-util-values':
         specifier: workspace:*
         version: link:../../util/values
@@ -15381,6 +15402,9 @@ importers:
       '@deepseek-ai/dsh-session-format-catalog':
         specifier: workspace:*
         version: link:../../session/session-format-catalog
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -15814,6 +15838,10 @@ importers:
         version: link:../session-projection
 
   packages/session/session-telemetry:
+    dependencies:
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:~
@@ -17164,6 +17192,9 @@ importers:
       '@deepseek-ai/dsh-chunked-list':
         specifier: workspace:*
         version: link:../../util/chunked-list
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       '@deepseek-ai/dsh-util-values':
         specifier: workspace:*
         version: link:../../util/values
@@ -17207,9 +17238,15 @@ importers:
       '@deepseek-ai/dsh-permission-presets':
         specifier: workspace:*
         version: link:../../interaction/permission-presets
+      '@deepseek-ai/dsh-ptc-runtime-node':
+        specifier: workspace:*
+        version: link:../../ptc-runtime/ptc-runtime-node
       '@deepseek-ai/dsh-sandbox':
         specifier: workspace:*
         version: link:../../sandbox/sandbox
+      '@deepseek-ai/dsh-sandbox-local':
+        specifier: workspace:*
+        version: link:../../sandbox/sandbox-local
       '@deepseek-ai/dsh-sandbox-policy':
         specifier: workspace:*
         version: link:../../sandbox/sandbox-policy
@@ -17231,6 +17268,9 @@ importers:
       '@deepseek-ai/dsh-session-query':
         specifier: workspace:*
         version: link:../../session-query/session-query
+      '@deepseek-ai/dsh-subprocess-local':
+        specifier: workspace:*
+        version: link:../../subprocess/subprocess-local
       '@deepseek-ai/dsh-system-prompt':
         specifier: workspace:*
         version: link:../../core/system-prompt

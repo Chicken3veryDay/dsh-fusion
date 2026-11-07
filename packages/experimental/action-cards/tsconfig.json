@@ -14,7 +14,8 @@
     { "path": "../../session/session-projection" },
     { "path": "../../api/remote-access/tsconfig.host.json" },
     { "path": "../../sandbox/sandbox-policy" },
-    { "path": "../../util/values" }
+    { "path": "../../util/values" },
+    { "path": "../../core/tool-executor-ptc" }
   ],
   "files": [
     "src/index.ts",
