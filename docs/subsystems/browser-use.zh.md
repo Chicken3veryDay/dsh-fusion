@@ -17,7 +17,7 @@ Web 和 Desktop 组合默认挂载交互能力和浏览器注册表。浏览器�
 | [Chrome DevTools MCP](../../packages/experimental/browser-use-chrome-devtools-mcp/README.zh.md) | 通过 MCP 进行 Chrome DevTools 检查与控制 |
 | [Stagehand](../../packages/experimental/browser-use-stagehand-native/README.zh.md) | 原生浏览器操作，支持 AI（人工智能）辅助的动作、观测与提取 |
 
-兼容服务注册提供方名称，并拒绝第二个提供方。DSH 交互服务增加 Agent 面向的通用操作，并将其映射到选定提供方；提供方专用的 MCP 工具在兼容模式下仍可用。Profile 中的提供方配置为此次激活选择启动或附加模式。
+兼容服务注册提供方名称，并拒绝第二个提供方。DSH 交互服务增加 Agent 面向的通用操作，并将其映射到选定提供方自己的工具目录与标签页标识，显式 `tabId` 会被应用，否则在任何浏览器变更之前被拒绝；提供方专用的 MCP 工具在兼容模式下仍可用。Profile 中的提供方配置为此次激活选择启动或附加模式。
 
 ## Session 所有权
 

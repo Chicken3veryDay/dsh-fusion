@@ -1,6 +1,7 @@
 /** Session-owned MCP browser processes and provider catalog activation. @module */
 
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
@@ -11,7 +12,8 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId, isBrowserActionKind } from '@deepseek-ai/dsh-interaction'
+import { interactionProviderId } from '@deepseek-ai/dsh-interaction'
+import { playwrightOperations, type BrowserMcpOperations } from './mcp-operations.ts'
 import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
@@ -19,6 +21,8 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-working-directory'
+
+export { chromeDevtoolsOperations, playwrightOperations, type BrowserMcpCall, type BrowserMcpMethod, type BrowserMcpOperations } from './mcp-operations.ts'
 
 /** Browser launch settings shared by the MCP integrations. */
 export interface BrowserMcpLaunchConfig {
@@ -91,6 +95,8 @@ export interface SessionMcpOptions {
   env?: Record<string, string>
   /** Per-call timeout override; omission retains the MCP client default. */
   toolCallTimeoutMs?: number
+  /** How this server's tool catalog executes normalized browser operations; omission uses the Playwright mapping. */
+  operations?: BrowserMcpOperations
 }
 
 /** One Session's browser connection: the registration scope and the MCP server's own registrations. */
@@ -158,46 +164,6 @@ function providerTool(server: McpClient.McpServerTools, rawNames: readonly strin
   return registration
 }
 
-function browserOperation(
-  server: McpClient.McpServerTools,
-  operation: InteractionOperation,
-): { registration: RegisteredTool; args: Record<string, JsonValue> } {
-  if (operation.domain !== 'browser') throw new Error('browser provider received a desktop operation')
-  if (operation.method === 'navigate') return { registration: providerTool(server, ['browser_navigate']), args: { url: operation.url } }
-  if (operation.method === 'observe') {
-    return {
-      registration: providerTool(server, ['browser_snapshot', 'browser_observe']),
-      args: operation.instruction === undefined ? {} : { target: operation.instruction },
-    }
-  }
-  if (operation.method === 'screenshot') return { registration: providerTool(server, ['browser_take_screenshot', 'browser_screenshot']), args: {} }
-  if (operation.method === 'tabs') {
-    const index = operation.tabId === undefined ? undefined : Number(operation.tabId)
-    if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
-      throw new Error('browser_tabs tabId must be a non-negative integer for this provider')
-    }
-    return {
-      registration: providerTool(server, ['browser_tabs', 'browser_tab_list']),
-      args: {
-        action: operation.operation,
-        ...index === undefined ? {} : { index },
-        ...operation.url === undefined ? {} : { url: operation.url },
-      },
-    }
-  }
-  if (operation.method === 'act') {
-    if (typeof operation.action !== 'object' || operation.action === null || Array.isArray(operation.action)) {
-      throw new Error('browser_act action must be an object with kind')
-    }
-    const kind = operation.action.kind
-    if (typeof kind !== 'string' || kind.length === 0) throw new Error('browser_act action.kind must be a non-empty string')
-    if (!isBrowserActionKind(kind)) throw new Error(`browser_act action.kind "${kind}" is not supported by the normalized facade`)
-    const { kind: _kind, ...args } = operation.action
-    return { registration: providerTool(server, [`browser_${kind}`, kind]), args }
-  }
-  throw new Error(`browser provider does not support normalized ${operation.method} yet`)
-}
-
 /**
  * Await one MCP client during each future Agent's creation.
  * A busy attachment leaves that activation without browser tools; its other turns continue.
@@ -210,7 +176,12 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
   const workingDirectory = ctx.get('workingDirectory')
   if (workingDirectory === undefined) throw new Error(`${options.name}: browser MCP requires a working-directory provider`)
   let resources!: SessionResources<BrowserSession>
+  const operations = options.operations ?? playwrightOperations
   let interactionCallSequence = 0
+  // Calls of an interaction operation that already holds its Session's serialized slot.
+  const heldCalls = new Set<ToolCallId>()
+  const heldCallPrefix = `interaction-${randomUUID()}-`
+  const servers = new Map<Agent, McpClient.McpServerTools>()
   const clients = new Map<Agent, ClientState>()
   const toolPrefix = `mcp__${options.name}__`
   const resourceTools = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
@@ -239,16 +210,40 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
     if (interaction !== undefined) {
       yield interaction.register({
         domain: 'browser',
-        describe: () => ({ id: interactionProviderId(options.name), domains: ['browser'], methods: ['navigate', 'tabs', 'observe', 'act', 'screenshot'], availability: 'ready' }),
+        describe: () => {
+          const live = [...servers.values()].map(server => operations.methods(raw => server.current().has(raw)))
+          const methods = live.length === 0
+            ? operations.methods(() => true)
+            : live.reduce((all, next) => all.filter(method => next.includes(method)))
+          return { id: interactionProviderId(options.name), domains: ['browser'], methods, availability: 'ready' }
+        },
         async open(agent, signal) {
           const { scope, server } = await resources.get(agent, signal)
           return {
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
-              const { registration, args } = browserOperation(server, operation)
-              const result = await scope.ctx.tools.invoke({
-                registration, arguments: args, signal: operationSignal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
+              if (operation.domain !== 'browser') throw new Error('browser provider received a desktop operation')
+              // Registrations resolve before the first call so unsupported targeting never mutates the browser.
+              const calls = operations.plan(operation).map(call => ({ call, registration: providerTool(server, call.tools) }))
+              return resources.run(agent, operationSignal, async (_session, combined) => {
+                const settled: JsonValue[] = []
+                for (const { call, registration } of calls) {
+                  const callId = ToolCallId(`${heldCallPrefix}${++interactionCallSequence}`)
+                  heldCalls.add(callId)
+                  let result: JsonValue
+                  try {
+                    result = JSON.parse(JSON.stringify(await scope.ctx.tools.invoke({
+                      registration, arguments: call.args(settled), signal: combined, agent, callId,
+                    }))) as JsonValue
+                  } finally {
+                    heldCalls.delete(callId)
+                  }
+                  const failed = typeof result === 'object' && result !== null && !Array.isArray(result) && result.isError === true
+                  if (failed || call === calls.at(-1)?.call) return result
+                  settled.push(result)
+                }
+                /* v8 ignore next -- every plan has at least one call */
+                throw new Error('browser operation planned no provider call')
               })
-              return JSON.parse(JSON.stringify(result)) as JsonValue
             },
             close: async () => {},
           }
@@ -293,9 +288,11 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
           signal.throwIfAborted()
           /* v8 ignore next -- an activated connection plugin has assigned its registrations */
           if (server === undefined) throw new Error(`${options.name}: browser MCP connection activated without registrations`)
+          servers.set(agent, server)
           return {
             value: { scope, server },
             close() {
+              servers.delete(agent)
               clients.delete(agent)
               return scope.dispose()
             },
@@ -338,6 +335,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
     if (agent === undefined || clients.get(agent)?.status !== 'ready') {
       throw new Error(`${options.name}: browser tool belongs to another Session`)
     }
+    if (heldCalls.has(exec.callId)) return next()
     return resources.run(agent, exec.signal, async (_scope, combined) => {
       const original = exec.signal
       exec.signal = combined

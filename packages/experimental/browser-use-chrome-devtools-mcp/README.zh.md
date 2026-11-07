@@ -81,7 +81,7 @@ kind: "package-reference"
 
 #### 模型可见内容
 
-工具以 `mcp__chrome-devtools-mcp__<tool>` 命名，保留上游描述和 JSON schema。文本与截图通过常规工具结果流程进入 Session 日志。截图需要附件存储及支持图片输入的模型路由；其他路由会收到 MCP 图片诊断。MCP 客户端还提供资源工具和注明服务器来源的指导。只有当前 Session 拥有连接后才显示浏览器指导；针对该服务器的资源请求执行相同的所有权检查。
+工具以 `mcp__chrome-devtools-mcp__<tool>` 命名，保留上游描述和 JSON schema。挂载交互工具时，规范化的 `browser_*` 工具运行在该目录的 `list_pages`、`new_page`、`select_page`、`close_page`、`navigate_page`、`take_snapshot`、`take_screenshot` 与输入工具上；`tabId` 是 `list_pages` 返回的页面 id，不提供 `scroll` 与提取。文本与截图通过常规工具结果流程进入 Session 日志。截图需要附件存储及支持图片输入的模型路由；其他路由会收到 MCP 图片诊断。MCP 客户端还提供资源工具和注明服务器来源的指导。只有当前 Session 拥有连接后才显示浏览器指导；针对该服务器的资源请求执行相同的所有权检查。
 
 #### Token 影响
 

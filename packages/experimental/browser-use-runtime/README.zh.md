@@ -29,7 +29,7 @@ kind: "package-library"
 
 原生提供方从包根入口构造 `SessionResources`，提供资源获取与清理回调。调用向 `run()` 传递确切的实时 Agent；失效的所有者与独占附加的第二个所有者在获取资源前失败。取消资源获取等待不会终止初始化，同一 Session 的其他调用方仍可继续等待；释放 Session 会中止并等待该初始化结束。提供方将注册保留到 `dispose()` 完成。
 
-MCP 提供方使用 `@deepseek-ai/dsh-experimental-browser-use-runtime/mcp` 中的 `mountSessionMcp`，提供固定服务器名称、可执行文件、参数与所有权策略。挂载上下文必须提供 `workingDirectory`。获取连接时通过[工作目录服务](../../session/working-directory/README.zh.md)验证或恢复当前目录，并将其设为 MCP 服务器进程的初始目录。Session 后续选择其他目录时，保留的服务器继续使用该目录。辅助库在每个后续 Agent 的 `agent/created` 事件中等待一次有作用域的客户端启动与发现尝试。Agent 创建或恢复在发现完成后结束，随后才运行排队输入；成功的客户端跨轮次归该 Session 所有。
+MCP 提供方使用 `@deepseek-ai/dsh-experimental-browser-use-runtime/mcp` 中的 `mountSessionMcp`，提供固定服务器名称、可执行文件、参数、所有权策略，以及可选的 `operations`（把规范化浏览器操作映射到该服务器工具的映射）。默认使用 `playwrightOperations`；`chromeDevtoolsOperations` 映射到 DevTools 的数字页面 id。交互提供方只声明实时目录能够执行的方法。挂载上下文必须提供 `workingDirectory`。获取连接时通过[工作目录服务](../../session/working-directory/README.zh.md)验证或恢复当前目录，并将其设为 MCP 服务器进程的初始目录。Session 后续选择其他目录时，保留的服务器继续使用该目录。辅助库在每个后续 Agent 的 `agent/created` 事件中等待一次有作用域的客户端启动与发现尝试。Agent 创建或恢复在发现完成后结束，随后才运行排队输入；成功的客户端跨轮次归该 Session 所有。
 
 附加连接被占用时，本次激活永久跳过启动，但其他工作继续运行。连接释放不会触发被跳过激活的重试；新创建或恢复的 Agent 可以获取连接。启动失败或取消会拒绝 Agent 创建或恢复，并触发包含客户端清理的创建回滚。重连已禁用。加载或重新加载提供方只作用于后续的 Agent 激活。浏览器所有权策略在分发前按身份将 `exec.definition` 与提供方注册比较。
 
@@ -49,7 +49,7 @@ MCP 提供方使用 `@deepseek-ai/dsh-experimental-browser-use-runtime/mcp` 中�
 
 因释放而取消时，在 AgentHandle 等待空闲前开始资源清理。清理先关闭资源再等待运行中的操作，使连接清理能够中断不支持 abort 的上游 API。关闭失败会拒绝释放并保留所有权。Agent 作用域清理防止使用同一持久 id 恢复的 Session 继承之前的浏览器。
 
-[MCP 辅助库](src/mcp.ts)在串行 `agent/created` 中建立连接；[AgentLoop](../../core/agent-loop/README.zh.md#understand-the-implementation)保留排队输入并负责创建回滚。提示词组装读取已初始化的目录。辅助库在资源清理期间保留提供方注册，并通过 [MCP 客户端](../../mcp/mcp-client/README.zh.md)处理传输、schema 发现、结果转换与持久图像接纳。浏览器交互把操作映射到 Session 连接当前代中的原始工具（辅助库从 `McpClient.connect()` 获得这些注册），再通过 `ctx.tools.invoke()` 运行该 `RegisteredTool`；其他位置的同名注册永远不会被运行，准入策略与 PTC 的直接调用规则也不适用。
+[MCP 辅助库](src/mcp.ts)在串行 `agent/created` 中建立连接；[AgentLoop](../../core/agent-loop/README.zh.md#understand-the-implementation)保留排队输入并负责创建回滚。提示词组装读取已初始化的目录。辅助库在资源清理期间保留提供方注册，并通过 [MCP 客户端](../../mcp/mcp-client/README.zh.md)处理传输、schema 发现、结果转换与持久图像接纳。浏览器交互按提供方的[映射](src/mcp-operations.ts)把操作规划为 Session 连接当前代中的一个或多个原始工具（辅助库从 `McpClient.connect()` 获得这些注册），在首次调用前解析全部 `RegisteredTool`，并在同一个 Session 队列槽内通过 `ctx.tools.invoke()` 运行；其他位置的同名注册永远不会被运行，准入策略与 PTC 的直接调用规则也不适用。显式 `tabId` 不会被丢弃：Playwright MCP 这类当前标签页服务器先收到标签页选择（之后该标签页保持选中），Chrome DevTools MCP 这类逐次调用带页面 id 的服务器直接收到该 id。格式错误或不受支持的目标在任何调用之前失败，选择失败会停止该操作。操作持有队列槽期间，模型调用的原始工具会等待；操作自身的调用不会排在自己之后。
 
 </details>
 

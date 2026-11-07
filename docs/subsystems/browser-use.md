@@ -17,7 +17,7 @@ Mount [`dsh-browser-use`](../../packages/browser-use/browser-use/README.md) and 
 | [Chrome DevTools MCP](../../packages/experimental/browser-use-chrome-devtools-mcp/README.md) | Chrome DevTools inspection and control through MCP |
 | [Stagehand](../../packages/experimental/browser-use-stagehand-native/README.md) | Native browser operations with AI-assisted actions, observation, and extraction |
 
-The compatibility service registers provider names and rejects a second provider. The DSH interaction service adds the common Agent-facing operations and maps them to the selected provider; provider-specific MCP tools remain available for compatibility. Provider configuration selects launch or attachment for that activation.
+The compatibility service registers provider names and rejects a second provider. The DSH interaction service adds the common Agent-facing operations and maps them to the selected provider's own tool catalog and tab identifiers, applying an explicit `tabId` or rejecting it before any browser change; provider-specific MCP tools remain available for compatibility. Provider configuration selects launch or attachment for that activation.
 
 ## Session ownership
 
