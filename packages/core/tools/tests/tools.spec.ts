@@ -52,6 +52,59 @@ const echoTool = defineTool({
 })
 
 describe('ToolRuntime', () => {
+  it('rejects an admission policy that invents several candidates', async () => {
+    const ctx = await setup()
+    try {
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(SessionStore)
+      await ctx.plugin(SessionProjectionRegistry)
+      await ctx.plugin(AgentRegistry)
+      await ctx.plugin(AgentLoop, { agents: [] })
+      const modelSelection = { provider: 'test', model: 'test' }
+      const agent = await ctx.agentLoop.create(SessionId('invalid-admission-candidates'), modelSelection)
+      ctx.tools.register(echoTool)
+      ctx.tools.registerAdmissionPolicy(() => ['missing-one', 'missing-two'])
+      await expect(ctx.tools.resolve({ agent, modelSelection, signal: testToolSignal })).rejects.toMatchObject({
+        cause: { message: 'policy named "missing-one", "missing-two", which are not an admitted candidate; policies may only remove tools' },
+      })
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('invokes a retained registration without an Agent or step admission lifetime', async () => {
+    const ctx = await setup()
+    try {
+      const handle = ctx.tools.register(echoTool)
+      let validated = 0
+      ctx.on('tools/pre-execute', async (exec, next) => {
+        expect(exec.agent).toBeUndefined()
+        expect(exec.toolSet).toBeDefined()
+        await exec.toolSet!.validate()
+        exec.toolSet!.dispose()
+        expect([...exec.toolSet!.view(undefined).keys()]).toEqual(['echo'])
+        validated++
+        return next()
+      })
+      const result = await ctx.tools.invoke({ registration: handle.registration, arguments: { text: 'host input' }, callId: ToolCallId('host'), signal: testToolSignal })
+      expect(result).toMatchObject({ isError: false, value: 'host input', content: [{ type: 'text', text: 'host input' }] })
+      expect(validated).toBe(1)
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('refuses successful dispatch or post-execute replacement for an unknown prepared tool', async () => {
+    const ctx = await setup()
+    try {
+      const pipeline = new ToolExecutionPipeline(ctx)
+      const prepared = await pipeline.prepare({ name: 'absent', arguments: {}, callId: ToolCallId('absent'), signal: testToolSignal })
+      expect(prepared.kind).toBe('dispatch')
+      ctx.on('tools/execute', async () => ({ isError: false, value: 'invented', content: [] }))
+      const dispatched = await pipeline.dispatch(prepared.exec)
+      expect(dispatched).toMatchObject({ kind: 'final-result', result: { isError: true, error: { info: { code: 'UNKNOWN_TOOL' } } } })
+      ctx.on('tools/post-execute', async () => ({ kind: 'accept' as const, value: 'replacement' }))
+      const replaced = await pipeline.complete(prepared.exec, { kind: 'post-result', result: { isError: false, value: 'invented', content: [] } })
+      expect(replaced).toMatchObject({ isError: true, error: { info: { code: 'UNKNOWN_TOOL' } } })
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it.each([{ mode: 'ptc' }, { maxParallelSubCalls: 4 }])('rejects removed execution configuration %j during plugin mounting', async (config) => {
     const ctx = new Context()
     try {

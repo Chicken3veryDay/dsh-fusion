@@ -7,6 +7,35 @@ let ctx: Context
 beforeEach(async () => { ctx = new Context(); await ctx.plugin(Sessions) })
 afterEach(async () => { await ctx.fiber.dispose() })
 
+it('distinguishes ordinary, withdrawing, detached and same-id foreign Sessions', async () => {
+  const id = SessionId('withdrawal-status')
+  const session = ctx.sessions.prepare(id)
+  const foreign = ctx.sessions.prepare(id)
+  const terminal = Promise.withResolvers<undefined>()
+  expect(ctx.sessions.withdrawalOf(session)).toBeUndefined()
+  expect(ctx.sessions.isWithdrawing(session)).toBe(false)
+  const detach = ctx.sessions.enter(session, { withdraw: () => terminal.promise })
+  ctx.sessions.announce(session)
+  expect(ctx.sessions.withdrawalOf(session)).toBeUndefined()
+  expect(ctx.sessions.withdrawalOf(foreign)).toBeUndefined()
+  const join = detach()
+  expect(ctx.sessions.isWithdrawing(session)).toBe(true)
+  expect(ctx.sessions.withdrawalOf(session)).toBe(join)
+  expect(ctx.sessions.isWithdrawing(foreign)).toBe(false)
+  expect(ctx.sessions.withdrawalOf(foreign)).toBeUndefined()
+  terminal.resolve(undefined)
+  await join
+  expect(ctx.sessions.isWithdrawing(session)).toBe(false)
+  expect(ctx.sessions.withdrawalOf(session)).toBeUndefined()
+
+  const ordinary = ctx.sessions.prepare(id)
+  const leave = ctx.sessions.enter(ordinary)
+  ctx.sessions.announce(ordinary)
+  expect(ctx.sessions.isWithdrawing(ordinary)).toBe(false)
+  expect(ctx.sessions.withdrawalOf(ordinary)).toBeUndefined()
+  leave()
+})
+
 it('fences all producers synchronously, publishes a stable reentrant join and retains ordinary publication', async () => {
   const session = ctx.sessions.prepare(SessionId('withdraw'))
   const terminal = Promise.withResolvers<undefined>()

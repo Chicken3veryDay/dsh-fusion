@@ -113,6 +113,8 @@ A tool can retain pure `presentCall()` and `presentResult()` methods for Host-lo
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
+A Host invocation can run without an Agent. Its retained selection bypasses step admission, but execution and post-execute wrappers cannot turn an unknown registration into a successful tool result.
+
 Tool bodies delegating to another registered tool may throw `ToolResultError` with its failed result to preserve structured error details and rendered content through the normal failure pipeline.
 
 <details>

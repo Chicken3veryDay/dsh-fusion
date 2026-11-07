@@ -1,5 +1,5 @@
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, ToolCallId, LlmError, StreamChunk, errorChain  } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
@@ -13,6 +13,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter.ts'
+import { ReactLoopAgent } from '../src/agent.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -52,6 +53,64 @@ function waitForIdle(ctx: Context, agent: Agent): Promise<void> {
 function send(agent: Agent, text: string) {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
 }
+
+it('coalesces overlapping deferred wakes without starting duplicate turns', async () => {
+  const adapter = new MockAdapter([textResponse('one reply')])
+  const ctx = await harness(adapter)
+  try {
+    const agent = await ctx.agentLoop.create(SessionId('deferred-wake'), { provider: 'mock', model: 'mock' })
+    if (!(agent instanceof ReactLoopAgent)) throw new Error('expected the stock driver')
+    agent.send(createUserMessage({ content: [{ type: 'text', text: 'queued' }], source: { kind: 'user' } }), 'next-turn', false)
+    agent.driveQueuedInput()
+    agent.driveQueuedInput()
+    await agent.whenIdle()
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
+    expect(agent.inbox.nextTurn).toEqual([])
+  } finally { await ctx.fiber.dispose() }
+})
+
+it('settles a failed request-context refresh without sending a model request', async () => {
+  const adapter = new MockAdapter([textResponse('unused')])
+  const ctx = await harness(adapter)
+  try {
+    const agent = await ctx.agentLoop.create(SessionId('refresh-failure'), { provider: 'mock', model: 'mock' })
+    const refresh = ctx.systemPrompt.refreshContext.bind(ctx.systemPrompt)
+    vi.spyOn(ctx.systemPrompt, 'refreshContext').mockImplementationOnce(refresh).mockImplementationOnce(() => { throw new Error('context refresh failed') })
+    send(agent, 'accepted input')
+    await agent.whenIdle()
+    expect(adapter.requests).toEqual([])
+    const end = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')
+    expect(end?.data.reason.kind).toBe('error')
+    if (end?.data.reason.kind !== 'error') throw new Error('missing refresh failure')
+    expect(end.data.reason.error.message).toContain('context refresh failed')
+    expect(agent.session.deriveMessages().some(message => message.role === 'user')).toBe(true)
+  } finally { vi.restoreAllMocks(); await ctx.fiber.dispose() }
+})
+
+it.each(['preparation', 'request'] as const)('reports both the %s failure and a refused claimed-input commit', async (point) => {
+  const adapter = new MockAdapter([textResponse('unused')])
+  const ctx = await harness(adapter)
+  try {
+    const agent = await ctx.agentLoop.create(SessionId(`commit-failure-${point}`), { provider: 'mock', model: 'mock' })
+    if (point === 'preparation') ctx.on('agent/pre-step', () => { throw new Error('preparation failed') })
+    else ctx.on('agent/request', () => { throw new Error('request failed') })
+    ctx.on('internal/dispatch', (_mode, name, args) => {
+      if (name !== 'session/event') return
+      const event = args[1] as SessionEvent
+      if (event.type === 'user/message') throw new Error('claimed-input storage failed')
+    })
+    send(agent, 'accepted input')
+    await agent.whenIdle()
+    const end = agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')
+    expect(end?.data.reason.kind).toBe('error')
+    if (end?.data.reason.kind !== 'error') throw new Error('missing claimed-input failure')
+    expect(end.data.reason.error.message).toContain(`${point} failed`)
+    expect(end.data.reason.error.message).toContain('claimed-input storage failed')
+    expect(adapter.requests).toEqual([])
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'step/end')).toHaveLength(1)
+  } finally { await ctx.fiber.dispose() }
+})
 
 describe('tool JSON parse', () => {
   it('passes through non-JSON arguments string without crashing', async () => {

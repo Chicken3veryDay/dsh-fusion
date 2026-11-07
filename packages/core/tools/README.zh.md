@@ -113,6 +113,8 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+Host 调用可以不带 Agent 执行。其保留的选择跳过步骤准入，但执行与执行后包装器不能把未知注册变成成功的工具结果。
+
 委托其他已注册工具的工具体可将失败结果包装为 `ToolResultError` 抛出，通过正常失败流程保留结构化错误详情和呈现内容。
 
 <details>

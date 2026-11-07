@@ -110,7 +110,6 @@ export async function retainSession(
       if (pendingAdoption !== undefined) {
         try { await pendingAdoption } catch (error: unknown) {
           operationFailures.push(error)
-          if (initialization.kind === 'pending') errors.push(error)
         }
       }
       if (initialization.kind === 'failed') {
