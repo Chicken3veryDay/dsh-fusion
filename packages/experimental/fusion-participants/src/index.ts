@@ -189,7 +189,6 @@ export default class FusionParticipants extends Service {
       caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
       void owner.enroll(provider, () => {
         caller.fiber.assertActive()
-        if (caller.fiber.state === FiberState.UNLOADING || caller.fiber.state === FiberState.DISPOSED) throw new ExecutionBlockedError('not-live')
       }).then(completion.resolve, completion.reject)
       return completion.promise
     } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
@@ -279,16 +278,10 @@ export default class FusionParticipants extends Service {
       draining = completion.promise
       taskAbort.abort(new Error('participant task disposed'))
       const joins: Promise<void>[] = [acquired.promise]
-      try {
-        // Fence delivery admission before waiting for execution revocation;
-        // execution.dispose() joins this same memoized delivery close later.
-        if (delivery !== undefined) joins.push(delivery.dispose())
-        joins.push(Promise.resolve(execution === undefined ? undefined : execution.dispose()))
-      } catch (error: unknown) {
-        const failed = Promise.withResolvers<void>()
-        failed.reject(error)
-        joins.push(failed.promise)
-      }
+      // Fence delivery admission before waiting for execution revocation;
+      // execution.dispose() joins this same memoized delivery close later.
+      if (delivery !== undefined) joins.push(delivery.dispose())
+      joins.push(Promise.resolve(execution === undefined ? undefined : execution.dispose()))
       void Promise.allSettled(joins).then((results) => {
         const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
         if (errors.length > 0) throw new AggregateError(errors, 'participant task drain failed')
@@ -312,7 +305,7 @@ export default class FusionParticipants extends Service {
           }
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
           try { removeStatus?.() } catch (error: unknown) { errors.push(error) }
-          try { await removeFence?.() } catch (error: unknown) { errors.push(error) }
+          await removeFence?.()
           if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
           if (prepared !== undefined) this.owned.delete(prepared)

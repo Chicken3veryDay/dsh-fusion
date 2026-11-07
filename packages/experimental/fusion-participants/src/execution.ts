@@ -273,7 +273,6 @@ export class TaskExecutionOwner {
   }
 
   private checkWriters(): void {
-    if (this.lifetimeWriters.length !== this.options.participants.size + 1) throw new ExecutionBlockedError('writer')
     for (const writer of this.lifetimeWriters) {
       const refusal = writer.checkDispatch()
       if (refusal !== undefined) throw new ExecutionBlockedError('writer', refusal)
@@ -307,12 +306,12 @@ export class TaskExecutionOwner {
     this.attempts.set(row.attemptId, row)
     this.held.set(token, row)
     const onAbort = (): void => {
-      this.cancelHeld(row, row.cancellation ?? 'cancel')
-      if (row.release === undefined) void this.finishHeld(row).catch(() => {})
+      this.cancelHeld(row, 'cancel')
+      if (row.release === undefined) void this.finishHeld(row)
     }
     signal.addEventListener('abort', onAbort, { once: true })
     row.stop = () => { signal.removeEventListener('abort', onAbort) }
-    if (signal.aborted) { this.cancelHeld(row, 'cancel'); void this.finishHeld(row).catch(() => {}) }
+    if (signal.aborted) { this.cancelHeld(row, 'cancel'); void this.finishHeld(row) }
     return token
   }
 
@@ -330,7 +329,7 @@ export class TaskExecutionOwner {
       this.checkRun(row.run, classification)
       row.phase = 'registering'
       row.producer = provider.registerHeld(token, row.attemptId, row.run.agent, row.operation, row.signal)
-      if (row.signal.aborted) this.cancelHeld(row, row.cancellation ?? 'cancel')
+      if (row.signal.aborted) this.cancelHeld(row, 'cancel')
       this.checkHeldRun(row.run)
       row.signal.throwIfAborted()
       row.registered = true
@@ -340,7 +339,7 @@ export class TaskExecutionOwner {
       // A throwing allocator cannot certify that no partial allocation escaped without an anchor.
       if (row.phase === 'registering' && row.producer === undefined) { row.failure = { reason: 'cleanup-unknown', cause: error }; this.block(error) }
       completion.reject(error)
-      void this.finishHeld(row).catch(() => {})
+      void this.finishHeld(row)
     }
     return completion.promise
   }
@@ -374,14 +373,13 @@ export class TaskExecutionOwner {
       const classification = row.run.adapter.classify(row.operation)
       this.checkHeldRun(row.run)
       this.checkRun(row.run, classification)
-      if (classification === undefined || row.producer === undefined) throw new ExecutionBlockedError('not-registered')
       start = startedSchema.parse({ rootSessionId: this.options.root.id, participantId: row.run.agent.session.id,
         incarnation: this.incarnation, runId: row.run.runId, attemptId: row.attemptId,
         generation: classification === 'mutation' ? this.generation : null,
         adapter: row.run.adapter.name, revision: row.run.adapter.revision, classification,
         requestHash: createHash('sha256').update(JSON.stringify([row.operation, row.run.agent.session.id])).digest('hex') })
       row.phase = 'preparing'
-      const invocation = await row.producer.prepare()
+      const invocation = await (row.producer as HeldProducer).prepare()
       // Resolve any provider-owned accessor before the final authority check.
       const invoke = invocation.invoke.bind(invocation)
       this.checkHeldRun(row.run)
@@ -719,7 +717,6 @@ export class TaskExecutionOwner {
     void Promise.allSettled([execution]).then(async (results) => {
       const errors = results.flatMap((result): unknown[] => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length === 1) throw errors[0]
-      if (errors.length > 1) throw new AggregateError(errors, 'execution and delivery cleanup failed')
       this.phase = 'stopped'
       await this.releaseLifetime()
       for (const stop of this.withdrawalStops.splice(0)) stop()
