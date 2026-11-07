@@ -2,6 +2,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import fc from 'fast-check'
 import { expect, it, vi } from 'vitest'
 import { Context, type Fiber, Service } from '@deepseek-ai/cordis'
@@ -12,7 +13,7 @@ import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import SessionStore, { type Session, SessionId } from '@deepseek-ai/dsh-session'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { SubagentActivation, SubagentResult } from '@deepseek-ai/dsh-subagent'
+import { type SubagentActivation, SubagentError, type SubagentResult } from '@deepseek-ai/dsh-subagent'
 import TicketService, {
   TicketAttemptId, TicketExecutionService, TicketOperationId, ticketProjectionDefinition,
   type PrepareTicketExecutionRequest, type TicketExecutionHandle, type TicketId,
@@ -20,30 +21,41 @@ import TicketService, {
 
 const SLOTS = 2
 const TIMEOUT_MS = 20
+/** Multi-second bounds: they only elapse when a product call is stuck, so they cost nothing on a passing run. */
+const LIVENESS_MS = 10_000
+const STOP_BOUND_MS = 5_000
 const DIRECTORY = '/property/shared'
 const SCOPE = [{ path: 'src/shared.ts', access: 'write', exclusive: true }] as const
 
-type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once'
+type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once' | 'disposes-at-start'
+type StartOutcome = 'establish' | 'refuse' | 'rollback-fails'
 type Action =
   | { readonly kind: 'prepare'; readonly slot: number; readonly dedicated: boolean; readonly signal: boolean; readonly holdAt: number }
-  | { readonly kind: 'retry' | 'abort' | 'finish' | 'settle' | 'dispose' | 'fail-ticket' | 'worker-down' | 'worker-up'; readonly slot: number }
-  | { readonly kind: 'activation'; readonly slot: number; readonly establish: boolean }
+  | { readonly kind: 'retry' | 'abort' | 'finish' | 'settle' | 'dispose' | 'fail-ticket' | 'worker-down' | 'worker-up' | 'busy'; readonly slot: number }
+  | { readonly kind: 'activation'; readonly slot: number; readonly start: StartOutcome; readonly cleanup: 'clean' | 'fails'; readonly stubborn: boolean }
   | { readonly kind: 'job'; readonly slot: number; readonly producer: ProducerKind }
   | { readonly kind: 'hold-flush'; readonly slot: number; readonly nth: number }
   | { readonly kind: 'fail-flush' | 'pass-flush' | 'root-down' | 'root-up' | 'drop-root'; readonly slot: number }
   | { readonly kind: 'replace' | 'restart' }
 
 interface Live { agent?: Agent; session?: Session; close?: () => void }
+/** A worker lives in its own owner scope, so its disposal runs the Jobs owner cleanup that force-fails and drops records. */
+interface Worker extends Live { scope?: Fiber; busy?: PromiseWithResolvers<undefined>; busyFor?: Attempt }
 interface Producer {
   readonly attempt: Attempt
   readonly done: PromiseWithResolvers<JobOutcome>
   readonly kind: ProducerKind
+  /** Ticket invoked the producer's start; a producer it never started is not live. */
+  started: boolean
   finished: boolean
   cancels: number
 }
+/** External child: its own end is `exit`; `cleanup: 'fails'` makes every release report failure, as the real manager memoizes it. */
+interface External { readonly exit: PromiseWithResolvers<SubagentResult>; readonly cleanup: 'clean' | 'fails'; exited: boolean }
 interface Attempt {
   readonly slot: number
   readonly generation: number
+  readonly epoch: number
   readonly request: PrepareTicketExecutionRequest
   readonly caller: Agent
   readonly abort: AbortController
@@ -52,23 +64,35 @@ interface Attempt {
   handle?: TicketExecutionHandle
   error?: unknown
   abortedWhilePending: boolean
-  activation?: { result: PromiseWithResolvers<SubagentResult>; finished: boolean }
-  start?: { resolve(): void; reject(error: Error): void }
+  activation?: External
+  /** A child whose rollback failed: it runs until the drain or a restart ends it, and Ticket holds no handle to it. */
+  orphan?: { finished: boolean }
+  start?: PromiseWithResolvers<{ start: StartOutcome; cleanup: 'clean' | 'fails'; stubborn: boolean }>
+  pendingJobs: number
+  stops: number
 }
+interface Stop { readonly attempt: Attempt; readonly promise: Promise<unknown>; done: boolean }
 
 interface World {
   readonly dir: string
   ctx: Context
   generation: number
+  /** Host lifetime; a restart ends every producer and every reservation the old host held. */
+  epoch: number
   tickets?: Fiber
   execution?: Fiber
   readonly roots: (Live & { deleted: boolean; path?: string })[]
-  readonly workers: Live[]
+  readonly workers: Worker[]
   readonly ticketIds: TicketId[]
   readonly flush: Map<string, { mode: 'pass' | 'fail' | 'hold'; nth: number; gate?: PromiseWithResolvers<undefined> }>
   readonly attempts: Attempt[]
   readonly producers: Producer[]
+  readonly stops: Stop[]
+  readonly disposals: Promise<unknown>[]
   readonly violations: string[]
+  readonly settled: Set<string>
+  /** Attempt a host caller is settling; its settlement vouches for its producers. */
+  hostSettling?: string
   serial: number
   /** Once set, the provider refuses new starts instead of waiting for the model. */
   draining: boolean
@@ -90,7 +114,9 @@ class Worktrees extends Service {
   async create(): Promise<never> { throw new Error('unexpected worktree') }
 }
 
-/** Dedicated-process provider whose start waits for the model; an abort rejects it without a child. */
+/** Dedicated-process provider whose start waits for the model. An abort rejects it without a child; `rollback-fails` rejects
+ * as the real manager does when releasing an unpublished child failed, leaving that child running. The activation follows the
+ * published contract: `result` settles after the release attempt, and `dispose()` reports that release, memoized. */
 function subagents(world: World) {
   return class Subagents extends Service {
     constructor(ctx: Context) { super(ctx, 'subagents') }
@@ -103,39 +129,74 @@ function subagents(world: World) {
       const attempt = world.attempts.findLast(item => item.request.rootSessionId === spec.request.parent.id && item.request.executor.kind !== 'in-process')
       if (attempt === undefined) throw new Error('activation without a preparing attempt')
       if (world.draining) throw new Error('provider refused')
-      const started = Promise.withResolvers<undefined>()
-      attempt.start = { resolve: () => { started.resolve(undefined) }, reject: (error) => { started.reject(error) } }
-      spec.signal?.addEventListener('abort', () => { started.reject(new Error('activation cancelled before a child started')) }, { once: true })
-      await started.promise
-      const result = Promise.withResolvers<SubagentResult>()
-      const activation = { result, finished: false }
-      void result.promise.then(() => { activation.finished = true })
-      attempt.activation = activation
+      const decision = Promise.withResolvers<{ start: StartOutcome; cleanup: 'clean' | 'fails'; stubborn: boolean }>()
+      attempt.start = decision
+      spec.signal?.addEventListener('abort', () => { decision.reject(new Error('activation cancelled before a child started')) }, { once: true })
+      const chosen = await decision.promise
+      if (chosen.start === 'refuse') throw new Error('provider refused')
+      if (chosen.start === 'rollback-fails') {
+        attempt.orphan = { finished: false }
+        throw new SubagentError('subagent was not admitted and releasing its execution failed', 'ACTIVATION_TEARDOWN_FAILED')
+      }
+      const external: External = { exit: Promise.withResolvers(), cleanup: chosen.cleanup, exited: false }
+      void external.exit.promise.then(() => { external.exited = true })
+      attempt.activation = external
+      let closing: Promise<void> | undefined
+      const close = () => closing ??= external.exit.promise.then(() => {
+        if (external.cleanup === 'fails') throw new Error('releasing the external child failed')
+      })
+      void external.exit.promise.then(() => close()).catch(() => {})
       return {
-        childId: SessionId(`child-${String(world.serial++)}`), result: result.promise,
-        dispose: async () => { result.resolve({ output: [], stopReason: 'aborted' }) },
+        childId: SessionId(`child-${String(world.serial++)}`),
+        result: external.exit.promise.then(async (result) => { await close().catch(() => {}); return result }),
+        dispose: () => {
+          if (!chosen.stubborn) external.exit.resolve({ output: [], stopReason: 'aborted' })
+          return close()
+        },
       }
     }
   }
 }
 
-function enter(world: World, id: string, seed?: Session): Live & { agent: Agent; session: Session } {
-  const { ctx } = world
+function enter(world: World, ctx: Context, id: string, seed?: Session): Live & { agent: Agent; session: Session } {
   const session = ctx.sessions.prepare(SessionId(id), seed === undefined ? undefined : { seed: seed.snapshotEvents() })
   const detachSession = ctx.sessions.enter(session)
   ctx.sessions.announce(session)
+  const worker = world.workers.find(item => `worker-${String(world.workers.indexOf(item))}` === id)
   const agent: Agent = { id: session.id, session, ctx, options: {}, status: 'idle', model: unsupportedModel(), inbox: unsupportedInbox(),
-    send() {}, followup() {}, steer() {}, inject() {}, cancel() {}, whenIdle: async () => {},
+    send() {}, followup() {}, steer() {}, inject() {}, cancel() {},
+    whenIdle: async () => { await worker?.busy?.promise },
     runMaintenance: async <T>(task: (signal: AbortSignal) => Promise<T>) => task(new AbortController().signal) }
   const detachAgent = ctx.agents.enter(agent, undefined)
   void ctx.agents.announce(agent, 'startup')
   return { agent, session, close: () => { detachAgent(); detachSession() } }
 }
 
+/** Enter a worker inside its own owner scope. */
+async function enterWorker(world: World, slot: number): Promise<void> {
+  const worker = world.workers[slot]
+  const id = `worker-${String(slot)}`
+  if (worker === undefined || worker.agent !== undefined || world.ctx.agents.get(SessionId(id)) !== undefined) return
+  const ready = Promise.withResolvers<Context>()
+  const scope = world.ctx.plugin({ name: `worker-scope-${String(world.serial++)}`, inject: ['sessions', 'agents'],
+    apply(child: Context) { ready.resolve(child) } })
+  await scope
+  const live = enter(world, await ready.promise, id)
+  Object.assign(worker, { agent: live.agent, session: live.session, scope })
+  delete worker.close
+}
+
 function down(live: Live): void {
   live.close?.()
   delete live.agent
   delete live.close
+}
+
+function workerDown(world: World, worker: Worker): void {
+  const scope = worker.scope
+  delete worker.agent
+  delete worker.scope
+  if (scope !== undefined) world.disposals.push(scope.dispose().catch(() => {}))
 }
 
 async function boot(world: World): Promise<void> {
@@ -160,6 +221,18 @@ async function boot(world: World): Promise<void> {
     }
     return await flush(session)
   })
+  // No execution-owned settlement may claim producers ended while one still runs or cannot confirm its release.
+  ctx.on('session/event', (_session, event) => {
+    if (event.type !== 'ticket/state' || event.data.version !== 2) return
+    for (const snapshot of event.data.ticket.attempts) {
+      if (snapshot.status !== 'settled' || world.settled.has(snapshot.id)) continue
+      world.settled.add(snapshot.id)
+      const attempt = world.attempts.find(item => item.request.attemptId === snapshot.id)
+      if (attempt !== undefined && world.hostSettling !== snapshot.id && (liveProducer(world, attempt) || unreleasable(attempt))) {
+        world.violations.push(`${snapshot.id} settled while its producer still runs or cannot confirm its release`)
+      }
+    }
+  })
   await mount(world)
 }
 
@@ -170,22 +243,23 @@ async function mount(world: World): Promise<void> {
 }
 
 async function setup(dir: string): Promise<World> {
-  const world: World = { dir, ctx: new Context(), generation: 0, roots: [], workers: [], ticketIds: [], flush: new Map(),
-    attempts: [], producers: [], violations: [], serial: 0, draining: false }
+  const world: World = { dir, ctx: new Context(), generation: 0, epoch: 0, roots: [], workers: [], ticketIds: [], flush: new Map(),
+    attempts: [], producers: [], stops: [], disposals: [], violations: [], settled: new Set(), serial: 0, draining: false }
   await boot(world)
   for (let slot = 0; slot < SLOTS; slot++) {
-    const root = enter(world, `root-${String(slot)}`)
-    const worker = enter(world, `worker-${String(slot)}`)
+    const root = enter(world, world.ctx, `root-${String(slot)}`)
+    world.workers.push({})
+    await enterWorker(world, slot)
+    const worker = world.workers[slot]!.agent!
     // A stored log makes the root visible to the stored-reservation scan, so deleting it is observable.
     await using writer = await world.ctx.sessionPersistence.create(root.session.header)
     await writer.append(root.session.snapshotEvents())
     const ticket = await world.ctx.agents.withInitiator(root.agent, () => world.ctx.tickets.create(root.session, { subject: 'Property', description: '' }))
     const assigned = await world.ctx.agents.withInitiator(root.agent, () => world.ctx.tickets.assign(root.session, {
-      ticketId: ticket.id, expectedRevision: ticket.revision, actorId: root.agent.id, ownerId: worker.agent.id, subject: 'Write', workScopes: [...SCOPE],
+      ticketId: ticket.id, expectedRevision: ticket.revision, actorId: root.agent.id, ownerId: worker.id, subject: 'Write', workScopes: [...SCOPE],
     }))
     const stat = await world.ctx.sessionPersistence.stat(root.agent.id)
     world.roots.push({ ...root, deleted: false, ...stat?.location?.kind === 'jsonl' ? { path: stat.location.path } : {} })
-    world.workers.push(worker)
     world.ticketIds.push(assigned.id)
     world.flush.set(root.session.id, { mode: 'pass', nth: 0 })
   }
@@ -201,15 +275,28 @@ function target(world: World, action: Action): Attempt | undefined {
       case 'job': case 'settle': case 'dispose': return attempt.handle !== undefined && attempt.generation === world.generation
       case 'abort': return attempt.status === 'pending' && attempt.request.signal !== undefined
       case 'activation': return attempt.start !== undefined && attempt.status === 'pending'
+      case 'busy': return attempt.handle !== undefined && attempt.request.executor.kind === 'in-process' && attempt.stops === 0
       default: return true
     }
   }
-  return mine.findLast(fit) ?? mine.at(-1)
+  return action.kind === 'busy' ? mine.findLast(fit) : mine.findLast(fit) ?? mine.at(-1)
+}
+
+/** A producer of `attempt` that has not ended. */
+function liveProducer(world: World, attempt: Attempt): boolean {
+  return world.producers.some(producer => producer.attempt === attempt && producer.started && !producer.finished)
+    || (attempt.activation !== undefined && !attempt.activation.exited)
+    || (attempt.orphan !== undefined && !attempt.orphan.finished)
+    || world.workers.some(worker => worker.busyFor === attempt && worker.busy !== undefined)
+}
+
+/** Ticket cannot confirm this attempt's producers released their resources. */
+function unreleasable(attempt: Attempt): boolean {
+  return attempt.activation?.cleanup === 'fails' || attempt.orphan !== undefined
 }
 
 function liveProducerElsewhere(world: World, attempt: Attempt): boolean {
-  return world.producers.some(producer => producer.attempt !== attempt && !producer.finished)
-    || world.attempts.some(other => other !== attempt && other.activation !== undefined && !other.activation.finished)
+  return world.attempts.some(other => other !== attempt && liveProducer(world, other))
 }
 
 function prepare(world: World, slot: number, dedicated: boolean, signal: boolean): void {
@@ -232,7 +319,8 @@ function prepare(world: World, slot: number, dedicated: boolean, signal: boolean
     ...signal ? { signal: abort.signal } : {},
   }
   const preparation = world.ctx.ticketExecution.prepare(caller, request)
-  const attempt: Attempt = { slot, generation: world.generation, request, caller, abort, preparation, status: 'pending', abortedWhilePending: false }
+  const attempt: Attempt = { slot, generation: world.generation, epoch: world.epoch, request, caller, abort, preparation,
+    status: 'pending', abortedWhilePending: false, pendingJobs: 0, stops: 0 }
   world.attempts.push(attempt)
   void preparation.then((handle) => {
     attempt.status = 'published'
@@ -249,18 +337,38 @@ function startJob(world: World, attempt: Attempt, kind: ProducerKind): void {
   const handle = attempt.handle
   if (handle === undefined) return
   const done = Promise.withResolvers<JobOutcome>()
-  const producer: Producer = { attempt, done, kind, finished: false, cancels: 0 }
+  const producer: Producer = { attempt, done, kind, started: false, finished: false, cancels: 0 }
   void done.promise.then(() => { producer.finished = true })
   world.producers.push(producer)
-  handle.startJob('property', () => ({
-    cancel() {
-      producer.cancels++
-      if (kind === 'stubborn') return
-      if (kind === 'throws-once' && producer.cancels === 1) throw new Error('transient cancellation failure')
-      done.resolve({ status: 'killed' })
-    },
-    done: done.promise,
-  })).catch(() => { done.resolve({ status: 'failed' }) })
+  attempt.pendingJobs++
+  handle.startJob('property', () => {
+    producer.started = true
+    // Startup asks to stop the attempt before it returns the hooks that could deliver that request.
+    if (kind === 'disposes-at-start') recordStop(world, attempt, handle.dispose())
+    return {
+      cancel() {
+        producer.cancels++
+        if (kind === 'stubborn') return
+        if ((kind === 'throws-once' || kind === 'disposes-at-start') && producer.cancels === 1) throw new Error('transient cancellation failure')
+        done.resolve({ status: 'killed' })
+      },
+      done: done.promise,
+    }
+  }).catch(() => {
+    if (!producer.started) done.resolve({ status: 'failed' })
+  }).finally(() => {
+    attempt.pendingJobs--
+    // Ticket never starts a producer whose stop began while its receipt was being written.
+    if (!producer.started) done.resolve({ status: 'killed' })
+  })
+}
+
+function recordStop(world: World, attempt: Attempt, operation: Promise<unknown> | undefined): void {
+  if (operation === undefined) return
+  attempt.stops++
+  const stop: Stop = { attempt, promise: operation.then(() => {}, () => {}), done: false }
+  void stop.promise.then(() => { stop.done = true })
+  world.stops.push(stop)
 }
 
 function finish(world: World, attempt: Attempt | undefined): void {
@@ -268,24 +376,61 @@ function finish(world: World, attempt: Attempt | undefined): void {
     if (attempt === undefined || producer.attempt === attempt) producer.done.resolve({ status: producer.kind === 'fails' ? 'failed' : 'completed' })
   }
   for (const candidate of world.attempts) {
-    if (attempt === undefined || candidate === attempt) candidate.activation?.result.resolve({ output: [], stopReason: 'completed' })
+    if (attempt !== undefined && candidate !== attempt) continue
+    candidate.activation?.exit.resolve({ output: [], stopReason: 'completed' })
+    if (candidate.orphan !== undefined) candidate.orphan.finished = true
+  }
+  for (const worker of world.workers) {
+    if (attempt !== undefined && worker.busyFor !== attempt) continue
+    worker.busy?.resolve(undefined)
+    delete worker.busy
+    delete worker.busyFor
   }
 }
 
-function setFlush(world: World, slot: number, mode: 'pass' | 'fail' | 'hold', nth = 0): void {
+/** A stop must return within its deadline while a flush is held whenever its attempt still has a producer or a pending Job
+ * admission; only a stop that handed its outcome to the ledger may wait for that ledger's write. */
+async function boundedStops(world: World): Promise<void> {
+  if (![...world.flush.values()].some(control => control.gate !== undefined)) return
+  for (const stop of world.stops) {
+    if (stop.done || (!liveProducer(world, stop.attempt) && stop.attempt.pendingJobs === 0)) continue
+    await Promise.race([stop.promise, delay(STOP_BOUND_MS)])
+    if (!stop.done) world.violations.push(`${stop.attempt.request.attemptId} stop did not return within its deadline while a flush was held`)
+  }
+}
+
+async function setFlush(world: World, slot: number, mode: 'pass' | 'fail' | 'hold', nth = 0): Promise<void> {
   const id = world.roots[slot]?.session?.id
   const control = id === undefined ? undefined : world.flush.get(id)
   if (control === undefined) return
-  if (mode !== 'hold') control.gate?.resolve(undefined)
+  if (mode !== 'hold') {
+    await boundedStops(world)
+    control.gate?.resolve(undefined)
+    delete control.gate
+  }
   control.mode = mode
   control.nth = nth
-  if (mode !== 'hold') delete control.gate
+}
+
+async function releaseFlushes(world: World): Promise<void> {
+  await boundedStops(world)
+  for (const control of world.flush.values()) { control.gate?.resolve(undefined); delete control.gate; control.mode = 'pass' }
 }
 
 function rootUp(world: World, slot: number): void {
   const root = world.roots[slot]
   if (root === undefined || root.agent !== undefined || root.deleted || root.session === undefined) return
-  Object.assign(root, enter(world, `root-${String(slot)}`, root.session))
+  Object.assign(root, enter(world, world.ctx, `root-${String(slot)}`, root.session))
+}
+
+/** The host exits: every producer it ran ends. */
+function exitHost(world: World): void {
+  for (const producer of world.producers) producer.done.resolve({ status: 'killed' })
+  for (const attempt of world.attempts) {
+    attempt.activation?.exit.resolve({ output: [], stopReason: 'aborted' })
+    if (attempt.orphan !== undefined) attempt.orphan.finished = true
+  }
+  for (const worker of world.workers) { worker.busy?.resolve(undefined); delete worker.busy; delete worker.busyFor }
 }
 
 async function act(world: World, action: Action): Promise<void> {
@@ -293,7 +438,7 @@ async function act(world: World, action: Action): Promise<void> {
   switch (action.kind) {
     case 'prepare':
       // Holding the nth flush of this preparation's root reaches the admission, workspace or runtime write.
-      if (action.holdAt > 0) setFlush(world, action.slot, 'hold', action.holdAt)
+      if (action.holdAt > 0) await setFlush(world, action.slot, 'hold', action.holdAt)
       prepare(world, action.slot, action.dedicated, action.signal)
       break
     case 'retry':
@@ -316,15 +461,20 @@ async function act(world: World, action: Action): Promise<void> {
       }
       break
     case 'activation':
-      if (attempt?.start !== undefined) {
-        if (action.establish) attempt.start.resolve()
-        else attempt.start.reject(new Error('provider refused'))
-      }
+      attempt?.start?.resolve({ start: action.start, cleanup: action.cleanup, stubborn: action.stubborn })
       break
     case 'job': if (attempt !== undefined && attempt.generation === world.generation) startJob(world, attempt, action.producer); break
+    case 'busy': {
+      const worker = world.workers[action.slot]
+      if (attempt !== undefined && worker !== undefined && worker.busy === undefined && attempt.status === 'published') {
+        worker.busy = Promise.withResolvers()
+        worker.busyFor = attempt
+      }
+      break
+    }
     case 'finish': finish(world, attempt); break
-    case 'settle': void attempt?.handle?.settle().catch(() => {}); break
-    case 'dispose': void attempt?.handle?.dispose().catch(() => {}); break
+    case 'settle': if (attempt !== undefined) recordStop(world, attempt, attempt.handle?.settle()); break
+    case 'dispose': if (attempt !== undefined) recordStop(world, attempt, attempt.handle?.dispose()); break
     case 'fail-ticket': {
       const root = world.roots[action.slot]
       const ticketId = world.ticketIds[action.slot]
@@ -338,15 +488,11 @@ async function act(world: World, action: Action): Promise<void> {
       } catch { /* A Ticket that cannot be read cannot be failed. */ }
       break
     }
-    case 'worker-down': { const worker = world.workers[action.slot]; if (worker !== undefined) down(worker); break }
-    case 'worker-up': {
-      const worker = world.workers[action.slot]
-      if (worker !== undefined && worker.agent === undefined) Object.assign(worker, enter(world, `worker-${String(action.slot)}`))
-      break
-    }
-    case 'hold-flush': setFlush(world, action.slot, 'hold', action.nth); break
-    case 'fail-flush': setFlush(world, action.slot, 'fail'); break
-    case 'pass-flush': setFlush(world, action.slot, 'pass'); break
+    case 'worker-down': { const worker = world.workers[action.slot]; if (worker !== undefined) workerDown(world, worker); break }
+    case 'worker-up': await enterWorker(world, action.slot); break
+    case 'hold-flush': await setFlush(world, action.slot, 'hold', action.nth); break
+    case 'fail-flush': await setFlush(world, action.slot, 'fail'); break
+    case 'pass-flush': await setFlush(world, action.slot, 'pass'); break
     case 'root-down': { const root = world.roots[action.slot]; if (root !== undefined) down(root); break }
     case 'root-up': rootUp(world, action.slot); break
     case 'drop-root': {
@@ -359,21 +505,23 @@ async function act(world: World, action: Action): Promise<void> {
     }
     case 'replace':
       // Teardown awaits in-flight writes, so a delayed flush completes first.
-      for (const control of world.flush.values()) { control.gate?.resolve(undefined); control.mode = 'pass' }
+      await releaseFlushes(world)
       // A teardown whose stop timed out rejects; Cordis contains it and replacement continues.
       await world.execution?.dispose().catch(() => {})
       await world.tickets?.dispose().catch(() => {})
       await mount(world)
       break
     case 'restart': {
-      for (const control of world.flush.values()) { control.gate?.resolve(undefined); control.mode = 'pass' }
-      await world.ctx.fiber.dispose()
-      // The host exit ends every producer it ran.
-      for (const producer of world.producers) producer.done.resolve({ status: 'killed' })
-      for (const candidate of world.attempts) candidate.activation?.result.resolve({ output: [], stopReason: 'aborted' })
+      await releaseFlushes(world)
+      const disposal = world.ctx.fiber.dispose()
+      exitHost(world)
+      await disposal
+      await Promise.allSettled(world.disposals.splice(0))
       for (const live of [...world.roots, ...world.workers]) { delete live.agent; delete live.close }
+      for (const worker of world.workers) delete worker.scope
+      world.epoch++
       await boot(world)
-      for (let slot = 0; slot < SLOTS; slot++) Object.assign(world.workers[slot] ?? {}, enter(world, `worker-${String(slot)}`))
+      for (let slot = 0; slot < SLOTS; slot++) await enterWorker(world, slot)
       break
     }
     default: action satisfies never
@@ -381,35 +529,30 @@ async function act(world: World, action: Action): Promise<void> {
   await settleTicks()
 }
 
-/** Release every gate, finish every producer and resume every root, then retry each owner's stop through product paths. */
 /** Await one product call; a call that never settles is a liveness violation. */
 async function within(world: World, label: string, operation: Promise<unknown> | undefined): Promise<void> {
   if (operation === undefined) return
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => { resolve('expired') }, 1000) })
-  const outcome = await Promise.race([operation.then(() => 'done', () => 'done'), expired])
-  clearTimeout(timer)
+  const outcome = await Promise.race([operation.then(() => 'done', () => 'done'), delay(LIVENESS_MS).then(() => 'expired')])
   if (outcome === 'expired') world.violations.push(`${label} never settled`)
 }
 
 async function quiesce(world: World): Promise<void> {
-  for (let waited = 0; waited < 1000 && world.attempts.some(attempt => attempt.status === 'pending'); waited += 5) {
-    await new Promise<void>((resolve) => { setTimeout(resolve, 5) })
-  }
+  for (let waited = 0; waited < LIVENESS_MS && world.attempts.some(attempt => attempt.status === 'pending'); waited += 5) await delay(5)
   await settleTicks()
   const pending = world.attempts.filter(attempt => attempt.status === 'pending').map(attempt => attempt.request.attemptId)
   if (pending.length > 0) world.violations.push(`preparations never settled: ${pending.join(', ')}`)
 }
 
+/** Release every gate, finish every producer and resume every root, then retry each owner's stop through product paths. */
 async function drain(world: World): Promise<void> {
   world.draining = true
-  for (let slot = 0; slot < SLOTS; slot++) setFlush(world, slot, 'pass')
+  await releaseFlushes(world)
   for (const attempt of world.attempts) attempt.start?.reject(new Error('provider refused'))
   finish(world, undefined)
+  await within(world, 'worker scope disposal', Promise.allSettled(world.disposals.splice(0)))
   for (let slot = 0; slot < SLOTS; slot++) {
     rootUp(world, slot)
-    const worker = world.workers[slot]
-    if (worker !== undefined && worker.agent === undefined) Object.assign(worker, enter(world, `worker-${String(slot)}`))
+    await enterWorker(world, slot)
   }
   await quiesce(world)
   // A caller retries a preparation that failed; an admission whose flush failed continues from the log.
@@ -433,7 +576,8 @@ async function drain(world: World): Promise<void> {
     if (agent === undefined || session === undefined) continue
     await within(world, `${session.id} barrier`, world.ctx.agents.withInitiator(agent, () => world.ctx.tickets.create(session, { subject: 'Barrier', description: '' })))
   }
-  // Host reconciliation owns attempts without a live owner in this generation that stopped as unknown or outlived theirs.
+  // Host reconciliation owns attempts without a live owner in this generation that stopped as unknown or outlived theirs, and
+  // attempts whose producers can never confirm their release.
   for (const [slot, root] of world.roots.entries()) {
     const { agent, session } = root
     const ticketId = world.ticketIds[slot]
@@ -442,12 +586,15 @@ async function drain(world: World): Promise<void> {
       if (attempt.status === 'settled') continue
       const record = world.attempts.find(item => item.request.attemptId === attempt.id)
       const owned = record !== undefined && record.generation === world.generation && record.handle !== undefined
-      if (owned || (attempt.status !== 'unknown' && record?.generation === world.generation)) continue
+      const abandoned = record !== undefined && unreleasable(record)
+      if (!abandoned && (owned || (attempt.status !== 'unknown' && record?.generation === world.generation))) continue
       const current = world.ctx.tickets.get(session, ticketId)
+      world.hostSettling = attempt.id
       await world.ctx.agents.withInitiator(agent, () => world.ctx.tickets.settleAttempt(session, {
         ticketId, attemptId: attempt.id, actorId: agent.id, expectedRevision: current.revision,
         operationId: TicketOperationId(`host-${attempt.id}`), outcome: 'cancelled',
       })).catch((error: unknown) => { world.violations.push(`host reconciliation of ${attempt.id} failed: ${String(error)}`) })
+      delete world.hostSettling
     }
   }
   await settleTicks()
@@ -477,10 +624,11 @@ async function check(world: World): Promise<void> {
     }
     expect(state.failure).toBeUndefined()
     expect(state.tickets).toEqual(world.ctx.tickets.list(session))
-    // Retrying a finished owner's stop is idempotent.
+    // Retrying a finished owner's stop is idempotent; an attempt whose producers cannot confirm release stays with its host.
     const events = session.snapshotEvents().length
     for (const attempt of world.attempts) {
       if (attempt.slot !== slot || attempt.generation !== world.generation || attempt.handle === undefined) continue
+      if (unreleasable(attempt)) continue
       for (const retry of [() => attempt.handle?.dispose(), () => attempt.handle?.settle()]) {
         await retry()?.catch((error: unknown) => { world.violations.push(`${attempt.request.attemptId} stop retry failed: ${String(error)}`) })
       }
@@ -498,17 +646,22 @@ async function check(world: World): Promise<void> {
         .catch((error: unknown) => { world.violations.push(`ticket ${String(slot)} cannot fail from ${current.status}: ${String(codeOf(error))}`) })
     }
   }
-  // Reservations balance: the exclusive scope admits fresh work.
-  const root = enter(world, `competing-root-${String(world.serial)}`)
-  const worker = enter(world, `competing-worker-${String(world.serial++)}`)
+  // Reservations balance: the exclusive scope admits fresh work, unless a producer that cannot confirm its release belongs to a
+  // deleted root in this host lifetime, which no host can settle until the host exits.
+  const held = world.attempts.some(attempt =>
+    unreleasable(attempt) && attempt.epoch === world.epoch && world.roots[attempt.slot]?.deleted === true)
+  const root = enter(world, world.ctx, `competing-root-${String(world.serial)}`)
+  const worker = enter(world, world.ctx, `competing-worker-${String(world.serial++)}`)
   const ticket = await world.ctx.agents.withInitiator(root.agent, () => world.ctx.tickets.create(root.session, { subject: 'Competing', description: '' }))
   const assigned = await world.ctx.agents.withInitiator(root.agent, () => world.ctx.tickets.assign(root.session, {
     ticketId: ticket.id, expectedRevision: ticket.revision, actorId: root.agent.id, ownerId: worker.agent.id, subject: 'Write', workScopes: [...SCOPE] }))
-  await world.ctx.ticketExecution.prepare(worker.agent, {
+  const admission = await world.ctx.ticketExecution.prepare(worker.agent, {
     rootSessionId: root.session.id, ticketId: ticket.id, assignmentId: assigned.assignments[0]?.id ?? ticket.assignments[0]!.id,
     expectedRevision: assigned.revision, attemptId: TicketAttemptId('attempt-competing'), operationId: TicketOperationId('prepare-competing'),
     workspace: { kind: 'shared-workspace', directory: DIRECTORY, baseCommit: 'a'.repeat(40) }, executor: { kind: 'in-process' },
-  }).then(handle => handle.dispose(), (error: unknown) => { world.violations.push(`the exclusive scope stays reserved: ${String(codeOf(error) ?? error)}`) })
+  }).then(async (handle) => { await handle.dispose(); return 'admitted' }, (error: unknown) => String(codeOf(error) ?? error))
+  if (held && admission !== 'TICKET_ATTEMPT_STATE') world.violations.push(`an unreleasable producer of a deleted root lost its reservation: ${admission}`)
+  if (!held && admission !== 'admitted') world.violations.push(`the exclusive scope stays reserved: ${admission}`)
 }
 
 const slot = fc.integer({ min: 0, max: SLOTS - 1 })
@@ -519,9 +672,11 @@ const action: fc.Arbitrary<Action> = fc.oneof(
   { weight: 7, arbitrary: fc.record({ kind: fc.constant('prepare' as const), slot, dedicated: fc.boolean(), signal: fc.boolean(),
     holdAt: fc.integer({ min: 0, max: 3 }) }) },
   { weight: 6, arbitrary: fc.record({ kind: fc.constant('job' as const), slot,
-    producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once') }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constant('activation' as const), slot, establish: fc.boolean() }) },
-  on('abort', 4), on('dispose', 4), on('settle', 2), on('finish', 2), on('retry', 2), on('fail-ticket', 1),
+    producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once', 'disposes-at-start') }) },
+  { weight: 4, arbitrary: fc.record({ kind: fc.constant('activation' as const), slot,
+    start: fc.constantFrom<StartOutcome>('establish', 'establish', 'refuse', 'rollback-fails'),
+    cleanup: fc.constantFrom<'clean' | 'fails'>('clean', 'clean', 'fails'), stubborn: fc.boolean() }) },
+  on('abort', 4), on('dispose', 4), on('settle', 2), on('finish', 2), on('retry', 2), on('fail-ticket', 1), on('busy', 2),
   on('worker-down', 2), on('worker-up', 1), on('root-down', 3), on('root-up', 2), on('drop-root', 2),
   { weight: 2, arbitrary: fc.record({ kind: fc.constant('hold-flush' as const), slot, nth: fc.integer({ min: 1, max: 3 }) }) },
   on('fail-flush', 2), on('pass-flush', 2),
@@ -530,13 +685,33 @@ const action: fc.Arbitrary<Action> = fc.oneof(
 )
 
 const inProcess = (slot: number, signal = false, holdAt = 0): Action => ({ kind: 'prepare', slot, dedicated: false, signal, holdAt })
-/** Round-6 interleavings, replayed before the generated sequences. */
+const dedicated = (slot: number): Action => ({ kind: 'prepare', slot, dedicated: true, signal: false, holdAt: 0 })
+const activation = (slot: number, start: StartOutcome, cleanup: 'clean' | 'fails' = 'clean', stubborn = false): Action =>
+  ({ kind: 'activation', slot, start, cleanup, stubborn })
+/** Round-6 and round-7 interleavings, replayed before the generated sequences. */
 const regressions: Action[][] = [
   [inProcess(0, true, 3), { kind: 'abort', slot: 0 }],
   [inProcess(0), { kind: 'job', slot: 0, producer: 'throws-once' }, { kind: 'dispose', slot: 0 }],
   [inProcess(0), { kind: 'job', slot: 0, producer: 'fails' }, { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }],
-  [{ kind: 'prepare', slot: 0, dedicated: true, signal: false, holdAt: 0 }, { kind: 'root-down', slot: 0 }],
+  [dedicated(0), { kind: 'root-down', slot: 0 }],
   [inProcess(0), { kind: 'job', slot: 0, producer: 'stubborn' }, { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
+  // R7-1: a Job admission whose receipt flush is held, then a stop.
+  [inProcess(0), { kind: 'hold-flush', slot: 0, nth: 1 }, { kind: 'job', slot: 0, producer: 'completes' }, { kind: 'dispose', slot: 0 },
+    { kind: 'pass-flush', slot: 0 }],
+  // R7-1b: a stop whose deadline expires while its uncertainty write is held.
+  [inProcess(0), { kind: 'busy', slot: 0 }, { kind: 'hold-flush', slot: 0, nth: 1 }, { kind: 'dispose', slot: 0 }, { kind: 'pass-flush', slot: 0 }],
+  // R7-2: replacement while a producer without a visible Job still runs: a busy worker, then a stubborn activation.
+  [inProcess(0), { kind: 'busy', slot: 0 }, { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
+  [dedicated(0), activation(0, 'establish', 'clean', true), { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
+  // R7-2: a Job whose record the owner's cleanup force-failed and removed while its producer runs.
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'throws-once' }, { kind: 'worker-down', slot: 0 }, { kind: 'drop-root', slot: 0 },
+    { kind: 'replace' }, inProcess(1)],
+  // R7-3: Job startup requests a stop before returning its hooks, whose cancel then throws.
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'disposes-at-start' }],
+  // R7-4: a Subagent start rejected after its rollback failed.
+  [dedicated(0), activation(0, 'rollback-fails')],
+  // R7-5: a captured result whose release then fails.
+  [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }],
 ]
 
 /* TICKET_PROPERTY_SEED, TICKET_PROPERTY_RUNS and TICKET_PROPERTY_NO_EXAMPLES vary the seed, the run count and the regression
@@ -569,7 +744,7 @@ it('every generated event sequence ends each attempt once, balances reservations
     } finally {
       vi.restoreAllMocks()
       if (world !== undefined) {
-        finish(world, undefined)
+        exitHost(world)
         for (const control of world.flush.values()) control.gate?.resolve(undefined)
         await world.ctx.fiber.dispose()
       }
@@ -579,4 +754,4 @@ it('every generated event sequence ends each attempt once, balances reservations
     seed, numRuns: Number(process.env.TICKET_PROPERTY_RUNS ?? 200), endOnFailure: true,
     ...process.env.TICKET_PROPERTY_NO_EXAMPLES === undefined ? { examples: regressions.map(actions => [actions]) } : {},
   })
-}, 60_000)
+}, 600_000)
