@@ -58,6 +58,9 @@ function spec(command: string, overrides: Partial<SubprocessSpawnSpec> = {}): Su
   }
 }
 
+/** Matches the degraded-containment reporter the runtime hands each Linux scope; typed `unknown` so it nests in an object matcher. */
+const anyReporter: unknown = expect.any(Function)
+
 describe('LocalSubprocessRuntime', () => {
   it('discovers the platform shell without inventing a missing default and honors cancellation', async () => {
     let loginShell: string | null = '/account/shell'
@@ -645,7 +648,7 @@ describe('LocalSubprocessRuntime', () => {
         expect.objectContaining({ argv: ['shell', '--literal'] }),
         expect.objectContaining({ PWD: targetCwd, TERM: 'dumb', TARGET_VALUE: 'preserved' }),
         ['--expand-environment=no'],
-        expect.objectContaining({ reportDegraded: expect.any(Function) }),
+        expect.objectContaining({ reportDegraded: anyReporter }),
       )
       expect(nodePtySpawn).toHaveBeenCalledWith(
         '/usr/bin/systemd-run',
@@ -1054,7 +1057,7 @@ describe('LocalSubprocessRuntime', () => {
         expect.anything(),
         expect.anything(),
         [],
-        expect.objectContaining({ reportDegraded: expect.any(Function) }),
+        expect.objectContaining({ reportDegraded: anyReporter }),
       )
       await linuxRuntime.spawn(spec('true')).done
       expect(confirmLinuxManager).toHaveBeenCalledTimes(3)
