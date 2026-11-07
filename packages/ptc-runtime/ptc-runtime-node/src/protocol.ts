@@ -23,7 +23,8 @@ export interface ProgramBootData {
 /** Program completion; logs are delivered separately before this result. */
 export interface ProgramResult {
   value?: PtcJsonWire
-  error?: { kind: 'exception' | 'invalid-output' | 'output-limit'; message: string }
+  /** `uncaught` reports an asynchronous failure the evaluation did not handle; the host ends the process. */
+  error?: { kind: 'exception' | 'invalid-output' | 'output-limit' | 'uncaught'; message: string }
 }
 
 /** Host operations for the current evaluation; one pipe delivers its messages before its result. */
@@ -63,17 +64,24 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 /**
  * Decode a remote run result without trusting model-written control traffic.
  * @param result - Untrusted result returned by the program process.
- * @returns Decoded completion or failure; malformed envelopes throw a protocol error.
+ * @returns Decoded completion or failure; `discard` asks the host to end the process, an `uncaught` report becoming
+ * a `worker-exit` failure. Malformed envelopes throw a protocol error.
  */
-export function readProgramResult(result: unknown): { value?: PtcJsonValue; error?: PtcRunFailure } {
+export function readProgramResult(result: unknown): { value?: PtcJsonValue; error?: PtcRunFailure; discard?: true } {
   if (!record(result)) throw new Error('invalid program result')
   if (result.error !== undefined) {
     const error = result.error
-    if (!record(error) || typeof error.message !== 'string'
-      || (error.kind !== 'exception' && error.kind !== 'invalid-output' && error.kind !== 'output-limit')) {
-      throw new Error('invalid terminal error')
+    if (!record(error) || typeof error.message !== 'string') throw new Error('invalid terminal error')
+    switch (error.kind) {
+      case 'exception':
+      case 'invalid-output':
+      case 'output-limit':
+        return { error: { kind: error.kind, message: error.message } }
+      case 'uncaught':
+        return { error: { kind: 'worker-exit', message: error.message }, discard: true }
+      default:
+        throw new Error('invalid terminal error')
     }
-    return { error: { kind: error.kind, message: error.message } }
   }
   if (result.value === undefined) return {}
   const value = decodePtcJsonWire(result.value)

@@ -3,9 +3,9 @@ import type { PtcProgramFormat } from '@deepseek-ai/dsh-ptc-runtime'
 import { createAsyncFunctionEvaluator } from './async-function.ts'
 import { createReplEvaluator } from './repl.ts'
 import { createVmScriptEvaluator } from './vm-script.ts'
-import type { ProgramEvaluator } from './types.ts'
+import type { EvaluatorDiagnostic, ProgramEvaluator } from './types.ts'
 
-const evaluators: Record<PtcProgramFormat, (reportError: (message: string) => void) => ProgramEvaluator> = {
+const evaluators: Record<PtcProgramFormat, (report: (diagnostic: EvaluatorDiagnostic) => void) => ProgramEvaluator> = {
   'function-body': createAsyncFunctionEvaluator,
   repl: createReplEvaluator,
   script: createVmScriptEvaluator,
@@ -14,9 +14,9 @@ const evaluators: Record<PtcProgramFormat, (reportError: (message: string) => vo
 /**
  * Create the selected evaluator for either a fresh or retained process.
  * @param format - Evaluation syntax selected by the host.
- * @param reportError - Asynchronous diagnostics attributed to the active evaluation.
+ * @param report - Asynchronous diagnostics, delivered in the async context of the evaluation that caused them.
  * @returns Globals, evaluation entry point, and resource cleanup.
  */
-export function createProgramEvaluator(format: PtcProgramFormat, reportError: (message: string) => void): ProgramEvaluator {
-  return evaluators[format](reportError)
+export function createProgramEvaluator(format: PtcProgramFormat, report: (diagnostic: EvaluatorDiagnostic) => void): ProgramEvaluator {
+  return evaluators[format](report)
 }

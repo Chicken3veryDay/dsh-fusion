@@ -3,7 +3,10 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Duplex } from 'node:stream'
 import type { PtcProgramFormat } from '@deepseek-ai/dsh-ptc-runtime'
 import { createProcessRpc } from './rpc.ts'
-import { captureStreamWrites, LogBuffer, makeConsoleShim, makeBindingErrorClass, makeNamespaces, prepareCompletion, prepareException } from './bootstrap.ts'
+import {
+  captureStreamWrites, LogBuffer, makeConsoleShim, makeBindingErrorClass, makeNamespaces,
+  prepareCompletion, prepareException, prepareUncaught, renderThrown,
+} from './bootstrap.ts'
 import type { BindingErrorConstructor, PatchableStream } from './bootstrap.ts'
 import { clearProgramEnvironment } from './environment.ts'
 import { createProgramEvaluator } from './evaluators/index.ts'
@@ -22,9 +25,14 @@ export interface ProgramProcess {
 interface Evaluation {
   logs: LogBuffer
   maxOutputBytes: number
+  /** Accepts binding calls and a completion. */
   active: boolean
+  /** The result reached the host; later diagnostics cannot change it. */
+  published: boolean
   reusable: boolean
   finish(result: ProgramResult): void
+  /** Replace the completion, or the result awaiting publication, with an `uncaught` failure. */
+  fail(result: ProgramResult): void
 }
 
 /**
@@ -71,17 +79,26 @@ export async function runNodeMain(
       const completion = Promise.withResolvers<ProgramResult>()
       const logs = new LogBuffer(data.maxOutputBytes, (text) => { void connection.log(text) }, () => { void connection.outputLimit() })
       const format = data.programFormat ?? defaultFormat
+      let pending: ProgramResult = {}
       const evaluation: Evaluation = {
-        logs, maxOutputBytes: data.maxOutputBytes, active: true, reusable: data.retainsState,
+        logs, maxOutputBytes: data.maxOutputBytes, active: true, published: false, reusable: data.retainsState,
         finish(result) {
           if (!evaluation.active) return
           evaluation.active = false
+          pending = result
           if (evaluation.reusable) {
             void connection.$rejectPendingCalls(({ reject }) => { reject(new Error('PTC evaluation ended before the binding completed')) })
           }
           // Node reports unhandled rejections after the current microtasks. End binding admission now,
-          // but publish any result after that checkpoint, so a detached rejection exits during this run.
-          setImmediate(() => { completion.resolve(result) })
+          // but publish the result after that checkpoint, so a detached rejection fails this run.
+          setImmediate(() => {
+            evaluation.published = true
+            completion.resolve(pending)
+          })
+        },
+        fail(result) {
+          if (evaluation.active) evaluation.finish(result)
+          else if (!evaluation.published && pending.error?.kind !== 'uncaught') pending = result
         },
       }
       current = evaluation
@@ -89,9 +106,17 @@ export async function runNodeMain(
         try {
           processState.chdir(cwd)
           if (evaluator === undefined) {
-            evaluator = createProgramEvaluator(format, (error) => {
-              const active = context.getStore()
-              if (active?.active && error) active.finish(prepareException(error, active.logs.remainingOutputBytes(), active.maxOutputBytes))
+            evaluator = createProgramEvaluator(format, (diagnostic) => {
+              // Diagnostics run in the causing evaluation's async context; a published result stays final.
+              const cause = context.getStore()
+              if (cause === undefined || cause.published) return
+              const remaining = cause.logs.remainingOutputBytes()
+              if (diagnostic.kind === 'printed' && cause.active) {
+                cause.finish(prepareException(diagnostic.message, remaining, cause.maxOutputBytes))
+                return
+              }
+              const message = diagnostic.kind === 'printed' ? diagnostic.message : `Uncaught ${renderThrown(diagnostic.reason)}`
+              cause.fail(prepareUncaught(message, remaining, cause.maxOutputBytes))
             })
             evaluator.globals.console = makeConsoleShim(logSink)
             // Context access must not reserve a function-body parameter named process.

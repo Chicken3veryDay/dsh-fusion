@@ -1,5 +1,11 @@
 /** Evaluation results and operations shared by the three child evaluators. */
 
+/**
+ * Asynchronous evaluator report: an exception the REPL printed, or a rejection
+ * that reached Node's unhandled-rejection checkpoint without a handler.
+ */
+export type EvaluatorDiagnostic = { kind: 'printed'; message: string } | { kind: 'unhandled-rejection'; reason: unknown }
+
 /** One evaluation's completion or thrown value. */
 type EvaluationResult = { ok: true; value: unknown } | { ok: false; error: unknown }
 

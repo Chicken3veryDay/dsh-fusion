@@ -221,9 +221,10 @@ export class ProgramWorker {
   private dispatch(evaluation: Evaluation): void {
     void this.channel?.run(evaluation.spec.cwd, evaluation.data).then((raw) => {
       if (evaluation.settled) return
-      const { error, value } = readProgramResult(raw)
+      const { error, value, discard } = readProgramResult(raw)
+      const failure = discard && error ? { ...error, message: this.message(error.message) } : error
       // Raw stdio can be queued beside the RPC result on separate pipes.
-      setImmediate(() => { evaluation.finish(error, value) })
+      setImmediate(() => { evaluation.finish(failure, value, discard) })
     }).catch((error: unknown) => {
       if (this.active === evaluation && !this.channel?.$closed) this.fail('protocol', messageOf(error))
     })
