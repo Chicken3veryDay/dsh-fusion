@@ -1,12 +1,14 @@
-import { spawn } from 'node:child_process'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleepMs } from 'node:timers/promises'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec, SubprocessTerminalHandle } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '../src/index.ts'
 import { launchLinuxScope, probeLinuxScope } from '../src/linux-scope.ts'
+import type { LinuxScopeInternals } from '../src/linux-scope.ts'
 import { targetEnvironment } from '../src/runner-launch.ts'
 import { bindManagedProcess } from '../src/spawn.ts'
 
@@ -139,6 +141,39 @@ async function waitForInputReadiness(handle: SubprocessTerminalHandle): Promise<
     await new Promise(resolve => setTimeout(resolve, 20))
   }
   throw new Error(`terminal ${String(handle.pid)} never became input-ready`)
+}
+
+/** Count the kernel watches this process holds across all of its inotify descriptors. */
+function inotifyWatchCount(): number {
+  let count = 0
+  for (const fd of readdirSync('/proc/self/fd')) {
+    let info: string
+    try {
+      info = readFileSync(`/proc/self/fdinfo/${fd}`, 'utf8')
+    } catch {
+      continue
+    }
+    count += info.split('\n').filter(line => line.startsWith('inotify wd:')).length
+  }
+  return count
+}
+
+/** One loop turn: libuv removes a closed watcher's kernel watch after a delivered event on the next turn. */
+function nextLoopTurn(): Promise<void> {
+  return new Promise<void>(resolve => setImmediate(resolve))
+}
+
+async function waitUntil(condition: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`)
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
+
+/** A descendant that outlives its direct parent until the test creates `flag`. */
+function lingeringDescendantCommand(pidFile: string, flag: string): string {
+  return `sh -c 'echo $$ > "$1"; while [ ! -e "$2" ]; do sleep 0.02; done' sh ${JSON.stringify(pidFile)} ${JSON.stringify(flag)} >/dev/null 2>&1 & exit 0`
 }
 
 const literalArgv = process.platform === 'linux' ? probeLinuxScope() : undefined
@@ -295,4 +330,101 @@ while :; do sleep 60; done
       await fiber.dispose()
     }
   }, 15_000)
+
+  it('ends the range wait at the last member exit from the cgroup event and releases its watch', async () => {
+    const pidFile = join(scratch, `linger-${Date.now()}.pid`)
+    const flag = join(scratch, `linger-${Date.now()}.release`)
+    const request = spec(['bash', '-c', lingeringDescendantCommand(pidFile, flag)])
+    const baselineWatches = inotifyWatchCount()
+    const attached = Promise.withResolvers<undefined>()
+    let closes = 0
+    let queries = 0
+    let watching = false
+    const internals: LinuxScopeInternals = {
+      // Establishment polls normally; once the watch exists no poll tick can fire, so only the kernel event can end the wait.
+      sleep: (delayMs, signal) => watching
+        ? new Promise<void>((resolve) => { signal?.addEventListener('abort', () => { resolve() }, { once: true }) })
+        : sleepMs(delayMs, undefined, { signal }),
+      systemctlQuery: (command, args) => new Promise((resolve) => {
+        queries += 1
+        execFile(command, [...args], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout, stderr) => {
+          const code = error === null ? 0 : (error as NodeJS.ErrnoException & { code?: string | number }).code
+          resolve({ status: typeof code === 'number' ? code : null, stdout, stderr, ...error === null ? {} : { error } })
+        })
+      }),
+      watchFile: (path) => {
+        const watcher = watch(path, { persistent: false })
+        const close = watcher.close.bind(watcher)
+        watcher.close = () => { closes += 1; close() }
+        watching = true
+        attached.resolve(undefined)
+        return watcher
+      },
+    }
+    const handle = bindManagedProcess(request, launchLinuxScope(request, targetEnvironment(request), scopeOptions, internals))
+    let descendant: number | undefined
+    try {
+      // Production observes the range after the direct child settles; a query issued while systemd is
+      // still creating the transient unit can read it as loaded but inactive.
+      await handle.done
+      descendant = await waitForPid(pidFile)
+      const waiting = handle.waitForExit()
+      await attached.promise
+      let settled = false
+      void waiting.then(() => { settled = true })
+      await nextLoopTurn()
+      expect(settled).toBe(false)
+      const queriesBeforeRelease = queries
+      writeFileSync(flag, '')
+      await expect(waiting).resolves.toBe(true)
+      // The event is the only wake-up. systemd may already have collected the scope when the observer
+      // reads the file; then exactly one systemctl query confirms the absence.
+      expect(queries - queriesBeforeRelease).toBeLessThanOrEqual(1)
+      expect(closes).toBe(1)
+      await waitGone(descendant)
+      await nextLoopTurn()
+      expect(inotifyWatchCount()).toBe(baselineWatches)
+    } finally {
+      handle.terminate()
+      await Promise.allSettled([handle.done, handle.waitForExit()])
+      if (descendant !== undefined) {
+        try { process.kill(descendant, 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+  }, 15_000)
+
+  it('closes every watch when the runtime is disposed during a pending range wait', async () => {
+    const pidFile = join(scratch, `dispose-${Date.now()}.pid`)
+    const flag = join(scratch, `dispose-${Date.now()}.release`)
+    const ctx = new Context()
+    const fiber = await ctx.plugin(LocalSubprocessRuntime)
+    const baselineWatches = inotifyWatchCount()
+    let descendant: number | undefined
+    try {
+      const handle = ctx.subprocess.spawn(spec(['bash', '-c', lingeringDescendantCommand(pidFile, flag)]))
+      await handle.done
+      descendant = await waitForPid(pidFile)
+      await waitUntil(() => inotifyWatchCount() > baselineWatches, 'the cgroup.events watch')
+      await fiber.dispose()
+      await waitGone(descendant)
+      await nextLoopTurn()
+      expect(inotifyWatchCount()).toBe(baselineWatches)
+    } finally {
+      writeFileSync(flag, '')
+      if (descendant !== undefined) {
+        try { process.kill(descendant, 'SIGKILL') } catch { /* already contained */ }
+      }
+      await fiber.dispose()
+    }
+  }, 15_000)
+
+  it('releases the watch of a completed spawn with no surviving descendant', async () => {
+    const baselineWatches = inotifyWatchCount()
+    const request = spec(['bash', '-c', 'exit 0'])
+    const handle = bindManagedProcess(request, launchLinuxScope(request, targetEnvironment(request), scopeOptions))
+    await handle.done
+    await expect(handle.waitForExit()).resolves.toBe(true)
+    await nextLoopTurn()
+    expect(inotifyWatchCount()).toBe(baselineWatches)
+  })
 })

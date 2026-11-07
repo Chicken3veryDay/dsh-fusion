@@ -72,6 +72,14 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   internals: SpawnInternals = {}
   /** Provider-lifetime latch suppressing repeated weaker-containment warnings. */
   private fallbackWarningIssued = false
+  private scopeWatchWarningIssued = false
+
+  /** The first degraded cgroup event watch warns; later ones stay at debug so one bad host does not flood the log. */
+  private readonly reportScopeWatchDegraded = (message: string): void => {
+    const level = this.scopeWatchWarningIssued ? 'debug' : 'warn'
+    this.scopeWatchWarningIssued = true
+    this.ctx.logger[level](`subprocess-local linux scope: ${message}`)
+  }
   /**
    * Linux native containment decisions. Each probe is a spawnSync that blocks the event loop and forks the
    * host, so the selector reruns it only after an event invalidates the previous verdict.
@@ -207,7 +215,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
       const linuxScope = containmentMode === 'linux-scope' ? this.linuxScopeDecision : undefined
       const launch = linuxScope === undefined
         ? launchWindowsJob(spec, env)
-        : launchLinuxScope(spec, env, linuxScope.literalArgv)
+        : launchLinuxScope(spec, env, linuxScope.literalArgv, { reportDegraded: this.reportScopeWatchDegraded })
       handle = bindManagedProcess(spec, launch, binding)
       if (linuxScope !== undefined) this.watchLinuxScopeStart(handle.done, linuxScope.generation)
     }
@@ -317,7 +325,12 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     try {
       scope = linuxScope === undefined
         ? undefined
-        : prepareLinuxTerminalScope(launch, { ...activity?.env ?? env, PWD: spec.cwd, TERM: spec.terminalType }, linuxScope.literalArgv)
+        : prepareLinuxTerminalScope(
+          launch,
+          { ...activity?.env ?? env, PWD: spec.cwd, TERM: spec.terminalType },
+          linuxScope.literalArgv,
+          { reportDegraded: this.reportScopeWatchDegraded },
+        )
       if (scope !== undefined) { options.cwd = scope.cwd; options.env = scope.env }
       terminal = requireNodePty().spawn(
         scope?.command ?? file,

@@ -28,9 +28,16 @@ import {
 } from './runner-launch.ts'
 import type { RunnerInvocation } from './runner-launch.ts'
 import { childEnv } from './spawn.ts'
+import { CgroupEventsWatch } from './cgroup-events.ts'
+import type { CgroupEventSeams } from './cgroup-events.ts'
 
 /** Test seams for systemd command execution. */
-export interface LinuxScopeInternals {
+export interface LinuxScopeInternals extends CgroupEventSeams {
+  /**
+   * Receives each degraded-containment fact of the cgroup event watch (an unwatchable or unreadable
+   * `cgroup.events`); range exit then falls back to polling systemctl alone.
+   */
+  reportDegraded?: (message: string) => void
   spawn?: typeof spawn
   spawnSync?: typeof spawnSync
   systemctlQuery?: (command: string, args: readonly string[]) => Promise<SystemctlResult>
@@ -290,6 +297,9 @@ class SystemdScopeOwner implements BoundProcessOwner {
   private directKillSettlement: Promise<void> | undefined
   private wakeGeneration = 0
   private wakeWaiter: { generation: number; resolve: () => void } | undefined
+  /** The scope's cgroup, learned from the first established query; undefined until then. */
+  private controlGroup: string | undefined
+  private readonly cgroup: CgroupEventsWatch
 
   constructor(
     private readonly unit: string,
@@ -299,7 +309,15 @@ class SystemdScopeOwner implements BoundProcessOwner {
     private readonly runSync: typeof spawnSync,
     private readonly query: (command: string, args: readonly string[]) => Promise<SystemctlResult>,
     private readonly sleep: (delayMs: number, signal?: AbortSignal) => Promise<void>,
-  ) {}
+    cgroupSeams: CgroupEventSeams = {},
+    reportDegraded: (message: string) => void = () => {},
+  ) {
+    this.cgroup = new CgroupEventsWatch(
+      cgroupSeams,
+      () => { this.wakeForCgroup() },
+      (message) => { reportDegraded(`${this.unit}: ${message}`) },
+    )
+  }
 
   inspectTaskCount(): number | undefined {
     const result = this.runSync(this.systemctl, [
@@ -349,6 +367,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
   }
 
   terminateForHostExit(): void {
+    this.cgroup.close()
     if (this.stopped) return
     try {
       if (this.direct.running()) this.direct.signal('SIGKILL')
@@ -408,7 +427,12 @@ class SystemdScopeOwner implements BoundProcessOwner {
     }
   }
 
-  private parseUnitState(stdout: string): { loadState: string; activeState: string; tasksCurrent: number | undefined } {
+  private parseUnitState(stdout: string): {
+    loadState: string
+    activeState: string
+    tasksCurrent: number | undefined
+    controlGroup: string | undefined
+  } {
     const values = new Map<string, string>()
     for (const line of stdout.split(/\r?\n/u)) {
       if (line === '') continue
@@ -422,6 +446,10 @@ class SystemdScopeOwner implements BoundProcessOwner {
       }
       values.set(name, line.slice(separator + 1))
     }
+    // Optional: only the range query asks for it, and an unloaded unit prints it empty.
+    const reportedGroup = values.get('ControlGroup')
+    values.delete('ControlGroup')
+    const controlGroup = reportedGroup === undefined || reportedGroup === '' ? undefined : reportedGroup
     const loadState = values.get('LoadState')
     const activeState = values.get('ActiveState')
     // The manager prints this sentinel for a property the unit does not carry.
@@ -438,6 +466,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
       loadState,
       activeState,
       tasksCurrent: tasksCurrent === undefined ? undefined : Number(tasksCurrent),
+      controlGroup,
     }
   }
 
@@ -452,12 +481,13 @@ class SystemdScopeOwner implements BoundProcessOwner {
       '--property=LoadState',
       '--property=ActiveState',
       '--property=TasksCurrent',
+      '--property=ControlGroup',
     ])
     // A signal invalidates state queried before its delivery and direct fallback.
     if (generation !== this.wakeGeneration) return true
     const output = `${result.stdout}\n${result.stderr}`
     if (result.status === 0) {
-      const { loadState, activeState, tasksCurrent } = this.parseUnitState(result.stdout)
+      const { loadState, activeState, tasksCurrent, controlGroup } = this.parseUnitState(result.stdout)
       if (loadState === 'not-found' && activeState === 'inactive') return this.absentUnit()
       if (loadState !== 'loaded') {
         throw new Error(
@@ -465,6 +495,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
         )
       }
       this.establishment = 'established'
+      this.controlGroup = controlGroup ?? this.controlGroup
       if (activeState === 'inactive' || activeState === 'failed') return false
       if (!['active', 'activating', 'reloading', 'deactivating'].includes(activeState)) {
         throw new Error(`systemctl returned unknown ActiveState for ${this.unit}: ${JSON.stringify(activeState)}`)
@@ -498,33 +529,69 @@ class SystemdScopeOwner implements BoundProcessOwner {
     this.wakeWaiter = undefined
   }
 
-  private async waitForPoll(delayMs: number, generation: number): Promise<void> {
-    if (generation !== this.wakeGeneration) return
+  /** Wake the sleeping observer for a cgroup event or watcher failure without invalidating an in-flight query. */
+  private wakeForCgroup(): void {
+    this.wakeWaiter?.resolve()
+    this.wakeWaiter = undefined
+  }
+
+  /**
+   * Sleep until the poll delay elapses or something wakes the observer.
+   * @returns `timer` when the delay elapsed, otherwise `wake` (signal, cgroup event, or watcher failure).
+   */
+  private async waitForPoll(delayMs: number, generation: number): Promise<'timer' | 'wake'> {
+    if (generation !== this.wakeGeneration || this.cgroup.hasEvent()) return 'wake'
     const wake = Promise.withResolvers<void>()
     const waiter = { generation, resolve: wake.resolve }
     const sleepController = new AbortController()
     this.wakeWaiter = waiter
     try {
-      await Promise.race([this.sleep(delayMs, sleepController.signal), wake.promise])
+      return await Promise.race([
+        this.sleep(delayMs, sleepController.signal).then((): 'timer' => 'timer'),
+        wake.promise.then((): 'wake' => 'wake'),
+      ])
     } finally {
       sleepController.abort()
       if (this.wakeWaiter === waiter) this.wakeWaiter = undefined
     }
   }
 
+  /**
+   * Observe the range until it is empty. systemctl stays the authority: it is queried on every
+   * poll tick (the interval backs off to at most five seconds) and after every signal. When the
+   * scope's `cgroup.events` is watchable, the kernel's populated flag additionally ends the wait
+   * the moment the last member exits, and an event that finds the range still populated costs
+   * no systemctl query.
+   */
   async waitForExit(): Promise<void> {
     if (this.stopped) return
     this.observation ??= (async () => {
       let pollIntervalMs = SCOPE_INITIAL_POLL_INTERVAL_MS
       let generation = this.wakeGeneration
-      while (await this.rangeActive()) {
-        await this.waitForPoll(pollIntervalMs, generation)
-        generation = this.wakeGeneration
-        // Keep establishment responsive, then reduce systemctl process churn
-        // while systemd remains the authoritative owner of an active range.
-        if (this.establishment === 'established') {
-          pollIntervalMs = Math.min(pollIntervalMs * 2, SYSTEMCTL_TIMEOUT_MS)
+      try {
+        let active = await this.rangeActive()
+        while (active) {
+          // A transition before the watch existed produced no event: let systemctl decide.
+          if (this.establishment === 'established' && this.cgroup.attach(this.controlGroup)
+            && this.cgroup.population() !== 'populated') {
+            active = await this.rangeActive()
+            continue
+          }
+          const woke = await this.waitForPoll(pollIntervalMs, generation)
+          generation = this.wakeGeneration
+          if (woke === 'wake' && this.cgroup.consumeEvent()) {
+            const population = this.cgroup.population()
+            if (population === 'empty') break
+            if (population === 'populated') continue
+          } else if (this.establishment === 'established') {
+            // Keep establishment responsive, then reduce systemctl process churn
+            // while systemd remains the authoritative owner of an active range.
+            pollIntervalMs = Math.min(pollIntervalMs * 2, SYSTEMCTL_TIMEOUT_MS)
+          }
+          active = await this.rangeActive()
         }
+      } finally {
+        this.cgroup.close()
       }
       this.stopped = true
     })().catch((error: unknown) => {
@@ -535,6 +602,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
   }
 
   cleanup(): void {
+    this.cgroup.close()
     cleanupLinuxLaunchFiles(this.startup.files)
   }
 }
@@ -655,6 +723,8 @@ export function prepareLinuxTerminalScope(
       internals.spawnSync ?? spawnSync,
       internals.systemctlQuery ?? querySystemctl,
       internals.sleep ?? sleepWithAbort,
+      internals,
+      internals.reportDegraded,
     ),
     resolveOutcome: outcome => startup.resolveOutcome(outcome),
     cleanup: () => { cleanupLinuxLaunchFiles(files) },
@@ -712,6 +782,8 @@ export function launchLinuxScope(
     internals.spawnSync ?? spawnSync,
     internals.systemctlQuery ?? querySystemctl,
     internals.sleep ?? sleepWithAbort,
+    internals,
+    internals.reportDegraded,
   )
   return {
     stdin: child.stdin,
