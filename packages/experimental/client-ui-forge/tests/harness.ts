@@ -158,6 +158,7 @@ export async function gitContext(record: SandboxRecord, root: string, real = fal
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(LocalFileSystem, { cwd: root })
   await ctx.plugin(LocalSubprocessRuntime)
+  spawnWithoutScopes(ctx)
   if (real) await ctx.plugin(LocalSandbox)
   else await ctx.plugin(RecordingSandbox, record)
   await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: root })
