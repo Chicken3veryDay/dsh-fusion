@@ -23,8 +23,9 @@ declare module '@deepseek-ai/cordis' {
     /**
      * Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on
      * the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves
-     * when its attempt is handed to the settlement ledger or released, when its producers' own signals prove they stopped
-     * after the service that admitted them was torn down, or when its root Session log records the attempt settled.
+     * when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt
+     * settled, or, once the attempt is `unknown`, when its producers' own signals prove they stopped, including after the
+     * service that admitted them was torn down.
      * @param collect - Receives each reservation synchronously.
      * @mode emit
      */
@@ -110,6 +111,8 @@ interface AttemptRun {
   /** Registered when the admission is recorded; released on entry to `handed` or `released`, or as described by the
    * `ticket/collect-reservations` event. */
   retained?: RetainedReservation
+  /** Set when the first entry to `unknown` attached the producers' own settlement signals to the retained reservation. */
+  joined?: true
   worker?: Agent
   workspace?: TicketWorkspaceReceipt
   activation?: SubagentActivation
@@ -175,9 +178,6 @@ export class TicketExecutionService extends Service {
           })
         }
       }))
-      // Wait strategy: a later service generation never adopts these runs; their reservations stay registered on the root
-      // context until the producers' own signals prove they stopped.
-      for (const run of runs) this.releaseOnQuiescence(run)
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
       if (failures.length > 0) throw new AggregateError(failures, 'Ticket execution teardown did not settle')
     }, 'ticket-execution.runtime()')
@@ -260,6 +260,7 @@ export class TicketExecutionService extends Service {
       // Each entry to the cancel intent sends a fresh cancellation request to every producer that has not finished.
       if (next.cancel && !(previous.kind === 'stopping' && previous.cancel)) this.cancelProducers(run)
     }
+    if (next.kind === 'unknown') this.releaseOnQuiescence(run)
     if (isTerminal(next) && !isTerminal(previous)) {
       if (this.runs.get(run.key) === run) this.runs.delete(run.key)
       for (const cleanup of run.listeners) cleanup()
@@ -314,21 +315,24 @@ export class TicketExecutionService extends Service {
     run.retained = retained
   }
 
-  /** After teardown, release a run's root-scoped reservation only on its producers' own settlement signals. */
+  /** Release an `unknown` run's root-scoped reservation once its producers' own signals prove they stopped, even after its
+   * service is gone: a later service generation waits for this rather than adopting the run. An `uncertain` run has no
+   * producer handle to join, so only a host settlement or host exit releases it. */
   private releaseOnQuiescence(run: AttemptRun): void {
     const retained = run.retained
-    // An `uncertain` run has no producer handle to join; only a host settlement or host exit releases it.
-    if (retained === undefined || run.state.kind !== 'unknown') return
+    if (retained === undefined || run.joined !== undefined) return
+    run.joined = true
     const { logger } = this.ctx
     const { attemptId } = run
     const activation = run.activation
     const joins: Promise<unknown>[] = [...run.producers.values()].map(producer => producer.done)
-    // A captured result may precede resource release; only a resolved dispose() proves the release.
+    // Only a resolved dispose() proves the release. It is read after the result, when the activation is already closing, so
+    // joining never cancels an activation whose natural settlement merely timed out.
     if (activation !== undefined) joins.push(activation.result.then(() => activation.dispose(), () => activation.dispose()))
     else if (run.worker !== undefined) joins.push(run.worker.whenIdle())
     void Promise.all(joins).then(() => { retained.release() }, (error: unknown) => {
-      logger.warn(`Ticket attempt "${attemptId}" outlived its execution service and its producers did not confirm releasing their `
-        + `resources; its work scopes stay reserved until a host settles the attempt or this host exits: ${String(error)}`)
+      logger.warn(`Ticket attempt "${attemptId}" is unknown and its producers did not confirm releasing their resources; its work `
+        + `scopes stay reserved until a host settles the attempt or this host exits: ${String(error)}`)
     })
   }
 

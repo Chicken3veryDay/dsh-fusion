@@ -6169,7 +6169,7 @@ export const EVENT_API: readonly EventApiEntry[] = [
     mode: 'emit',
     signature: '\'ticket/collect-reservations\'(collect: (reservation: TicketProducerReservation) => void): void',
     summary: 'Collects the work-scope reservations of execution producers that may still write.',
-    description: 'Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its producers\' own signals prove they stopped after the service that admitted them was torn down, or when its root Session log records the attempt settled.',
+    description: 'Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt settled, or, once the attempt is `unknown`, when its producers\' own signals prove they stopped, including after the service that admitted them was torn down.',
     parameters: [{ name: 'collect', description: 'Receives each reservation synchronously.' }],
   },
   {
