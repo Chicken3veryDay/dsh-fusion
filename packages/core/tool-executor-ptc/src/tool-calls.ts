@@ -17,7 +17,8 @@ import type { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import type {} from './types.ts'
+// Re-exported so declaration consumers also load the nested dispatch event declarations.
+export type { PtcDispatchEventData, PtcDispatchStartEventData } from './types.ts'
 
 /** Session events that start one effective tool call. */
 export type ToolCallStartEvent = SessionEvent<'tool/call'> | SessionEvent<'tool/ptc-dispatch-start'>
