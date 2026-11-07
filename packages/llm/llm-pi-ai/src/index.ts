@@ -63,9 +63,10 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-fs'
+import { credentialKeyScope } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
-import { authContextFrom, credentialStoreFrom } from './auth.ts'
+import { authContextFrom, credentialStoreFrom, RECORD_SCOPE } from './auth.ts'
 import { catalogProvider, catalogProviderIds } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
@@ -172,15 +173,21 @@ function directoryEntries(
 }
 
 /** Register one generic pi-ai adapter for all configured provider routes. */
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
   const settingsNs = ctx.fiber.entry?.options.id ?? NS
   let lastRaw: ReturnType<Config['providers']['get']> | undefined
+  let lastSignedIn: ReadonlySet<string> | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
+  // Catalog providers this installation holds a stored credential for. Each
+  // one is a route without any settings profile, so signing in is enough.
+  let signedIn: ReadonlySet<string> = new Set()
   /**
    * The resolved profiles for the current configuration, memoized by the raw
-   * snapshot's identity — which is also what makes the adapter's own snapshot
-   * stable across operations that observe no change.
+   * snapshot's and the signed-in set's identity — which is also what makes the
+   * adapter's own snapshot stable across operations that observe no change.
+   * A signed-in provider with no profile of its own resolves as an empty
+   * catalog profile; a profile the settings document does declare always wins.
    *
    * Catalog diagnostics stay in the snapshot beside serviceable models, so
    * stored configuration remains visible after an installed catalog changes.
@@ -188,9 +195,13 @@ export function apply(ctx: Context, config: Config): void {
    */
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     const raw = config.providers.get()
-    if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(structuredClone(raw) as import('./config.ts').Options['providers'], 'deferred')
+    if (raw === lastRaw && signedIn === lastSignedIn && memoized !== undefined) return memoized
+    const configured = structuredClone(raw) as import('./config.ts').Options['providers']
+    const implied = Object.fromEntries([...signedIn].filter(provider => configured?.[provider] === undefined)
+      .map(provider => [provider, {}]))
+    const next = resolveProfiles({ ...implied, ...configured }, 'deferred')
     lastRaw = raw
+    lastSignedIn = signedIn
     memoized = next
     return next
   }
@@ -334,11 +345,46 @@ export function apply(ctx: Context, config: Config): void {
   }
   ensureRegistrationFacts()
 
-  ctx.on('loader/volatile-update', () => {
+  const reconcile = (): void => {
     try { ensureRegistrationFacts(); ensureDirectory() }
     catch (error) {
       ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
       ctx.logger.error(error)
     }
+  }
+  ctx.on('loader/volatile-update', reconcile)
+
+  // A stored credential for an installed catalog provider is a route of its
+  // own: signing in is the whole setup, with no settings profile to write. The
+  // set follows the credential store, so a sign-in adds the route and a
+  // sign-out removes it. Anthropic's subscription grant is not one: only its
+  // API key activates an Anthropic route.
+  let disposed = false
+  ctx.effect(() => () => { disposed = true })
+  const refreshSignedIn = async (): Promise<void> => {
+    let stored: Awaited<ReturnType<typeof auth.credentials.list>>
+    try { stored = await auth.credentials.list() }
+    catch (error) {
+      ctx.logger.warn('llm-pi-ai: could not list stored credentials; signed-in routes are unchanged')
+      ctx.logger.warn(error)
+      return
+    }
+    if (disposed) return
+    const next = new Set(stored
+      .filter(entry => catalogProvider(entry.providerId) !== undefined
+        && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
+      .map(entry => entry.providerId))
+    if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) return
+    signedIn = next
+    reconcile()
+  }
+  // Refreshes run one after another so a slow listing cannot overwrite a newer one.
+  let refreshing: Promise<void> = Promise.resolve()
+  const refresh = (): void => { refreshing = refreshing.then(refreshSignedIn) }
+  ctx.inject(['credentials'], refresh)
+  ctx.on('credentials/record-updated', (key) => {
+    if (credentialKeyScope(key) === RECORD_SCOPE) refresh()
   })
+  // The routes of a sign-in made in an earlier run exist before the first request.
+  await refreshing
 }

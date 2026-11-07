@@ -38,10 +38,20 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-/** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all. */
-async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }> {
+/** A stored OAuth grant, as the sign-in flow leaves it. */
+const grantRecord = (provider: string): string => `  llm-pi-ai/${provider}:
+    kind: grant
+    payload: { type: oauth, access: at, refresh: rt, expires: 4102444800000 }
+`
+
+/** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all; stored records seed the credential file. */
+async function loadComposition(storedRecords = ''): Promise<{ ctx: Context; settingsPath: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-pi-composition-'))
-  await writeFile(join(root, '.credentials.yaml'), 'version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n', { mode: 0o600 })
+  await writeFile(
+    join(root, '.credentials.yaml'),
+    `version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n${storedRecords === '' ? '' : `records:\n${storedRecords}`}`,
+    { mode: 0o600 },
+  )
 
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
@@ -150,6 +160,43 @@ describe('llm-pi-ai real dormant composition', () => {
     // generates and stores itself, so the route offers it ahead of its key login.
     expect(methods('openai')).toEqual(['oauth', 'api-key'])
     expect(methods('anthropic')).toEqual(['oauth', 'api-key'])
+  })
+
+  it('routes a provider the moment this installation signs in, and drops it on sign-out', async () => {
+    const { ctx } = await loadComposition()
+    expect(ctx.llm.listProviders()).toEqual([])
+    const codex = LlmPiAi.recordKeyFor('openai-codex')
+
+    await ctx.credentials.modifyRecord(codex, () => Promise.resolve({
+      kind: 'grant',
+      payload: { type: 'oauth', access: 'at', refresh: 'rt', expires: 4102444800000 },
+    }))
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai-codex'])
+    }, { timeout: 5000 })
+    expect((await ctx.llm.listModels('openai-codex')).length).toBeGreaterThan(0)
+
+    await ctx.credentials.deleteRecord(codex)
+    await vi.waitFor(() => { expect(ctx.llm.listProviders()).toEqual([]) }, { timeout: 5000 })
+  })
+
+  it('has the route of an earlier sign-in ready before anything asks for it', async () => {
+    const { ctx } = await loadComposition(grantRecord('openai-codex'))
+
+    expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai-codex'])
+  })
+
+  it('never activates an Anthropic subscription grant, only its API key', async () => {
+    const { ctx } = await loadComposition(grantRecord('anthropic'))
+    expect(ctx.llm.listProviders()).toEqual([])
+
+    await ctx.credentials.modifyRecord(LlmPiAi.recordKeyFor('anthropic'), () => Promise.resolve({
+      kind: 'api-key',
+      key: 'sk-ant-test',
+    }))
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['anthropic'])
+    }, { timeout: 5000 })
   })
 
   it('uses settings-only route headers for model discovery', async () => {

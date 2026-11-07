@@ -358,10 +358,10 @@ export class PiAiAdapter extends LlmAdapter {
       // signed-in account) is asked with the stored credential, so the picker
       // offers only models the account can call. Explicitly selecting another
       // catalog model still resolves; this narrows the offer, not the route.
-      const filter = snapshot.models.getProvider(provider)?.filterModels
-      const offered = filter === undefined
+      const piProvider = snapshot.models.getProvider(provider)
+      const offered = piProvider?.filterModels === undefined
         ? catalog
-        : filter(catalog, await this.config.auth.credentials.read(provider))
+        : piProvider.filterModels(catalog, await this.config.auth.credentials.read(provider))
       return offered.map(model => ({
         provider,
         id: model.id,
