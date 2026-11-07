@@ -4434,12 +4434,6 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'session', description: 'root Session whose command queue is awaited.' }],
       },
       {
-        signature: 'registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void',
-        description: 'Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.\n\n`beginAttempt` consults every guard inside the Session\'s command queue, after the scope checks and in the same synchronous step as the append. The guard receives every unsettled attempt this service knows from live roots and from the stored-root scan, and refuses by throwing a `TicketError`, which fails the admission unchanged and appends nothing; any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.',
-        parameters: [{ name: 'guard', description: 'synchronous decision over the known unsettled attempts.' }],
-        returns: 'disposer that removes the guard.',
-      },
-      {
         signature: 'recover(session: Session): TicketView[]',
         description: 'Read all Tickets recovered from one Session\'s durable log.',
         parameters: [{ name: 'session', description: 'Session whose log is replayed.' }],
@@ -6169,6 +6163,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Publish pending context messages after request preparation on every attempt.',
     description: 'Publish pending context messages after request preparation on every attempt. Providers must not claim inbox input or commit these messages; the loop logs them before request-time tool admission. Return only context absent from the surviving Session history. Retries invoke providers again.',
     parameters: [{ name: 'context', description: 'requesting scope, model selection, and cancellation.' }, { name: 'pending', description: 'accepted messages not yet logged on the first attempt; empty on retries.' }],
+  },
+  {
+    name: 'ticket/collect-reservations',
+    mode: 'emit',
+    signature: '\'ticket/collect-reservations\'(collect: (reservation: TicketProducerReservation) => void): void',
+    summary: 'Collects the work-scope reservations of execution producers that may still write.',
+    description: 'Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its producers\' own signals prove they stopped after the service that admitted them was torn down, or when its root Session log records the attempt settled.',
+    parameters: [{ name: 'collect', description: 'Receives each reservation synchronously.' }],
   },
   {
     name: 'tools/change',
@@ -11083,6 +11085,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface TicketParent {\n    readonly ticketId: TicketId;\n    readonly required: boolean;\n}',
   },
   {
+    name: 'TicketProducerReservation',
+    declaration: 'export interface TicketProducerReservation {\n    readonly rootId: SessionId;\n    readonly ticketId: TicketId;\n    readonly attemptId: TicketAttemptId;\n    readonly workspace: TicketAttemptWorkspace;\n    readonly executor: TicketAttemptExecutor;\n    readonly scopes: readonly WorkScope[];\n}',
+  },
+  {
     name: 'TicketQuestionId',
     declaration: 'export type TicketQuestionId = Branded<\'TicketQuestionId\'>;',
   },
@@ -11112,7 +11118,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TicketService',
-    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void;\n    registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void;\n    registerCommandAuthority(authority: TicketCommandAuthority): () => void;\n    async whenIdle(session: Session): Promise<void>;\n    registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void;\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAtt /* …truncated — full shape in source */',
+    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void;\n    registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void;\n    registerCommandAuthority(authority: TicketCommandAuthority): () => void;\n    async whenIdle(session: Session): Promise<void>;\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async resol /* …truncated — full shape in source */',
   },
   {
     name: 'TicketSnapshot',

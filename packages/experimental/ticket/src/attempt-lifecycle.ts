@@ -8,7 +8,8 @@ export type AttemptOutcome = 'succeeded' | 'failed' | 'cancelled'
 /** One execution-owned attempt, from reservation to its hand-off to the settlement ledger.
  *
  * `aborted` is the only cancellation predicate before publication; `cancel` is the sticky intent to cancel once producers
- * may exist. `handed` and `released` are terminal: the execution reservation is dropped on entry to either.
+ * may exist. `captured` is the outcome the producers reported before their resource release failed; once present it is
+ * final. `handed` and `released` are terminal: the execution reservation is dropped on entry to either.
  */
 export type AttemptState =
   | { readonly kind: 'admitting'; readonly aborted: boolean }
@@ -18,8 +19,8 @@ export type AttemptState =
   | { readonly kind: 'activating'; readonly aborted: boolean }
   | { readonly kind: 'launched'; readonly aborted: boolean }
   | { readonly kind: 'running' }
-  | { readonly kind: 'stopping'; readonly cancel: boolean }
-  | { readonly kind: 'unknown'; readonly cancel: boolean }
+  | { readonly kind: 'stopping'; readonly cancel: boolean; readonly captured?: AttemptOutcome }
+  | { readonly kind: 'unknown'; readonly cancel: boolean; readonly captured?: AttemptOutcome }
   | { readonly kind: 'uncertain' }
   | { readonly kind: 'handed'; readonly outcome: AttemptOutcome }
   | { readonly kind: 'released' }
@@ -36,20 +37,22 @@ export type AttemptEvent =
   | { readonly type: 'worktree-start' }
   | { readonly type: 'activation-start' }
   | { readonly type: 'effect-established' }
+  | { readonly type: 'effect-refused' }
   | { readonly type: 'effect-failed' }
   | { readonly type: 'stage-failed' }
   | { readonly type: 'publish' }
   | { readonly type: 'settle' }
   | { readonly type: 'dispose' }
   | { readonly type: 'producers-settled'; readonly outcome: AttemptOutcome }
+  | { readonly type: 'cleanup-failed'; readonly outcome: AttemptOutcome }
   | { readonly type: 'stop-failed' }
   | { readonly type: 'reconciled' }
 
 /** Event names in specification order. */
 export const attemptEventTypes = [
   'caller-abort', 'owner-disposed', 'teardown', 'admitted', 'admission-unflushed', 'admission-refused', 'retry',
-  'worktree-start', 'activation-start', 'effect-established', 'effect-failed', 'stage-failed', 'publish', 'settle', 'dispose',
-  'producers-settled', 'stop-failed', 'reconciled',
+  'worktree-start', 'activation-start', 'effect-established', 'effect-refused', 'effect-failed', 'stage-failed', 'publish', 'settle',
+  'dispose', 'producers-settled', 'cleanup-failed', 'stop-failed', 'reconciled',
 ] as const satisfies readonly AttemptEvent['type'][]
 
 /** State names in specification order. */
@@ -90,6 +93,13 @@ const reject = (state: AttemptState, event: AttemptEvent): AttemptRejection =>
 /** Outcome of a preparation that ends before any producer starts. */
 const unstarted = (aborted: boolean): AttemptState => ({ kind: 'handed', outcome: aborted ? 'cancelled' : 'failed' })
 
+/** Outcome the producers' report yields under the intent: a cancel intent turns any outcome other than `failed` into `cancelled`. */
+const underIntent = (cancel: boolean, outcome: AttemptOutcome): AttemptOutcome => cancel && outcome !== 'failed' ? 'cancelled' : outcome
+
+/** A stop phase carrying the intent and any captured outcome forward. */
+const stopPhase = <K extends 'stopping' | 'unknown'>(kind: K, cancel: boolean, captured: AttemptOutcome | undefined) =>
+  captured === undefined ? { kind, cancel } : { kind, cancel, captured }
+
 /** The single transition function of the execution-owned attempt lifecycle.
  * @param state - Current phase.
  * @param event - Observed event.
@@ -128,9 +138,12 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
         case 'settle': return state
         case 'owner-disposed':
         case 'teardown':
-        case 'dispose': return { kind: 'stopping', cancel: true }
-        case 'producers-settled': return { kind: 'handed', outcome: state.cancel && event.outcome !== 'failed' ? 'cancelled' : event.outcome }
-        case 'stop-failed': return { kind: 'unknown', cancel: state.cancel }
+        case 'dispose': return stopPhase('stopping', true, state.captured)
+        // Results and resource release are both proven; a captured outcome predates any later cancel intent.
+        case 'producers-settled': return { kind: 'handed', outcome: state.captured ?? underIntent(state.cancel, event.outcome) }
+        // Results are known but release is not: the outcome is kept and the reservation stays.
+        case 'cleanup-failed': return stopPhase('unknown', state.cancel, state.captured ?? underIntent(state.cancel, event.outcome))
+        case 'stop-failed': return stopPhase('unknown', state.cancel, state.captured)
         default: return reject(state, event)
       }
     case 'unknown':
@@ -139,8 +152,8 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
         case 'retry':
         case 'owner-disposed': return state
         case 'teardown':
-        case 'dispose': return { kind: 'stopping', cancel: true }
-        case 'settle': return { kind: 'stopping', cancel: state.cancel }
+        case 'dispose': return stopPhase('stopping', true, state.captured)
+        case 'settle': return stopPhase('stopping', state.cancel, state.captured)
         // A host caller recorded the outcome with `settleAttempt`, which vouches that the producers ended.
         case 'reconciled': return { kind: 'released' }
         default: return reject(state, event)
@@ -200,11 +213,12 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
       if (state.kind === 'worktree') return state.aborted ? unstarted(true) : { kind: 'preparing', aborted: false }
       if (state.kind === 'activating') return state.aborted ? { kind: 'stopping', cancel: true } : { kind: 'launched', aborted: false }
       return reject(state, event)
+    case 'effect-refused':
+      // The Subagent seam certifies that a rejected start left no child: the provider cleaned up and any rollback succeeded.
+      return state.kind === 'activating' ? unstarted(state.aborted) : reject(state, event)
     case 'effect-failed':
-      // A Worktree provider may have created the checkout before failing; a Subagent provider publishes a child only on fulfilment.
-      if (state.kind === 'worktree') return { kind: 'uncertain' }
-      if (state.kind === 'activating') return unstarted(state.aborted)
-      return reject(state, event)
+      // A Worktree provider may have created the checkout before failing; a failed Subagent rollback may leave a live child.
+      return state.kind === 'worktree' || state.kind === 'activating' ? { kind: 'uncertain' } : reject(state, event)
     case 'stage-failed':
       if (state.kind === 'preparing') return unstarted(state.aborted)
       if (state.kind === 'launched') return { kind: 'stopping', cancel: true }
@@ -216,9 +230,30 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
     case 'settle':
     case 'dispose':
     case 'producers-settled':
+    case 'cleanup-failed':
     case 'stop-failed':
     case 'reconciled': return reject(state, event)
     default: return assertNever(event)
+  }
+}
+
+/** Durable execution stages that record an attempt as `unknown` without settling it: `stop-unknown` after `stop-failed`,
+ * `cleanup-unknown` after `cleanup-failed`. */
+export const uncertaintyStages = ['stop-unknown', 'cleanup-unknown'] as const
+
+/** One durable uncertainty stage. */
+export type UncertaintyStage = typeof uncertaintyStages[number]
+
+/** The diagnostic an uncertainty stage writes. It is fixed for one attempt, so a repeated write is an idempotent retry.
+ * @param stage - Uncertainty stage.
+ * @param captured - Outcome the producers reported before their release failed; required for `cleanup-unknown`.
+ * @returns Diagnostic text.
+ */
+export function uncertaintyDiagnostic(stage: UncertaintyStage, captured?: AttemptOutcome): string {
+  switch (stage) {
+    case 'stop-unknown': return 'Cancellation did not establish producer settlement; reservation retained'
+    case 'cleanup-unknown': return `Producers reported ${captured ?? 'succeeded'}, but releasing their resources was not confirmed; reservation retained`
+    default: return assertNever(stage)
   }
 }
 
@@ -275,7 +310,7 @@ function describeState(state: AttemptState): string {
     case 'activating':
     case 'launched': return state.aborted ? `${state.kind}(aborted)` : state.kind
     case 'stopping':
-    case 'unknown': return `${state.kind}(${state.cancel ? 'cancel' : 'natural'})`
+    case 'unknown': return `${state.kind}(${state.cancel ? 'cancel' : 'natural'}${state.captured === undefined ? '' : `; ${state.captured}`})`
     case 'handed': return `handed(${state.outcome})`
     case 'unflushed':
     case 'running':
@@ -295,7 +330,8 @@ function variants(kind: AttemptState['kind']): { readonly label: string; readonl
       return [{ label: '', state: { kind, aborted: false } }, { label: 'aborted', state: { kind, aborted: true } }]
     case 'stopping':
     case 'unknown':
-      return [{ label: 'natural', state: { kind, cancel: false } }, { label: 'cancel', state: { kind, cancel: true } }]
+      return [{ label: 'natural', state: { kind, cancel: false } }, { label: 'cancel', state: { kind, cancel: true } },
+        { label: 'captured', state: { kind, cancel: false, captured: 'succeeded' } }]
     case 'handed': return [{ label: '', state: { kind, outcome: 'succeeded' } }]
     case 'unflushed':
     case 'running':
@@ -306,11 +342,12 @@ function variants(kind: AttemptState['kind']): { readonly label: string; readonl
 }
 
 function sampleEvent(type: AttemptEvent['type']): AttemptEvent {
-  return type === 'producers-settled' ? { type, outcome: 'succeeded' } : { type }
+  return type === 'producers-settled' || type === 'cleanup-failed' ? { type, outcome: 'succeeded' } : { type }
 }
 
 /** Render one specification cell: `—` keeps the state, `✗` rejects, otherwise the next state per variant.
- * `producers-settled` is rendered for a succeeded observation; cancel intent turns it into `cancelled` unless it failed.
+ * `producers-settled` and `cleanup-failed` are rendered for a succeeded report; cancel intent turns it into `cancelled`
+ * unless it failed, and a captured outcome (rendered as `succeeded`) takes precedence over both.
  * @param kind - State name.
  * @param type - Event name.
  * @returns Cell text.

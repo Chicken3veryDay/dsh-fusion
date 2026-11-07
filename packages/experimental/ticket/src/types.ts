@@ -420,6 +420,16 @@ export type TicketAttemptExecutor =
   | { readonly kind: 'in-process' }
   | { readonly kind: 'dedicated-process'; readonly provider: string }
   | { readonly kind: 'remote'; readonly provider: string; readonly world: string }
+/** Work scopes held for an execution-owned attempt while its producers may still write, independent of the Ticket and
+ * execution service generations and of the attempt's root Session log. */
+export interface TicketProducerReservation {
+  readonly rootId: SessionId
+  readonly ticketId: TicketId
+  readonly attemptId: TicketAttemptId
+  readonly workspace: TicketAttemptWorkspace
+  readonly executor: TicketAttemptExecutor
+  readonly scopes: readonly WorkScope[]
+}
 /** Runtime receipt retained across restarts, without a live handle. */
 export interface TicketRuntimeReceipt {
   readonly runtimeId: string

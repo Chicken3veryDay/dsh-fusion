@@ -1,23 +1,35 @@
 /** Durable Ticket attempt ownership over managed activations and background Jobs. */
 
 import { isAbsolute } from 'node:path'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, FiberState, Service } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobHandle, JobHooks, JobId, JobOutcome } from '@deepseek-ai/dsh-jobs'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type { SubagentActivation, SubagentResult } from '@deepseek-ai/dsh-subagent'
+import { type SubagentActivation, SubagentError, type SubagentResult } from '@deepseek-ai/dsh-subagent'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import {
-  type AttemptEvent, type AttemptOutcome, type AttemptState, isAborted, isTerminal, transitionAttempt,
+  type AttemptEvent, type AttemptOutcome, type AttemptState, type UncertaintyStage, isAborted, isTerminal, transitionAttempt,
+  uncertaintyDiagnostic,
 } from './attempt-lifecycle.ts'
 import { TicketError } from './errors.ts'
 import {
-  type AssignmentSnapshot, type BeginTicketAttemptRequest, type TicketAttemptSnapshot,
+  type AssignmentSnapshot, type BeginTicketAttemptRequest, type TicketAttemptSnapshot, type TicketProducerReservation,
   type TicketView, type TicketWorkspaceReceipt, type TicketAttemptController,
 } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context { ticketExecution: TicketExecutionService }
+  interface Events {
+    /**
+     * Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on
+     * the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves
+     * when its attempt is handed to the settlement ledger or released, when its producers' own signals prove they stopped
+     * after the service that admitted them was torn down, or when its root Session log records the attempt settled.
+     * @param collect - Receives each reservation synchronously.
+     * @mode emit
+     */
+    'ticket/collect-reservations'(collect: (reservation: TicketProducerReservation) => void): void
+  }
 }
 
 declare module '@deepseek-ai/dsh-jobs' {
@@ -57,16 +69,24 @@ export interface TicketExecutionHandle {
    * @returns Registered Job identity after its receipt is persisted.
    */
   startJob(label: string, run: (job: JobHandle) => JobHooks, signal?: AbortSignal): Promise<JobId>
-  /** Await natural producer completion and hand the observed outcome to the settlement ledger. */
+  /** Await natural producer completion and resource release, then hand the observed outcome to the settlement ledger. */
   settle(): Promise<void>
   /** Request cancellation and await all producers before settling the attempt; a retry after a failed stop cancels again. */
   dispose(): Promise<void>
 }
 
+/** One Ticket Job producer. Once Ticket started the producer, only the producer's own `done` settles `done`; Ticket settles
+ * it itself only when it never started the producer. */
 interface Producer {
+  /** Deliver one cancellation request; a throwing producer cancel propagates. */
   cancel(): void
   readonly done: Promise<JobOutcome>
   finished: boolean
+}
+
+/** A reservation registered on the root context; `release` is idempotent. */
+interface RetainedReservation {
+  release(): void
 }
 
 /** One execution-owned attempt. Only {@link TicketExecutionService.apply} assigns `state`. */
@@ -78,6 +98,8 @@ interface AttemptRun {
   readonly ticketId: TicketView['id']
   readonly attemptId: TicketAttemptSnapshot['id']
   readonly fingerprint: string
+  /** Shared-workspace scopes read from the Ticket revision the admission checks; absent for isolated worktrees. */
+  readonly scope?: TicketProducerReservation
   /** Aborted exactly when the state becomes aborted; effects of preparation observe only this signal. */
   readonly lifetime: AbortController
   state: AttemptState
@@ -85,13 +107,16 @@ interface AttemptRun {
   /** The preparation callers join; an identical retry of an `unflushed` admission replaces it. */
   preparation?: Promise<TicketExecutionHandle>
   recorder?: TicketAttemptController
+  /** Registered when the admission is recorded; released on entry to `handed` or `released`, or as described by the
+   * `ticket/collect-reservations` event. */
+  retained?: RetainedReservation
   worker?: Agent
   workspace?: TicketWorkspaceReceipt
   activation?: SubagentActivation
   readonly jobs: JobId[]
   readonly producers: Map<JobId, Producer>
   readonly listeners: Set<() => void>
-  /** Serializes Job admissions; a stop starts after the pending admission. */
+  /** Serializes Job admissions; a stop joins the pending admission inside its deadline. */
   queue: Promise<void>
   /** The stop that entered `stopping` most recently. */
   stop?: Promise<void>
@@ -99,12 +124,17 @@ interface AttemptRun {
   stopFailure?: PromiseWithResolvers<never>
   /** The settlement ledger's write for the outcome handed over on entry to `handed`. */
   settlement?: Promise<unknown>
+  /** In-flight uncertainty writes; a failure while one is pending joins it instead of writing again. */
+  readonly recordings: Map<UncertaintyStage, Promise<void>>
 }
 
 const runKey = (rootId: Session['id'], request: Pick<PrepareTicketExecutionRequest, 'ticketId' | 'assignmentId'>) =>
   JSON.stringify([rootId, request.ticketId, request.assignmentId])
 
 const asError = (value: unknown, message: string): Error => value instanceof Error ? value : new Error(message, { cause: value })
+
+/** Whether a rejected Subagent start reports that rolling back its unpublished child failed, so the child may still run. */
+const rollbackFailed = (error: unknown): boolean => error instanceof SubagentError && error.code === 'ACTIVATION_TEARDOWN_FAILED'
 
 /** Serializes attempt admission, retains uncertain resources, and waits for producer settlement. */
 export class TicketExecutionService extends Service {
@@ -130,8 +160,6 @@ export class TicketExecutionService extends Service {
           new TicketError(`Ticket execution owner "${agent.id}" was disposed during preparation`, 'TICKET_AUTHORITY'))
       }
     })
-    this.ctx.effect(() => this.ctx.tickets.registerAdmissionGuard((reserved) => { this.assertNoOrphanJobs(reserved) }),
-      'ticket-execution.admission-guard()')
     this.ctx.effect(() => async () => {
       this.closing = true
       const runs = [...this.runs.values()]
@@ -147,6 +175,9 @@ export class TicketExecutionService extends Service {
           })
         }
       }))
+      // Wait strategy: a later service generation never adopts these runs; their reservations stay registered on the root
+      // context until the producers' own signals prove they stopped.
+      for (const run of runs) this.releaseOnQuiescence(run)
       const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
       if (failures.length > 0) throw new AggregateError(failures, 'Ticket execution teardown did not settle')
     }, 'ticket-execution.runtime()')
@@ -189,10 +220,15 @@ export class TicketExecutionService extends Service {
       if (current.terminalOutcome !== undefined) throw new TicketError('Terminal Ticket cannot execute', 'TICKET_TERMINAL')
       if (unsettled) throw new TicketError('Recovered Ticket attempt requires settlement reconciliation before execution', 'TICKET_ATTEMPT_STATE')
       this.preflight(request)
+      // The admission's compare-and-set requires this revision, so these are the scopes it reserves.
+      const scope: TicketProducerReservation | undefined = request.workspace.kind === 'shared-workspace' ? {
+        rootId: root.id, ticketId: request.ticketId, attemptId: request.attemptId, workspace: request.workspace,
+        executor: request.executor, scopes: assignment.workScopes,
+      } : undefined
       const run: AttemptRun = {
         key, caller, rootId: root.id, ownerId: assignment.ownerId, ticketId: request.ticketId, attemptId: request.attemptId,
-        fingerprint, lifetime: new AbortController(), state: { kind: 'admitting', aborted: false },
-        jobs: [], producers: new Map(), listeners: new Set(), queue: Promise.resolve(),
+        fingerprint, ...scope === undefined ? {} : { scope }, lifetime: new AbortController(), state: { kind: 'admitting', aborted: false },
+        jobs: [], producers: new Map(), listeners: new Set(), queue: Promise.resolve(), recordings: new Map(),
       }
       this.runs.set(key, run)
       const preparation = this.drive(run, root, assignment, request)
@@ -227,6 +263,7 @@ export class TicketExecutionService extends Service {
     if (isTerminal(next) && !isTerminal(previous)) {
       if (this.runs.get(run.key) === run) this.runs.delete(run.key)
       for (const cleanup of run.listeners) cleanup()
+      run.retained?.release()
       if (next.kind === 'handed') run.settlement = this.handOff(run, next.outcome)
     }
     return next
@@ -250,20 +287,49 @@ export class TicketExecutionService extends Service {
     return settlement
   }
 
-  /** A shared-workspace admission is refused while a live Ticket Job has no reservation that accounts for it. */
-  private assertNoOrphanJobs(reserved: readonly TicketAttemptSnapshot[]): void {
-    const accounted = new Set<string>(reserved.flatMap(attempt => attempt.runtimeReceipt?.jobIds ?? []))
-    for (const run of this.runs.values()) for (const id of run.jobs) accounted.add(id)
-    const live = new Map<string, string>()
-    for (const owner of [undefined, ...this.ctx.sessions.list().map(session => session.id)]) {
-      for (const job of this.ctx.jobs.list(owner)) {
-        if (job.kind === 'ticket' && (job.status === 'running' || job.status === 'stopping') && !accounted.has(job.id)) live.set(job.id, job.label)
-      }
+  /** Register the run's shared-workspace scopes on the root context, in the step that records its admission. */
+  private retain(run: AttemptRun): void {
+    const scope = run.scope
+    const { root } = this.ctx
+    // An unloading host admits nothing afterwards, and its exit ends the producers it ran.
+    if (scope === undefined || run.retained !== undefined || root.fiber.state === FiberState.UNLOADING
+      || root.fiber.state === FiberState.DISPOSED) return
+    const disposers: (() => boolean)[] = []
+    let released = false
+    const retained: RetainedReservation = {
+      release: () => {
+        if (released) return
+        released = true
+        for (const dispose of disposers) dispose()
+      },
     }
-    if (live.size === 0) return
-    const jobs = [...live.keys()].map(id => `"${id}"`).join(', ')
-    throw new TicketError(`Ticket Job ${jobs} is still running without a known work-scope reservation, so shared-workspace admission `
-      + 'cannot exclude its writes; wait for it to finish or stop it, then retry', 'TICKET_ATTEMPT_STATE')
+    disposers.push(root.on('ticket/collect-reservations', (collect) => { collect(scope) }))
+    // A host that settles the attempt declares its producers ended or abandoned.
+    disposers.push(root.on('session/event', (session, event) => {
+      if (session.id !== scope.rootId || event.type !== 'ticket/state') return
+      const attempt = event.data.ticket.id === scope.ticketId && 'attempts' in event.data.ticket
+        ? event.data.ticket.attempts.find(item => item.id === scope.attemptId) : undefined
+      if (attempt?.status === 'settled') retained.release()
+    }))
+    run.retained = retained
+  }
+
+  /** After teardown, release a run's root-scoped reservation only on its producers' own settlement signals. */
+  private releaseOnQuiescence(run: AttemptRun): void {
+    const retained = run.retained
+    // An `uncertain` run has no producer handle to join; only a host settlement or host exit releases it.
+    if (retained === undefined || run.state.kind !== 'unknown') return
+    const { logger } = this.ctx
+    const { attemptId } = run
+    const activation = run.activation
+    const joins: Promise<unknown>[] = [...run.producers.values()].map(producer => producer.done)
+    // A captured result may precede resource release; only a resolved dispose() proves the release.
+    if (activation !== undefined) joins.push(activation.result.then(() => activation.dispose(), () => activation.dispose()))
+    else if (run.worker !== undefined) joins.push(run.worker.whenIdle())
+    void Promise.all(joins).then(() => { retained.release() }, (error: unknown) => {
+      logger.warn(`Ticket attempt "${attemptId}" outlived its execution service and its producers did not confirm releasing their `
+        + `resources; its work scopes stay reserved until a host settles the attempt or this host exits: ${String(error)}`)
+    })
   }
 
   private assertOwners(caller: Agent, root: Agent, worker: Agent | undefined): void {
@@ -308,7 +374,13 @@ export class TicketExecutionService extends Service {
         // The phase names the stage that failed.
         switch (run.state.kind) {
           case 'worktree': this.apply(run, { type: 'effect-failed' }); return await this.uncertain(run, error)
-          case 'activating': this.apply(run, { type: 'effect-failed' }); break
+          case 'activating':
+            if (rollbackFailed(error)) {
+              this.apply(run, { type: 'effect-failed' })
+              return await this.uncertain(run, error)
+            }
+            this.apply(run, { type: 'effect-refused' })
+            break
           case 'preparing':
           case 'launched': this.apply(run, { type: 'stage-failed' }); break
           default: break
@@ -346,7 +418,10 @@ export class TicketExecutionService extends Service {
         workspace: request.workspace, executor: request.executor,
         ...request.assignmentRevision === undefined ? {} : { assignmentRevision: request.assignmentRevision },
         ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
-      }, (controller) => { recorder = controller }))
+      }, (controller) => {
+        recorder = controller
+        this.retain(run)
+      }))
     } catch (error: unknown) {
       if (recorder === undefined) {
         this.apply(run, { type: 'admission-refused' })
@@ -451,7 +526,7 @@ export class TicketExecutionService extends Service {
     throw new AggregateError(failures, 'Ticket execution preparation is unknown; reservation retained')
   }
 
-  /** A Worktree provider failed after it may have created the checkout: the attempt stays reserved for host reconciliation. */
+  /** A provider failed after it may have left a checkout or a live child: the attempt stays reserved for host reconciliation. */
   private async uncertain(run: AttemptRun, error: unknown): Promise<never> {
     const failures: unknown[] = [error]
     try {
@@ -509,7 +584,9 @@ export class TicketExecutionService extends Service {
         finished: false,
         cancel: () => {
           if (entry.finished) return
-          if (this.ctx.jobs.list(run.caller.id).some(job => job.id === id)) this.ctx.jobs.kill(id, run.caller.id, 'Ticket execution released')
+          // A terminal or removed registry record says nothing about the producer, so the request then goes to it directly.
+          const record = this.ctx.jobs.list(run.caller.id).find(job => job.id === id)
+          if (record?.status === 'running' || record?.status === 'stopping') this.ctx.jobs.kill(id, run.caller.id, 'Ticket execution released')
           else {
             producer.cancelled = true
             producer.hooks?.cancel('Ticket execution released')
@@ -528,18 +605,34 @@ export class TicketExecutionService extends Service {
         const receipt = current.attempts.find(item => item.id === attemptId)?.runtimeReceipt
         if (receipt === undefined) throw new TicketError('Job admission requires a runtime receipt', 'TICKET_ATTEMPT_STATE')
         await recorder.update('job-' + id, { status: 'running', runtimeReceipt: { ...receipt, jobIds: [...receipt.jobIds ?? [], id] } })
-        if (signal?.aborted || producer.cancelled) {
-          done.resolve({ status: 'killed' })
-        } else {
-          if (producer.job === undefined) throw new TicketError('Job registration did not supply its producer handle', 'TICKET_RECOVERY_FAILED')
-          producer.hooks = start(producer.job)
-          void producer.hooks.done.then(done.resolve, done.reject)
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- producer startup can synchronously request cancellation.
-          if (producer.cancelled) producer.hooks.cancel(producer.reason)
-        }
       } catch (error: unknown) {
-        done.resolve({ status: 'failed', detail: 'Ticket job admission or producer startup failed' })
+        done.resolve({ status: 'failed', detail: 'Ticket job admission failed before its producer started' })
         throw error
+      }
+      // A stop that began while the receipt was being written starts no producer.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the receipt write awaits, during which a stop can begin.
+      if (run.state.kind !== 'running' || signal?.aborted || producer.cancelled) {
+        done.resolve({ status: 'killed' })
+        return id
+      }
+      let hooks: JobHooks
+      try {
+        if (producer.job === undefined) throw new TicketError('Job registration did not supply its producer handle', 'TICKET_RECOVERY_FAILED')
+        hooks = start(producer.job)
+      } catch (error: unknown) {
+        // Startup returned no hooks, so no producer handle exists to cancel or join.
+        done.resolve({ status: 'failed', detail: 'Ticket producer startup failed' })
+        throw error
+      }
+      producer.hooks = hooks
+      // From here only the producer's own settlement settles this Job.
+      void hooks.done.then(done.resolve, done.reject)
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- producer startup can synchronously request cancellation.
+      if (producer.cancelled) {
+        try { hooks.cancel(producer.reason) } catch (error: unknown) {
+          this.cancelFailed(run, error)
+          throw error
+        }
       }
       if (signal !== undefined) {
         const cancel = () => this.ctx.jobs.kill(id, run.caller.id, 'Ticket execution caller cancelled')
@@ -555,54 +648,96 @@ export class TicketExecutionService extends Service {
     return operation
   }
 
-  /** Send one cancellation request to every unfinished producer; a failed request fails the current stop. */
+  /** A cancellation request that throws is a failed cancel: it fails the current stop, never settles a producer. */
+  private cancelFailed(run: AttemptRun, error: unknown): void {
+    run.stopFailure?.reject(asError(error, 'Ticket producer cancellation failed'))
+  }
+
+  /** Send one cancellation request to every unfinished producer. */
   private cancelProducers(run: AttemptRun): void {
-    const fail = (error: unknown) => { run.stopFailure?.reject(asError(error, 'Ticket producer cancellation failed')) }
     for (const producer of run.producers.values()) {
       if (producer.finished) continue
-      try { producer.cancel() } catch (error: unknown) { fail(error) }
+      try { producer.cancel() } catch (error: unknown) { this.cancelFailed(run, error) }
     }
-    if (run.activation !== undefined) run.activation.dispose().catch(fail)
+    // The stop's observation reads the activation's release verdict from the same memoized disposal.
+    if (run.activation !== undefined) void run.activation.dispose().catch(() => {})
     else if (run.worker !== undefined) {
       const worker = run.worker
-      void Promise.resolve().then(() => { worker.cancel({ kind: 'parent' }) }).catch(fail)
+      void Promise.resolve().then(() => { worker.cancel({ kind: 'parent' }) }).catch((error: unknown) => { this.cancelFailed(run, error) })
     }
   }
 
-  /** Observe every producer, then hand the outcome to the ledger; a failed observation records `unknown` and keeps the run. */
+  /** Observe every producer, then hand the outcome to the ledger. One deadline bounds the pending Job admission, the
+   * observation and the uncertainty write; a failure applies `stop-failed` or `cleanup-failed` before that write starts. */
   private async stopRun(run: AttemptRun): Promise<void> {
-    await run.queue
-    const failure = run.stopFailure?.promise ?? new Promise<never>(() => {})
-    let outcome: AttemptOutcome
+    const deadline = this.deadline()
     try {
-      outcome = await this.bounded(Promise.race([this.observeProducers(run), failure]))
-    } catch (error: unknown) {
-      let recording: unknown
+      const failure = run.stopFailure?.promise ?? new Promise<never>(() => {})
+      const observation = this.observe(run)
+      let outcome: AttemptOutcome
       try {
-        await run.recorder?.update('stop-unknown', {
-          status: 'unknown', diagnostics: ['Cancellation did not establish producer settlement; reservation retained'],
+        outcome = await Promise.race([observation.settled, failure, deadline.expired])
+      } catch (error: unknown) {
+        const captured = observation.captured()
+        const next = this.apply(run, captured === undefined ? { type: 'stop-failed' } : { type: 'cleanup-failed', outcome: captured })
+        const stage: UncertaintyStage = captured === undefined ? 'stop-unknown' : 'cleanup-unknown'
+        let recording: unknown
+        try {
+          await Promise.race([this.recordUncertainty(run, stage, next.kind === 'unknown' ? next.captured : undefined), deadline.expired])
+        } catch (cause: unknown) {
+          if (cause !== deadline.reason) recording = cause
+        }
+        const message = stage === 'stop-unknown'
+          ? 'Ticket producer settlement was not established; reservation retained'
+          : `Ticket producers reported ${captured ?? 'an outcome'}, but releasing their resources was not confirmed; reservation retained`
+        throw new TicketError(message, 'TICKET_ATTEMPT_STATE', {
+          cause: recording === undefined ? error : new AggregateError([error, recording], 'The uncertainty record failed as well'),
         })
-      } catch (cause: unknown) { recording = cause }
-      this.apply(run, { type: 'stop-failed' })
-      if (recording !== undefined) throw new AggregateError([error, recording], 'Ticket producer settlement and uncertainty recording failed; reservation retained')
-      throw error
-    }
-    this.apply(run, { type: 'producers-settled', outcome })
+      }
+      this.apply(run, { type: 'producers-settled', outcome })
+    } finally { deadline.clear() }
     await run.settlement
   }
 
-  private async observeProducers(run: AttemptRun): Promise<AttemptOutcome> {
-    let outcome: AttemptOutcome = 'succeeded'
-    if (run.activation !== undefined) {
-      const result = await run.activation.result
-      if (result.stopReason !== 'completed') outcome = result.stopReason === 'aborted' ? 'cancelled' : 'failed'
-    } else if (run.worker !== undefined) await run.worker.whenIdle()
-    for (const producer of run.producers.values()) {
-      const result = await producer.done
-      if (result.status === 'failed') outcome = 'failed'
-      else if (result.status === 'killed' && outcome !== 'failed') outcome = 'cancelled'
-    }
-    return outcome
+  /** Each producer's own signals: results first, then the activation's release, which may follow its captured result. */
+  private observe(run: AttemptRun): { readonly settled: Promise<AttemptOutcome>; captured(): AttemptOutcome | undefined } {
+    let captured: AttemptOutcome | undefined
+    const settled = (async () => {
+      await run.queue
+      let outcome: AttemptOutcome = 'succeeded'
+      const activation = run.activation
+      if (activation !== undefined) {
+        const result = await activation.result
+        if (result.stopReason !== 'completed') outcome = result.stopReason === 'aborted' ? 'cancelled' : 'failed'
+      } else if (run.worker !== undefined) await run.worker.whenIdle()
+      for (const producer of run.producers.values()) {
+        const result = await producer.done
+        if (result.status === 'failed') outcome = 'failed'
+        else if (result.status === 'killed' && outcome !== 'failed') outcome = 'cancelled'
+      }
+      captured = outcome
+      if (activation !== undefined) await activation.dispose()
+      return outcome
+    })()
+    void settled.catch(() => {})
+    return { settled, captured: () => captured }
+  }
+
+  /** Write one uncertainty stage; a failure while the same write is pending joins it. A failed write is logged here because
+   * a stop past its deadline no longer awaits it. */
+  private recordUncertainty(run: AttemptRun, stage: UncertaintyStage, captured: AttemptOutcome | undefined): Promise<void> {
+    const pending = run.recordings.get(stage)
+    if (pending !== undefined) return pending
+    const recorder = run.recorder
+    if (recorder === undefined) return Promise.reject(new TicketError('Ticket attempt has no admission to record', 'TICKET_RECOVERY_FAILED'))
+    const write = recorder.update(stage, { status: 'unknown', diagnostics: [uncertaintyDiagnostic(stage, captured)] }).then(() => {})
+    run.recordings.set(stage, write)
+    const { logger } = this.ctx
+    void write.then(() => { run.recordings.delete(stage) }, (error: unknown) => {
+      run.recordings.delete(stage)
+      logger.warn(`Ticket attempt "${run.attemptId}" is unknown in memory, but recording it failed; the reservation is retained: ${String(error)}`)
+    })
+    return write
   }
 
   private liveRoot(id: Session['id']): Session {
@@ -611,13 +746,15 @@ export class TicketExecutionService extends Service {
     return root
   }
 
-  private async bounded<T>(operation: Promise<T>): Promise<T> {
+  /** One settlement deadline; `expired` rejects with `reason` once it passes. */
+  private deadline(): { readonly expired: Promise<never>; readonly reason: TicketError; clear(): void } {
+    const reason = new TicketError('Ticket producer settlement timed out', 'TICKET_ATTEMPT_STATE')
     let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => { reject(new TicketError('Ticket producer settlement timed out', 'TICKET_ATTEMPT_STATE')) }, this.config.settlementTimeoutMs)
-      })])
-    } finally { clearTimeout(timer) }
+    const expired = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { reject(reason) }, this.config.settlementTimeoutMs)
+    })
+    void expired.catch(() => {})
+    return { expired, reason, clear: () => { clearTimeout(timer) } }
   }
 }
 

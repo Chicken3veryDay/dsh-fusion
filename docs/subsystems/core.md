@@ -1423,17 +1423,6 @@ registerCommandAuthority(authority: TicketCommandAuthority): () => void
  */
 async whenIdle(session: Session): Promise<void>
 
-/** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
- *
- * `beginAttempt` consults every guard inside the Session's command queue, after the scope checks and in the same
- * synchronous step as the append. The guard receives every unsettled attempt this service knows from live roots and
- * from the stored-root scan, and refuses by throwing a `TicketError`, which fails the admission unchanged and appends
- * nothing; any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.
- * @param guard - synchronous decision over the known unsettled attempts.
- * @returns disposer that removes the guard.
- */
-registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void
-
 /** Read all Tickets recovered from one Session's durable log.
  * @param session - Session whose log is replayed.
  * @returns recovered Ticket views.
@@ -2230,4 +2219,28 @@ One session committed a different agent preset to its durable log. Consumers inv
 ```
 
 Source: [`packages/preset/agent-preset-registry/src/types.ts`](../../packages/preset/agent-preset-registry/src/types.ts)
+
+<a id="ticket-events"></a>
+
+### `ticket/*` events
+
+<a id="ticketcollect-reservations--emit"></a>
+
+#### `ticket/collect-reservations` — emit
+
+Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its producers' own signals prove they stopped after the service that admitted them was torn down, or when its root Session log records the attempt settled.
+
+```ts cordis-catalog
+/**
+ * Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on
+ * the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves
+ * when its attempt is handed to the settlement ledger or released, when its producers' own signals prove they stopped
+ * after the service that admitted them was torn down, or when its root Session log records the attempt settled.
+ * @param collect - Receives each reservation synchronously.
+ * @mode emit
+ */
+'ticket/collect-reservations'(collect: (reservation: TicketProducerReservation) => void): void
+```
+
+Source: [`packages/experimental/ticket/src/execution.ts`](../../packages/experimental/ticket/src/execution.ts)
 <!-- END GENERATED cordis-surface -->

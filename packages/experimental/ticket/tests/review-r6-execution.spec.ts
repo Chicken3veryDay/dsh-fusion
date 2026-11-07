@@ -54,7 +54,7 @@ it('R6-2 explicit disposal retries cancellation after a transient producer stop 
     done: done.promise,
   }))
   const first = await handle.dispose().then(() => 'settled', code)
-  expect(first).toBe('Error: transient producer stop failure')
+  expect(first).toBe('TICKET_ATTEMPT_STATE')
   const retry = await handle.dispose().then(() => 'settled', code)
   // Finish the owned producer even on the broken retry path, then try once more with a known outcome.
   done.resolve({ status: 'killed' })

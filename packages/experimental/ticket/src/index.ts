@@ -12,7 +12,7 @@ import { ticketProjectionDefinition, validateTicketChange } from './projection.t
 import type { TicketProjectionState } from './projection.ts'
 import { assertTicketAcceptance, validateTicketReferences } from './validation.ts'
 import { TicketError } from './errors.ts'
-import { type AttemptCommand, attemptAdmitsCommand, durableAttemptStatus } from './attempt-lifecycle.ts'
+import { type AttemptCommand, attemptAdmitsCommand, durableAttemptStatus, uncertaintyDiagnostic, uncertaintyStages } from './attempt-lifecycle.ts'
 import {
   AssignmentId,
   TicketAttemptId, TicketOperationId, MissionId,
@@ -48,6 +48,7 @@ import type {
   TicketStatus,
   TicketView,
   UpdateTicketAttentionRequest,
+  TicketProducerReservation,
   WorkScope,
 } from './types.ts'
 
@@ -214,7 +215,6 @@ export class TicketService extends Service {
   private readonly tails = new Map<SessionId, Promise<void>>()
   private readonly coordinatorAuthorities = new Set<CoordinatorAuthority>()
   private readonly commandAuthorities = new Set<TicketCommandAuthority>()
-  private readonly admissionGuards = new Set<(reserved: readonly TicketAttemptSnapshot[]) => void>()
   /** Execution-admitted attempts this service owns until a durable flush shows them settled, keyed like scope reservations. */
   private readonly settlements = new Map<string, Settlement>()
   /** Roots live when this service activated; their attempts may still belong to the previous service generation's producers. */
@@ -319,20 +319,6 @@ export class TicketService extends Service {
    */
   async whenIdle(session: Session): Promise<void> {
     await this.tails.get(session.id)
-  }
-
-  /** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
-   *
-   * `beginAttempt` consults every guard inside the Session's command queue, after the scope checks and in the same
-   * synchronous step as the append. The guard receives every unsettled attempt this service knows from live roots and
-   * from the stored-root scan, and refuses by throwing a `TicketError`, which fails the admission unchanged and appends
-   * nothing; any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.
-   * @param guard - synchronous decision over the known unsettled attempts.
-   * @returns disposer that removes the guard.
-   */
-  registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void {
-    this.admissionGuards.add(guard)
-    return () => { this.admissionGuards.delete(guard) }
   }
 
   /** Read all Tickets recovered from one Session's durable log.
@@ -791,39 +777,33 @@ export class TicketService extends Service {
       if (ticket.attempts.some(attempt => attempt.assignmentId === assignment.id && attempt.status !== 'settled')) throw new TicketError('previous attempt has not settled', 'TICKET_ATTEMPT_STATE')
       if (request.workspace.kind === 'shared-workspace') {
         for (const root of this.ctx.sessions.list()) this.retainScopes(root)
-        for (const reservation of this.scopeReservations.values()) {
-          const attempt = reservation.attempt
+        const held: (Omit<TicketProducerReservation, 'ticketId' | 'attemptId'> & { readonly producer: boolean })[] = []
+        for (const { root, attempt, scopes } of this.scopeReservations.values()) {
+          held.push({ rootId: root, workspace: attempt.workspace, executor: attempt.executor, scopes, producer: false })
+        }
+        // Execution producers can outlive the service generations and the root log that admitted them.
+        this.ctx.emit('ticket/collect-reservations', (reservation) => { held.push({ ...reservation, producer: true }) })
+        for (const reservation of held) {
           const world = request.executor.kind === 'remote' ? request.executor.world : undefined
-          const otherWorld = attempt.executor.kind === 'remote' ? attempt.executor.world : undefined
+          const otherWorld = reservation.executor.kind === 'remote' ? reservation.executor.world : undefined
           if (world !== otherWorld) continue
           const conflict = assignment.workScopes.some(scope => reservation.scopes.some((reserved) => {
             if (scope.access !== 'write' || reserved.access !== 'write' || (!scope.exclusive && !reserved.exclusive)) return false
             const path = resolve(request.workspace.directory, scope.path)
-            const otherPath = resolve(attempt.workspace.directory, reserved.path)
+            const otherPath = resolve(reservation.workspace.directory, reserved.path)
             const contains = (parent: string, child: string) => {
               const suffix = relative(parent, child)
               return !isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith('..' + sep)
             }
             return contains(path, otherPath) || contains(otherPath, path)
           }))
+          if (conflict && reservation.producer) {
+            throw new TicketError(`Exclusive write scope is reserved by a producer of Session "${reservation.rootId}" that may still be writing; `
+              + 'it is released when that producer stops or a host settles its attempt', 'TICKET_ATTEMPT_STATE')
+          }
           if (conflict) {
-            throw new TicketError(`Exclusive write scope is reserved by unsettled work in Session "${reservation.root}"; settle that work, `
+            throw new TicketError(`Exclusive write scope is reserved by unsettled work in Session "${reservation.rootId}"; settle that work, `
               + 'or resume that Session so recovery can settle it', 'TICKET_ATTEMPT_STATE')
-          }
-        }
-        if (this.admissionGuards.size > 0) {
-          const reserved = new Map<string, TicketAttemptSnapshot>()
-          for (const [key, reservation] of this.scopeReservations) reserved.set(key, reservation.attempt)
-          for (const root of this.ctx.sessions.list()) {
-            for (const known of this.projection?.stateOf(root).tickets ?? []) for (const attempt of known.attempts) {
-              if (attempt.status !== 'settled') reserved.set(JSON.stringify([root.id, known.id, attempt.id]), attempt)
-            }
-          }
-          for (const guard of this.admissionGuards) {
-            try { guard([...reserved.values()]) } catch (cause: unknown) {
-              if (cause instanceof TicketError) throw cause
-              throw new TicketError('Ticket admission guard failed', 'TICKET_RECOVERY_FAILED', { cause })
-            }
           }
         }
       }
@@ -1279,12 +1259,14 @@ export class TicketService extends Service {
       } : {},
       attempts: ticket.attempts.map(attempt => attempt.status === 'settled' ? attempt : {
         ...attempt, status: 'settled', outcome: 'cancelled', updatedAt: Number.MAX_SAFE_INTEGER,
-        diagnostics: [...attempt.diagnostics, ...ticket.operations.some(item => item.id === executionOperationId(attempt.id, 'stop-unknown')) ? [] : ['Cancellation did not establish producer settlement; reservation retained']],
+        diagnostics: [...attempt.diagnostics, ...uncertaintyStages
+          .filter(stage => !ticket.operations.some(item => item.id === executionOperationId(attempt.id, stage)))
+          .map(stage => uncertaintyDiagnostic(stage))],
       }),
       assignments: ticket.assignments.map(item => unsettled.some(attempt => attempt.assignmentId === item.id)
         ? { ...item, status: 'released', revision: Number.MAX_SAFE_INTEGER } : item),
       operations: [...ticket.operations, ...unsettled.flatMap(attempt =>
-        ['stop-unknown', 'settled'].filter(stage => !ticket.operations.some(item => item.id === executionOperationId(attempt.id, stage)))
+        [...uncertaintyStages, 'settled'].filter(stage => !ticket.operations.some(item => item.id === executionOperationId(attempt.id, stage)))
           .map(stage => ({ id: executionOperationId(attempt.id, stage), request: '0'.repeat(64), attemptId: attempt.id })))],
     }
     const bytes = Math.max(textBytes(JSON.stringify(ticket)), textBytes(JSON.stringify(reserved)))
