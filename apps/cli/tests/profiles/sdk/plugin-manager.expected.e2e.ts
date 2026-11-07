@@ -69,7 +69,7 @@ it.for(['standard', 'ptc'] as const)('keeps %s plugin changes pending until the 
   const env = profileEnvironment(root, `http://127.0.0.1:${address.port}`)
   const options = {
     cwd: root, processCwd: root, dshHome: join(root, 'home'), env, model: 'deepseek-v4-pro',
-    patches: mode === 'ptc' ? [fileURLToPath(new URL('../../../config/examples/ptc.yml', import.meta.url))] : [],
+    patches: mode === 'standard' ? [fileURLToPath(new URL('../../../config/examples/native.yml', import.meta.url))] : [],
   }
   async function run(restarted: boolean): Promise<void> {
     const harness = new DeepSeekHarness(options)
@@ -139,6 +139,8 @@ it.for(['unavailable', 'approved', 'missing-pnpm'] as const)('reports the %s plu
     env.PATH = root
   }
   const harness = new DeepSeekHarness({ cwd: root, processCwd: root, dshHome: join(root, 'home'),
+    // These prerequisite cases exercise native protocol results independently of executor defaults.
+    patches: [fileURLToPath(new URL('../../../config/examples/native.yml', import.meta.url))],
     env, model: 'deepseek-v4-pro', approvalRequests: scenario === 'approved' })
   let approvals = 0
   const abort = (): void => { void harness.close() }

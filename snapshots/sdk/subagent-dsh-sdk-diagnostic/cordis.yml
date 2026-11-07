@@ -63,3 +63,10 @@
         maxDepth: provider-managed
     - id: await-external-subagents
       name: '../../../packages/test-support/session-snapshot/tests/fixtures/subagent-settlement-barrier.ts'
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

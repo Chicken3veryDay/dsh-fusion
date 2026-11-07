@@ -17,6 +17,7 @@ export interface ProductPackagePolicy {
  */
 export const PRODUCT_PACKAGE_POLICY: Readonly<Record<string, ProductPackagePolicy>> = {
   'packages/preset/fusion-config': { category: 'optional', reason: 'Explicit Fusion configuration and non-inference command; never mounted by stock profiles.' },
+  'packages/core/tool-executor-native': { category: 'optional', reason: 'Explicit deployment or Agent-scope opt-out from the shipped Node PTC executor.' },
   'packages/core/agent-tool-presentation': { category: 'optional', reason: 'Deprecated selector retained for existing executor configurations.' },
   'packages/lsp/lsp': { category: 'optional', reason: 'Service definition for deployment-configured language servers.' },
   'packages/lsp/lsp-stdio': { category: 'optional', reason: 'Requires an explicit server list and language-server executables.' },

@@ -2869,6 +2869,9 @@ importers:
       '@deepseek-ai/dsh-plugin-package-inventory-deepseek':
         specifier: workspace:*
         version: link:../../llm/plugin-package-inventory-deepseek
+      '@deepseek-ai/dsh-ptc-runtime-node':
+        specifier: workspace:*
+        version: link:../../ptc-runtime/ptc-runtime-node
       '@deepseek-ai/dsh-sandbox-local':
         specifier: workspace:*
         version: link:../../sandbox/sandbox-local
@@ -2920,6 +2923,9 @@ importers:
       '@deepseek-ai/dsh-tool-executor-native':
         specifier: workspace:*
         version: link:../../core/tool-executor-native
+      '@deepseek-ai/dsh-tool-executor-ptc':
+        specifier: workspace:*
+        version: link:../../core/tool-executor-ptc
       '@deepseek-ai/dsh-tool-fs':
         specifier: workspace:*
         version: link:../../fs/tool-fs

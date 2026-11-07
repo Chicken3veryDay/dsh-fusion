@@ -79,7 +79,10 @@ export async function runNodeMain(
           if (evaluation.reusable) {
             void connection.$rejectPendingCalls(({ reject }) => { reject(new Error('PTC evaluation ended before the binding completed')) })
           }
-          completion.resolve(result)
+          // Node reports unhandled rejections after the current microtasks.
+          // End binding admission now, but publish success after that checkpoint.
+          if (result.error === undefined) setImmediate(() => { completion.resolve(result) })
+          else completion.resolve(result)
         },
       }
       current = evaluation

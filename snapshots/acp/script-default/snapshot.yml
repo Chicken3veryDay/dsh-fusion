@@ -1,0 +1,9 @@
+version: 1
+scenario: script-default
+profile: acp
+composition: acp-script-default
+recording: live
+header:
+  class: acp-script-default
+  pin: true
+permission: danger-full-access

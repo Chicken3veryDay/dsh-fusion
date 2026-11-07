@@ -1,0 +1,9 @@
+version: 1
+scenario: script-default
+profile: headless
+composition: headless-script-default
+recording: live
+header:
+  class: headless-script-default
+  pin: true
+permission: danger-full-access

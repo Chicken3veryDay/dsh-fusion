@@ -633,7 +633,7 @@ describe('dsh web keyless CLI smoke', () => {
     const child = spawn(
       process.execPath,
       ['--import', tsxLoader, join(REPO_ROOT, 'apps/cli/src/bin.ts'), 'web',
-        ...mode === 'ptc' ? ['--patch', join(REPO_ROOT, 'apps/cli/config/examples/ptc.yml')] : [],
+        ...mode === 'native' ? ['--patch', join(REPO_ROOT, 'apps/cli/config/examples/native.yml')] : [],
         '--no-open', '--port', '0',
       ],
       {

@@ -10,8 +10,6 @@ const child = spawn(process.execPath, [
   'apps/cli/src/bin.ts',
   '--profile',
   'headless',
-  '--patch',
-  'apps/cli/config/examples/ptc.yml',
   task,
 ], {
   stdio: 'inherit',

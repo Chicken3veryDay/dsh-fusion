@@ -1,0 +1,8 @@
+version: 1
+scenario: script-default
+profile: sdk
+composition: sdk-script-default
+recording: live
+header:
+  class: sdk-script-default
+  pin: true

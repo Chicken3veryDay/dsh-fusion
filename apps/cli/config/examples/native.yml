@@ -1,0 +1,6 @@
+# Explicit native opt-out from the shipped run_code default.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

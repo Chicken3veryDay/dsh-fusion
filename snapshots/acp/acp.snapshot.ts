@@ -28,6 +28,7 @@ const controllerCases: readonly {
   readonly hasModelTurn: boolean
   readonly configPath?: string
 }[] = [
+  { name: 'script-default', hasModelTurn: true, configPath: join(corpusDir, 'script-default', 'cordis.yml') },
   { name: 'handshake', hasModelTurn: false },
   { name: 'reject-extra-dirs', hasModelTurn: false },
   { name: 'cancel', hasModelTurn: true },
@@ -67,7 +68,7 @@ const scenarios: Scenario[] = controllerCases.map((controller) => {
     ...(toolSchemasSource === undefined ? {} : { toolSchemasSource }),
     ...(manifest.platform === 'posix' ? { posixOnly: true } : {}),
     ...(manifest.platform === 'pwsh' ? { pwshOnly: true } : {}),
-    ...(controller.configPath === undefined ? {} : { configPath: controller.configPath }),
+    configPath: controller.configPath ?? join(corpusDir, 'escalation-approved', 'cordis.yml'),
     ...manifest.permission === undefined && manifest.environment === undefined
       ? {}
       : {
@@ -82,7 +83,7 @@ const scenarios: Scenario[] = controllerCases.map((controller) => {
 defineAcpSnapshotSuite({
   agent: {
     binScript: fileURLToPath(new URL('../../apps/cli/src/bin.ts', import.meta.url)),
-    configPath: fileURLToPath(new URL('./escalation-approved/cordis.yml', import.meta.url)),
+    configPath: fileURLToPath(new URL('./cordis.yml', import.meta.url)),
     profile: 'acp',
     tsconfigPath: fileURLToPath(new URL('../../tsconfig.json', import.meta.url)),
   },

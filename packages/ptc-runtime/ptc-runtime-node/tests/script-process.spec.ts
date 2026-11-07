@@ -70,3 +70,15 @@ it.each([false, true])('reports native Script parse errors with their source pos
   expect(result.error?.message).not.toContain('vm-script')
   expect(result.error?.message).not.toContain('node:vm')
 })
+
+it.each([false, true])('reports immediate detached rejection before Script success with retention %s', async (scriptPersistence) => {
+  const { runtime } = await mountRuntime(new Context(), { executionMode: 'vm-script', scriptPersistence })
+  const stateOwner = {}
+  const run = (program: string) => runtime.run(runtime.resolve({ program, bindings: [], stateOwner }))
+  expect((await run('let retained = 17; retained')).value).toBe(17)
+  const failure = await run('void Promise.reject(new Error("immediate detached rejection")); 7')
+  expect(failure.value).toBeUndefined()
+  expect(failure.error?.kind).toBe('worker-exit')
+  if (scriptPersistence) expect(failure.error?.message).toContain('retained variables were cleared')
+  expect((await run('typeof retained')).value).toBe('undefined')
+})

@@ -80,7 +80,7 @@ describe.skipIf(!process.env.DEEPSEEK_API_KEY || !runtime).each(['native', 'ptc'
       tsconfigPath: join(repo, 'tsconfig.base.json'),
       configPath,
       binArgs: ['--profile', 'headless', '--patch', configPath,
-        ...mode === 'ptc' ? ['--patch', join(repo, 'apps/cli/config/examples/ptc.yml')] : [],
+        ...mode === 'native' ? ['--patch', join(repo, 'apps/cli/config/examples/native.yml')] : [],
         `${task} Use input.xlsx and save the finished workbook as result.xlsx. Preserve the Notes sheet and leave input.xlsx unchanged. Respond briefly in English.`,
       ],
       processTimeoutMs: 110_000,

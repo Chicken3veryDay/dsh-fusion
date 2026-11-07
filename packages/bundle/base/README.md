@@ -25,6 +25,8 @@ Every base-backed `dsh --profile` surface runs on `dsh-base`, so those surfaces 
 <a id="use-this-package"></a>
 ## Use this package
 
+All shipped profiles use Node PTC programs through `run_code` by default. Registered tools are program bindings; [native execution](../../core/tool-executor-native/README.md#use-this-package) is an explicit deployment or Agent-scope opt-out.
+
 You get the dsh core automatically: the shipped `web`, `headless`, `sdk`, and `acp` profiles already include it, and a custom profile names it as its first bundle. After that, everything works with no further configuration.
 
 ### A minimal custom profile

@@ -31,6 +31,8 @@ kind: "package-reference"
 - name: '@deepseek-ai/dsh-tool-executor-native'
 ```
 
+随附 profile 默认使用 Node PTC。要为部署选择原生调用，通过 `--patch` 或 SDK 的 `patches` 选项应用[原生 overlay](../../../apps/cli/config/examples/native.yml)。要仅覆盖一个 Agent 作用域，在该 preset 的 `config.plugins` 内挂载上方条目；最近的执行器优先于部署执行器。
+
 Agent 步骤使用 [agent-loop 并发配置](../agent-loop/README.zh.md)，循环在每个批次开始时读取一次上限。本插件没有配置字段。直接构造 `NativeToolExecutor` 的调用方可以传入回调，默认返回 `10`；批次未指定 `maxParallelToolCalls` 时，每个工具组读取该回调。上限必须是正整数；`1` 表示串行执行。
 
 -----

@@ -66,7 +66,7 @@ async function fixture(test: TestContext) {
     if (side === 'sdk') {
       const harness = new DeepSeekHarness({
         cwd, processCwd: cwd, dshHome: join(cwd, 'home'), env, model: 'deepseek-v4-pro',
-        patches: [...mode === 'ptc' ? [join(repo, 'apps/cli/config/examples/ptc.yml')] : [], patch],
+        patches: [...mode === 'standard' ? [join(repo, 'apps/cli/config/examples/native.yml')] : [], patch],
       })
       const abort = (): void => { void harness.close() }
       test.signal.addEventListener('abort', abort, { once: true })
@@ -81,6 +81,7 @@ async function fixture(test: TestContext) {
       expect(inventory.hmr).toBe(false)
     } else {
       const child = execa(process.execPath, [join(repo, 'apps/cli/lib/bin.js'), '--profile', 'web',
+        ...mode === 'standard' ? ['--patch', join(repo, 'apps/cli/config/examples/native.yml')] : [],
         '--patch', patch, '--host', '127.0.0.1', '--port', '0', '--no-open'], {
         cwd, env: { ...env, DSH_HOME: join(cwd, 'home') }, extendEnv: false,
         ipc: true, stdin: 'ignore', reject: false, cancelSignal: test.signal, forceKillAfterDelay: 10_000,

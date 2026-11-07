@@ -25,6 +25,8 @@ Use this executor when models should call tools through `run_code` programs. Mou
 <a id="use-this-package"></a>
 ## Use this package
 
+Shipped profiles select this executor with the Node runtime by default. Custom compositions must mount it explicitly; [native execution](../tool-executor-native/README.md#use-this-package) remains available per deployment or Agent scope.
+
 Add this row to a composition with `dsh-tools` mounted. The nearest scoped executor selects tool behavior; one scope permits only one executor.
 
 ```yaml
