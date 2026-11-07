@@ -114,6 +114,7 @@ it('reports a write handle kept open because its Session withdrawal failed at pr
   })
   expect(f.writer.durabilityOpen).toBe(true)
   expect(f.tracker.openHandles.has(f.writer)).toBe(true)
+  expect(f.writer.lifetimeUncertain).toBe(true)
 })
 
 it('joins a successful Session withdrawal before closing the handle at provider teardown', async () => {

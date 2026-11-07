@@ -571,7 +571,7 @@ export interface PendingSession {
  */
 export class JsonlBackendTracker {
   /** Every open handle; teardown closes what remains. */
-  readonly openHandles = new Set<SessionHandle>()
+  readonly openHandles = new Set<JsonlSessionHandle>()
   /** `null` marks a claim whose handle is still being constructed. */
   private readonly writers = new Map<SessionId, JsonlSessionHandle | null>()
   private readonly pending = new Map<SessionId, PendingSession>()
@@ -969,14 +969,17 @@ export class JsonlBackendTracker {
         const errors: unknown[] = []
         for (const handle of [...openHandles]) {
           try {
-            const session = bindings.get(handle as JsonlSessionHandle)
+            const session = bindings.get(handle)
             const withdrawal = session === undefined ? undefined : ctx.sessions.withdrawalOf(session)
             if (withdrawal !== undefined) {
               try {
                 await withdrawal
               } catch (withdrawalFailure: unknown) {
-                // The Session may still publish: leave the handle open with its lease, and report it.
-                errors.push(new Error(`${name}: session "${handle.id}" write handle kept open because Session withdrawal failed`, { cause: withdrawalFailure }))
+                // The Session may still publish: keep the handle open with its lease, retain the
+                // uncertainty on it so release and close refuse, and report the same failure.
+                const failure = new Error(`${name}: session "${handle.id}" write handle kept open because Session withdrawal failed`, { cause: withdrawalFailure })
+                handle.retainFailure(failure)
+                errors.push(failure)
                 continue
               }
             }
