@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import { GitRunner, blobText, diffTrees, ignoredPaths, locateGitWorkspace, snapshotTree, treeBlob } from '../src/git.ts'
 import { TurnRecorder } from '../src/recorder.ts'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
@@ -23,6 +24,7 @@ async function runner(limits = { timeoutMs: 30_000, outputMaxBytes: 1024 * 1024 
   cleanups.push(() => ctx.fiber.dispose())
   await ctx.plugin(SessionStore)
   await ctx.plugin(LocalSubprocessRuntime)
+  useProcessGroupContainment(ctx)
   return { ctx, git: new GitRunner(ctx.subprocess, await ctx.subprocess.resolveExecutable(executable).catch(() => executable), limits) }
 }
 

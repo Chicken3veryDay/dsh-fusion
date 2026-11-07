@@ -19,6 +19,7 @@ import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
@@ -84,6 +85,7 @@ describe('worktree tool through real Loader composition', () => {
     for (const [specifier, plugin] of modules) context.loader.builtins[specifier] = plugin
     await context.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await context.loader.await()
+    useProcessGroupContainment(context)
 
     const agent = await context.agentLoop.create(SessionId('worktree-loader'), {}, { cwd: repository })
     const invoke = (name: string, agentValue = agent) => executeToolFixture(context!, {

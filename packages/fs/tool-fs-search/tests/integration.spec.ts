@@ -22,6 +22,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH } from '@deepseek-ai/dsh-tools'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import * as ToolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
 
 const testToolSignal = new AbortController().signal
@@ -70,6 +71,7 @@ describe('search tools over the real subprocess service + the packaged rg', () =
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(LocalSubprocessRuntime)
+    useProcessGroupContainment(ctx)
     await ctx.plugin(ToolFsSearch, { sampleOverCapGlobResults: true })
   })
 

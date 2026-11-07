@@ -20,6 +20,7 @@ import SessionStore, { pluginRecordOf, SessionId } from '@deepseek-ai/dsh-sessio
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as ShellEnv from '@deepseek-ai/dsh-shell-env'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
@@ -197,6 +198,7 @@ async function load() {
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
   await ctx.loader.await()
   for (const entry of ctx.loader.entries()) await entry.fiber?.await()
+  useProcessGroupContainment(ctx)
 
   const path = `PATH=${JSON.stringify(`${bin}:${process.env.PATH ?? ''}`)}`
   return { ctx, path, root }

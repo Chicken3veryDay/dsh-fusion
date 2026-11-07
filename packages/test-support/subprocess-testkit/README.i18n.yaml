@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/test-support/subprocess-testkit/README.md
+/:
+  en: 069dacf6435bc00b
+  zh: 7a07b1c1c463fc51
+/deepseek-ai-dsh-subprocess-testkit:
+  en: 5c01c9809e0ea0f7
+  zh: 881048752cc6a2aa
+/deepseek-ai-dsh-subprocess-testkit/summary:
+  en: 9d47b2533eac0685
+  zh: 1dff86f0f5a2b510
+/deepseek-ai-dsh-subprocess-testkit/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 1db86285abf6c499
+/deepseek-ai-dsh-subprocess-testkit/use-this-package:
+  en: 8b106e6112afe309
+  zh: 10a16d9cdd1c4cb2
+/deepseek-ai-dsh-subprocess-testkit/understand-the-implementation:
+  en: 36ac399db80999e9
+  zh: f53eaa61f652fad9
+/deepseek-ai-dsh-subprocess-testkit/further-exploration:
+  en: 919a9442614d16d0
+  zh: 092f06b1b2a5b1a2
+/deepseek-ai-dsh-subprocess-testkit/model-experience:
+  en: 478835c82631e8c3
+  zh: 1f2930eccef8f83b
+/deepseek-ai-dsh-subprocess-testkit/model-experience/kv-cache-effect:
+  en: be3fa044c8f27bf0
+  zh: ba21cbd916ce6d44
+/deepseek-ai-dsh-subprocess-testkit/known-limitations-and-deferred-work:
+  en: 889fea1430b15570
+  zh: 2a08a906fb59a489
+/deepseek-ai-dsh-subprocess-testkit/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 6c5f9788c6536776

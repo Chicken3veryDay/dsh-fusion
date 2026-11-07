@@ -15,6 +15,7 @@ import LocalSandbox from '@deepseek-ai/dsh-sandbox-local'
 import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 import WorktreeService from '../src/index.ts'
@@ -77,6 +78,7 @@ export async function harness(root: string, config: Config = {}, mode: SandboxMo
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(LocalFileSystem, { cwd: root })
     await ctx.plugin(LocalSubprocessRuntime)
+    useProcessGroupContainment(ctx)
     if (mode === 'danger-full-access') await ctx.plugin(UnusedSandbox)
     else await ctx.plugin(LocalSandbox)
     await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: root })

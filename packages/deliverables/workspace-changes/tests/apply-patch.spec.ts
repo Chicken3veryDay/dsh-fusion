@@ -10,6 +10,7 @@ import * as FsPolicy from '@deepseek-ai/dsh-fs-observation-policy'
 import { ToolCallId, createAssistantMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
@@ -39,6 +40,7 @@ async function boot(environment: string) {
   cleanups.push(() => ctx.fiber.dispose())
   await ctx.plugin(SessionStore)
   await ctx.plugin(LocalSubprocessRuntime)
+  useProcessGroupContainment(ctx)
   if (environment === 'git-unavailable') {
     const resolve = ctx.subprocess.resolveExecutable.bind(ctx.subprocess)
     vi.spyOn(ctx.subprocess, 'resolveExecutable').mockImplementation((name, ...args) => {

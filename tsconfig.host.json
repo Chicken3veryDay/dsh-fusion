@@ -518,6 +518,7 @@
     { "path": "./packages/guard/timeout-policy" },
     { "path": "./packages/test-support/agent-loop-testkit" },
     { "path": "./packages/test-support/tool-testkit" },
+    { "path": "./packages/test-support/subprocess-testkit" },
     { "path": "./packages/acp/acp" },
     { "path": "./packages/bundle/acp-app" },
     { "path": "./packages/bundle/base" },
