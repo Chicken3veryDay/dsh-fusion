@@ -1830,8 +1830,9 @@ cursor(caller: Agent, rootSessionId: SessionId): number
  * @param rootSessionId - explicit Workstream root.
  * @param request - last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation.
  * Without `afterCursor`, every concerning event committed after `afterRevision` counts.
- * @returns at once when the revision differs from `afterRevision` or a concerning event is at or after the cursor;
- * otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+ * @returns the current revision and cursor, at once when the revision differs from `afterRevision` or a concerning event
+ * is at or after the cursor, otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+ * Waiting again with the returned revision and cursor reports only later concerning events.
  */
 async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; afterCursor?: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>
 
