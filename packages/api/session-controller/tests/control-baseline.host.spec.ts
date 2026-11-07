@@ -15,6 +15,7 @@ afterEach(async () => {
   ownedContexts.clear()
 })
 
+// Pins current behavior: neither the registry nor the baseline contains one unit's fold failure yet; change with that fix.
 it('fails the whole baseline, never a partial one, when one Session fold throws', async () => {
   const ctx = new Context()
   ownedContexts.add(ctx)
