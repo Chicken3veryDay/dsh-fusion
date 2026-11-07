@@ -38,6 +38,13 @@ declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap { ticket: 'ticket' }
 }
 
+/** One settlement deadline; `expired` rejects with `reason` once it passes, and `clear` stops the timer. */
+interface Deadline {
+  readonly expired: Promise<never>
+  readonly reason: TicketError
+  clear(): void
+}
+
 /** Runtime settlement bound; expiry retains the durable reservation. */
 export interface TicketExecutionConfig {
   readonly settlementTimeoutMs: number
@@ -556,7 +563,8 @@ export class TicketExecutionService extends Service {
     if (next.kind === 'handed') {
       // A repeated request asks the ledger to write the outcome it holds again.
       const settlement = previous.kind === 'handed' ? this.handOff(run, next.outcome) : run.settlement
-      return (settlement ?? Promise.resolve()).then(() => {})
+      const deadline = this.deadline()
+      return this.awaitDurable(run, settlement, deadline).finally(() => { deadline.clear() })
     }
     return Promise.reject(new TicketError(`Ticket attempt in ${next.kind} has no stop to await`, 'TICKET_ATTEMPT_STATE'))
   }
@@ -719,8 +727,31 @@ export class TicketExecutionService extends Service {
         })
       }
       this.apply(run, { type: 'producers-settled', outcome })
+      await this.awaitDurable(run, run.settlement, deadline)
     } finally { deadline.clear() }
-    await run.settlement
+  }
+
+  /** Wait for the ledger's write of a handed outcome within `deadline`. At the deadline the producer outcome stays known
+   * and the write stays owned by the ledger: it is neither discarded nor retried here, and a late failure is logged.
+   * @param run - Attempt in `handed`.
+   * @param settlement - The ledger write started by the hand-off.
+   * @param deadline - The stop or request deadline that bounds the wait.
+   * @throws TicketError `TICKET_SETTLEMENT_PENDING` when the deadline passes first. */
+  private async awaitDurable(run: AttemptRun, settlement: Promise<unknown> | undefined, deadline: Deadline): Promise<void> {
+    if (settlement === undefined) return
+    try {
+      await Promise.race([settlement, deadline.expired])
+    } catch (error: unknown) {
+      if (error !== deadline.reason) throw error
+      const { logger } = this
+      void settlement.catch((late: unknown) => {
+        logger.warn(`Ticket attempt "${run.attemptId}" outcome is known, but its settlement write failed after its deadline; `
+          + `the ledger retains it until its root is writable: ${String(late)}`)
+      })
+      const outcome = run.state.kind === 'handed' ? run.state.outcome : 'with a known outcome'
+      throw new TicketError(`Ticket attempt "${run.attemptId}" ended ${outcome}, but its settlement record is not durable yet; `
+        + 'the ledger keeps writing it, so retry settle() or dispose() once storage recovers', 'TICKET_SETTLEMENT_PENDING', { cause: error })
+    }
   }
 
   /** Each producer's own signals: results first, then the activation's release, which may follow its captured result. */
@@ -771,7 +802,7 @@ export class TicketExecutionService extends Service {
   }
 
   /** One settlement deadline; `expired` rejects with `reason` once it passes. */
-  private deadline(): { readonly expired: Promise<never>; readonly reason: TicketError; clear(): void } {
+  private deadline(): Deadline {
     const reason = new TicketError('Ticket producer settlement timed out', 'TICKET_ATTEMPT_STATE')
     let timer: ReturnType<typeof setTimeout> | undefined
     const expired = new Promise<never>((_resolve, reject) => {
