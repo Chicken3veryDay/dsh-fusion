@@ -3,6 +3,7 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // Type-only: includes the first-party todo event consumed below.
 import type {} from '@deepseek-ai/dsh-tool-todo'
+import { effectiveToolCall, effectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 
 /**
  * Extract searchable semantic text from one first-party session event.
@@ -18,14 +19,17 @@ export function extractSessionEventText(event: SessionEvent): string {
       return contentText(event.data.content)
     case 'assistant/message':
       return contentText(event.data.message.content)
+    // A call nested in a `run_code` program is searchable like a model-issued call.
     case 'tool/call':
-      return joinText([event.data.name, event.data.arguments])
+    case 'tool/ptc-dispatch-start': {
+      const call = effectiveToolCall(event)
+      return joinText([call.name, call.arguments])
+    }
     case 'tool/result':
-      return joinText([
-        contentText(event.data.message.content),
-        event.data.error?.name ?? '',
-        event.data.error?.code ?? '',
-      ])
+    case 'tool/ptc-dispatch': {
+      const result = effectiveToolResult(event)
+      return joinText([contentText(result.content), result.error?.name ?? '', result.error?.code ?? ''])
+    }
     case 'todo/write':
       return joinText(event.data.todos.flatMap(todo => [todo.status, todo.content]))
     case 'turn/end':

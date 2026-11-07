@@ -37,7 +37,7 @@ kind: "package-library"
 
 ### 捕获内容
 
-捕获以两种模式之一运行。`live` 捕获在追加时跟随会话事件、在挂载时回放已存活会话并记录生命周期标记；`on-demand` 捕获只在后端通过 `captureSession(session, throughSeq?)` 请求前缀时读取权威会话日志。协调器选项决定是否包含存储历史。每条权威会话事件都按顺序映射为一条 ledger 记录。`assistant/message` 或 `assistant/attempt` 记录会携带完整的嵌入式紧凑流，包括失败和重试输出。每条 ledger 记录还携带 `session.id`、`session.format_version`、数值型事件标识、可选 header 事实与预先映射的严重级别（`tool/result.isError`、`turn/end` 的错误原因与 `agent-error` 映射为 `error`；其余为 `info`）。
+捕获以两种模式之一运行。`live` 捕获在追加时跟随会话事件、在挂载时回放已存活会话并记录生命周期标记；`on-demand` 捕获只在后端通过 `captureSession(session, throughSeq?)` 请求前缀时读取权威会话日志。协调器选项决定是否包含存储历史。每条权威会话事件都按顺序映射为一条 ledger 记录。`assistant/message` 或 `assistant/attempt` 记录会携带完整的嵌入式紧凑流，包括失败和重试输出。每条 ledger 记录还携带 `session.id`、`session.format_version`、数值型事件标识、可选 header 事实与预先映射的严重级别（`tool/result.isError`、嵌套 `run_code` 调用的 `tool/ptc-dispatch.isError`、`turn/end` 的错误原因与 `agent-error` 映射为 `error`；其余为 `info`）。
 
 ledger 记录携带 `sourceEvent`，其中包含所属 Session id 和不含 `data` 的事件信封副本。脱敏 waterfall 接收的 `body` 是唯一的载荷副本。后端可从信封和脱敏后的 body 重建完整导出事件，而不绕过脱敏。
 

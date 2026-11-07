@@ -5,6 +5,7 @@
  * dispose-ordering pins, failure containment, and the `agent/error` relay.
  */
 import { createAssistantMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -202,6 +203,18 @@ describe('SessionTelemetryCoordinator capture', () => {
       ['tool/result', 'info'],
       ['telemetry-test/opaque', 'info'],
       ['turn/end', 'error'],
+    ])
+  })
+
+  it('maps a run_code nested call outcome to severity', async () => {
+    const { ctx, backend } = await setup()
+    const session = liveSession(ctx)
+    const ids = { rootCallId: 'p' as never, parentCallId: 'p' as never, name: 'bash', arguments: {} }
+    session.append('tool/ptc-dispatch', { ...ids, subCallId: 'p:ptc:1' as never, isError: true, content: [] })
+    session.append('tool/ptc-dispatch', { ...ids, subCallId: 'p:ptc:2' as never, isError: false, content: [] })
+    expect(backend.ledger().map(r => [r.attributes['event.type'], r.severity])).toEqual([
+      ['tool/ptc-dispatch', 'error'],
+      ['tool/ptc-dispatch', 'info'],
     ])
   })
 

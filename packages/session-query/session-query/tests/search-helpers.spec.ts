@@ -124,6 +124,15 @@ describe('session-query semantic extraction', () => {
     expect(extractSessionEventText(events[6]!)).toBe('in_progress\nship search')
   })
 
+  it('extracts a call nested in run_code like a model-issued call', () => {
+    const ids = { rootCallId: ToolCallId('prog'), parentCallId: ToolCallId('prog'), subCallId: ToolCallId('prog:ptc:1'), name: 'bash', arguments: { cmd: 'pwd' } }
+    expect(extractSessionEventText({ type: 'tool/ptc-dispatch-start', seq: SessionSeq(1), time: 1, data: ids })).toBe('bash\n{"cmd":"pwd"}')
+    expect(extractSessionEventText({
+      type: 'tool/ptc-dispatch', seq: SessionSeq(2), time: 2,
+      data: { ...ids, isError: true, content: [{ type: 'text', text: 'failed' }], error: { name: 'Oops', code: 'E_OOPS' } },
+    })).toBe('failed\nOops\nE_OOPS')
+  })
+
   it('extracts meaningful turn outcomes and skips structural or unknown events', () => {
     const reasons: Array<[SessionEvent<'turn/end'>['data']['reason'], string]> = [
       [{ kind: 'error', error: { message: 'boom', code: 'UNKNOWN' } }, 'error\nboom'],

@@ -24,6 +24,7 @@ import {
   type SessionSeqCursor,
 } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { effectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import type { SessionTelemetrySink, SessionTelemetryRecord, SessionTelemetrySeverity } from './index.ts'
 
 /** Whether capture follows live events or reads the canonical log only when requested. */
@@ -269,8 +270,10 @@ function shutdownRecord(session: Session): SessionTelemetryRecord {
 /** Map an event's own outcome flag to the pre-baked alerting severity. */
 function severityOf(event: SessionEvent): SessionTelemetrySeverity {
   switch (event.type) {
+    // A call nested in a `run_code` program reports its own outcome, like a model-issued call.
     case 'tool/result':
-      return event.data.message.isError === true ? 'error' : 'info'
+    case 'tool/ptc-dispatch':
+      return effectiveToolResult(event).isError ? 'error' : 'info'
     case 'turn/end':
       return event.data.reason.kind === 'error' ? 'error' : 'info'
     default:
