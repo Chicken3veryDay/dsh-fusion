@@ -52,7 +52,7 @@ Workstream 所有者被恢复时，服务会读取每个没有已注册 Agent �
 包由四个小层次组成：
 
 - [`src/types.ts`](src/types.ts) 负责快照、成员、消息、上下文包、请求和配置类型，以及 `workstream/state` 事件、`workstream` 投影和 `workstream-message`、`workstream-notice` 消息来源的声明。
-- [`src/projection.ts`](src/projection.ts) 用严格的 schema 验证每个 `workstream/state` 事件，忽略 `ownerSessionId` 与被折叠 Session 不同的事件，并拒绝版本间隙和创建 `operationId` 的变化。它还记录快照所在事件的位置、Workstream 打开后最新一个根 `ticket/state` 事件的位置，以及每个协调者或 Assignment 所有者对应的最新此类事件的位置，供 `waitForChange` 与游标比较。
+- [`src/projection.ts`](src/projection.ts) 用严格的 schema 验证每个 `workstream/state` 事件，忽略 `ownerSessionId` 与被折叠 Session 不同的事件，并拒绝版本间隙和创建 `operationId` 的变化。它还记录快照所在事件的位置、Workstream 打开后最新一个根 `ticket/state` 事件的位置，以及每个协调者或 Assignment 所有者对应的最新此类事件的位置，供 `waitForChange` 与游标比较。检查点仅在完整重放可以产生的状态下才被接受：已打开的快照始终带有其提交事件的位置，且记录的 Ticket 位置彼此一致。违反这些条件的检查点无法通过 schema 验证，缓存读取因此回退到完整日志，而不是恢复缺失的位置。
 - [`src/index.ts`](src/index.ts) 按根 Session 串行化操作，执行权限和数量限制，以 `version: 1` 追加完整快照，通过 `ctx.sessions` 刷新，并提供 `ctx.workstreams`。
 - [`src/tools.ts`](src/tools.ts) 通过 `ctx.tools` 注册可选的 `workstream_*` 工具。
 

@@ -34,19 +34,41 @@ const snapshotSchema: z.ZodType<WorkstreamSnapshot> = z.object({
 }).strict()
 
 const seq = z.number().int().nonnegative()
-const stateSchema = z.object({
+const stateFields = {
   ownerSessionId: sessionId,
-  snapshot: snapshotSchema.nullable(),
+  /** Seq of the latest root Ticket event since the Workstream opened naming each Session as coordinator or Assignment owner. */
+  participantTicketSeqs: z.record(z.string(), seq),
+} as const
+
+/** Before the Workstream opens: no event position is recorded, because `apply` ignores root Ticket events until a snapshot exists. */
+const unopenedStateSchema = z.object({ ...stateFields, snapshot: z.null(), snapshotSeq: z.null(), ticketSeq: z.null() }).strict()
+  .refine(state => Object.keys(state.participantTicketSeqs).length === 0, 'an unopened Workstream records no Ticket participants')
+
+/** After it opens: the committing event's seq is always present, and the Ticket positions agree with each other.
+ * Every root Ticket event sets `ticketSeq` and the position of at least its coordinator, so no participant is ahead of
+ * `ticketSeq`, the latest participant position is `ticketSeq`, and neither exists without the other. */
+const openedStateSchema = z.object({
+  ...stateFields,
+  snapshot: snapshotSchema,
   /** Seq of the event that committed `snapshot`. */
-  snapshotSeq: seq.nullable(),
+  snapshotSeq: seq,
   /** Seq of the latest root Ticket event since the Workstream opened. */
   ticketSeq: seq.nullable(),
-  /** Seq of the latest such Ticket event naming each Session as coordinator or Assignment owner. */
-  participantTicketSeqs: z.record(z.string(), seq),
-}).strict()
+}).strict().refine((state) => {
+  const positions = Object.values(state.participantTicketSeqs)
+  return (positions.length === 0 ? null : Math.max(...positions)) === state.ticketSeq
+}, 'Ticket positions must agree with the latest root Ticket event')
 
-/** Private checkpoint state; consumers read through WorkstreamService. */
+const stateSchema: z.ZodType<
+  z.infer<typeof unopenedStateSchema> | z.infer<typeof openedStateSchema>
+> = z.union([unopenedStateSchema, openedStateSchema])
+
+/** Private checkpoint state; consumers read through WorkstreamService. A checkpoint is accepted only when full replay of the log
+ * could have produced it, so a restored position never differs from a replayed one. */
 export type WorkstreamProjectionState = z.infer<typeof stateSchema>
+
+/** The projection state of a Workstream that has opened: its snapshot and commit position are present. */
+export type OpenedWorkstreamProjectionState = Extract<WorkstreamProjectionState, { readonly snapshot: WorkstreamSnapshot }>
 
 /** The fields of a root `ticket/state` event that decide which Workstream callers it concerns; both versions carry them. */
 const ticketParticipantsSchema = z.object({
