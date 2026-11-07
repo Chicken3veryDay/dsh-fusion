@@ -715,7 +715,8 @@ export class SessionProjectionRegistry extends Service {
       if (row !== undefined && row.ver === def.stateVersion && row.seq >= beforeBase && row.seq <= endSeq) {
         const parsed = def.stateSchema.safeParse(row.val)
         if (parsed.success) seed = { state: parsed.data, seq: row.seq }
-        else this.ctx.logger.warn(`session projection ${JSON.stringify(def.key)}: discarded the checkpoint row of Session ${JSON.stringify(header.id)} that its state schema rejects; refolding from the log: ${parsed.error.message}`)
+        // The schema message and issue paths carry payload-derived keys, so only the rejection category is logged.
+        else this.ctx.logger.warn(`session projection ${JSON.stringify(def.key)}: discarded the checkpoint row of Session ${JSON.stringify(header.id)} that its state schema rejects (rejection: state-schema); refolding from the log`)
       }
       if (seed === undefined && baseSeq > 0) {
         throw new Error(

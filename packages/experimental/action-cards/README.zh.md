@@ -55,7 +55,7 @@ kind: "package-reference"
 
 本包默认导出 `actionCards` Remote 服务。它在全局注册一次 `propose_action`，并附带 `when` 条件：在线的根 Agent 自己直接调用 `skill` 加载了已注册种类的 Skill 后，该 Agent 才满足条件，subagent 或代码中发起的加载一律忽略；这个标记保存在内存中，直到 Agent 被释放。调用的 `execute` 检查在线根 Agent、投影累计的排队消息是否达到 `queuedMessageLimit`，并通过轮次边界检查本轮加载过的 Skill，同时在内存中标记本轮已接受的调用；日志中的 `tool/call` 及其成功的 `tool/result` 就是持久的提议。
 
-`actionCards` 会话投影（状态版本 2）把每个 `propose_action` 调用与其成功结果配对，从 `plugin:action-cards/decision` 读取决定，从收件箱拼接事件累计排队到下一轮的消息供工具上限使用，并保留尚未报告的决定，直到 `through` 覆盖它们的状态通知写入日志。投影的客户端视图 `{ proposals, decisions }` 不进入会话摘要。
+`actionCards` 会话投影（状态版本 3）把每个 `propose_action` 调用与其成功结果配对，从 `plugin:action-cards/decision` 读取决定，从收件箱拼接事件累计排队到下一轮的消息供工具上限使用，并保留尚未报告的决定，直到 `through` 覆盖它们的状态通知写入日志。投影的客户端视图 `{ proposals, decisions }` 不进入会话摘要。提案、决定和待处理调用都按调用 id 索引，每个被接纳的 id（包括 `__proto__`、`constructor` 和 `toString`）在恢复和客户端传输中都作为自有条目保留，因此取代逻辑和卡片显示不依赖 id 的拼写。
 
 Remote `act(sessionId, callId, verb, payload?)` 先检查服务所有者、在线根 Agent 和卡片；“暂不需要”在种类未注册时也继续处理，其他操作还需要种类、操作和 Remote 权限。然后同一张卡片共用一次处理。种类的 `reconcile` 先运行，之后再次检查在线根 Agent；已忽略或已替换的卡片原样返回，“暂不需要”被记录，写入类操作在只读会话中被拒绝，其余操作在该 Agent 的发起方作用域内交给种类处理器。`record()` 也接受种类已注销的动作，因为 Cordis 并发释放插件的各个 effect，卸载中的种类仍要记录已开始工作的结果。一个 `agent/pre-step` 监听器在后续监听器准备好本步之后追加状态通知。
 

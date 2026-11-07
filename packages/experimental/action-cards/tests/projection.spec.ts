@@ -128,3 +128,30 @@ it('publishes proposals and decisions as one view reused across internal state c
   expect(projection.wire.view(fold([spliced(1), call('pending')], state))).toBe(view)
   expect(projection.stateSchema.parse(state)).toEqual(state)
 })
+
+it('keeps cards and supersession for prototype-named call ids through state and wire parsing', () => {
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    const state = fold([turn(1), call(id), result(id), turn(2), call('next', args, 2), result('next', false, 2)])
+    expect(Object.keys(state.view.proposals)).toEqual([id, 'next'])
+    expect(Object.keys(state.view.decisions)).toEqual([id])
+    expect(state.view.decisions[id]).toEqual({ callId: id, action: 'test_action', phase: 'replaced' })
+    expect(Object.getPrototypeOf(state.view.decisions)).toBe(Object.prototype)
+    const restored = projection.stateSchema.parse(JSON.parse(JSON.stringify(state)))
+    expect(restored).toEqual(state)
+    expect(Object.keys(projection.wire.viewSchema.parse(JSON.parse(JSON.stringify(state.view))).proposals)).toEqual([id, 'next'])
+  }
+  const pending = fold([turn(1), call('__proto__')])
+  expect(Object.keys(pending.calls)).toEqual(['__proto__'])
+  expect(Object.keys(projection.stateSchema.parse(JSON.parse(JSON.stringify(pending))).calls)).toEqual(['__proto__'])
+  const decided = fold(records({ callId: ToolCallId('__proto__'), action: 'test_action', phase: 'creating' }))
+  expect(Object.keys(decided.pendingStatus)).toEqual(['__proto__'])
+  expect(Object.keys(projection.stateSchema.parse(JSON.parse(JSON.stringify(decided))).pendingStatus)).toEqual(['__proto__'])
+})
+
+it('rejects a state or view whose call-id record is not an object or holds an invalid entry', () => {
+  const state = fold([turn(1), call('a'), result('a')])
+  expect(projection.stateSchema.safeParse({ ...state, calls: [] }).success).toBe(false)
+  expect(projection.stateSchema.safeParse({ ...state, calls: null }).success).toBe(false)
+  expect(projection.wire.viewSchema.safeParse({ proposals: { a: { callId: 'a' } }, decisions: {} }).success).toBe(false)
+  expect(projection.stateSchema.safeParse({ ...state, pendingStatus: { a: 'seq' } }).success).toBe(false)
+})

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { pluginRecordOf, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import type { ActionCardDecision } from './types.ts'
 
 /** Model-facing name of the card tool. */
 export const PROPOSE_ACTION = 'propose_action'
@@ -35,9 +36,33 @@ export const decisionSchema = z.object({
   data: fieldsSchema.optional(),
 }).strict()
 
+/**
+ * Record of values by tool-call id that keeps every own key. Zod's `z.record` silently removes the reserved key
+ * `__proto__`, so a card whose provider-issued call id is `__proto__` would vanish from restored state and the Client wire.
+ * @param value - schema of each entry.
+ * @returns schema whose output holds each own entry of a JSON object as an own data property.
+ */
+function recordByCallId<T>(value: z.ZodType<T>): z.ZodType<Record<string, T>> {
+  return z.unknown().transform((input, ctx): Record<string, T> => {
+    if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+      ctx.issues.push({ code: 'custom', message: 'Expected an object keyed by call id', input })
+      return z.NEVER
+    }
+    const entries: [string, T][] = []
+    for (const [id, entry] of Object.entries(input)) {
+      const parsed = value.safeParse(entry)
+      if (parsed.success) entries.push([id, parsed.data])
+      else {
+        for (const issue of parsed.error.issues) ctx.issues.push({ code: 'custom', message: issue.message, input: entry, path: [id, ...issue.path] })
+      }
+    }
+    return Object.fromEntries(entries)
+  })
+}
+
 const viewSchema = z.object({
-  proposals: z.record(z.string(), proposalSchema),
-  decisions: z.record(z.string(), decisionSchema),
+  proposals: recordByCallId(proposalSchema),
+  decisions: recordByCallId(decisionSchema),
 })
 
 const stateSchema = z.object({
@@ -45,11 +70,11 @@ const stateSchema = z.object({
   inheritedEventCount: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionLogOffset),
   view: viewSchema,
   /** `propose_action` calls of the open turn still waiting for their result. */
-  calls: z.record(z.string(), proposalSchema.omit({ callId: true })),
+  calls: recordByCallId(proposalSchema.omit({ callId: true })),
   /** Turn of the latest admitted proposal; later calls of that turn create no card. */
   admittedTurn: z.number().int().nullable(),
   /** Decisions not yet reported to the model, by call id, with the seq of their record. */
-  pendingStatus: z.record(z.string(), z.number()),
+  pendingStatus: recordByCallId(z.number()),
   /** User messages still queued for later turns, folded from inbox splices; the card tool compares it with its limit. */
   queued: z.number().int().nonnegative(),
 })
@@ -68,7 +93,7 @@ export type ActionCardProjectionDefinition = Omit<ProjectionDefinition<'actionCa
  * Events inherited by a forked Session create no proposals or decisions.
  */
 export const actionCardProjection: ActionCardProjectionDefinition = {
-  key: 'actionCards', stateVersion: 2, stateSchema,
+  key: 'actionCards', stateVersion: 3, stateSchema,
   init: (_header, inheritedEventCount) => ({
     inheritedEventCount, view: { proposals: {}, decisions: {} }, calls: {}, admittedTurn: null, pendingStatus: {}, queued: 0,
   }),
@@ -101,11 +126,11 @@ export const actionCardProjection: ActionCardProjectionDefinition = {
         if (call === undefined) return state
         const calls = Object.fromEntries(Object.entries(state.calls).filter(([id]) => id !== callId))
         if (event.data.message.isError === true || state.admittedTurn === call.turn) return { ...state, calls }
-        const decisions = { ...state.view.decisions }
         // A newer card supersedes every unstarted card; the model made that choice, so no status is reported.
-        for (const earlier of Object.values(state.view.proposals)) {
-          if (decisions[earlier.callId] === undefined) decisions[earlier.callId] = { callId: earlier.callId, action: earlier.action, phase: 'replaced' }
-        }
+        // Entries are built, not assigned: `decisions[id] = …` with id `__proto__` would call the inherited setter.
+        const replaced = Object.values(state.view.proposals).filter(earlier => !Object.hasOwn(state.view.decisions, earlier.callId))
+          .map((earlier): [string, ActionCardDecision] => [earlier.callId, { callId: earlier.callId, action: earlier.action, phase: 'replaced' }])
+        const decisions: Record<string, ActionCardDecision> = Object.fromEntries([...Object.entries(state.view.decisions), ...replaced])
         return { ...state, calls, admittedTurn: call.turn,
           view: { proposals: { ...state.view.proposals, [callId]: { callId, ...call } }, decisions } }
       }
