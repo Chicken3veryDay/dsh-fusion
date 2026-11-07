@@ -43,13 +43,15 @@ function isMissing(error: unknown): boolean {
  * One scope's `cgroup.events` watch. The kernel changes the file when the cgroup's `populated`
  * flag flips, so an event is a wake-up and {@link CgroupEventsWatch.population} is the proof.
  * Hosts without the unified hierarchy and scopes that vanish before the watch starts stay
- * silent because the caller's systemctl poll already covers them; every other failure goes to
- * `report` once and leaves the poll as the only observer.
+ * silent because the caller's systemctl poll already covers them. Every other failure (an
+ * unwatchable path, a watcher error, an unreadable or unparsable file) goes to `report` once and
+ * closes the watch for the rest of the owner's life, leaving the poll as the only observer.
  */
 export class CgroupEventsWatch {
   private watcher: CgroupFileWatcher | undefined
   private path: string | undefined
   private attempted = false
+  private closed = false
   private pending = false
   private reported = false
 
@@ -68,10 +70,10 @@ export class CgroupEventsWatch {
    * Start watching the scope's `cgroup.events` once its cgroup path is known.
    * @param controlGroup - the scope's `ControlGroup` property, relative to the hierarchy root.
    * @returns whether this call attached the watcher, so the caller can re-check emptiness for a
-   *   transition that happened before the watch existed.
+   *   transition that happened before the watch existed. Always false after {@link close}.
    */
   attach(controlGroup: string | undefined): boolean {
-    if (this.attempted || controlGroup === undefined) return false
+    if (this.closed || this.attempted || controlGroup === undefined) return false
     this.attempted = true
     const root = this.seams.cgroupRoot ?? UNIFIED_CGROUP_ROOT
     if (!existsSync(join(root, 'cgroup.controllers'))) return false
@@ -84,11 +86,13 @@ export class CgroupEventsWatch {
       return false
     }
     watcher.on('change', () => {
+      // A watcher released after a degraded read must not decide anything.
+      if (this.watcher !== watcher) return
       this.pending = true
       this.wake()
     })
     watcher.on('error', (error) => {
-      this.close()
+      this.release()
       this.degrade('watcher failed', error)
       this.wake()
     })
@@ -115,7 +119,8 @@ export class CgroupEventsWatch {
   }
 
   /**
-   * Read the kernel's populated flag for the watched cgroup.
+   * Read the kernel's populated flag for the watched cgroup. A read that fails for any reason other
+   * than a missing file, or a file without the flag, releases the watcher so no later event is read.
    * @returns `unreadable` when the file is gone (scope collected), unreadable, or unparsable.
    */
   population(): CgroupPopulation {
@@ -124,11 +129,15 @@ export class CgroupEventsWatch {
     try {
       text = (this.seams.readFile ?? defaultReadFile)(this.path)
     } catch (error) {
-      if (!isMissing(error)) this.degrade('could not be read', error)
+      if (!isMissing(error)) {
+        this.release()
+        this.degrade('could not be read', error)
+      }
       return 'unreadable'
     }
     const populated = POPULATED_LINE.exec(text)?.[1]
     if (populated === undefined) {
+      this.release()
       this.degrade('has no populated flag', new Error(JSON.stringify(text.slice(0, 80))))
       return 'unreadable'
     }
@@ -141,12 +150,17 @@ export class CgroupEventsWatch {
    */
   detach(): void {
     const healthy = this.watcher !== undefined
-    this.close()
+    this.release()
     if (healthy) this.attempted = false
   }
 
-  /** Stop watching for good. Safe to repeat. */
+  /** Stop watching for good: a later {@link attach} does nothing. Safe to repeat. */
   close(): void {
+    this.closed = true
+    this.release()
+  }
+
+  private release(): void {
     const watcher = this.watcher
     this.watcher = undefined
     this.pending = false

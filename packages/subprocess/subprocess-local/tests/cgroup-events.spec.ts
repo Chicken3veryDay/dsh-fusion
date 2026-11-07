@@ -90,4 +90,23 @@ describe('CgroupEventsWatch on the real filesystem', () => {
     expect(reports[0]).toContain('has no populated flag')
     watch.close()
   })
+
+  it('attaches again after a healthy detach but never after close', () => {
+    const tree = realTree()
+    const closed: string[] = []
+    const watchFile = vi.fn((path: string) => ({ on: () => undefined, close: () => { closed.push(path) } }))
+    const watch = new CgroupEventsWatch({ cgroupRoot: tree.root, watchFile }, vi.fn(), vi.fn())
+    expect(watch.attach(tree.group)).toBe(true)
+    watch.detach()
+    expect(watch.attach(tree.group)).toBe(true)
+    watch.close()
+    expect(watch.attach(tree.group)).toBe(false)
+    watch.detach()
+    expect(watch.attach(tree.group)).toBe(false)
+    const unused = new CgroupEventsWatch({ cgroupRoot: tree.root, watchFile }, vi.fn(), vi.fn())
+    unused.close()
+    expect(unused.attach(tree.group)).toBe(false)
+    expect(watchFile).toHaveBeenCalledTimes(2)
+    expect(closed).toEqual([tree.events, tree.events])
+  })
 })
