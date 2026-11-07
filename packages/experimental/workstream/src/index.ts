@@ -452,7 +452,8 @@ export class WorkstreamService extends Service {
    * @param request - last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation.
    * Without `afterCursor`, every concerning event committed after `afterRevision` counts.
    * @returns the current revision and cursor, at once when the revision differs from `afterRevision` or a concerning event
-   * is at or after the cursor, otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+   * is at or after the cursor, otherwise at the next concerning event or the timeout. Abort and shutdown reject, also when a
+   * change is already visible.
    * Waiting again with the returned revision and cursor reports only later concerning events.
    */
   async waitForChange(
@@ -465,6 +466,10 @@ export class WorkstreamService extends Service {
     if (request.afterCursor !== undefined && (!Number.isSafeInteger(request.afterCursor) || request.afterCursor < 0
       || request.afterCursor > owner.session.seq))
       throw new WorkstreamError('afterCursor must be a cursor read from this Workstream', 'WORKSTREAM_INVALID_INPUT')
+    const signal = AbortSignal.any([request.signal, this.lifetime.signal])
+    const cancelled = (): Error => signal.reason instanceof Error ? signal.reason : new
+    WorkstreamError('Workstream wait was cancelled', 'WORKSTREAM_DISPOSED')
+    if (signal.aborted) throw cancelled()
     const result = (timedOut: boolean): WorkstreamWaitResult =>
       ({ timedOut, revision: this.state(owner).revision, cursor: owner.session.seq })
     if (snapshot.revision !== request.afterRevision) return result(false)
@@ -474,12 +479,9 @@ export class WorkstreamService extends Service {
       caller.id === snapshotNow.ownerSessionId || caller.id === snapshotNow.coordinatorId
     const seen = Math.max(state.snapshotSeq ?? -1, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
     if (seen >= from) return result(false)
-    const signal = AbortSignal.any([request.signal, this.lifetime.signal])
-    signal.throwIfAborted()
     return new Promise((resolve, reject) => {
       const cleanup = (): void => { clearTimeout(timer); stop(); signal.removeEventListener('abort', abort) }
-      const abort = (): void => { cleanup(); reject(signal.reason instanceof Error ? signal.reason : new
-      WorkstreamError('Workstream wait was cancelled', 'WORKSTREAM_DISPOSED')) }
+      const abort = (): void => { cleanup(); reject(cancelled()) }
       const stop = this.ctx.on('session/event', (session, event) => {
         if (session !== owner.session) return
         if (event.type === 'workstream/state') {
