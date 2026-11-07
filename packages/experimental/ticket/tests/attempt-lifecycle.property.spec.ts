@@ -31,9 +31,9 @@ type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once' | 'cancel
 type StartOutcome = 'establish' | 'refuse' | 'rollback-fails'
 type Action =
   | { readonly kind: 'prepare'; readonly slot: number; readonly dedicated: boolean; readonly signal: boolean; readonly holdAt: number }
-  | { readonly kind: 'retry' | 'abort' | 'finish' | 'settle' | 'dispose' | 'fail-ticket' | 'worker-down' | 'worker-up' | 'busy'; readonly slot: number }
+  | { readonly kind: 'retry' | 'abort' | 'abort-job' | 'finish' | 'settle' | 'dispose' | 'fail-ticket' | 'worker-down' | 'worker-up' | 'busy'; readonly slot: number }
   | { readonly kind: 'activation'; readonly slot: number; readonly start: StartOutcome; readonly cleanup: 'clean' | 'fails'; readonly stubborn: boolean }
-  | { readonly kind: 'job'; readonly slot: number; readonly producer: ProducerKind }
+  | { readonly kind: 'job'; readonly slot: number; readonly producer: ProducerKind; readonly signal?: boolean }
   | { readonly kind: 'hold-flush'; readonly slot: number; readonly nth: number }
   | { readonly kind: 'fail-flush' | 'pass-flush' | 'root-down' | 'root-up' | 'drop-root'; readonly slot: number }
   | { readonly kind: 'replace' | 'restart' }
@@ -45,6 +45,8 @@ interface Producer {
   readonly attempt: Attempt
   readonly done: PromiseWithResolvers<JobOutcome>
   readonly kind: ProducerKind
+  /** The caller's `startJob` signal, when the action passed one. */
+  readonly abort?: AbortController
   /** Ticket invoked the producer's start; a producer it never started is not live. */
   started: boolean
   finished: boolean
@@ -278,6 +280,7 @@ function target(world: World, action: Action): Attempt | undefined {
     switch (action.kind) {
       case 'job': case 'settle': case 'dispose': return attempt.handle !== undefined && attempt.generation === world.generation
       case 'abort': return attempt.status === 'pending' && attempt.request.signal !== undefined
+      case 'abort-job': return signalled(world, attempt) !== undefined
       case 'activation': return attempt.deciding
       case 'busy': return attempt.handle !== undefined && attempt.request.executor.kind === 'in-process' && attempt.stops === 0
       default: return true
@@ -351,11 +354,18 @@ function prepare(world: World, slot: number, dedicated: boolean, signal: boolean
   return attempt
 }
 
-function startJob(world: World, attempt: Attempt, kind: ProducerKind): void {
+/** The newest Job of `attempt` whose caller signal has not aborted. */
+function signalled(world: World, attempt: Attempt): Producer | undefined {
+  return world.producers.findLast(producer => producer.attempt === attempt && producer.abort?.signal.aborted === false)
+}
+
+function startJob(world: World, attempt: Attempt, kind: ProducerKind, signal: boolean): void {
   const handle = attempt.handle
   if (handle === undefined) return
   const done = Promise.withResolvers<JobOutcome>()
-  const producer: Producer = { attempt, done, kind, started: false, finished: false, cancels: 0 }
+  const producer: Producer = {
+    attempt, done, kind, started: false, finished: false, cancels: 0, ...signal ? { abort: new AbortController() } : {},
+  }
   void done.promise.then(() => { producer.finished = true })
   world.producers.push(producer)
   attempt.pendingJobs++
@@ -373,7 +383,7 @@ function startJob(world: World, attempt: Attempt, kind: ProducerKind): void {
       },
       done: done.promise,
     }
-  }).catch(() => {
+  }, producer.abort?.signal).catch(() => {
     if (!producer.started) done.resolve({ status: 'failed' })
   }).finally(() => {
     attempt.pendingJobs--
@@ -475,6 +485,10 @@ async function act(world: World, action: Action): Promise<void> {
         await until(world, () => retried || attempt.deciding)
       }
       break
+    case 'abort-job':
+      // Abort listeners run synchronously; anything they throw reaches the host's uncaught-exception path.
+      if (attempt !== undefined) signalled(world, attempt)?.abort?.abort(new Error('caller cancelled the Job'))
+      break
     case 'abort':
       if (attempt !== undefined && !attempt.abort.signal.aborted) {
         if (attempt.status === 'pending' && attempt.request.signal !== undefined) attempt.abortedWhilePending = true
@@ -487,7 +501,7 @@ async function act(world: World, action: Action): Promise<void> {
       break
     case 'job':
       if (attempt !== undefined && attempt.generation === world.generation) {
-        startJob(world, attempt, action.producer)
+        startJob(world, attempt, action.producer, action.signal === true)
         await until(world, () => attempt.pendingJobs === 0)
       }
       break
@@ -708,11 +722,11 @@ const action: fc.Arbitrary<Action> = fc.oneof(
     holdAt: fc.integer({ min: 0, max: 3 }) }) },
   { weight: 6, arbitrary: fc.record({ kind: fc.constant('job' as const), slot,
     producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once', 'cancel-fails',
-      'disposes-at-start') }) },
+      'disposes-at-start'), signal: fc.boolean() }) },
   { weight: 4, arbitrary: fc.record({ kind: fc.constant('activation' as const), slot,
     start: fc.constantFrom<StartOutcome>('establish', 'establish', 'refuse', 'rollback-fails'),
     cleanup: fc.constantFrom<'clean' | 'fails'>('clean', 'clean', 'fails'), stubborn: fc.boolean() }) },
-  on('abort', 4), on('dispose', 4), on('settle', 2), on('finish', 2), on('retry', 2), on('fail-ticket', 1), on('busy', 2),
+  on('abort', 4), on('abort-job', 2), on('dispose', 4), on('settle', 2), on('finish', 2), on('retry', 2), on('fail-ticket', 1), on('busy', 2),
   on('worker-down', 2), on('worker-up', 1), on('root-down', 3), on('root-up', 2), on('drop-root', 2),
   { weight: 2, arbitrary: fc.record({ kind: fc.constant('hold-flush' as const), slot, nth: fc.integer({ min: 1, max: 3 }) }) },
   on('fail-flush', 2), on('pass-flush', 2),
@@ -724,7 +738,7 @@ const inProcess = (slot: number, signal = false, holdAt = 0): Action => ({ kind:
 const dedicated = (slot: number): Action => ({ kind: 'prepare', slot, dedicated: true, signal: false, holdAt: 0 })
 const activation = (slot: number, start: StartOutcome, cleanup: 'clean' | 'fails' = 'clean', stubborn = false): Action =>
   ({ kind: 'activation', slot, start, cleanup, stubborn })
-/** Round-6 and round-7 interleavings, replayed before the generated sequences. */
+/** Round-6, round-7 and round-9 interleavings, replayed before the generated sequences. */
 const regressions: Action[][] = [
   [inProcess(0, true, 3), { kind: 'abort', slot: 0 }],
   [inProcess(0), { kind: 'job', slot: 0, producer: 'throws-once' }, { kind: 'dispose', slot: 0 }],
@@ -752,6 +766,10 @@ const regressions: Action[][] = [
   [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }, inProcess(1)],
   [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }, { kind: 'drop-root', slot: 0 },
     { kind: 'replace' }, inProcess(1)],
+  // R9-M1: a stop fails while its root is closed, then a replacement and a resume of that root while the worker still runs.
+  [inProcess(0), { kind: 'busy', slot: 0 }, { kind: 'root-down', slot: 0 }, { kind: 'replace' }, { kind: 'root-up', slot: 0 }, inProcess(1)],
+  // R9-M2: a Job's caller signal aborts while its producer refuses cancellation.
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'cancel-fails', signal: true }, { kind: 'abort-job', slot: 0 }],
 ]
 
 /* TICKET_PROPERTY_SEED, TICKET_PROPERTY_RUNS and TICKET_PROPERTY_NO_EXAMPLES vary the seed, the run count and the regression
@@ -759,7 +777,13 @@ const regressions: Action[][] = [
  * sequence on failure. */
 it('every generated event sequence ends each attempt once, balances reservations, and replays to the live state', async () => {
   const seed = Number(process.env.TICKET_PROPERTY_SEED ?? 20261106)
-  await fc.assert(fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 20 }), async (actions) => {
+  // No producer failure may reach the host's uncaught-exception path, which the Harness boot makes fatal.
+  let active: World | undefined
+  const escaped: string[] = []
+  process.setUncaughtExceptionCaptureCallback((error) => {
+    (active?.violations ?? escaped).push(`an exception escaped to the host: ${String(error)}`)
+  })
+  const property = fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 20 }), async (actions) => {
     const dir = await mkdtemp(join(tmpdir(), 'ticket-property-'))
     let world: World | undefined
     try {
@@ -768,6 +792,7 @@ it('every generated event sequence ends each attempt once, balances reservations
       }
       let started = Date.now()
       world = await setup(dir)
+      active = world
       trace?.('setup', started)
       for (const step of actions) {
         started = Date.now()
@@ -782,6 +807,7 @@ it('every generated event sequence ends each attempt once, balances reservations
       trace?.('check', started)
       expect(world.violations).toEqual([])
     } finally {
+      active = undefined
       vi.restoreAllMocks()
       if (world !== undefined) {
         exitHost(world)
@@ -790,8 +816,14 @@ it('every generated event sequence ends each attempt once, balances reservations
       }
       await rm(dir, { recursive: true, force: true })
     }
-  }), {
-    seed, numRuns: Number(process.env.TICKET_PROPERTY_RUNS ?? 200), endOnFailure: true,
-    ...process.env.TICKET_PROPERTY_NO_EXAMPLES === undefined ? { examples: regressions.map(actions => [actions]) } : {},
   })
+  try {
+    await fc.assert(property, {
+      seed, numRuns: Number(process.env.TICKET_PROPERTY_RUNS ?? 200), endOnFailure: true,
+      ...process.env.TICKET_PROPERTY_NO_EXAMPLES === undefined ? { examples: regressions.map(actions => [actions]) } : {},
+    })
+  } finally {
+    process.setUncaughtExceptionCaptureCallback(null)
+  }
+  expect(escaped).toEqual([])
 }, 600_000)
