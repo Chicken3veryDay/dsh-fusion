@@ -73,7 +73,7 @@ kind: "package-reference"
 
 缺少 `agents` 服务时，启动请求以 `CONTINUATION_UNAVAILABLE` 拒绝；运行时可用但父级缺失或被替换时，以 `UNAUTHORIZED` 拒绝。未实现任何执行方法的提供方会在注册时以 `UNSUPPORTED_CAPABILITY` 被拒绝；请求不受支持的能力会以同一码使创建失败。调用方信号仅取消尚未发布的工作；发布后通过 `dispose()` 取消该次 activation，并等待其后代（包括正在启动的后代）及其资源清理完成。`result` 在清理与通知结束后完成，携带输出、可选结构化数据与停止原因；结果捕获故障在清理后使其拒绝。清理失败使 `dispose()` 拒绝，并将生命周期结束事件标记为失败；结果 promise 与父级通知保留已捕获的执行结果。
 
-被拒绝的启动或投递不返回 Activation。拒绝前，管理器释放该操作创建的所有执行，并归还其容量槽位与父级所有权。该释放失败时，执行可能仍在运行：拒绝码为 `ACTIVATION_TEARDOWN_FAILED`，消息写明执行 id 与两项失败，`cause` 是由准入失败和释放失败组成的 `AggregateError`。随后管理器保留该执行，关闭其准入，并保留其 id、容量槽位与父级所有权。`drainChildren()`、`drainDescendants()`、父级释放与管理器拆除会重试 `SubagentRun.dispose()` 或 Agent 句柄释放；只有重试成功才归还槽位与所有权。排空操作在重试失败时记录日志而不拒绝，因为被拒绝的准入已经报告了该失败。`waitForChildren()` 不等待被保留的执行。
+被拒绝的启动或投递不返回 Activation。拒绝前，管理器释放该操作创建的所有执行，并归还其容量槽位与父级所有权。该释放失败时，执行可能仍在运行：拒绝码为 `ACTIVATION_TEARDOWN_FAILED`，消息写明执行 id 与两项失败，`cause` 是由准入失败和释放失败组成的 `AggregateError`。随后管理器保留该执行，关闭其准入，并保留其 id、容量槽位与父级所有权。`drainChildren()`、`drainDescendants()`、父级释放与管理器拆除会重试 `SubagentRun.dispose()` 或 Agent 句柄释放；只有重试成功才归还槽位与所有权。排空操作在重试失败时记录日志而不拒绝，因为被拒绝的准入已经报告了该失败。`waitForChildren()` 不等待被保留的执行，向被保留子级的投递以 `ACTIVATION_CLOSING` 拒绝。
 
 -----
 

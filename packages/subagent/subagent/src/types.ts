@@ -54,7 +54,8 @@ export interface SubagentActivationSpec {
  * failure and the release failure. The execution may then still run; the
  * manager retains it with closed admission, its id, its slot, and its parent
  * ownership until a retry by a selected drain, a descendant drain, parent
- * disposal, or manager teardown releases it.
+ * disposal, or manager teardown releases it; deliveries to it reject with
+ * `ACTIVATION_CLOSING` meanwhile.
  */
 export interface SubagentActivation {
   /** Stable identity of the child. */

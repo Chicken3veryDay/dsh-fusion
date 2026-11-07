@@ -1463,6 +1463,14 @@ export class SubagentManager {
         const activation = this.resident.get(childId)
         if (activation === undefined) return this.coldResume(parent, childId, content, options)
         requireLocalActivation(activation)
+        // A retained Activation stays closed until a release retry succeeds;
+        // waiting on its settled transaction would retry forever.
+        if (activation.retained !== undefined) {
+          throw new SubagentError(
+            `subagent "${childId}" could not be released after a rejected admission; the message was not accepted`,
+            'ACTIVATION_CLOSING',
+          )
+        }
         const disposal = activation.closing
         /* v8 ignore next 3 -- the send-versus-dispose cutoff needs a delivery to
          * observe the transaction inside the same critical section that opened it. */

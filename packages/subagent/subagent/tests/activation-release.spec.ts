@@ -180,6 +180,9 @@ describe('rejected admission release', () => {
     await expect(rejected).rejects.toMatchObject({ code: 'ACTIVATION_TEARDOWN_FAILED' })
     await expect(rejected).rejects.toThrow(/not admitted \(start publication failed\).*handle release failed/)
     expect(resident.get(started.childId)?.retained).toBeDefined()
+    // Input to the retained child is refused instead of waiting for a release that already failed.
+    await expect(ctx.subagents.sendMessage(parent, started.childId, text('later'), { signal }))
+      .rejects.toMatchObject({ code: 'ACTIVATION_CLOSING' })
     await ctx.subagents.drainChildren(parent, [started.childId])
     expect(resident.has(started.childId)).toBe(false)
   })
