@@ -65,7 +65,7 @@ function renumber(events: SessionEvent[]): SessionEvent[] {
 }
 
 function fold(events: readonly SessionEvent[]): ReceiverState {
-  let state = receiverProjection.init(header, SessionLogOffset(0))
+  let state: ReceiverState = receiverProjection.init(header, SessionLogOffset(0))
   for (const event of events) state = receiverProjection.apply(state, event)
   return state
 }
