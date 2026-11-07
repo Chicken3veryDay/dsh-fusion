@@ -149,9 +149,9 @@ function desktopTool(ctx: Context, method: DesktopOperation['method']) {
     name: `desktop_${method}`,
     description: `Use the active Linux desktop to ${method}; obtain fresh state before acting and verify the result afterward. Input is irreversible and requires host permission.`,
     parameters: {
-      applicationId: { type: 'string', description: 'Application identifier from a prior desktop result.' },
-      windowId: { type: 'string', description: 'Window identifier from a prior desktop result.' },
-      ...(method === 'act' ? { action: { type: 'json', required: true, description: 'Provider-normalized desktop action.' } } : {}),
+      applicationId: { type: 'string', description: 'Driver process id as a positive integer string, obtained from the driver\'s list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither.' },
+      windowId: { type: 'string', description: 'Driver window id as a positive integer string, obtained from the driver\'s list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither.' },
+      ...(method === 'act' ? { action: { type: 'json', required: true, description: 'Desktop action with kind: click, type, press_key, scroll, drag, hotkey, or set_value, when the live driver catalog exposes that kind. Other fields pass to the driver as declared by its schema (type uses text; hotkey uses keys; drag uses from_x, from_y, to_x, to_y).' } } : {}),
     },
     output: {
       schema: JSON_RESULT,

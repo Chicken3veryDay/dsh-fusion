@@ -46,7 +46,7 @@ kind: "package-reference"
 
 #### 模型看到的内容
 
-模型会看到稳定的 `browser_*` 和 `desktop_*` 名称及操作专用 JSON 输入。模型不会选择提供方，也不会收到提供方凭据。
+模型会看到稳定的 `browser_*` 和 `desktop_*` 名称及操作专用 JSON 输入。桌面输入说明驱动 `list_windows` 工具提供的整数进程和窗口 id、整屏观察不返回 id 的限制、支持的操作类型及驱动 Schema 参数。模型不会选择提供方，也不会收到提供方凭据。
 
 #### Token 影响
 

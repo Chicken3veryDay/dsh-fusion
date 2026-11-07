@@ -16,6 +16,10 @@ export async function apply(ctx) {
     })
     return () => hooks.deregister()
   }, 'computer-use-native-fixture.module')
+  const { default: Interaction } = await import('@deepseek-ai/dsh-interaction')
+  const interactionTools = await import('@deepseek-ai/dsh-interaction-tools')
+  await ctx.plugin(Interaction)
+  await ctx.plugin(interactionTools)
   const provider = await import('@deepseek-ai/dsh-experimental-computer-use-cua-driver-native')
   await ctx.plugin(provider)
 }

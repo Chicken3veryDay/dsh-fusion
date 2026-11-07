@@ -42,7 +42,7 @@ The tools use step-time activation conditions. Browser and desktop schemas disap
 
 #### What the model sees
 
-The model sees stable `browser_*` and `desktop_*` names with operation-specific JSON inputs. It does not choose a provider or receive provider credentials.
+The model sees stable `browser_*` and `desktop_*` names with operation-specific JSON inputs. Desktop inputs describe integer process/window ids from the driver’s `list_windows` tool, the whole-display observation’s lack of ids, supported action kinds, and driver-schema arguments. It does not choose a provider or receive provider credentials.
 
 #### Token effect
 
