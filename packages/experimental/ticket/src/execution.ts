@@ -192,7 +192,7 @@ export class TicketExecutionService extends Service {
       const deadline = this.deadline('Ticket execution teardown timed out')
       for (const run of runs) this.apply(run, { type: 'teardown' }, reason)
       const drain = (async () => {
-        await Promise.allSettled(runs.map(run => run.work))
+        await Promise.allSettled(runs.map(run => run.work).filter(work => work !== undefined))
         const results = await Promise.allSettled(runs.map(async (run) => {
           if (run.state.kind === 'stopping') await run.stop
           if (run.state.kind === 'handed') {
