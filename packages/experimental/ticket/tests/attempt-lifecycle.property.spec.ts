@@ -25,7 +25,7 @@ const SCOPE = [{ path: 'src/shared.ts', access: 'write', exclusive: true }] as c
 
 type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once'
 type Action =
-  | { readonly kind: 'prepare'; readonly slot: number; readonly dedicated: boolean; readonly signal: boolean }
+  | { readonly kind: 'prepare'; readonly slot: number; readonly dedicated: boolean; readonly signal: boolean; readonly holdAt: number }
   | { readonly kind: 'retry' | 'abort' | 'finish' | 'settle' | 'dispose' | 'fail-ticket' | 'worker-down' | 'worker-up'; readonly slot: number }
   | { readonly kind: 'activation'; readonly slot: number; readonly establish: boolean }
   | { readonly kind: 'job'; readonly slot: number; readonly producer: ProducerKind }
@@ -192,8 +192,19 @@ async function setup(dir: string): Promise<World> {
   return world
 }
 
-function latest(world: World, slot: number): Attempt | undefined {
-  return world.attempts.findLast(attempt => attempt.slot === slot)
+/** The attempt an action on `slot` addresses: the newest one the action can act on, else the newest one. */
+function target(world: World, action: Action): Attempt | undefined {
+  if (!('slot' in action)) return undefined
+  const mine = world.attempts.filter(attempt => attempt.slot === action.slot)
+  const fit = (attempt: Attempt): boolean => {
+    switch (action.kind) {
+      case 'job': case 'settle': case 'dispose': return attempt.handle !== undefined && attempt.generation === world.generation
+      case 'abort': return attempt.status === 'pending' && attempt.request.signal !== undefined
+      case 'activation': return attempt.start !== undefined && attempt.status === 'pending'
+      default: return true
+    }
+  }
+  return mine.findLast(fit) ?? mine.at(-1)
 }
 
 function liveProducerElsewhere(world: World, attempt: Attempt): boolean {
@@ -278,9 +289,13 @@ function rootUp(world: World, slot: number): void {
 }
 
 async function act(world: World, action: Action): Promise<void> {
-  const attempt = 'slot' in action ? latest(world, action.slot) : undefined
+  const attempt = target(world, action)
   switch (action.kind) {
-    case 'prepare': prepare(world, action.slot, action.dedicated, action.signal); break
+    case 'prepare':
+      // Holding the nth flush of this preparation's root reaches the admission, workspace or runtime write.
+      if (action.holdAt > 0) setFlush(world, action.slot, 'hold', action.holdAt)
+      prepare(world, action.slot, action.dedicated, action.signal)
+      break
     case 'retry':
       if (attempt !== undefined && attempt.caller === world.ctx.agents.get(attempt.caller.id)) {
         const before = attempt.status
@@ -497,21 +512,39 @@ async function check(world: World): Promise<void> {
 }
 
 const slot = fc.integer({ min: 0, max: SLOTS - 1 })
+const on = <K extends Action['kind']>(kind: K, weight: number) =>
+  ({ weight, arbitrary: fc.record({ kind: fc.constant(kind), slot }) })
+/** Weights favour the actions that reach owner, flush and replacement interleavings within a short sequence. */
 const action: fc.Arbitrary<Action> = fc.oneof(
-  { weight: 5, arbitrary: fc.record({ kind: fc.constant('prepare' as const), slot, dedicated: fc.boolean(), signal: fc.boolean() }) },
-  { weight: 4, arbitrary: fc.record({ kind: fc.constant('job' as const), slot, producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'throws-once') }) },
+  { weight: 7, arbitrary: fc.record({ kind: fc.constant('prepare' as const), slot, dedicated: fc.boolean(), signal: fc.boolean(),
+    holdAt: fc.integer({ min: 0, max: 3 }) }) },
+  { weight: 6, arbitrary: fc.record({ kind: fc.constant('job' as const), slot,
+    producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once') }) },
   { weight: 3, arbitrary: fc.record({ kind: fc.constant('activation' as const), slot, establish: fc.boolean() }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constant('hold-flush' as const), slot, nth: fc.integer({ min: 1, max: 3 }) }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constantFrom('retry' as const, 'abort' as const, 'finish' as const, 'settle' as const,
-    'dispose' as const, 'fail-ticket' as const, 'worker-down' as const, 'worker-up' as const), slot }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constantFrom('fail-flush' as const, 'pass-flush' as const, 'root-down' as const,
-    'root-up' as const, 'drop-root' as const), slot }) },
-  { weight: 1, arbitrary: fc.record({ kind: fc.constantFrom('replace' as const, 'restart' as const) }) },
+  on('abort', 4), on('dispose', 4), on('settle', 2), on('finish', 2), on('retry', 2), on('fail-ticket', 1),
+  on('worker-down', 2), on('worker-up', 1), on('root-down', 3), on('root-up', 2), on('drop-root', 2),
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant('hold-flush' as const), slot, nth: fc.integer({ min: 1, max: 3 }) }) },
+  on('fail-flush', 2), on('pass-flush', 2),
+  { weight: 3, arbitrary: fc.constant({ kind: 'replace' as const }) },
+  { weight: 1, arbitrary: fc.constant({ kind: 'restart' as const }) },
 )
 
+const inProcess = (slot: number, signal = false, holdAt = 0): Action => ({ kind: 'prepare', slot, dedicated: false, signal, holdAt })
+/** Round-6 interleavings, replayed before the generated sequences. */
+const regressions: Action[][] = [
+  [inProcess(0, true, 3), { kind: 'abort', slot: 0 }],
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'throws-once' }, { kind: 'dispose', slot: 0 }],
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'fails' }, { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }],
+  [{ kind: 'prepare', slot: 0, dedicated: true, signal: false, holdAt: 0 }, { kind: 'root-down', slot: 0 }],
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'stubborn' }, { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
+]
+
+/* TICKET_PROPERTY_SEED, TICKET_PROPERTY_RUNS and TICKET_PROPERTY_NO_EXAMPLES vary the seed, the run count and the regression
+ * replay when investigating; TICKET_PROPERTY_TRACE prints the duration of each step. fast-check prints the seed and the failing
+ * sequence on failure. */
 it('every generated event sequence ends each attempt once, balances reservations, and replays to the live state', async () => {
   const seed = Number(process.env.TICKET_PROPERTY_SEED ?? 20261106)
-  await fc.assert(fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 14 }), async (actions) => {
+  await fc.assert(fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 20 }), async (actions) => {
     const dir = await mkdtemp(join(tmpdir(), 'ticket-property-'))
     let world: World | undefined
     try {
@@ -521,8 +554,11 @@ it('every generated event sequence ends each attempt once, balances reservations
       let started = Date.now()
       world = await setup(dir)
       trace?.('setup', started)
-      for (const step of actions) { started = Date.now(); trace?.(`start ${JSON.stringify(step)}`, started); await act(world, step); trace?.(JSON.stringify(step), started) }
-      trace?.('drain start', Date.now())
+      for (const step of actions) {
+        started = Date.now()
+        await act(world, step)
+        trace?.(JSON.stringify(step), started)
+      }
       started = Date.now()
       await drain(world)
       trace?.('drain', started)
@@ -539,5 +575,8 @@ it('every generated event sequence ends each attempt once, balances reservations
       }
       await rm(dir, { recursive: true, force: true })
     }
-  }), { seed, numRuns: Number(process.env.TICKET_PROPERTY_RUNS ?? 200), endOnFailure: true })
+  }), {
+    seed, numRuns: Number(process.env.TICKET_PROPERTY_RUNS ?? 200), endOnFailure: true,
+    ...process.env.TICKET_PROPERTY_NO_EXAMPLES === undefined ? { examples: regressions.map(actions => [actions]) } : {},
+  })
 }, 60_000)
