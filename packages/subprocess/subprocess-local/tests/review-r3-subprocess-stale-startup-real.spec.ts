@@ -1,4 +1,5 @@
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
+import type { SpawnOptions, SpawnSyncOptions } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -51,14 +52,14 @@ it.skipIf(options === undefined).each(['stale', 'fresh'] as const)('keeps a live
       stdio: { stdin: 'ignore' as const, stdout: { maxBytes: 1024 }, stderr: { maxBytes: 1024 } }, graceMs: 5_000,
     }
     launch = launchLinuxScope(spec, targetEnvironment(spec), options ?? [], {
-      spawn: (command, args, settings) => {
+      spawn: ((command: string, args: readonly string[], settings: SpawnOptions) => {
         unit = `${args.find(arg => arg.startsWith('--unit='))?.slice('--unit='.length)}.scope`
         return spawn(command, [`--property=After=${gate}`, ...args], settings)
-      },
-      spawnSync: (command, args, settings) => {
-        if (args?.includes('kill')) killCalls += 1
+      }) as never,
+      spawnSync: ((command: string, args: readonly string[], settings: SpawnSyncOptions) => {
+        if (args.includes('kill')) killCalls += 1
         return spawnSync(command, args, settings)
-      },
+      }) as never,
       systemctlQuery: async (command, args) => {
         if (!first) { secondQuery.resolve(undefined); return query(command, args) }
         first = false
