@@ -6,7 +6,7 @@ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { resolveProfiles, authContextFrom, credentialStoreFrom } from '@deepseek-ai/dsh-llm-pi-ai/profiles'
 import { ReasoningEffortId, LlmError } from '@deepseek-ai/dsh-llm'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands'
-import type {} from '@deepseek-ai/dsh-credentials'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { definitionSchema, FusionConfigError, resolveCatalog } from './catalog.ts'
@@ -115,13 +115,6 @@ export class FusionConfig extends Service {
     } catch (_error) {
       throw new FusionConfigError('invalid-configuration')
     }
-    // This consumer owns explicit provider profiles. Inline keys/headers and ambient auth are excluded.
-    for (const profile of this.profiles.values()) {
-      if (profile.apiKeyEnv === undefined || profile.headers !== undefined || profile.transport === 'auto'
-        || (profile.api !== 'openai-responses' && profile.api !== 'anthropic-messages')) {
-        throw new FusionConfigError('invalid-configuration')
-      }
-    }
     const keys = new Set<string>()
     for (const row of this.document.declarations) {
       const key = JSON.stringify([row.providerId, row.wireModelId])
@@ -140,8 +133,7 @@ export class FusionConfig extends Service {
       profiles: () => this.profiles,
       auth: { credentials: credentialStoreFrom(ctx), authContext: authContextFrom(ctx) },
       resolveApiKey: async (_provider, profile) => {
-        if (profile.apiKeyEnv === undefined) throw new LlmError('Fusion route requires a credential reference', 'MISSING_CREDENTIAL')
-        const hit = await ctx.credentials.resolve(profile.apiKeyEnv)
+        const hit = await ctx.credentials.resolve(profile.apiKeyEnv as CredentialRef)
         if (hit === undefined || !hit.value.trim()) throw new LlmError('Fusion route credential is unavailable', 'MISSING_CREDENTIAL')
         return hit.value
       },
@@ -191,9 +183,8 @@ export class FusionConfig extends Service {
   preflight(id: string, signal?: AbortSignal): Promise<PreflightReport> {
     const selection = this.selection(id)
     const cancellation = signal === undefined ? this.lifetime.signal : AbortSignal.any([this.lifetime.signal, signal])
-    const operation = this.inspect(selection, cancellation)
+    const operation = this.inspect(selection, cancellation).finally(() => { this.pending.delete(operation) })
     this.pending.add(operation)
-    void operation.then(() => this.pending.delete(operation), () => this.pending.delete(operation))
     return operation
   }
 
@@ -207,7 +198,7 @@ export class FusionConfig extends Service {
         // The preset audit can await Loader settlement, including this plugin's own unload.
         const preset = await Promise.race([this.ctx.agentPresets.resolve(selection.agentPreset), cancelled.promise])
         signal.throwIfAborted()
-        if (preset !== undefined && preset.broken === undefined) agentPreset = 'ready'
+        if (preset?.broken === undefined) agentPreset = 'ready'
       } catch (_error) { /* Registry diagnostics are not safe command output; the blocked preset remains visible. */ }
       finally { signal.removeEventListener('abort', abort) }
     }
@@ -253,10 +244,9 @@ export class FusionConfig extends Service {
       return blocked('unsupported-effort')
     }
     try {
-      const resolved = await this.ctx.llm.resolveCallConfig({
+      await this.ctx.llm.resolveCallConfig({
         provider: binding.providerId, model: binding.wireModelId, reasoningEffort: ReasoningEffortId(binding.effort),
       }, signal)
-      if (resolved.reasoningEffort !== binding.effort) return blocked('unsupported-effort')
     } catch (_error) { return blocked('adapter-failed') }
     let key: string
     try {

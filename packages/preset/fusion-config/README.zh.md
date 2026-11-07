@@ -28,7 +28,7 @@ kind: "package-reference"
 
 ### Minimal configuration
 
-在显式配置覆盖层中插入以下条目。源码仓库中，如果配置解析器未包含此包，请将 `name` 改为本包构建后 `lib/index.js` 的绝对路径。运行现有 CLI：`dsh --profile sdk --patch /absolute/path/fusion.patch.yml`，然后通过该配置的人类命令接口调用 `/fusion_preflight top`。此操作不会设置持久默认值。SDK 覆盖层显式允许此命令定义；原始 SDK 文本路由只允许内置命令。若已有预设注册表及适用预设，请省略相应条目。空的检查预设不组合任务工具。凭证条目仅在此显式覆盖层中启用现有本地提供方；空路由不会读取凭证。无密钥快照使用模拟凭证提供方。
+在显式配置覆盖层中插入以下条目。源码仓库中，如果配置解析器未包含此包，请将 `name` 改为本包构建后 `lib/index.js` 的绝对路径。运行现有 CLI：`dsh --profile sdk --patch /absolute/path/fusion.patch.yml`，然后通过该配置的人类命令接口调用 `/fusion_preflight top`。文档解析器要求两种受支持的 API 都显式指定凭证引用并使用 SSE 传输。此操作不会设置持久默认值。SDK 覆盖层显式允许此命令定义；原始 SDK 文本路由只允许内置命令。若已有预设注册表及适用预设，请省略相应条目。空的检查预设不组合任务工具。凭证条目仅在此显式覆盖层中启用现有本地提供方；空路由不会读取凭证。无密钥快照使用模拟凭证提供方。
 
 ```yaml
 - id: sdk-jsonrpc-server
