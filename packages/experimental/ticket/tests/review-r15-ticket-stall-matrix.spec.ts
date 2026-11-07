@@ -53,7 +53,7 @@ async function host(withExecution: boolean) {
 /** Fold `events` in a fresh host under the same root id. */
 async function replay(rootId: string, events: ReturnType<Session['snapshotEvents']>, ticketId: TicketView['id']) {
   const { ctx } = await host(false)
-  const { agent } = await live(ctx, rootId, { snapshotEvents: () => events } as unknown as Session)
+  const { agent } = await live(ctx, rootId, ctx.sessions.prepare(SessionId(rootId), { seed: events }))
   return { ctx, root: agent, view: () => ctx.tickets.get(agent.session, ticketId) }
 }
 
