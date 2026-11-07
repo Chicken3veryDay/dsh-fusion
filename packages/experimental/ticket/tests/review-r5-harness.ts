@@ -27,7 +27,7 @@ class Subagents extends Service {
 export const shared = { kind: 'shared-workspace', directory: '/review/shared', baseCommit: 'a'.repeat(40) } as const
 export const exclusive: WorkScope[] = [{ path: 'src/file.ts', access: 'write', exclusive: true }]
 
-export async function harness(before?: (ctx: Context) => Promise<void>) {
+export async function harness(before?: (ctx: Context) => Promise<void>, settlementTimeoutMs = 1000) {
   const ctx = new Context()
   onTestFinished(async () => { vi.restoreAllMocks(); await ctx.fiber.dispose() })
   await ctx.plugin(SessionStore)
@@ -40,7 +40,7 @@ export async function harness(before?: (ctx: Context) => Promise<void>) {
   await ctx.plugin(Worktrees)
   await ctx.plugin(Directories)
   await ctx.plugin(Subagents)
-  const execution = await ctx.plugin(TicketExecutionService, { settlementTimeoutMs: 1000 })
+  const execution = await ctx.plugin(TicketExecutionService, { settlementTimeoutMs })
   return { ctx, tickets, execution }
 }
 

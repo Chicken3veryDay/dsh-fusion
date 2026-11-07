@@ -4,7 +4,8 @@
  *
  * `TICKET_COORDINATOR_UNAVAILABLE`, `TICKET_ROOT_UNAVAILABLE` and `TICKET_SETTLEMENT_PENDING` are retryable: the
  * message names what must become available (a loading coordinator authority, or a root Session to resume) before the
- * same request is retried. `TICKET_RECOVERY_FAILED` reports a Ticket log or stored reservation that could not be read.
+ * same request is retried. `TICKET_SETTLEMENT_PENDING` from a stopped `prepare` or from execution teardown needs no retry:
+ * Ticket completes the step it names. `TICKET_RECOVERY_FAILED` reports a Ticket log or stored reservation that could not be read.
  */
 export type TicketErrorCode =
   | 'TICKET_ACCEPTANCE'

@@ -7,14 +7,16 @@ export type AttemptOutcome = 'succeeded' | 'failed' | 'cancelled'
 
 /** One execution-owned attempt, from reservation to its hand-off to the settlement ledger.
  *
- * `aborted` is the only cancellation predicate before publication; `cancel` is the sticky intent to cancel once producers
- * may exist. `captured` is the outcome the producers reported before their resource release failed; once present it is
- * final. `handed` and `released` are terminal: the execution reservation is dropped on entry to either.
+ * `aborted` is the only cancellation predicate before publication while an admission or provider effect is in flight;
+ * an abort in `preparing`, where only a Ticket write can be in flight, hands the attempt over as cancelled at once.
+ * `cancel` is the sticky intent to cancel once producers may exist. `captured` is the outcome the producers reported
+ * before their resource release failed; once present it is final. `handed` and `released` are terminal: the execution
+ * reservation is dropped on entry to either.
  */
 export type AttemptState =
   | { readonly kind: 'admitting'; readonly aborted: boolean }
   | { readonly kind: 'unflushed' }
-  | { readonly kind: 'preparing'; readonly aborted: boolean }
+  | { readonly kind: 'preparing' }
   | { readonly kind: 'worktree'; readonly aborted: boolean }
   | { readonly kind: 'activating'; readonly aborted: boolean }
   | { readonly kind: 'launched'; readonly aborted: boolean }
@@ -109,11 +111,24 @@ const stopPhase = <K extends 'stopping' | 'unknown'>(kind: K, cancel: boolean, c
 export function transitionAttempt(state: AttemptState, event: AttemptEvent): AttemptState | AttemptRejection {
   switch (state.kind) {
     case 'admitting':
-    case 'preparing':
     case 'worktree':
     case 'activating':
     case 'launched':
       return transitionPreparation(state, event)
+    case 'preparing':
+      switch (event.type) {
+        // Only a Ticket write can be in flight here, so the outcome of an aborted preparation is already fixed.
+        case 'caller-abort':
+        case 'owner-disposed':
+        case 'teardown': return { kind: 'handed', outcome: 'cancelled' }
+        case 'retry': return state
+        case 'admission-unflushed': return { kind: 'unflushed' }
+        case 'worktree-start': return { kind: 'worktree', aborted: false }
+        case 'activation-start': return { kind: 'activating', aborted: false }
+        case 'stage-failed': return { kind: 'handed', outcome: 'failed' }
+        case 'publish': return { kind: 'running' }
+        default: return reject(state, event)
+      }
     case 'unflushed':
       switch (event.type) {
         case 'caller-abort': return state
@@ -175,6 +190,8 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
       }
     case 'handed':
       switch (event.type) {
+        // The admission flush failed after an abort handed the attempt over; the queued settlement repeats that flush.
+        case 'admission-unflushed':
         case 'caller-abort':
         case 'owner-disposed':
         case 'teardown':
@@ -207,19 +224,11 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
     case 'retry': return state
     case 'admitted':
       if (state.kind !== 'admitting') return reject(state, event)
-      return state.aborted ? { kind: 'handed', outcome: 'cancelled' } : { kind: 'preparing', aborted: false }
-    case 'admission-unflushed':
-      if (state.kind !== 'admitting') return reject(state, event)
-      return state.aborted ? { kind: 'handed', outcome: 'cancelled' } : { kind: 'unflushed' }
+      return state.aborted ? { kind: 'handed', outcome: 'cancelled' } : { kind: 'preparing' }
     case 'admission-refused':
       return state.kind === 'admitting' ? { kind: 'released' } : reject(state, event)
-    case 'worktree-start':
-    case 'activation-start':
-      if (state.kind !== 'preparing') return reject(state, event)
-      if (state.aborted) return unstarted(true)
-      return { kind: event.type === 'worktree-start' ? 'worktree' : 'activating', aborted: false }
     case 'effect-established':
-      if (state.kind === 'worktree') return state.aborted ? unstarted(true) : { kind: 'preparing', aborted: false }
+      if (state.kind === 'worktree') return state.aborted ? unstarted(true) : { kind: 'preparing' }
       if (state.kind === 'activating') return state.aborted ? { kind: 'stopping', cancel: true } : { kind: 'launched', aborted: false }
       return reject(state, event)
     case 'effect-refused':
@@ -229,13 +238,13 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
       // A Worktree provider may have created the checkout before failing; a failed Subagent rollback may leave a live child.
       return state.kind === 'worktree' || state.kind === 'activating' ? { kind: 'uncertain' } : reject(state, event)
     case 'stage-failed':
-      if (state.kind === 'preparing') return unstarted(state.aborted)
-      if (state.kind === 'launched') return { kind: 'stopping', cancel: true }
-      return reject(state, event)
+      return state.kind === 'launched' ? { kind: 'stopping', cancel: true } : reject(state, event)
     case 'publish':
-      if (state.kind === 'preparing') return state.aborted ? unstarted(true) : { kind: 'running' }
       if (state.kind === 'launched') return state.aborted ? { kind: 'stopping', cancel: true } : { kind: 'running' }
       return reject(state, event)
+    case 'admission-unflushed':
+    case 'worktree-start':
+    case 'activation-start':
     case 'settle':
     case 'dispose':
     case 'producers-settled':
@@ -316,7 +325,6 @@ export function attemptAdmitsCommand(status: DurableAttemptStatus, command: Atte
 function describeState(state: AttemptState): string {
   switch (state.kind) {
     case 'admitting':
-    case 'preparing':
     case 'worktree':
     case 'activating':
     case 'launched': return state.aborted ? `${state.kind}(aborted)` : state.kind
@@ -324,6 +332,7 @@ function describeState(state: AttemptState): string {
     case 'unknown': return `${state.kind}(${state.cancel ? 'cancel' : 'natural'}${state.captured === undefined ? '' : `; ${state.captured}`})`
     case 'handed': return `handed(${state.outcome})`
     case 'unflushed':
+    case 'preparing':
     case 'running':
     case 'uncertain':
     case 'released': return state.kind
@@ -334,7 +343,6 @@ function describeState(state: AttemptState): string {
 function variants(kind: AttemptState['kind']): { readonly label: string; readonly state: AttemptState }[] {
   switch (kind) {
     case 'admitting':
-    case 'preparing':
     case 'worktree':
     case 'activating':
     case 'launched':
@@ -345,6 +353,7 @@ function variants(kind: AttemptState['kind']): { readonly label: string; readonl
         { label: 'captured', state: { kind, cancel: false, captured: 'succeeded' } }]
     case 'handed': return [{ label: '', state: { kind, outcome: 'succeeded' } }]
     case 'unflushed':
+    case 'preparing':
     case 'running':
     case 'uncertain':
     case 'released': return [{ label: '', state: { kind } }]

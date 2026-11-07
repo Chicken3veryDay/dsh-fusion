@@ -38,10 +38,13 @@ declare module '@deepseek-ai/dsh-jobs' {
   interface JobKindMap { ticket: 'ticket' }
 }
 
-/** One settlement deadline; `expired` rejects with `reason` once it passes, and `clear` stops the timer. */
+/** One `settlementTimeoutMs` deadline. Its timer starts at `arm()`, or at creation for an armed deadline; `expired` rejects
+ * with `reason` once it passes, and `clear` stops the timer. */
 interface Deadline {
   readonly expired: Promise<never>
   readonly reason: TicketError
+  /** Start the timer; later calls, and calls after `clear()`, do nothing. */
+  arm(): void
   clear(): void
 }
 
@@ -115,8 +118,14 @@ interface AttemptRun {
   readonly lifetime: AbortController
   state: AttemptState
   abortReason?: Error
-  /** The preparation callers join; an identical retry of an `unflushed` admission replaces it. */
+  /** The preparation callers join: `work` bounded by `bound`. An identical retry of an `unflushed` admission replaces it. */
   preparation?: Promise<TicketExecutionHandle>
+  /** The preparation itself. It runs to a terminal or `uncertain` state after its callers stop waiting; teardown joins it. */
+  work?: Promise<TicketExecutionHandle>
+  /** Bounds the callers' wait for `work`; armed when preparation is aborted or enters its failure report. */
+  bound?: Deadline
+  /** The failure `work` reports, once known; a caller whose bound expires first receives it with the pending step. */
+  failure?: Error
   recorder?: TicketAttemptController
   /** Registered when the admission is recorded; released on entry to `handed` or `released`, or as described by the
    * `ticket/collect-reservations` event. */
@@ -180,27 +189,36 @@ export class TicketExecutionService extends Service {
       this.closing = true
       const runs = [...this.runs.values()]
       const reason = new TicketError('Ticket execution admission is closed', 'TICKET_ATTEMPT_STATE')
+      const deadline = this.deadline('Ticket execution teardown timed out')
       for (const run of runs) this.apply(run, { type: 'teardown' }, reason)
-      await Promise.allSettled(runs.flatMap(run => run.preparation === undefined ? [] : [run.preparation]))
-      const results = await Promise.allSettled(runs.map(async (run) => {
-        if (run.state.kind === 'stopping') await run.stop
-        if (run.state.kind === 'handed') {
-          await run.settlement?.catch((error: unknown) => {
-            this.ctx.logger.warn(`Ticket attempt ended ${run.state.kind === 'handed' ? run.state.outcome : ''}; the settlement ledger `
-              + `retains it until its root is writable: ${String(error)}`)
-          })
-        }
-      }))
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
-      if (failures.length > 0) throw new AggregateError(failures, 'Ticket execution teardown did not settle')
+      const drain = (async () => {
+        await Promise.allSettled(runs.flatMap(run => run.work === undefined ? [] : [run.work]))
+        const results = await Promise.allSettled(runs.map(async (run) => {
+          if (run.state.kind === 'stopping') await run.stop
+          if (run.state.kind === 'handed') {
+            await run.settlement?.catch((error: unknown) => {
+              this.logger.warn(`Ticket attempt ended ${run.state.kind === 'handed' ? run.state.outcome : ''}; the settlement ledger `
+                + `retains it until its root is writable: ${String(error)}`)
+            })
+          }
+        }))
+        const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map((result): unknown => result.reason)
+        if (failures.length > 0) throw new AggregateError(failures, 'Ticket execution teardown did not settle')
+      })()
+      try {
+        await this.within(drain, deadline, () => new TicketError('Ticket execution teardown stopped waiting after settlementTimeoutMs; '
+          + 'its attempts keep their reservations and finish their writes in the settlement ledger', 'TICKET_SETTLEMENT_PENDING'),
+        this.warn('Ticket execution teardown failed after its deadline'))
+      } finally { deadline.clear() }
     }, 'ticket-execution.runtime()')
   }
 
   /** Prepare or return the exact live attempt; recovered attempts cannot replay effects.
    * @param caller - Exact registered owner or current coordinator.
    * @param request - Stable operation and attempt ids, CAS, and explicit placement.
-   * @returns The single resource handle retained for this preparation. Cancelled preparation bounds its settlement write
-   * by settlementTimeoutMs; a stop that already reported pending durability is not awaited again.
+   * @returns The single resource handle retained for this preparation. Once preparation is aborted (by `request.signal`,
+   * owner disposal or teardown) or fails, the promise settles within settlementTimeoutMs; the attempt still reaches its
+   * terminal or uncertain durable state afterwards, and an expired wait rejects with `TICKET_SETTLEMENT_PENDING`.
    */
   prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle> {
     try {
@@ -223,7 +241,7 @@ export class TicketExecutionService extends Service {
           const resumed = retained.state.kind === 'unflushed'
           this.apply(retained, { type: 'retry' })
           // The admission is in the in-memory log; the retry repeats its flush and continues preparation.
-          if (resumed || retained.preparation === undefined) retained.preparation = this.drive(retained, root, assignment, request)
+          if (resumed || retained.preparation === undefined) return this.launch(retained, root, assignment, request)
           return retained.preparation
         }
         if (unsettled) throw new TicketError('Ticket assignment already has a different execution reservation', 'TICKET_ATTEMPT_STATE')
@@ -245,12 +263,28 @@ export class TicketExecutionService extends Service {
         jobs: [], producers: new Map(), listeners: new Set(), queue: Promise.resolve(), recordings: new Map(),
       }
       this.runs.set(key, run)
-      const preparation = this.drive(run, root, assignment, request)
-      run.preparation = preparation
-      return preparation
+      return this.launch(run, root, assignment, request)
     } catch (error: unknown) {
       return Promise.reject(asError(error, 'Ticket execution preparation failed'))
     }
+  }
+
+  /** Start one preparation and return the callers' bounded wait for it. */
+  private launch(
+    run: AttemptRun, root: Session, assignment: AssignmentSnapshot, request: PrepareTicketExecutionRequest,
+  ): Promise<TicketExecutionHandle> {
+    const bound = this.deadline('Ticket preparation stop timed out', false)
+    run.bound = bound
+    delete run.failure
+    const work = this.drive(run, root, assignment, request)
+    run.work = work
+    void work.then(() => { bound.clear() }, () => { bound.clear() })
+    const late = this.warn(`Ticket preparation of attempt "${run.attemptId}" failed after its callers stopped waiting`)
+    // A cancellation whose writes succeeded rejects with only the preparation's own cause, which its callers already received.
+    run.preparation = this.within(work, bound, () => this.unfinished(run), (failure) => {
+      if (failure !== run.failure && failure !== run.abortReason) late(failure)
+    })
+    return run.preparation
   }
 
   /** The only writer of attempt state: applies one event through {@link transitionAttempt} and runs the entry actions of
@@ -260,9 +294,12 @@ export class TicketExecutionService extends Service {
     const next = transitionAttempt(previous, event)
     if ('reason' in next) throw new TicketError(next.reason, 'TICKET_ATTEMPT_STATE')
     run.state = next
-    if (isAborted(next) && !isAborted(previous)) {
+    const stopped = event.type === 'caller-abort' || event.type === 'owner-disposed' || event.type === 'teardown'
+    // Becoming aborted, or an abort that hands a `preparing` attempt over, ends the preparation.
+    if ((isAborted(next) && !isAborted(previous)) || (stopped && previous.kind === 'preparing')) {
       run.abortReason ??= reason ?? new TicketError('Ticket execution preparation was cancelled', 'TICKET_ATTEMPT_STATE')
       run.lifetime.abort(run.abortReason)
+      run.bound?.arm()
     }
     if (next.kind === 'stopping') {
       if (previous.kind !== 'stopping') {
@@ -288,7 +325,7 @@ export class TicketExecutionService extends Service {
   private raise(run: AttemptRun, event: AttemptEvent, warning: string, reason: Error): void {
     const previous = run.state
     const next = this.apply(run, event, reason)
-    const report = (error: unknown) => { this.ctx.logger.warn(`${warning}: ${String(error)}`) }
+    const report = (error: unknown) => { this.logger.warn(`${warning}: ${String(error)}`) }
     if (next.kind === 'stopping' && previous.kind !== 'stopping') void run.stop?.catch(report)
     if (next.kind === 'handed' && previous.kind !== 'handed') void run.settlement?.catch(report)
   }
@@ -410,7 +447,8 @@ export class TicketExecutionService extends Service {
     }
   }
 
-  /** Admit the durable attempt; an admission whose flush failed stays `unflushed` for an identical retry. */
+  /** Admit the durable attempt; an admission whose flush failed stays `unflushed` for an identical retry. The run enters
+   * `preparing` when the admission is appended, but nothing after it starts before the admission is durable. */
   private async admit(
     run: AttemptRun, root: Session, assignment: AssignmentSnapshot, request: PrepareTicketExecutionRequest,
   ): Promise<void> {
@@ -436,28 +474,24 @@ export class TicketExecutionService extends Service {
         ...request.assignmentRevision === undefined ? {} : { assignmentRevision: request.assignmentRevision },
         ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
       }, (controller) => {
+        // The admission is in the in-memory log: from here an abort hands the attempt to the ledger, behind this write.
         recorder = controller
+        run.recorder = controller
         this.retain(run)
+        this.apply(run, { type: 'admitted' })
       }))
     } catch (error: unknown) {
       if (recorder === undefined) {
         this.apply(run, { type: 'admission-refused' })
         throw error
       }
-      run.recorder = recorder
-      if (this.apply(run, { type: 'admission-unflushed' }).kind === 'handed') {
-        await this.awaitDurable(run, run.settlement).catch((recording: unknown) => {
-          this.ctx.logger.warn(`Ticket admission without a producer was ended as cancelled, but its settlement is not durable yet: ${String(recording)}`)
-        })
-      }
+      if (this.apply(run, { type: 'admission-unflushed' }).kind === 'handed') return await this.ended(run, error)
       throw error
     }
     if (recorder === undefined) {
       this.apply(run, { type: 'admission-refused' })
       throw new TicketError('Ticket admission did not grant an execution recorder', 'TICKET_RECOVERY_FAILED')
     }
-    run.recorder = recorder
-    this.apply(run, { type: 'admitted' })
   }
 
   /** Record workspace and runtime facts, then publish; returns undefined when a transition ended the preparation. */
@@ -482,6 +516,8 @@ export class TicketExecutionService extends Service {
     }
     const workspace = run.workspace
     await recorder.update('workspace', { status: 'running', workspaceReceipt: workspace })
+    // An abort during a receipt write handed the attempt to the ledger.
+    if (isTerminal(run.state)) return undefined
     this.assertOwners(run.caller, technicalRoot, run.worker)
     if (request.executor.kind !== 'in-process') {
       if (this.apply(run, { type: 'activation-start' }).kind !== 'activating') return undefined
@@ -509,6 +545,7 @@ export class TicketExecutionService extends Service {
       childSessionId: run.activation?.childId ?? assignment.ownerId,
       ...request.executor.kind === 'remote' ? { world: request.executor.world } : {},
     } })
+    if (isTerminal(run.state)) return undefined
     const ticket = this.ctx.tickets.get(this.liveRoot(root.id), request.ticketId)
     const attempt = ticket.attempts.find(item => item.id === request.attemptId)
     const nextAssignment = ticket.assignments.find(item => item.id === assignment.id)
@@ -525,48 +562,37 @@ export class TicketExecutionService extends Service {
     }
   }
 
-  /** Reject a preparation the state machine ended, once its stop and ledger hand-off have run. */
+  /** Reject a preparation the state machine ended, once its stop and the ledger's write have finished. Entry starts the
+   * callers' bound; a rejection after that bound passes reaches the late-failure log instead. */
   private async ended(run: AttemptRun, error?: unknown): Promise<never> {
     const cause = asError(error ?? run.abortReason ?? new TicketError('Ticket execution preparation was cancelled', 'TICKET_ATTEMPT_STATE'), 'Ticket preparation failed')
+    run.failure = cause
+    run.bound?.arm()
     const failures: unknown[] = [cause]
-    let pending: unknown
-    if (run.stop !== undefined) {
-      try { await run.stop } catch (stop: unknown) {
-        failures.push(stop)
-        if (stop instanceof TicketError && stop.code === 'TICKET_SETTLEMENT_PENDING') pending = stop
-      }
-    }
+    // A stop that hands the outcome over rejects only with the ledger write's own failure or its deadline; the write's result,
+    // awaited below, reports the former and supersedes the latter.
+    if (run.stop !== undefined) await run.stop.catch((stop: unknown) => { if (run.state.kind !== 'handed') failures.push(stop) })
     const state = run.state
-    if (state.kind === 'handed') {
-      if (pending === undefined) {
-        try { await this.awaitDurable(run, run.settlement) } catch (recording: unknown) { pending = asError(recording, 'Ticket settlement write failed') }
-      }
-      if (pending === undefined) {
-        if (failures.length === 1) throw cause
-        throw new AggregateError(failures, 'Ticket preparation ended after stopping its activation')
-      }
-      if (!failures.includes(pending)) failures.push(pending)
+    if (state.kind !== 'handed') throw new AggregateError(failures, 'Ticket execution preparation is unknown; reservation retained')
+    try { await run.settlement } catch (recording: unknown) {
       const started = run.activation === undefined ? 'before a producer started' : 'after stopping its activation'
-      throw new AggregateError(failures, `Ticket preparation ended ${started}; its ${state.outcome} settlement write failed or exceeded its deadline and is `
-        + 'completed by the next write to its root, a resume of that root, or Ticket teardown')
+      throw new AggregateError([cause, recording], `Ticket preparation ended ${started}; its ${state.outcome} settlement write failed `
+        + 'and is completed by the next write to its root, a resume of that root, or Ticket teardown')
     }
-    throw new AggregateError(failures, 'Ticket execution preparation is unknown; reservation retained')
+    throw cause
   }
 
   /** A provider failed after it may have left a checkout or a live child: the attempt stays reserved for host reconciliation. */
   private async uncertain(run: AttemptRun, error: unknown): Promise<never> {
+    run.failure = asError(error, 'Ticket preparation failed')
+    run.bound?.arm()
     const failures: unknown[] = [error]
-    const deadline = this.deadline('Ticket preparation uncertainty write timed out')
-    const recording = run.recorder?.update('preparation-unknown', {
-      status: 'unknown', ...run.workspace === undefined ? {} : { workspaceReceipt: run.workspace },
-      diagnostics: ['Preparation did not establish a recoverable live execution handle; retained resources require reconciliation'],
-    })
-    void recording?.catch((failure: unknown) => {
-      this.logger.warn(`Ticket preparation is unknown; its uncertainty record failed and the reservation is retained: ${String(failure)}`)
-    })
     try {
-      await Promise.race([recording, deadline.expired])
-    } catch (failure: unknown) { failures.push(failure) } finally { deadline.clear() }
+      await run.recorder?.update('preparation-unknown', {
+        status: 'unknown', ...run.workspace === undefined ? {} : { workspaceReceipt: run.workspace },
+        diagnostics: ['Preparation did not establish a recoverable live execution handle; retained resources require reconciliation'],
+      })
+    } catch (failure: unknown) { failures.push(failure) }
     throw new AggregateError(failures, 'Ticket execution preparation is unknown; reservation retained')
   }
 
@@ -747,30 +773,60 @@ export class TicketExecutionService extends Service {
     } finally { deadline.clear() }
   }
 
-  /** Wait for the ledger's write of a handed outcome within `deadline`. At the deadline the producer outcome stays known
-   * and the write stays owned by the ledger: it is neither discarded nor retried here, and a late failure is logged.
+  /** Wait for the ledger's write of a handed outcome within `deadline`, as {@link within} describes.
    * @param run - Attempt in `handed`.
    * @param settlement - The ledger write started by the hand-off.
-   * @param deadline - Existing stop deadline; otherwise this wait creates and clears a fresh deadline.
+   * @param deadline - The calling `settle()` or `dispose()` deadline.
    * @throws TicketError `TICKET_SETTLEMENT_PENDING` when the deadline passes first. */
-  private async awaitDurable(run: AttemptRun, settlement: Promise<unknown> | undefined, deadline?: Deadline): Promise<void> {
+  private async awaitDurable(run: AttemptRun, settlement: Promise<unknown> | undefined, deadline: Deadline): Promise<void> {
     if (settlement === undefined) return
-    const bound = deadline ?? this.deadline()
-    try {
-      await Promise.race([settlement, bound.expired])
-    } catch (error: unknown) {
-      if (error !== bound.reason) throw error
-      const { logger } = this
-      void settlement.catch((late: unknown) => {
-        logger.warn(`Ticket attempt "${run.attemptId}" outcome is known, but its settlement write failed after its deadline; `
-          + `the ledger retains it until its root is writable: ${String(late)}`)
-      })
+    await this.within(settlement, deadline, () => {
       const outcome = run.state.kind === 'handed' ? run.state.outcome : 'with a known outcome'
-      throw new TicketError(`Ticket attempt "${run.attemptId}" ended ${outcome}, but its settlement record is not durable yet; `
+      return new TicketError(`Ticket attempt "${run.attemptId}" ended ${outcome}, but its settlement record is not durable yet; `
         + 'the ledger keeps writing it, so retry settle() or dispose() once storage recovers', 'TICKET_SETTLEMENT_PENDING', {
         cause: new Error('Ticket settlement write did not become durable within settlementTimeoutMs'),
       })
-    } finally { if (deadline === undefined) bound.clear() }
+    }, this.warn(`Ticket attempt "${run.attemptId}" outcome is known, but its settlement write failed after its deadline; the `
+      + 'ledger retains it until its root is writable'))
+  }
+
+  /** The single bound on a caller-facing wait. At the deadline `work` keeps running under its owner: it is neither discarded
+   * nor repeated here, and its late failure is logged.
+   * @param work - Owned operation the caller waits on.
+   * @param deadline - The caller's deadline; its creator clears it.
+   * @param expired - Builds the rejection for a wait that reached the deadline.
+   * @param late - Reports a failure of `work` after the deadline.
+   * @returns The result of `work` when it settles before the deadline. */
+  private async within<T>(work: Promise<T>, deadline: Deadline, expired: () => Error, late: (failure: unknown) => void): Promise<T> {
+    try {
+      return await Promise.race([work, deadline.expired])
+    } catch (error: unknown) {
+      if (error !== deadline.reason) throw error
+      void work.catch(late)
+      throw expired()
+    }
+  }
+
+  /** A logger callback for {@link within}.
+   * @param message - Text before the failure. */
+  private warn(message: string): (failure: unknown) => void {
+    const { logger } = this
+    return (failure) => { logger.warn(`${message}: ${String(failure)}`) }
+  }
+
+  /** The rejection of a preparation whose callers' bound passed before it finished. The step still running holds the
+   * reservation, and nothing the caller can retry would finish it sooner. */
+  private unfinished(run: AttemptRun): AggregateError {
+    const cause = run.failure ?? run.abortReason ?? new TicketError('Ticket execution preparation was stopped', 'TICKET_ATTEMPT_STATE')
+    const state = run.state
+    const step = state.kind === 'handed'
+      ? `ended ${state.outcome}; the settlement ledger is still writing its record and keeps its work scopes reserved until that write completes`
+      : `is still in its ${state.kind} step, which holds the reservation until the attempt is recorded as settled or unknown`
+    const pending = new TicketError(`Ticket attempt "${run.attemptId}" ${step}`, 'TICKET_SETTLEMENT_PENDING', {
+      cause: new Error('Ticket preparation did not finish within settlementTimeoutMs'),
+    })
+    return new AggregateError([cause, pending], 'Ticket preparation was stopped and did not finish within settlementTimeoutMs; '
+      + 'Ticket completes its remaining write without a retry')
   }
 
   /** Each producer's own signals: results first, then the activation's release, which may follow its captured result. */
@@ -820,15 +876,31 @@ export class TicketExecutionService extends Service {
     return root
   }
 
-  /** One settlement deadline; `expired` rejects with `reason` once it passes. */
-  private deadline(message = 'Ticket producer settlement timed out'): Deadline {
+  /** One settlement deadline; `expired` rejects with `reason` once `settlementTimeoutMs` passes after it is armed.
+   * @param message - Text of `reason`.
+   * @param armed - Whether the timer starts now rather than at `arm()`. */
+  private deadline(message = 'Ticket producer settlement timed out', armed = true): Deadline {
     const reason = new TicketError(message, 'TICKET_ATTEMPT_STATE')
+    const expiry = Promise.withResolvers<never>()
+    void expiry.promise.catch(() => {})
     let timer: ReturnType<typeof setTimeout> | undefined
-    const expired = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => { reject(reason) }, this.config.settlementTimeoutMs)
-    })
-    void expired.catch(() => {})
-    return { expired, reason, clear: () => { clearTimeout(timer) } }
+    // Set by the first `arm()` or by `clear()`; a cleared deadline never starts.
+    let started = false
+    const deadline: Deadline = {
+      expired: expiry.promise,
+      reason,
+      arm: () => {
+        if (started) return
+        started = true
+        timer = setTimeout(() => { expiry.reject(reason) }, this.config.settlementTimeoutMs)
+      },
+      clear: () => {
+        started = true
+        clearTimeout(timer)
+      },
+    }
+    if (armed) deadline.arm()
+    return deadline
   }
 }
 
