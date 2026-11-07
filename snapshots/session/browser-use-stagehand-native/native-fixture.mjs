@@ -71,6 +71,14 @@ export function installBrowserFixtureHooks() {
 
 export async function apply(ctx) {
   ctx.effect(installBrowserFixtureHooks, 'browser-use-stagehand-native-fixture.module')
+  const { default: Interaction } = await import('@deepseek-ai/dsh-interaction')
+  const interactionTools = await import('@deepseek-ai/dsh-interaction-tools')
+  await ctx.plugin(Interaction)
+  await ctx.plugin(interactionTools)
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    if (exec.name !== 'stagehand_navigate') return next()
+    return { kind: 'deny', reason: 'Navigation requires Host permission' }
+  })
   const provider = await import('@deepseek-ai/dsh-experimental-browser-use-stagehand-native')
   await ctx.plugin(provider, {
     mode: 'launch', model: { modelName: 'openai/gpt-5.4-mini', apiKey: 'snapshot-placeholder' },

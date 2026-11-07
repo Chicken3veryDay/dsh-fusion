@@ -28,6 +28,8 @@ kind: "package-reference"
 <a id="understand-the-implementation"></a>
 ## 实现说明
 
+提供方失败仍返回失败的工具结果，并保留结构化错误详情、呈现内容和图像附件引用。
+
 工具使用步骤级激活条件。对应提供方不可用时，浏览器和桌面模式会消失；提供方专用的兼容工具可以继续显示。
 
 <a id="further-exploration"></a>

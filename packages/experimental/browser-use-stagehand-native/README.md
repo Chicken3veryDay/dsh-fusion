@@ -83,6 +83,8 @@ env -u NODE_USE_ENV_PROXY DSH_STAGEHAND_E2E=1 pnpm exec vitest run --config vite
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
+Normalized interaction operations invoke the exact registered Stagehand tool, including its guards, approval policy, and execution wrappers. Raw and normalized calls share the raw tool’s resource serialization.
+
 <details>
 <summary>Implementation internals — click to expand</summary>
 
