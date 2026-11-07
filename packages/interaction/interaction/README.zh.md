@@ -58,7 +58,7 @@ Agent 只会收到当前提供方可用性接纳的规范化 `browser_*` 和 `de
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
 
-- `desktop-catalog.ts` 将规范化桌面操作映射到 Cua Driver 目录：`applicationId` 是驱动的整数进程 id，`windowId` 是其整数窗口 id，每种操作类型解析为唯一精确的驱动工具（`type` 对应 `type_text`；`select` 和 `perform_action` 没有对应工具，不被接受）。
+- `desktop-catalog.ts` 将规范化桌面操作映射到 Cua Driver 目录：`applicationId` 是驱动的整数进程 id，`windowId` 是其整数窗口 id，封闭 Schema 仅接受显式声明的自有参数名，每种操作类型解析为唯一精确的驱动工具（`type` 对应 `type_text`；`select` 和 `perform_action` 没有对应工具，不被接受）。
 - 本服务不提供提供方实现、操作系统权限流程或可持久化的浏览器和桌面状态；这些责任由适配器承担。
 
 <a id="dev-note"></a>

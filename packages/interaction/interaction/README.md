@@ -51,7 +51,7 @@ Provider availability changes which interaction tool schemas enter a request; an
 
 ## Known Limitations and Deferred Work
 
-- `desktop-catalog.ts` maps normalized desktop operations onto a Cua Driver catalog: `applicationId` is the driver's integer process id, `windowId` its integer window id, and each action kind resolves to one exact driver tool (`type` to `type_text`; `select` and `perform_action` have none and are not accepted).
+- `desktop-catalog.ts` maps normalized desktop operations onto a Cua Driver catalog: `applicationId` is the driver's integer process id, `windowId` its integer window id, and closed schemas accept only explicitly declared own argument names, and each action kind resolves to one exact driver tool (`type` to `type_text`; `select` and `perform_action` have none and are not accepted).
 - The service does not provide a provider implementation, OS permission flow, or durable browser or desktop state. Those responsibilities remain with adapters.
 
 ### Dev Note

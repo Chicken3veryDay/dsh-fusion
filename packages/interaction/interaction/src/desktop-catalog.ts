@@ -45,7 +45,7 @@ const WINDOW_STATE_TOOL = 'get_window_state'
 
 function declared(schema: Readonly<Record<string, unknown>> | undefined, key: string): boolean {
   const properties = schema?.properties
-  return typeof properties === 'object' && properties !== null && key in properties
+  return typeof properties === 'object' && properties !== null && Object.hasOwn(properties, key)
 }
 
 function closed(schema: Readonly<Record<string, unknown>>): boolean {
@@ -128,7 +128,7 @@ function plannedAction(catalog: DesktopCatalog, operation: Extract<DesktopOperat
     throw new Error(`desktop_act action.kind "${kind}" is not supported; supported kinds: ${supported.join(', ') || 'none'}`)
   }
   const target = targetArgs(operation)
-  const clash = Object.keys(target).find(key => key in rest)
+  const clash = Object.keys(target).find(key => Object.hasOwn(rest, key))
   if (clash !== undefined) throw new Error(`desktop_act action must not repeat "${clash}"; use applicationId and windowId`)
   const args = { ...target, ...rest }
   requireDeclared(mapped, schema, Object.keys(args))
