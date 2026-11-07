@@ -52,9 +52,10 @@ it('offers a busy attachment Session neither raw nor normalized browser tools', 
         agent: busy, signal, toolSet, name: 'browser_navigate', arguments: { url: 'https://busy.invalid/' }, callId: ToolCallId('busy-facade'),
       })
       const initializations = (await readFile(join(root, 'events.ndjson'), 'utf8')).split('\n').filter(line => line.includes('"event":"initialize"')).length
+      const anyContent: unknown = expect.anything()
       expect({ offered, facadeContent: facade.content, initializations }).toEqual({
         offered: false,
-        facadeContent: expect.anything() as unknown,
+        facadeContent: anyContent,
         initializations: 1,
       })
     } finally { toolSet.dispose() }
