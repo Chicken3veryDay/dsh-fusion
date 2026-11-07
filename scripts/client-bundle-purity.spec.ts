@@ -219,6 +219,8 @@ describe('client bundle purity gate', () => {
     expect(resolveId('@deepseek-ai/dsh-token-meter/client')).toBeNull()
     expect(() => resolveId('@deepseek-ai/dsh-token-meter')).toThrow(/purity/)
     expect(() => resolveId('@deepseek-ai/dsh-token-meter/client/internal')).toThrow(/purity/)
+    expect(resolveId('@deepseek-ai/dsh-tool-executor-ptc/tool-calls')).toBeNull()
+    expect(() => resolveId('@deepseek-ai/dsh-tool-executor-ptc')).toThrow(/purity/)
     expect(resolveId('@deepseek-ai/dsh-host-open-in-app/shared')).toBeNull()
     expect(resolveId('@deepseek-ai/dsh-native-command/types')).toBeNull()
     expect(() => resolveId('@deepseek-ai/dsh-native-command')).toThrow('client bundle purity')
