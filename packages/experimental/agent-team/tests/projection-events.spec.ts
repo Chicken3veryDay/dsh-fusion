@@ -106,8 +106,9 @@ describe('Agent Teams projection events', () => {
     expect(discarded).toEqual(project(ROOT, []))
     expect(discarded).not.toEqual(retired)
     // A partial-log restore cannot refold the discarded unit and asks for a full re-read.
+    const retiredRow: unknown = JSON.parse(JSON.stringify(retired))
     expect(() => ctx.sessionProjections.restore({
-      agentTeam: { ver: teamProjectionDefinition.stateVersion, seq: SessionSeq(0), val: JSON.parse(JSON.stringify(retired)) as unknown },
+      agentTeam: { ver: teamProjectionDefinition.stateVersion, seq: SessionSeq(0), val: retiredRow },
     }, [], SessionLogOffset(1), session.header, SessionLogOffset(0))).toThrow(/"agentTeam" cannot restore from seq 1.*re-read from seq 0/)
     expect(() => projectTeam(ROOT, [event('team/message/queued', {
       version: 2, teamId: TEAM, message: retiredMessage,
