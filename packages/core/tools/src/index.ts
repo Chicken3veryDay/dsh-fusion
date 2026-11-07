@@ -128,7 +128,6 @@ export class ToolsService extends Service {
   private root: Registration | undefined
   private readonly guards = new ScopedLayers(() => new GuardLayer(), () => {})
   private readonly admission = new ScopedLayers(() => new AdmissionLayer(), () => { this.ctx.emit('tools/change') })
-  /** Pipeline for {@link invoke}, created on first use because it reads this service from the context. */
 
   constructor(ctx: Context) {
     super(ctx, 'tools')
