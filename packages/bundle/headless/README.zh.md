@@ -103,6 +103,8 @@ dsh headless --permission-mode workspace-write --add-dir "$git_dir" --json - < t
 
 `tool_result.error` 存在时，在相同输出限制内保留持久化的 `{ name, code, reason? }` 错误字段。`AUTO_REVIEW_DENIED` 标识最终策略拒绝；`AUTO_REVIEW_FAILED` 标识 reviewer 失败。两者都不会执行调用 body。截断记录可能省略结构化详情；需要完整理由时读取持久 Session。
 
+在 `run_code` 程序内发起的调用同样会输出：其 `tool_call` 与 `tool_result` 以子调用 id（`<run_code id>:ptc:<n>`）作为 `callId`，并带有指向 `run_code` 调用的 `parentCallId`；`run_code` 调用本身仍在其外层输出自己的 `tool_call` 与 `tool_result`。顶层事件没有 `parentCallId`，嵌套 `tool_call.input` 是程序传入的、经 JSON 规范化的参数对象。
+
 ### 何时使用
 
 在脚本化或自动化的 dsh 运行中使用 headless——CI 步骤、批处理任务、从终端快速获取答案。当需要多轮交互会话或 GUI 时请避免它；浏览器表层（[dsh-web-app](../web-app/README.zh.md)）负责这类场景。进程只为本次运行而存活，不打开监听端口，并且自行退出，因此适合等待进程结束的流水线。当监督进程需要进度而不只是答案时，`--json` 提供事件流，`--session-id` 则让后续调用继续同一段对话。
