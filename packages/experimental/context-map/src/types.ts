@@ -104,7 +104,10 @@ export interface MapOp {
   readonly kind: MapOpKind
   readonly actor: SessionId
   readonly target?: string
-  /** For `claim`: fingerprint of the curation work the run was started for; equal fingerprints count as one retried job. */
+  /**
+   * For `claim`: fingerprint of the curation work the run was started for; equal fingerprints count as one retried job.
+   * For `release`: the counted work whose claim the release returns because its run never started.
+   */
   readonly work?: string
 }
 

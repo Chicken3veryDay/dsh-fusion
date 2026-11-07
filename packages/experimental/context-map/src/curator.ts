@@ -6,7 +6,8 @@
  * `claiming`, `running`, `yielding`, `settling`, or `disposed`; {@link DefaultContextCurator.transition}
  * is the only code that changes it, and the package README holds the state table. A run starts when
  * curation work waits (a changed index, a pending or stale note, or a note refused for lack of room)
- * and nothing else holds the role, at most `maxAttempts` times for the same work. It ends when its
+ * and nothing else holds the role, at most `maxAttempts` times for the same work; a start the subagent
+ * activation pool refuses for capacity returns its claim uncounted and waits for a subagent to end. It ends when its
  * work is done, its step bound is reached, the role moves to another holder, its owner is disposed,
  * or the service disposes, and always releases the role and settles its subagent before the next
  * run or disposal. Only the child's logged map edits reach the owner's Session; its transcript
@@ -19,8 +20,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm/brand'
-import type { SubagentActivation } from '@deepseek-ai/dsh-subagent'
-import '@deepseek-ai/dsh-subagent'
+import { SubagentError, type SubagentActivation } from '@deepseek-ai/dsh-subagent'
 import { CuratorConfigSchema, resolveCuratorConfig, type ResolvedCuratorConfig } from './config.ts'
 import { ContextMapError } from './error.ts'
 import { selectCuratorRoute } from './route.ts'
@@ -58,6 +58,8 @@ interface Run {
   readonly controller: AbortController
   activation: SubagentActivation | undefined
   indexDigest: string | undefined
+  /** {@link DefaultContextCurator.endedSubagents} when the activation pool refused the start for capacity. */
+  refusedAt: number | undefined
 }
 
 /** Lifecycle state of the default curator for one map owner. */
@@ -80,12 +82,15 @@ type CuratorEvent =
   | { readonly kind: 'trigger'; readonly news: boolean; readonly work?: CurationWork }
   /** Evaluation found work this curator may start. */
   | { readonly kind: 'eligible'; readonly work: string }
-  /** Evaluation ended the announcement: no work, a live holder, attempts used up, no cheap route, or a failed read. */
+  /**
+   * Evaluation ended the announcement: no work, a live holder, attempts used up, no cheap route, work
+   * waiting for capacity, or a failed read.
+   */
   | { readonly kind: 'ineligible' }
   /** The run committed its claim and started its subagent. */
   | { readonly kind: 'started' }
   | { readonly kind: 'stop'; readonly reason: StopReason }
-  /** The run's start failed or was canceled, or its subagent finished. */
+  /** The run's start failed, was refused for capacity (`no capacity`), or was canceled, or its subagent finished. */
   | { readonly kind: 'ended'; readonly reason: string }
   /** The run released the role and its subagent settled. */
   | { readonly kind: 'settled' }
@@ -105,6 +110,8 @@ interface OwnerRecord {
   reported: string | undefined
   /** Work and owner route for which no cheap route exists; nothing new starts until either changes. */
   noRoute: string | undefined
+  /** Work whose start the activation pool refused for capacity; it starts again only after a subagent ends. */
+  awaitingCapacity: string | undefined
   /** Resolved and replaced on every transition. */
   changed: PromiseWithResolvers<void>
 }
@@ -123,6 +130,8 @@ export class DefaultContextCurator extends Service {
   /** Evaluations and runs in flight, so disposal waits for every one of them. */
   private readonly tasks = new Set<Promise<void>>()
   private stopping = false
+  /** Subagents ended since load; a refusal followed by an end retries without waiting for another. */
+  private endedSubagents = 0
 
   constructor(ctx: Context, config: CuratorConfig = {}) {
     super(ctx, 'contextCurator')
@@ -140,6 +149,15 @@ export class DefaultContextCurator extends Service {
         return Promise.resolve({ kind: 'reject' as const })
       }
       return next()
+    })
+    // An ended subagent frees an activation slot, so work refused for capacity may start again.
+    this.ctx.on('subagent/end', () => {
+      this.endedSubagents++
+      for (const record of [...this.records.values()]) {
+        if (record.awaitingCapacity === undefined) continue
+        record.awaitingCapacity = undefined
+        this.trigger(record.owner, true)
+      }
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
       const record = this.records.get(agent.id)
@@ -250,7 +268,8 @@ export class DefaultContextCurator extends Service {
     if (record === undefined) {
       record = {
         owner, state: { kind: 'idle' }, retrigger: false, skipWork: undefined, closing: false,
-        failure: undefined, reported: undefined, noRoute: undefined, changed: Promise.withResolvers<void>(),
+        failure: undefined, reported: undefined, noRoute: undefined, awaitingCapacity: undefined,
+        changed: Promise.withResolvers<void>(),
       }
       this.records.set(owner.id, record)
     }
@@ -282,7 +301,7 @@ export class DefaultContextCurator extends Service {
         else if (event.kind === 'eligible') {
           const run: Run = {
             childId: SessionId(randomUUID()), work: event.work, controller: new AbortController(),
-            activation: undefined, indexDigest: undefined,
+            activation: undefined, indexDigest: undefined, refusedAt: undefined,
           }
           // The run reads the map itself, so news that arrived during evaluation is its work too.
           record.skipWork = undefined
@@ -345,6 +364,12 @@ export class DefaultContextCurator extends Service {
     // A holder that made this run yield may since have gone; its work is picked up again.
     if (reason === 'role moved' && this.ctx.contextMap.snapshotOf(record.owner).curatorId === null) {
       this.transition(record, { kind: 'trigger', news: true })
+    } else if (reason === 'no capacity' && run.refusedAt !== this.endedSubagents) {
+      // A subagent ended after the refusal, so its slot may be free already.
+      this.transition(record, { kind: 'trigger', news: true })
+    } else if (reason === 'no capacity') {
+      record.awaitingCapacity = run.work
+      if (record.retrigger) this.transition(record, { kind: 'trigger', news: true })
     } else if (record.retrigger) {
       // A trigger during the run starts another one only for different work; an interrupted run
       // is retried by a later owner step, within maxAttempts.
@@ -382,7 +407,7 @@ export class DefaultContextCurator extends Service {
       const route = owner.model.current()
       const routeKey = `${work?.signature ?? ''}|${route?.provider ?? ''}/${route?.model ?? ''}`
       const eligible = work !== null && work.attempts < this.config.maxAttempts
-        && work.signature !== record.skipWork && routeKey !== record.noRoute
+        && work.signature !== record.skipWork && routeKey !== record.noRoute && work.signature !== record.awaitingCapacity
         && this.ctx.contextMap.snapshotOf(owner).curatorId === null
       this.transition(record, eligible ? { kind: 'eligible', work: work.signature } : { kind: 'ineligible' })
     } catch (error: unknown) {
@@ -436,6 +461,11 @@ export class DefaultContextCurator extends Service {
         },
       })
     } catch (error: unknown) {
+      if (!signal.aborted && error instanceof SubagentError && error.code === 'ACTIVATION_LIMIT_REACHED') {
+        run.refusedAt = this.endedSubagents
+        this.transition(record, { kind: 'ended', reason: 'no capacity' })
+        return
+      }
       const conflict = error instanceof ContextMapError && error.code === 'CONTEXT_MAP_CONFLICT'
       if (!signal.aborted && !conflict) this.report(record, error)
       this.transition(record, { kind: 'ended', reason: signal.aborted || conflict ? 'canceled' : 'start failed' })
@@ -466,7 +496,10 @@ export class DefaultContextCurator extends Service {
     }
   }
 
-  /** Release the role if the run still holds it, acknowledge a completed index, and settle the subagent. */
+  /**
+   * Release the role if the run still holds it, returning the claim of a start refused for capacity,
+   * acknowledge a completed index, and settle the subagent.
+   */
   private async settle(record: OwnerRecord, run: Run, reason: string): Promise<void> {
     const { owner } = record
     try {
@@ -476,7 +509,9 @@ export class DefaultContextCurator extends Service {
     }
     try {
       if (this.ctx.agents.get(owner.id) === owner && this.ctx.contextMap.snapshotOf(owner).curatorId === run.childId) {
-        await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
+        await this.ctx.contextMap.release(owner, {
+          rootSessionId: owner.id, ...reason === 'no capacity' ? { unstartedWork: run.work } : {},
+        })
       }
       if (this.ctx.agents.get(owner.id) === owner && reason === 'completed' && run.indexDigest !== undefined) {
         await this.ctx.contextMap.acknowledgeIndex(owner, { rootSessionId: owner.id, indexDigest: run.indexDigest })

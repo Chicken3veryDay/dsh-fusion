@@ -110,6 +110,8 @@ export interface WorldOptions {
   readonly script?: Script
   readonly ownerModel?: string
   readonly models?: typeof MODELS
+  /** Subagent activation capacity; omit for the shipped default. */
+  readonly maxActiveSubagents?: number
 }
 
 /**
@@ -145,7 +147,7 @@ export async function world(options: WorldOptions = {}): Promise<World> {
   await ctx.plugin(FixedWorkingDirectory, { path: project })
   await ctx.plugin(ContextIndexService)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(Subagents)
+  await ctx.plugin(Subagents, options.maxActiveSubagents === undefined ? {} : { maxActiveSubagents: options.maxActiveSubagents })
   await ctx.plugin(Spawn, { providerName: 'spawn' })
   await ctx.plugin(ContextTreeService)
   await ctx.plugin(ContextTreeTools)

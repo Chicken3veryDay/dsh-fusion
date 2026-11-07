@@ -1,7 +1,8 @@
 /**
  * Deterministic recovery of the project map from `context-map/state` events. Every edit logs the
  * complete snapshot; replay keeps its content and the last explicitly acknowledged index digest,
- * counts the claims made for the same curation work, and checks that revisions are contiguous.
+ * counts the claims made for the same curation work less the ones returned unstarted, and checks
+ * that revisions are contiguous.
  */
 import { z } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -57,7 +58,7 @@ const opSchema: z.ZodType<MapOp> = z.object({
 const stateSchema = z.object({
   ownerSessionId: sessionId,
   snapshot: snapshotSchema.nullable(),
-  /** Claims made for the newest curation work, so retries stay bounded across restarts. */
+  /** Claims made for the newest curation work whose run started, so retries stay bounded across restarts. */
   attempts: z.object({ work: z.string().min(1), count: z.number().int().positive() }).strict().nullable(),
 }).strict()
 
@@ -73,7 +74,7 @@ export const CONTEXT_MAP_PROJECTION_KEY = 'contextMap'
  */
 export const contextMapProjectionDefinition = {
   key: CONTEXT_MAP_PROJECTION_KEY,
-  stateVersion: 3,
+  stateVersion: 4,
   stateSchema,
   init: header => ({ ownerSessionId: header.id, snapshot: null, attempts: null }),
   apply: (state, event) => {
@@ -84,9 +85,14 @@ export const contextMapProjectionDefinition = {
     // acknowledgement establishes completion, including when refolding an older checkpoint.
     const indexDigest = data.op.kind === 'index-ack' ? data.snapshot.indexDigest : state.snapshot?.indexDigest ?? null
     // A claim names the work it serves; the same work claimed again is a retry, anything else starts a count.
-    const work = data.op.kind === 'claim' ? data.op.work : undefined
-    const attempts = work === undefined ? state.attempts
-      : { work, count: state.attempts?.work === work ? state.attempts.count + 1 : 1 }
+    // A release naming the counted work returns a claim whose run never started.
+    const { kind, work } = data.op
+    let attempts = state.attempts
+    if (kind === 'claim' && work !== undefined) {
+      attempts = { work, count: attempts?.work === work ? attempts.count + 1 : 1 }
+    } else if (kind === 'release' && work !== undefined && attempts?.work === work) {
+      attempts = attempts.count > 1 ? { work, count: attempts.count - 1 } : null
+    }
     return { ownerSessionId: state.ownerSessionId, snapshot: { ...data.snapshot, indexDigest }, attempts }
   },
 } satisfies ProjectionDefinition<typeof CONTEXT_MAP_PROJECTION_KEY, ContextMapProjectionState>

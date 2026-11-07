@@ -86,6 +86,16 @@ export interface MapTarget {
   readonly rootSessionId?: SessionId
 }
 
+/** Target of a release, and the claim it returns when the claimed run never started. */
+export interface ReleaseRequest extends MapTarget {
+  /**
+   * Signature of the {@link CurationWork} whose newest claim this release returns because its run never
+   * started, such as a subagent the activation pool refused for capacity. Logged; that claim stops counting
+   * toward the work's attempts. Only the map owner may return a claim.
+   */
+  readonly unstartedWork?: string
+}
+
 /** Target and revision of a curator edit. */
 export interface CurateRequest extends MapTarget {
   /** Revision the curator read; a different current revision rejects the edit. */
@@ -384,19 +394,23 @@ export class ContextMapService extends Service {
   /**
    * Give up the curator role. The holder or the map owner may release it.
    * @param caller - the exact live holder or the owner.
-   * @param target - which map.
+   * @param request - which map, and the work whose unstarted claim the release returns.
    * @returns the committed snapshot, or the current one when nobody held the role.
-   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.
+   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller, or when a non-owner returns a claim.
    */
-  async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot> {
+  async release(caller: Agent, request: ReleaseRequest = {}): Promise<MapSnapshot> {
     this.live(caller)
-    const owner = this.ownerFor(target.rootSessionId ?? this.rootOf(caller).id)
+    const owner = this.ownerFor(request.rootSessionId ?? this.rootOf(caller).id)
     const current = this.snapshotOf(owner)
     if (caller !== owner && current.curatorId !== caller.id) {
       throw new ContextMapError('Only the curator or the map owner may release the role', 'CONTEXT_MAP_UNAUTHORIZED')
     }
+    if (request.unstartedWork !== undefined && caller !== owner) {
+      throw new ContextMapError('Only the map owner may return an unstarted claim', 'CONTEXT_MAP_UNAUTHORIZED')
+    }
     if (current.curatorId === null) return current
-    return this.commit(owner, caller.id, { kind: 'release', target: current.curatorId }, { ...current, curatorId: null, route: null })
+    const work = request.unstartedWork === undefined ? {} : { work: request.unstartedWork }
+    return this.commit(owner, caller.id, { kind: 'release', target: current.curatorId, ...work }, { ...current, curatorId: null, route: null })
   }
 
   /**
