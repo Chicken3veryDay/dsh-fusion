@@ -73,7 +73,7 @@ if (mode.startsWith('history-')) {
 }
 owner = new TaskExecutionOwner({ ctx, root: root.session, participants,
   state: new Map([root.session, ...participants.values()].map(session => [session, projection.readerFor(session)])),
-  signal: new AbortController().signal, adapters: [adapter], drain: async () => { if (mode === 'drain') throw new Error('transport drain failed') },
+  signal: new AbortController().signal, live: () => true, adapters: [adapter], drain: async () => { if (mode === 'drain') throw new Error('transport drain failed') },
 })
 if (mode.startsWith('history-')) {
   await assert.rejects(owner.open(), /conflicting-task-history/)

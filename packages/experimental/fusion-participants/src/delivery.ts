@@ -45,6 +45,8 @@ interface Owner {
   participants: ReadonlyMap<SessionId, Session>
   projections: { admissions: ProjectionHandle<AdmissionState>; receivers: ProjectionHandle<ReceiverState> }
   signal: AbortSignal
+  /** Synchronous initiating-caller lifetime check; false once the caller or an ancestor is unloading. */
+  live: () => boolean
 }
 interface Reservation { intent: DeliveryIntent; promise: Promise<DeliveryReceipt> | null }
 const inboxLengths = z.object({ 'next-turn': z.array(z.unknown()), 'next-step': z.array(z.unknown()) })
@@ -90,6 +92,7 @@ export class DeliveryOwner implements DormantDelivery {
     try {
       this.signal.throwIfAborted()
       caller?.throwIfAborted()
+      if (!this.owner.live()) throw new Error('task caller is unloading')
       if (!this.owner.participants.has(input.targetParticipantId)) throw new Error('target is outside this task')
       const state = this.rootState()
       const existing = this.reservations.get(input.deliveryId)
@@ -144,6 +147,7 @@ export class DeliveryOwner implements DormantDelivery {
   }
 
   reconcile(): Promise<void> {
+    if (!this.owner.live()) return Promise.reject(new DeliveryBlockedError(null, new Error('task caller is unloading')))
     return this.order.reserve(async () => {
       try {
         this.signal.throwIfAborted()

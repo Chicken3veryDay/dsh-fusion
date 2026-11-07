@@ -79,6 +79,8 @@ export interface ExecutionOwnerOptions {
   readonly participants: ReadonlyMap<SessionId, Session>
   readonly state: ReadonlyMap<Session, () => ExecutionState>
   readonly signal: AbortSignal
+  /** Synchronous initiating-caller lifetime check; false once the caller or an ancestor is unloading. */
+  readonly live: () => boolean
   readonly adapters: readonly ExecutionAdapter[]
   /** Synchronously stop transport admission and return its actual cleanup join. */
   readonly drain: () => Promise<void>
@@ -219,7 +221,7 @@ export class TaskExecutionOwner {
     void (async () => {
       if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.disposal !== undefined
         || this.phase === 'revoking' || this.phase === 'stopped') throw new ExecutionBlockedError('not-live')
-      current()
+      this.admitted()
       startedSchema.shape.adapter.parse(provider.name)
       startedSchema.shape.revision.parse(provider.revision)
       const acquiring = this.lifetimeWriters.length === 0
@@ -235,7 +237,7 @@ export class TaskExecutionOwner {
         }
         throw error
       }
-      current()
+      this.admitted()
       const issuer = Object.freeze({}) as ExecutionIssuer
       // Legacy adapters remain internal. The public path never calls their callback-fence protocol.
       const adapter: ExecutionAdapter = { issuer, name: provider.name, revision: provider.revision,
@@ -491,7 +493,8 @@ export class TaskExecutionOwner {
     const work = async (): Promise<void> => {
       if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.phase !== 'closed' || this.owner !== null
         || this.attempts.size > 0 || this.reconciliations.size > 0 || this.unknown.size > 0 || !this.options.participants.has(target)) throw new ExecutionBlockedError('not-drained')
-      if (this.enrollment !== undefined) { this.enrollment.current(); this.checkWriters() }
+      this.admitted()
+      if (this.enrollment !== undefined) this.checkWriters()
       const grant = grantedSchema.parse({ rootSessionId: this.options.root.id, incarnation: this.incarnation,
         generation: ++this.generation, participantId: target,
         previousRevoke: this.options.state.get(this.options.root)?.().revoke?.generation ?? null })
@@ -734,8 +737,13 @@ export class TaskExecutionOwner {
     this.rootWriter = undefined
   }
 
-  private checkLive(agent: Agent): void {
+  /** Refuse new work once the initiating caller or the declaring host fiber is unloading. */
+  private admitted(): void {
+    if (!this.options.live()) throw new ExecutionBlockedError('not-live')
     this.enrollment?.current()
+  }
+  private checkLive(agent: Agent): void {
+    this.admitted()
     if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.phase === 'revoking' || this.phase === 'blocked'
       || this.phase === 'stopped' || this.options.ctx.agents.get(agent.id) !== agent
       || this.options.participants.get(agent.session.id) !== agent.session

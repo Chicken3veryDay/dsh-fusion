@@ -22,6 +22,7 @@ import { TaskExecutionOwner, ExecutionBlockedError } from './execution.ts'
 import type { ExecutionSnapshot } from './execution.ts'
 import { executionProjection } from './execution-state.ts'
 import type { ExecutionState } from './execution-state.ts'
+import { fiberAdmits } from './liveness.ts'
 import { rosterProjection } from './state.ts'
 import type { RosterState } from './state.ts'
 
@@ -188,9 +189,7 @@ export default class FusionParticipants extends Service {
       })
       caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
       void owner.enroll(provider, () => {
-        caller.fiber.assertActive()
-        // A reloading fiber keeps its uid, so assertActive alone admits work during UNLOADING.
-        if (caller.fiber.state === FiberState.UNLOADING) throw new ExecutionBlockedError('not-live')
+        if (!fiberAdmits(caller.fiber)) throw new ExecutionBlockedError('not-live')
       }).then(completion.resolve, completion.reject)
       return completion.promise
     } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
@@ -375,8 +374,16 @@ export default class FusionParticipants extends Service {
       }
       await this.barrier(root.session)
       signal.throwIfAborted()
+      // The initiating caller and its ancestors fence the task at the synchronous unload edge. Both owners
+      // recheck this at admission, so an observer that runs before the status fence cannot admit new work.
+      const ancestors = new Set<typeof this.ctx.fiber>()
+      for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
+        ancestors.add(fiber)
+        if (fiber.parent.fiber === fiber) break
+      }
+      const live = (): boolean => [...ancestors].every(fiberAdmits)
       delivery = new DeliveryOwner({
-        ctx: this.lifetime.ctx, root: root.session, signal,
+        ctx: this.lifetime.ctx, root: root.session, signal, live,
         participants: new Map([...participants].map(([id, lease]) => [id, lease.session])),
         projections: { admissions: this.admissions, receivers: this.receivers },
       })
@@ -386,18 +393,14 @@ export default class FusionParticipants extends Service {
       // A raw caller-fiber unload must fence both admission and execution
       // synchronously, before asynchronous writer cleanup starts.
       const fence = (): void => { void deliveryOwner.dispose(); void execution?.dispose() }
-      const ancestors = new Set<typeof this.ctx.fiber>()
-      for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
-        ancestors.add(fiber)
-        if (fiber.parent.fiber === fiber) break
-      }
-      removeStatus = this.ctx.root.on('internal/status', (fiber) => {
+      removeStatus =this.ctx.root.on('internal/status', (fiber) => {
         if (ancestors.has(fiber) && fiber.state === FiberState.UNLOADING) fence()
       })
       removeFence = this.ctx.root.effect(() => () => { fence() }, 'fusion-participants.delivery-fence')
       const sessions = new Map([...participants].map(([id, lease]) => [id, lease.session]))
       execution = new TaskExecutionOwner({
-        ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, adapters: [], drain: () => deliveryOwner.dispose(),
+        ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, live, adapters: [],
+        drain: () => deliveryOwner.dispose(),
         state: new Map([root.session, ...sessions.values()].map(session => [session, this.executions.readerFor(session)])),
       })
       await execution.open()

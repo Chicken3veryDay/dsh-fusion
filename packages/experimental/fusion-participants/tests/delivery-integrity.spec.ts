@@ -15,7 +15,7 @@ async function fixture() {
   const receivers = await ctx.sessionProjections.register(receiverProjection)
   const participants = new Map([[target.id, target]])
   const owner = new DeliveryOwner({ ctx, root, participants,
-    projections: { admissions, receivers }, signal: new AbortController().signal })
+    projections: { admissions, receivers }, signal: new AbortController().signal, live: () => true })
   const input = { deliveryId: DeliveryId('integrity'), targetParticipantId: target.id,
     inboxTarget: 'next-turn' as const, correlationId: null, text: 'retained original' }
   return { ctx, task, root, target, admissions, receivers, owner, input, adapter, participants }

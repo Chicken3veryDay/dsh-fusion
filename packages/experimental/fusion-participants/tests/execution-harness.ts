@@ -47,7 +47,7 @@ export async function fixture(options: { open?: boolean; configure?: (options: E
   }))
   const abort = new AbortController()
   const ownerOptions: ExecutionOwnerOptions = { ctx, root: root.session, participants: new Map([[child.session.id, child.session]]),
-    signal: abort.signal, drain: () => Promise.resolve(undefined),
+    signal: abort.signal, live: () => true, drain: () => Promise.resolve(undefined),
     state: new Map([root.session, child.session].map(session => [session, projection.readerFor(session)])),
     adapters: [{ issuer, name: 'fake-host', revision: 'fake-1', classify: () => { control.onClassify?.(); return control.classification },
       async prepare() {
