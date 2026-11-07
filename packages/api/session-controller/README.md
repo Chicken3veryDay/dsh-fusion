@@ -125,6 +125,7 @@ No direct effect; model requests remain owned by the Agent and LLM packages.
 
 - A single summary, the query provider's own enumeration, final sorting, and response serialization can exceed the list work-slice target; it is not a hard Host latency bound.
 - The image byte cap does not validate decoded dimensions or pixel count.
+- A control-baseline fold failure reaches the UI only for a catalog parent, through the subagent dropdown. Its Retry rereads `session/projections`, which fails through the same snapshot and shows the Gateway's diagnostic text. Projection drive still stops at a throwing unit for that Session's later events.
 - A failed follow resumption remains visible to the caller instead of retrying indefinitely.
 - The raw browser upload is one streaming HTTP request without resumable offsets; a retry sends the file again from byte zero.
 - File-reference completion uses the shared Agent lookup and can resume a cold Session; the `skills/list` catalog is the non-activating alternative for skill metadata.

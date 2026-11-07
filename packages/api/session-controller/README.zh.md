@@ -125,6 +125,7 @@ Blockquote 作为普通 prompt 文本传递，不携带 quote 元数据。本地
 
 - 单个摘要、查询提供方自身的枚举、最终排序和响应序列化都可能超出列表时间片目标；它不是 Host 延迟的硬上限。
 - 图片字节上限不校验解码后的尺寸或像素数。
+- control baseline 的 fold 失败只会通过 subagent 下拉菜单，对目录父 Session 显示在 UI 中。其重试会重新读取 `session/projections`，经同一 snapshot 失败后显示 Gateway 的诊断文本。对于该 Session 后续的事件，projection drive 仍会在抛出异常的 unit 处停止。
 - follow 恢复失败会对调用方可见，而不会无限重试。
 - 浏览器原始字节上传使用一次不带断点续传偏移的流式 HTTP 请求；重试会从第零字节重新传输整个文件。
 - 文件引用补全使用共享 Agent lookup，因此可能恢复冷 Session；`skills/list` 目录是不激活 Agent 的 skill 元数据读取路径。
