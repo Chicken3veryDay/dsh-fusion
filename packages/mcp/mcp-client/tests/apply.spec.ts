@@ -49,7 +49,7 @@ vi.mock('@modelcontextprotocol/client/stdio', () => ({
 
 // vi.mock is hoisted above static imports, so the module under test sees the
 // mocked SDK even through a static import.
-import { apply, name, inject, Config as ConfigSchema } from '@deepseek-ai/dsh-mcp-client/src/index.ts'
+import { apply, connect, name, inject, Config as ConfigSchema } from '@deepseek-ai/dsh-mcp-client/src/index.ts'
 
 // ---- Helpers ----
 
@@ -183,6 +183,14 @@ describe('apply (plugin lifecycle)', () => {
       }
     },
   )
+
+  it('exposes only the current connection registrations through its retained handle', async () => {
+    const server = await connect(ctx, stdioConfig)
+    expect(server.current().get('remote')?.definition).toBe(ctx.tools.get('mcp__srv__remote'))
+    expect(server.current().size).toBe(1)
+    await ctx.fiber.dispose()
+    expect(server.current().size).toBe(0)
+  })
 
   it('connects, syncs tools under the namespace, and registers a notification handler', async () => {
     await apply(ctx, stdioConfig)

@@ -98,6 +98,8 @@ When a server connection drops — for example a local server process crashes �
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
+Both transport schemas share server identity, timeout, startup, origin, instruction-size, and reconnect fields.
+
 <details>
 <summary>Implementation internals — click to expand</summary>
 

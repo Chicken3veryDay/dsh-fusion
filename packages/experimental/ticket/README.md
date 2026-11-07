@@ -44,6 +44,8 @@ Work scopes normalize slash-separated relative paths, collapse `.` and `..`, and
 
 ## Understand the implementation
 
+Current Assignment and report parsers extend their historical field definitions; attempt updates and settlement share receipt merging. Ticket tools share JSON rendering and bind paired assignment commands to the calling Agent.
+
 The package has three small layers:
 
 - [`src/types.ts`](src/types.ts) owns branded ids, JSON-compatible snapshots, requests, browser projection types, and the durable event declaration.

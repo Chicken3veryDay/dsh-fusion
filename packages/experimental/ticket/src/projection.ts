@@ -16,12 +16,10 @@ import {
   TicketReportId,
 } from './types.ts'
 import type {
-  AssignmentSnapshotV1,
   ExecutionSlotSnapshot,
   TicketAttentionSnapshot,
   TicketProjection,
   TicketQuestionSnapshot,
-  TicketReportSnapshot,
   TicketSnapshot,
   TicketSnapshotV1,
   TicketStatus,
@@ -44,7 +42,7 @@ const workScopeSchema: z.ZodType<WorkScope> = z.object({
   exclusive: z.boolean().optional(),
 }).strict() as z.ZodType<WorkScope>
 
-const assignmentSchema: z.ZodType<AssignmentSnapshotV1> = z.object({
+const assignmentSchema = z.object({
   id: assignmentIdSchema,
   revision: positiveInteger,
   role: z.enum(['worker', 'reviewer', 'integrator', 'observer']),
@@ -56,7 +54,7 @@ const assignmentSchema: z.ZodType<AssignmentSnapshotV1> = z.object({
   executionSlotId: executionSlotIdSchema.optional(),
   attempts: safeInteger,
   latestReportId: reportIdSchema.optional(),
-}).strict() as z.ZodType<AssignmentSnapshotV1>
+}).strict()
 
 const executionSlotSchema: z.ZodType<ExecutionSlotSnapshot> = z.object({
   id: executionSlotIdSchema,
@@ -66,7 +64,7 @@ const executionSlotSchema: z.ZodType<ExecutionSlotSnapshot> = z.object({
   holderId: sessionIdSchema.optional(),
 }).strict() as z.ZodType<ExecutionSlotSnapshot>
 
-const reportSchema: z.ZodType<TicketReportSnapshot> = z.object({
+const reportSchema = z.object({
   id: reportIdSchema,
   assignmentId: assignmentIdSchema,
   authorId: sessionIdSchema,
@@ -183,17 +181,11 @@ export const ticketCandidateContentSchema = z.discriminatedUnion('kind', [
 export const missionMilestoneSchema = z.object({ title: z.string().trim().min(1), ticketIds: z.array(ticketIdSchema).min(1) }).strict()
 /** Runtime schema for the complete current durable Ticket value. */
 export const ticketSnapshotSchema: z.ZodType<TicketSnapshot> = ticketSnapshotV1Schema.extend({
-  assignments: z.array(z.object({
-    id: assignmentIdSchema, revision: positiveInteger, role: z.enum(['worker', 'reviewer', 'integrator', 'observer']),
-    subject: z.string().min(1), instructions: z.string(), ownerId: sessionIdSchema,
-    status: z.enum(['assigned', 'claimed', 'running', 'released', 'completed', 'blocked', 'failed', 'cancelled']),
-    workScopes: z.array(workScopeSchema), executionSlotId: executionSlotIdSchema.optional(), attempts: safeInteger,
-    latestReportId: reportIdSchema.optional(), contribution: z.enum(['required', 'advisory']), activeAttemptId: attemptIdSchema.optional(),
+  assignments: z.array(assignmentSchema.extend({
+    contribution: z.enum(['required', 'advisory']), activeAttemptId: attemptIdSchema.optional(),
   }).strict()),
-  reports: z.array(z.object({
-    id: reportIdSchema, assignmentId: assignmentIdSchema, authorId: sessionIdSchema,
-    kind: z.enum(['progress', 'result', 'failure']), summary: z.string().min(1), evidence: z.array(z.string()),
-    nextSteps: z.array(z.string()), createdAt: safeInteger, specRevision: positiveInteger.optional(), attemptId: attemptIdSchema.optional(),
+  reports: z.array(reportSchema.extend({
+    specRevision: positiveInteger.optional(), attemptId: attemptIdSchema.optional(),
   }).strict()),
   specification: ticketSpecificationSchema, attempts: z.array(attemptSchema),
   candidates: z.array(z.object({

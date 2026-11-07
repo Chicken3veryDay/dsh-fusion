@@ -125,6 +125,8 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+地图工具使用 `dsh-tools` 共享的 JSON 输出渲染器。
+
 - [`src/types.ts`](src/types.ts) 包含地图记录、请求和配置类型。
 - [`src/projection.ts`](src/projection.ts) 是 Session 投影以及事件的严格模式。
 - [`src/edits.ts`](src/edits.ts) 包含纯编辑规则：路径解析、成员与引用检查、哈希和过期判断。

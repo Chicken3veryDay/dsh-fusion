@@ -277,6 +277,14 @@ describe('durable Workstream authority and delivery', () => {
     await rejection
   })
 
+  it('rejects completion of a missing root-owned Ticket through the model tool', async () => {
+    const { ctx, owner } = await setup()
+    await ctx.plugin(WorkstreamTools)
+    const tool = ctx.tools.get('workstream_end_ticket')!
+    await expect(tool.execute({ root_session_id: owner.id, ticket_id: 'missing', expected_revision: 1,
+      summary: 'Accepted' }, { agent: owner, signal } as ToolRunContext)).rejects.toMatchObject({ code: 'TICKET_NOT_FOUND' })
+  })
+
   it('creates a Ticket under a model-chosen id and rejects its reuse', async () => {
     const { ctx, owner } = await setup()
     await ctx.plugin(WorkstreamTools)

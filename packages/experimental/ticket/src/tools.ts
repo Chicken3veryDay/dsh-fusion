@@ -3,8 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Service } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { InferValue } from '@deepseek-ai/dsh-tools'
+import { defineTool, jsonToolOutput } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { TicketError } from './errors.ts'
@@ -43,19 +42,16 @@ function canRead(ticket: TicketSnapshot, actorId: SessionId): boolean {
   return ticket.coordinatorId === actorId || ticket.assignments.some(assignment => assignment.ownerId === actorId)
 }
 
-const JSON_OUTPUT_SCHEMA = { type: 'json' } as const
-type JsonObjectOutput = InferValue<typeof JSON_OUTPUT_SCHEMA>
-
-function jsonOutput(): {
-  schema: typeof JSON_OUTPUT_SCHEMA
-  render: (args: unknown, value: JsonObjectOutput) => [{ type: 'text'; text: string }]
-} {
-  return { schema: JSON_OUTPUT_SCHEMA, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] }
-}
-
 function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue
 }
+
+const assignmentParameters = {
+  root_session_id: { type: 'string', required: true },
+  ticket_id: { type: 'string', required: true },
+  assignment_id: { type: 'string', required: true },
+  expected_revision: { type: 'integer', required: true },
+} as const
 
 function workScopes(value: readonly Record<string, JsonValue>[]): WorkScope[] {
   return value.map((row) => {
@@ -107,6 +103,11 @@ export class TicketTools extends Service {
         + 'and report results or questions instead of silently changing ownership.',
     })
     const register = (tool: Parameters<Context['tools']['register']>[0]): void => { this.ctx.tools.register(tool) }
+    const withCaller = async (toolName: string, caller: Agent | undefined, run: (agent: Agent) => Promise<unknown>): Promise<JsonValue> => {
+      const agent = agentOf(caller, toolName)
+      return asJson(await this.ctx.agents.withInitiator(agent, () => run(agent)))
+    }
+
     register(defineTool({
       name: 'ticket_list',
       description: 'List durable Tickets in a Session. Pass root_session_id when a worker is acting on a coordinator-owned Ticket.',
@@ -116,7 +117,7 @@ export class TicketTools extends Service {
           description: 'Session id that owns the Ticket log. Defaults to the calling Agent Session.',
         },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_list')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
@@ -132,7 +133,7 @@ export class TicketTools extends Service {
         root_session_id: { type: 'string', description: 'Session id that owns the Ticket log.' },
         ticket_id: { type: 'string', required: true, description: 'Ticket id.' },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_get')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
@@ -156,7 +157,7 @@ export class TicketTools extends Service {
           description: 'Declared path access for the Ticket.',
         },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_create')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
@@ -185,7 +186,7 @@ export class TicketTools extends Service {
         execution_mode: { type: 'string', enum: ['shared-workspace', 'isolated-worktree', 'dedicated-process'] },
         work_scopes: { type: 'array', items: { type: 'object', additionalProperties: true } },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_assign')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -199,63 +200,36 @@ export class TicketTools extends Service {
           })))
       },
     }))
-    register(defineTool({
-      name: 'ticket_claim',
-      description: 'Claim the calling worker’s assigned Ticket responsibility and start its execution slot.',
-      parameters: {
-        root_session_id: { type: 'string', required: true },
-        ticket_id: { type: 'string', required: true },
-        assignment_id: { type: 'string', required: true },
-        expected_revision: { type: 'integer', required: true },
-      },
-      output: jsonOutput(),
-      execute: async (args, exec) => {
-        const agent = agentOf(exec.agent, 'ticket_claim')
-        return asJson(await this.ctx.agents.withInitiator(agent, () =>
-          this.ctx.tickets.claim(sessionOf(this.ctx, args.root_session_id, agent), {
+    for (const [toolName, action, description] of [
+      ['ticket_claim', 'claim', 'Claim the calling worker’s assigned Ticket responsibility and start its execution slot.'],
+      ['ticket_release', 'release', 'Release a Ticket assignment while retaining its worker owner for later resumption.'],
+    ] as const) {
+      register(defineTool({
+        name: toolName,
+        description,
+        parameters: assignmentParameters,
+        output: jsonToolOutput(),
+        execute: (args, exec) => withCaller(toolName, exec.agent, agent =>
+          this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
             ticketId: TicketId(args.ticket_id),
             assignmentId: AssignmentId(args.assignment_id),
             expectedRevision: args.expected_revision,
             actorId: agent.id,
-          })))
-      },
-    }))
-    register(defineTool({
-      name: 'ticket_release',
-      description: 'Release a Ticket assignment while retaining its worker owner for later resumption.',
-      parameters: {
-        root_session_id: { type: 'string', required: true },
-        ticket_id: { type: 'string', required: true },
-        assignment_id: { type: 'string', required: true },
-        expected_revision: { type: 'integer', required: true },
-      },
-      output: jsonOutput(),
-      execute: async (args, exec) => {
-        const agent = agentOf(exec.agent, 'ticket_release')
-        return asJson(await this.ctx.agents.withInitiator(agent, () =>
-          this.ctx.tickets.release(sessionOf(this.ctx, args.root_session_id, agent), {
-            ticketId: TicketId(args.ticket_id),
-            assignmentId: AssignmentId(args.assignment_id),
-            expectedRevision: args.expected_revision,
-            actorId: agent.id,
-          })))
-      },
-    }))
+          })),
+      }))
+    }
     register(defineTool({
       name: 'ticket_report',
       description: 'Publish a bounded worker progress, result, or failure report for a Ticket assignment.',
       parameters: {
-        root_session_id: { type: 'string', required: true },
-        ticket_id: { type: 'string', required: true },
-        assignment_id: { type: 'string', required: true },
-        expected_revision: { type: 'integer', required: true },
+        ...assignmentParameters,
         attempt_id: { type: 'string', description: 'Active attempt id; required once the assignment has an active attempt.' },
         kind: { type: 'string', required: true, enum: ['progress', 'result', 'failure'] },
         summary: { type: 'string', required: true },
         evidence: { type: 'array', items: { type: 'string' } },
         next_steps: { type: 'array', items: { type: 'string' } },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_report')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -282,7 +256,7 @@ export class TicketTools extends Service {
         expected_revision: { type: 'integer', required: true },
         question: { type: 'string', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_ask')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -305,7 +279,7 @@ export class TicketTools extends Service {
         expected_revision: { type: 'integer', required: true },
         answer: { type: 'string', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_answer')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -324,7 +298,7 @@ export class TicketTools extends Service {
         question_id: { type: 'string', required: true },
         expected_revision: { type: 'integer', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_close_question')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -346,15 +320,12 @@ export class TicketTools extends Service {
           attention_id: { type: 'string', required: true },
           expected_revision: { type: 'integer', required: true },
         },
-        output: jsonOutput(),
-        execute: async (args, exec) => {
-          const agent = agentOf(exec.agent, toolName)
-          return asJson(await this.ctx.agents.withInitiator(agent, () =>
-            this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
-              ticketId: TicketId(args.ticket_id), attentionId: TicketAttentionId(args.attention_id),
-              expectedRevision: args.expected_revision, actorId: agent.id,
-            })))
-        },
+        output: jsonToolOutput(),
+        execute: (args, exec) => withCaller(toolName, exec.agent, agent =>
+          this.ctx.tickets[action](sessionOf(this.ctx, args.root_session_id, agent), {
+            ticketId: TicketId(args.ticket_id), attentionId: TicketAttentionId(args.attention_id),
+            expectedRevision: args.expected_revision, actorId: agent.id,
+          })),
       }))
     }
     register(defineTool({
@@ -368,7 +339,7 @@ export class TicketTools extends Service {
         kind: { type: 'string', required: true, enum: ['review', 'question', 'blocked', 'decision'] },
         message: { type: 'string', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_attention')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -391,7 +362,7 @@ export class TicketTools extends Service {
         expected_revision: { type: 'integer', required: true },
         reason: { type: 'string', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_block')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -412,7 +383,7 @@ export class TicketTools extends Service {
         expected_revision: { type: 'integer', required: true },
         new_coordinator_id: { type: 'string', required: true },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_handoff')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -437,7 +408,7 @@ export class TicketTools extends Service {
           description: 'Complete replacement rows {id, description, required, independent}; independent criteria need a check author who did not contribute.',
         },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_revise')
         const session = sessionOf(this.ctx, args.root_session_id, agent)
@@ -466,7 +437,7 @@ export class TicketTools extends Service {
           description: 'Either {kind:"commit", repository, commit} or {kind:"artifact", reference, digest}.',
         },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_submit_candidate')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -492,7 +463,7 @@ export class TicketTools extends Service {
         outcome: { type: 'string', required: true, enum: ['pass', 'fail'] },
         evidence: { type: 'array', required: true, items: { type: 'string' }, description: 'Readable evidence for the outcome.' },
       },
-      output: jsonOutput(),
+      output: jsonToolOutput(),
       execute: async (args, exec) => {
         const agent = agentOf(exec.agent, 'ticket_check_candidate')
         return asJson(await this.ctx.agents.withInitiator(agent, () =>
@@ -514,7 +485,7 @@ export class TicketTools extends Service {
           expected_revision: { type: 'integer', required: true },
           summary: { type: 'string', required: true },
         },
-        output: jsonOutput(),
+        output: jsonToolOutput(),
         execute: async (args, exec) => {
           const agent = agentOf(exec.agent, toolName)
           const session = sessionOf(this.ctx, args.root_session_id, agent)

@@ -328,11 +328,13 @@ describe('package payload constraints', () => {
     ])
   })
 
-  it('publishes tools entry points and shared runtime chunks', () => {
-    const dir = 'packages/core/tools'
+  it.each([
+    { dir: 'packages/core/tools', entry: 'pipeline' },
+    { dir: 'packages/llm/llm-pi-ai', entry: 'profiles' },
+  ])('publishes $dir entry points and shared runtime chunks', ({ dir, entry }) => {
     const manifest = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8')) as WorkspaceManifest['manifest']
     expect(checkWorkspaceManifest({ dir, manifest })).toEqual([])
-    for (const omitted of ['lib/pipeline.js', 'lib/shared-*.js']) {
+    for (const omitted of [`lib/${entry}.js`, 'lib/shared-*.js']) {
       expect(checkWorkspaceManifest({ dir, manifest: {
         ...manifest, files: manifest.files!.filter(file => file !== omitted),
       } })).toEqual([expect.stringContaining('package.json files must be')])
@@ -341,27 +343,9 @@ describe('package payload constraints', () => {
       ...manifest,
       exports: {
         ...manifest.exports,
-        './pipeline': { types: './lib/types/pipeline.d.ts', default: './lib/index.js' },
+        [`./${entry}`]: { types: `./lib/types/${entry}.d.ts`, default: './lib/index.js' },
       },
-    } })).toContainEqual(expect.stringContaining('exports["./pipeline"] must expose'))
-  })
-
-  it('publishes pi-ai profile composition and shared runtime chunks', () => {
-    const dir = 'packages/llm/llm-pi-ai'
-    const manifest = JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8')) as WorkspaceManifest['manifest']
-    expect(checkWorkspaceManifest({ dir, manifest })).toEqual([])
-    for (const omitted of ['lib/profiles.js', 'lib/shared-*.js']) {
-      expect(checkWorkspaceManifest({ dir, manifest: {
-        ...manifest, files: manifest.files!.filter(file => file !== omitted),
-      } })).toEqual([expect.stringContaining('package.json files must be')])
-    }
-    expect(checkWorkspaceManifest({ dir, manifest: {
-      ...manifest,
-      exports: {
-        ...manifest.exports,
-        './profiles': { types: './lib/types/profiles.d.ts', default: './lib/index.js' },
-      },
-    } })).toContainEqual(expect.stringContaining('exports["./profiles"] must expose'))
+    } })).toContainEqual(expect.stringContaining(`exports["./${entry}"] must expose`))
   })
 
   it('publishes the directory of each locale detail document after the locale resources', () => {

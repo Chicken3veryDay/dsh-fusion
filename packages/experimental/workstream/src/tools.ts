@@ -1,7 +1,7 @@
 /** Model tools preserve caller identity and select an explicit Workstream root. */
 import { Context, Service } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, jsonToolOutput } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { TicketId } from '@deepseek-ai/dsh-experimental-ticket'
@@ -11,10 +11,7 @@ function caller(agent: Agent | undefined): Agent {
   if (agent === undefined) throw new Error('Workstream tools require a live calling Agent')
   return agent
 }
-const output = {
-  schema: { type: 'json' as const },
-  render: (_args: unknown, value: unknown): [{ type: 'text'; text: string }] => [{ type: 'text', text: JSON.stringify(value) }],
-}
+const output = jsonToolOutput()
 const root = { type: 'string' as const, required: true as const, description: 'Stable technical owner Session id.' }
 const operation = { type: 'string' as const, required: true as const, description: 'Stable operation id; reuse exactly for retries.' }
 
