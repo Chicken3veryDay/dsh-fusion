@@ -292,23 +292,17 @@ export function projectJsonRun(
         write({ type: 'status', phase: 'turn_end', turn: event.data.turn, reason: event.data.reason })
         return
       case 'tool/call':
+      case 'tool/ptc-dispatch-start': {
+        const nested = event.type === 'tool/ptc-dispatch-start'
         write({
           type: 'tool_call',
-          callId: event.data.callId,
+          callId: nested ? event.data.subCallId : event.data.callId,
+          ...nested ? { parentCallId: event.data.parentCallId } : {},
           tool: event.data.name,
-          input: parseArguments(event.data.arguments),
+          input: nested ? event.data.arguments : parseArguments(event.data.arguments),
         })
         return
-      case 'tool/ptc-dispatch-start':
-        // A call made inside a `run_code` program: same shape as a top-level call, tied to the program by `parentCallId`.
-        write({
-          type: 'tool_call',
-          callId: event.data.subCallId,
-          parentCallId: event.data.parentCallId,
-          tool: event.data.name,
-          input: event.data.arguments,
-        })
-        return
+      }
       case 'tool/ptc-dispatch':
         write({
           type: 'tool_result',

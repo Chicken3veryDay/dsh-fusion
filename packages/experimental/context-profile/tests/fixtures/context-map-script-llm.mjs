@@ -12,6 +12,7 @@
 
 import { writeFileSync } from 'node:fs'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { modelToolCall, modelToolNames, modelToolsSdk } from '../../../workstream-profile/tests/fixtures/model-tools.ts'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 const CURATOR_MARKER = 'You are the project map curator'
@@ -28,10 +29,11 @@ const textOf = message => message.content.map(block => block.text ?? '').join(''
 let markFiled
 const filed = new Promise((resolve) => { markFiled = resolve })
 
-async function * call(id, name, args) {
+async function * emitCall(options, id, name, args) {
+  const call = modelToolCall(options, name, args)
   yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-  yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: JSON.stringify(args) }
-  yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) } }
+  yield { type: 'tool-call-delta', index: 0, id, name: call.name, argumentsDelta: call.arguments }
+  yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: call.name, arguments: call.arguments } }
   yield { type: 'finish', reason: { kind: 'tool-calls' } }
 }
 
@@ -87,7 +89,8 @@ class MapScriptAdapter extends LlmAdapter {
       auxiliary,
       model: options.model,
       effort: options.reasoningEffort ?? null,
-      tools: (options.tools ?? []).map(tool => tool.name),
+      tools: modelToolNames(options),
+      sdk: auxiliary ? undefined : modelToolsSdk(options),
       bytes: conversation.length,
       hasNote: conversation.includes(NOTE_TEXT),
       hasGroupTitle: conversation.includes('Shell tools'),
@@ -95,10 +98,11 @@ class MapScriptAdapter extends LlmAdapter {
     })
     writeFileSync(out, JSON.stringify(this.requests))
     if (auxiliary) yield * say('Project map probe')
-    else yield * (curator ? this.curate(options.messages) : this.work())
+    else yield * (curator ? this.curate(options.messages, options) : this.work(options))
   }
 
-  work() {
+  work(options) {
+    const call = (id, name, args) => emitCall(options, id, name, args)
     this.mainSteps += 1
     if (this.mainSteps === 1) return call('cm-note', 'context_note', { text: NOTE_TEXT, cites: ['ref:package.json test script'] })
     if (this.mainSteps === 2) return call('cm-load', 'context_load', { paths: ['Tools/Global/probe'] })
@@ -106,7 +110,8 @@ class MapScriptAdapter extends LlmAdapter {
     return say('MAP_PROBE_OK')
   }
 
-  curate(messages) {
+  curate(messages, options) {
+    const call = (id, name, args) => emitCall(options, id, name, args)
     const result = lastResult(messages)
     if (result === undefined) return call('cm-view-1', 'map_view', {})
     if (result.id === FILE_CALL) {

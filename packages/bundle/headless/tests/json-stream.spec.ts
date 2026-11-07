@@ -7,7 +7,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
-import { boundJsonLine, MAX_STRING_BYTES, projectJsonRun, type JsonProjectionOptions } from '../src/json-stream.ts'
+import { boundJsonLine, MAX_EVENT_BYTES, MAX_STRING_BYTES, projectJsonRun, type JsonProjectionOptions } from '../src/json-stream.ts'
 
 interface ProjectionHarness {
   readonly lines: string[]
@@ -455,6 +455,53 @@ describe('--json projection', () => {
       type: 'tool_result', callId: 'run-1:ptc:1', parentCallId: 'run-1', status: 'error', result: 'denied',
       error: { name: 'AutoReviewDeniedError', code: 'AUTO_REVIEW_DENIED' },
     })
+  })
+
+  it('bounds nested program input keys, values, results and error detail like top-level calls', () => {
+    const test = harness({ maxStringBytes: 16 }, 's1')
+    test.emitSession({
+      type: 'tool/ptc-dispatch-start', seq: SessionSeq(0), time: 0,
+      data: {
+        rootCallId: ToolCallId('run'), parentCallId: ToolCallId('run'), subCallId: ToolCallId('run:ptc:1'), name: 'bash',
+        arguments: { ['é'.repeat(9)]: { items: ['é'.repeat(9), null, true] } },
+      },
+    })
+    test.emitSession({
+      type: 'tool/ptc-dispatch', seq: SessionSeq(1), time: 1,
+      data: {
+        rootCallId: ToolCallId('run'), parentCallId: ToolCallId('run'), subCallId: ToolCallId('run:ptc:1'), name: 'bash',
+        arguments: {}, isError: true, content: [{ type: 'text', text: 'é'.repeat(9) }],
+        error: { name: 'Denied', code: 'DENIED', reason: 'é'.repeat(9) },
+      },
+    })
+    expect(test.parsed().slice(1)).toEqual([
+      { type: 'tool_call', callId: 'run:ptc:1', parentCallId: 'run', tool: 'bash',
+        input: { ['é'.repeat(8)]: { items: ['é'.repeat(8), null, true] } }, truncated: true },
+      { type: 'tool_result', callId: 'run:ptc:1', parentCallId: 'run', status: 'error', result: 'é'.repeat(8),
+        error: { name: 'Denied', code: 'DENIED', reason: 'é'.repeat(8) }, truncated: true },
+    ])
+  })
+
+  it('applies the complete line limit to nested program input and escaped result text', () => {
+    const test = harness()
+    test.emitSession({
+      type: 'tool/ptc-dispatch-start', seq: SessionSeq(0), time: 0,
+      data: {
+        rootCallId: ToolCallId('run'), parentCallId: ToolCallId('run'), subCallId: ToolCallId('run:ptc:1'), name: 'bash',
+        arguments: Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`item${String(index)}`, 'x'.repeat(1024)])),
+      },
+    })
+    test.emitSession({
+      type: 'tool/ptc-dispatch', seq: SessionSeq(1), time: 1,
+      data: {
+        rootCallId: ToolCallId('run'), parentCallId: ToolCallId('run'), subCallId: ToolCallId('run:ptc:1'), name: 'bash',
+        arguments: {}, isError: false, content: [{ type: 'text', text: '\u0000'.repeat(MAX_STRING_BYTES) }],
+      },
+    })
+    const events = test.parsed().slice(1)
+    expect(events[0]).toEqual({ type: 'tool_call', callId: 'run:ptc:1', parentCallId: 'run', tool: 'bash', truncated: true })
+    expect(events[1]).toEqual({ type: 'tool_result', truncated: true })
+    expect(events.every(event => Buffer.byteLength(JSON.stringify(event) + '\n', 'utf8') <= MAX_EVENT_BYTES)).toBe(true)
   })
 
   it('bounds one projected payload through the line writer', () => {

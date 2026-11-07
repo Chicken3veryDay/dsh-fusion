@@ -65,11 +65,11 @@ patch 在 `agent-instructions` 条目上设置 `maxBytes: 4096`，并插入六�
 
 #### 模型看到的内容
 
-`context_browse` 和 `context_load` 的 schema、目录消息，以及加载之后的授权与激活消息，均见[上下文树的模型体验](../context-tree/README.zh.md#model-experience)。本层不增加自己的文本。基础集之外的工具在加载之前不会被声明。
+`context_browse` 和 `context_load` 的 schema、目录消息，以及加载之后的授权与激活消息，均见[上下文树的模型体验](../context-tree/README.zh.md#model-experience)。本层不增加自己的文本。使用随附 PTC 执行器时，只有 `run_code` 可直接调用；获准工具出现在 `tools:sdk` 及其程序绑定中。基础集之外的工具在加载后的下一步之前不会出现在这两处，压缩会同时撤销声明与绑定。正在运行的程序保留已获准的工具集。
 
 #### Token 影响
 
-本层从每次请求中移除所有非基础工具的 schema，并加入两个树 schema、`context_note` schema 和目录。地图策展不占用工作对话：它发生在策展者自己的 Session 中，使用更便宜的路线。4096 字节的指令上限缩短了急切加载的指令文本；被省略的部分仍可通过树中的 `Instructions` 获取。
+本层从每次请求中移除尚未加载的非基础工具声明，并加入树和 `context_note` 的声明及目录；PTC 将这些声明渲染为生成的 SDK，原生执行则渲染工具 schema。地图策展不占用工作对话：它发生在策展者自己的 Session 中，使用更便宜的路线。4096 字节的指令上限缩短了急切加载的指令文本；被省略的部分仍可通过树中的 `Instructions` 获取。
 
 #### KV 缓存影响
 

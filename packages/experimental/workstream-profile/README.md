@@ -91,11 +91,11 @@ Agent Teams stays unmounted. `WorkstreamService` delivers messages, interruption
 
 #### What the model sees
 
-The 38 `ticket_*`, `workstream_*`, and `workstream_evidence_*` tool schemas, plus the `ticket-tools:policy` system-prompt section registered by `TicketTools`. This layer adds no text of its own.
+The 38 `ticket_*`, `workstream_*`, and `workstream_evidence_*` tools appear as program bindings in `tools:sdk` under the shipped `run_code` default, or as tool schemas under an explicit native executor, plus the `ticket-tools:policy` system-prompt section registered by `TicketTools`. This layer adds no text of its own.
 
 #### Token effect
 
-The layer adds the tool schemas and one policy section of the three packages.
+The layer adds the generated SDK declarations or native tool schemas and one policy section of the three packages.
 
 #### KV Cache effect
 

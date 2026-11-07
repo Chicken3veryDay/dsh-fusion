@@ -34,6 +34,7 @@ const EVIDENCE_TOOLS = [
 const EXPECTED_TOOLS = [...TICKET_TOOLS, ...WORKSTREAM_TOOLS, ...EVIDENCE_TOOLS]
 
 interface Probe {
+  readonly wireTools: string[]
   readonly tools: string[]
   readonly mounted: Record<string, boolean>
 }
@@ -94,6 +95,7 @@ async function probe(bundles: readonly string[]): Promise<Probe> {
 
 /** The assertion the layer must satisfy; the negative control proves it can fail. */
 function expectWorkstreamLayer(seen: Probe): void {
+  expect(seen.wireTools).toEqual(['run_code'])
   expect(seen.mounted).toMatchObject({ tickets: true, workstreams: true, workstreamEvidence: true })
   const visible = seen.tools.filter(tool => /^(ticket|workstream)_/u.test(tool)).sort()
   expect(visible).toEqual([...EXPECTED_TOOLS].sort())
