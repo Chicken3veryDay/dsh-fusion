@@ -1462,7 +1462,7 @@ describe('headless recorded-session snapshots', () => {
               expect(results).toHaveLength(1)
               expect(results[0]).toMatchObject({ isError: false, content: [{ type: 'text', text: [
                 'normal: cleanup fulfilled; bodies 0; cleanups 1; removals 0; hooks 0; complete prefixes',
-                'fault: cleanup rejected; bodies 0; cleanups 1; removals 2; hooks 0; complete prefixes',
+                'fault: cleanup rejected; bodies 0; cleanups 1; removals 1; hooks 1; complete prefixes',
               ].join('\n') }] })
               expect(actualLogs).toHaveLength(5)
               for (const log of actualLogs.slice(1)) {

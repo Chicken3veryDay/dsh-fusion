@@ -85,8 +85,14 @@ export function apply(ctx: Context): void {
           Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
         }
         assert.equal(rejected, fault)
-        assert.equal(removals, fault ? 2 : 0)
-        assert.equal((events['_hooks']['session/event'] ?? []).some(hook => callbacks.has(hook.callback)), false)
+        // Unknown participant cleanup retains both writers and the root route, so the root remover never runs.
+        assert.equal(removals, fault ? 1 : 0)
+        const hooks = (events['_hooks']['session/event'] ?? []).filter(hook => callbacks.has(hook.callback)).length
+        assert.equal(hooks, fault ? 1 : 0)
+        if (fault) for (const session of [root, participant]) {
+          // The fixture and the provider bundle load separate copies of the error class.
+          await assert.rejects(ctx.sessionPersistence.open(session.id, 'write'), { name: 'SessionAlreadyOwnedError' })
+        }
         for (const session of [root, participant]) {
           const reader = await ctx.sessionPersistence.open(session.id, 'read')
           try {
@@ -94,7 +100,7 @@ export function apply(ctx: Context): void {
             assert.equal(session.ownEvents().some(event => event.type === 'request/context'), false)
           } finally { await reader.close() }
         }
-        outcomes.push(`${fault ? 'fault' : 'normal'}: cleanup ${rejected ? 'rejected' : 'fulfilled'}; bodies ${bodies}; cleanups ${cleanups}; removals ${removals}; hooks 0; complete prefixes`)
+        outcomes.push(`${fault ? 'fault' : 'normal'}: cleanup ${rejected ? 'rejected' : 'fulfilled'}; bodies ${bodies}; cleanups ${cleanups}; removals ${removals}; hooks ${hooks}; complete prefixes`)
       }
       assert.equal(requests, 0)
       return outcomes.join('\n')
