@@ -92,6 +92,9 @@ function revokeCompacted(state: ContextTreeProjectionState, shadowedSeqs: readon
   const grants = state.grants.filter(entry => !shadowed.has(entry.seq))
   const activations = state.activations.filter(entry => !shadowed.has(entry.seq))
   const kept = state.catalog !== null && !shadowed.has(state.catalog.seq)
+  if (grants.length === state.grants.length && activations.length === state.activations.length && (kept || state.catalog === null)) {
+    return state
+  }
   const retainedKeys = new Set(grants.map(entry => entry.key))
   const lost = [
     ...state.grants.filter(entry => shadowed.has(entry.seq) && !retainedKeys.has(entry.key))

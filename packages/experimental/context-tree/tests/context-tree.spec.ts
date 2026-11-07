@@ -894,6 +894,19 @@ describe('projection edge cases', () => {
     expect([...w.tree.activeTools(w.agent)].sort()).toEqual(['deploy_run', 'deploy_status'])
   })
 
+  it('keeps the state when a restored compaction price names no entry the replacement could revoke', async () => {
+    const w = await world()
+    const [message] = await loadedContexts(w, ['Tools/Global/deploy'])
+    const earlier = w.session.append('user/message', message!, { surfaceOp: 'append' })
+    const replacement = w.session.append('user/message', message!, {
+      surfaceOp: { op: 'replace', startSeq: earlier.seq, endSeq: earlier.seq }, sourceEventSeqs: [earlier.seq],
+    })
+    const state = contextTreeProjectionDefinition.init()
+    const next = contextTreeProjectionDefinition.apply({ ...state, pendingCompaction: [replacement.seq + 100] }, replacement)
+    expect(next.pendingCompaction).toBeNull()
+    expect(next.dropped).toEqual([])
+  })
+
   it('keeps a catalog that sits in the retained tail while grants before it are revoked', async () => {
     const w = await world()
     const published = await agentEvents(w.ctx, w.agent).waterfall(

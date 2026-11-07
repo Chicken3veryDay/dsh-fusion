@@ -64,6 +64,8 @@ export async function selectCuratorRoute(
   signal?.addEventListener('abort', onAbort, { once: true })
   let models: readonly { readonly id: string }[]
   try {
+    /* v8 ignore if -- the signal is checked on entry and nothing yields before the listener is added; this covers an abort in between */
+    if (signal?.aborted === true) onAbort()
     // Promise.race observes late catalog rejection after cancellation; this read has no owned mutations.
     models = (await Promise.race([catalog, aborted.promise])).slice(0, config.maxRoutesInspected)
     signal?.throwIfAborted()

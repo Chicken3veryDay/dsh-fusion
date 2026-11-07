@@ -94,9 +94,11 @@ export function knownSection(raw: string, facts: IndexFacts): ContextSectionId {
   return id
 }
 
-/** Metadata of a section already checked against `facts` by {@link knownSection} or a membership test. */
 function sectionMeta(id: ContextSectionId, facts: IndexFacts): ContextSectionMeta {
-  return facts.sections.get(id) as ContextSectionMeta
+  const meta = facts.sections.get(id)
+  /* v8 ignore if -- every caller passes an id that knownSection or a membership test already found in these same facts */
+  if (meta === undefined) throw new ContextMapError(`"${id}" is not a section in the current index`, 'CONTEXT_MAP_NOT_FOUND')
+  return meta
 }
 
 /**

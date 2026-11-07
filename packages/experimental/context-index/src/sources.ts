@@ -137,7 +137,10 @@ function ancestorChain(root: string, cwd: string): string[] {
   let current = cwd
   while (current !== root) {
     chain.push(current)
-    current = dirname(current)
+    const parent = dirname(current)
+    /* v8 ignore if -- the project root is `cwd` or one of its ancestors, so the walk meets it before the filesystem root */
+    if (parent === current) break
+    current = parent
   }
   chain.push(root)
   return chain.reverse()
@@ -207,7 +210,7 @@ async function discoverDocs(
       diagnostics.push({ code: 'directory-unreadable', path: display, message: `cannot list directory: ${describe(error)}` })
       return undefined
     }
-    const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))
+    const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     listings.set(directory.targetKey, {
       version,
       entries: sorted.map(({ name, type, target }) => ({ name, type, target })),

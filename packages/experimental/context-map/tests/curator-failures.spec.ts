@@ -345,6 +345,40 @@ it('retries a start refused for capacity when news arrives while the refusal set
   await occupier.dispose()
 })
 
+it('starts nothing when a subagent ends while its owner is disposed during an evaluation', async () => {
+  const w = await world({ curator: { maxAttempts: 1 }, maxActiveSubagents: 1, script: ['hang'] })
+  quietLog(w)
+  const request = requestsOf(w)
+  const root = await w.spawnRoot('root')
+  const occupier = await w.ctx.subagents.startActivation({
+    provider: 'spawn', label: 'Occupier', delivery: 'caller', signal: SIGNAL,
+    request: { parent: root, prompt: [{ type: 'text', text: 'Hold the slot.' }], agentOptions: { provider: 'mock', model: 'big' } },
+  })
+  await request(1)
+  // The start refused for capacity leaves the record waiting for a subagent to end.
+  await w.ctx.contextMap.note(root, { text: 'First thing.' })
+  await w.ctx.contextCurator.idle(root.id)
+  const requestsBefore = w.adapter.requests.length
+  const ensure = w.ctx.workingDirectory.ensure.bind(w.ctx.workingDirectory)
+  const held = barrier()
+  let calls = 0
+  vi.spyOn(w.ctx.workingDirectory, 'ensure').mockImplementation(async (...args) => {
+    calls++
+    // The second note resolves the directory first; the curator's evaluation of it resolves it second.
+    if (calls === 2) await held.enter()
+    return ensure(...args)
+  })
+  await w.ctx.contextMap.note(root, { text: 'Second thing.' })
+  await held.entered
+  await w.disposeRoot(root)
+  await occupier.dispose()
+  held.open()
+  await w.ctx.contextCurator.idle(root.id)
+  expect(root.session.snapshotEvents().flatMap(event => event.type === 'context-map/state' ? [event.data.op.kind] : [])
+    .filter(kind => kind === 'claim')).toHaveLength(1)
+  expect(w.adapter.requests).toHaveLength(requestsBefore)
+})
+
 it('starts nothing for a note filed while the service is being disposed', async () => {
   const w = await world({ curator: {}, script: ['hang'] })
   quietLog(w)

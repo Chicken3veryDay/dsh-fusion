@@ -31,6 +31,8 @@ class ProbeFileSystem extends LocalFileSystem {
   hideSize = false
   /** Whether `listDir` returns entries in reverse name order. */
   reverseList = false
+  /** Whether `listDir` returns every entry twice, as a backend that repeats a name would. */
+  repeatList = false
   gate: Promise<void> | undefined
   entered: (() => void) | undefined
 
@@ -64,7 +66,8 @@ class ProbeFileSystem extends LocalFileSystem {
       if (target.displayPath.endsWith(suffix)) throw new FsError('injected list failure', 'FS_PERMISSION_DENIED')
     }
     const entries = await super.listDir(target, signal)
-    return this.reverseList ? entries.toReversed() : entries
+    const listed = this.reverseList ? entries.toReversed() : entries
+    return this.repeatList ? listed.flatMap(entry => [entry, entry]) : listed
   }
 
   readsOf(suffix: string): number {
@@ -988,6 +991,14 @@ describe('discovery failures and limits', () => {
     w.fs.reverseList = true
     const snapshot = await w.index.snapshot(scopeOf(w))
     expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/a.md`, `${DOCS}/b.md`, `${DOCS}/c.md`, `${DOCS}/d.md`])
+  })
+
+  it('lists a documentation file once when the filesystem reports its name twice', async () => {
+    const w = await world()
+    for (const name of ['b', 'a']) write(join(w.project, DOCS, `${name}.md`), `# ${name}\n`)
+    w.fs.repeatList = true
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/a.md`, `${DOCS}/b.md`])
   })
 
   it('stops walking once the documentation file limit is reached, including the remaining directories', async () => {

@@ -243,8 +243,9 @@ export class ContextIndexService extends Service {
     diagnostics: ContextDiagnostic[],
     signal: AbortSignal | undefined,
   ): Promise<ReadonlyMap<ContextSectionId, FreshSection>> {
-    // Every section of a committed state comes from one of its records.
-    const record = state.records.get(recordKey(meta.kind, meta.path)) as SourceRecord
+    const record = state.records.get(recordKey(meta.kind, meta.path))
+    /* v8 ignore if -- a committed state holds a record for every source of its sections, and this state is the one the section came from */
+    if (record === undefined) return new Map()
     const outcome = await this.guard(signal, abort => (
       readSource(this.ctx.fs, record.target, record.path, undefined, this.config.maxSourceBytes, abort)
     ))
@@ -281,7 +282,14 @@ export class ContextIndexService extends Service {
     this.assertLive()
     signal?.throwIfAborted()
     const abort = signal === undefined ? this.lifetime.signal : AbortSignal.any([signal, this.lifetime.signal])
-    return this.track(work(abort))
+    try {
+      return await this.track(work(abort))
+    } catch (error: unknown) {
+      /* v8 ignore else -- readSource fails only with the abort reason, so no failure reaches here outside an abort */
+      if (abort.aborted) throw abort.reason
+      /* v8 ignore next -- see the guard above */
+      throw error
+    }
   }
 
   private refresh(scope: ContextIndexScope, signal: AbortSignal | undefined): Promise<IndexState> {
@@ -316,8 +324,8 @@ export class ContextIndexService extends Service {
       const onAbort = (): void => {
         flight.waiters--
         if (flight.waiters === 0) {
-          // A flight with a waiting caller is still pending, so it is still the directory's flight.
-          this.flights.delete(directory)
+          /* v8 ignore else -- the listener is removed in the microtask that clears a settled flight, so this flight is the directory's */
+          if (this.flights.get(directory) === flight) this.flights.delete(directory)
           flight.controller.abort(signal?.reason)
         }
         rejectJoin(asError(signal?.reason))
