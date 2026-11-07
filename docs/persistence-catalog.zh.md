@@ -699,7 +699,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/participant-established': { participantId: SessionId }
 ```
 
-来源：[`packages/experimental/fusion-participants/src/index.ts:62`](../packages/experimental/fusion-participants/src/index.ts)
+来源：[`packages/experimental/fusion-participants/src/index.ts:63`](../packages/experimental/fusion-participants/src/index.ts)
 
 <a id="fusionroster--log-only"></a>
 
@@ -710,7 +710,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/roster': Roster
 ```
 
-来源：[`packages/experimental/fusion-participants/src/index.ts:60`](../packages/experimental/fusion-participants/src/index.ts)
+来源：[`packages/experimental/fusion-participants/src/index.ts:61`](../packages/experimental/fusion-participants/src/index.ts)
 
 ### `goal/*`
 
@@ -11065,7 +11065,7 @@ SHA-256: `9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c`
 
 SHA-256: `3f5502c23b839bae247f05615d85333b0e4ea11bab79c1aea570192ba1b98072`
 
-来源：[`packages/experimental/fusion-participants/src/index.ts:62`](../packages/experimental/fusion-participants/src/index.ts)
+来源：[`packages/experimental/fusion-participants/src/index.ts:63`](../packages/experimental/fusion-participants/src/index.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
