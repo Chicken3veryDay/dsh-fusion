@@ -129,6 +129,7 @@ Ticket 状态变化不会修改请求头或模型提示词前缀。
 - 损坏根若没有可恢复的 Ticket 执行位置，就无法预留可识别的工作区；恢复警告要求在恢复该根之前修复。已知预留仍被保留。根关闭后，必须先恢复才能持久化结算；在此之前结果只保存在内存中，因此若宿主先退出，进程内尝试会恢复为 `cancelled`，其他执行位置保持预留。
 - 针对被替换执行服务之生产者的防护只能看到存活的 `ticket` Job。没有 Job 的进程内 Worker 或 Subagent 激活，以及记录已被所属 Agent 清理删除的 Job，都不在其可见范围内。
 - 激活后的第一次共享工作区准入会读取每个存储根日志一次；在有紧凑的预留索引之前，开销随存储历史增长。
+- 注入 `tickets` 的服务会在 `ctx.tickets` 重新加载时一同卸载。在 [Workstream profile](../workstream-profile/README.zh.md#known-limitations-and-deferred-work) 中，这会卸载 `workstreams`，其关闭过程会排空每个成员并中止每个运行中的成员本轮。
 - Ticket 位于一个 Session 日志中。跨 Session 复制和来源接入由适配器负责。
 
 <a id="dev-note"></a>

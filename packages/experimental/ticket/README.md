@@ -127,6 +127,7 @@ Ticket state changes do not alter request headers or model prompt prefixes.
 - A damaged root with no recoverable Ticket placement cannot reserve an identifiable workspace; its recovery warning requires repair before resuming that root. Known reservations remain held. A closed root must be resumed before a settlement can be persisted; the outcome is held in memory until then, so an in-process attempt whose host exits first is recovered as `cancelled` and other placements stay reserved.
 - The guard against producers of a replaced execution service sees only live `ticket` Jobs. An in-process worker or Subagent activation without a Job, and a Job whose owning Agent cleanup already removed its record, are not seen by it.
 - The first shared-workspace admission after activation reads every stored root log once; cost grows with stored history until a compact reservation index exists.
+- A service that injects `tickets` unloads when `ctx.tickets` reloads. In the [Workstream profile](../workstream-profile/README.md#known-limitations-and-deferred-work), that unloads `workstreams`, whose shutdown drains every member and aborts each running member turn.
 - A Ticket is rooted in one Session log. Cross-Session replication and source-specific ingress remain adapter responsibilities.
 
 <a id="dev-note"></a>

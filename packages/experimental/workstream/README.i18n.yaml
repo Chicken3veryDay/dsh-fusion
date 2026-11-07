@@ -15,11 +15,11 @@
   en: 76368b6b1da79c80
   zh: 03a4bf09d960f762
 /deepseek-ai-dsh-experimental-workstream/use-this-package:
-  en: fe294d63f3e8c833
-  zh: 8a3458809d4824dd
+  en: 12bee4b49d5a0a4a
+  zh: 4e80a477228d477f
 /deepseek-ai-dsh-experimental-workstream/understand-the-implementation:
-  en: de487c9f197eba10
-  zh: 8ff5d76231549f84
+  en: d7a4bb2ce02e48b1
+  zh: 3bc8d1558f42f908
 /deepseek-ai-dsh-experimental-workstream/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -46,10 +46,22 @@
   zh: ea8633804769bdb7
 /deepseek-ai-dsh-experimental-workstream/model-experience/peer-messages-and-member-prompts/kv-cache-effect:
   en: cb3db60723893cdf
-  zh: 1338a025810a1cf4
+  zh: 13ff52408ebc93ab
+/deepseek-ai-dsh-experimental-workstream/model-experience/workstream-notices:
+  en: b64a5133b2a53dd1
+  zh: b1c1418dde4bce48
+/deepseek-ai-dsh-experimental-workstream/model-experience/workstream-notices/what-the-model-sees:
+  en: e62e62f52ee5b70d
+  zh: f5ce85395897842b
+/deepseek-ai-dsh-experimental-workstream/model-experience/workstream-notices/token-effect:
+  en: 4738dc295515b4f6
+  zh: b17a74d29b72975f
+/deepseek-ai-dsh-experimental-workstream/model-experience/workstream-notices/kv-cache-effect:
+  en: e4aae392c87f9412
+  zh: 47d915d87ee844dc
 /deepseek-ai-dsh-experimental-workstream/known-limitations-and-deferred-work:
-  en: 88e47b5ecec6d82c
-  zh: e83eac4ddf00faf8
+  en: ec5bfa2dbea00b2c
+  zh: c3fd57dc11102e2d
 /deepseek-ai-dsh-experimental-workstream/known-limitations-and-deferred-work/dev-note:
   en: 9d607d7aa7388dd9
   zh: 9dda6cfdd16807ed

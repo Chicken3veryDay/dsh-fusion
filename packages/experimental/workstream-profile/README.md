@@ -108,6 +108,7 @@ The system prompt and tool schemas stay prefix-stable while the patch and config
 - **Opt-in only** — no shipped CLI, Web, SDK, ACP, or Python profile enables it.
 - **No execution service** — Ticket attempt execution with Jobs and Worktree providers is not mounted.
 - **Base profile required** — the patch depends on services supplied by `dsh-base`.
+- **Reloading `tickets` or `workstreams` stops the team** — `workstreams` injects `tickets`, and the `ticket_*` tools depend on `workstreams`, so reloading either Loader entry unloads Workstream. Its shutdown drains every member: each running member turn ends `aborted`, and the owner receives the Subagent notice that the member stopped before it finished. Nothing resumes the member; send it a message with `workstream_send` to continue its work. After a process restart, the resumed owner receives a `workstream-notice` naming such members ([Workstream](../workstream/README.md#use-this-package)). Reloading `context-map`, `context-tree`, `context-curator` or `workstream-evidence` leaves members running.
 
 <a id="dev-note"></a>
 ### Dev Note

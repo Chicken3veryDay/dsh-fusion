@@ -108,6 +108,7 @@ patch 与已配置工具不变时，系统提示与工具 schema 保持前缀稳
 - **仅限显式启用**——随产品发布的 CLI、Web、SDK、ACP 或 Python profile 均不启用本层。
 - **无执行服务**——挂载 Jobs 与 Worktree 提供方的 Ticket 尝试执行未启用。
 - **需要 base profile**——patch 依赖 `dsh-base` 提供的服务。
+- **重新加载 `tickets` 或 `workstreams` 会停止团队**——`workstreams` 注入 `tickets`，而 `ticket_*` 工具依赖 `workstreams`，因此重新加载其中任一 Loader 条目都会卸载 Workstream。其关闭过程会排空每个成员：每个运行中的成员本轮以 `aborted` 结束，所有者收到 Subagent 关于该成员在完成前已停止的通知。没有任何机制恢复该成员；用 `workstream_send` 向它发送消息即可让它继续工作。进程重启后，被恢复的所有者会收到一条列出此类成员的 `workstream-notice`（[Workstream](../workstream/README.zh.md#use-this-package)）。重新加载 `context-map`、`context-tree`、`context-curator` 或 `workstream-evidence` 不会影响运行中的成员。
 
 <a id="dev-note"></a>
 ### 开发备注
