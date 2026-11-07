@@ -12,3 +12,10 @@
         timeoutMs: 5000
         provider: deepseek-official
         model: deepseek-v4-flash
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

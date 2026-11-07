@@ -1327,7 +1327,7 @@ describe('headless recorded-session snapshots', () => {
       if (baseComposition === undefined) throw new Error('headless corpus has no default composition')
       const replaying = mode !== 'record'
       const compositionPatch = join(composition.dir, replaying ? 'cordis.snapshot.yml' : 'cordis.yml')
-      const patchSources = [
+      const patchSources = scenario.manifest.composition.startsWith('headless-') ? [compositionPatch] : [
         join(baseComposition.dir, 'cordis.yml'),
         ...composition === baseComposition && !replaying ? [] : [compositionPatch],
         ...model === undefined ? [] : [join(baseComposition.dir, 'model.cordis.yml')],
@@ -1468,6 +1468,11 @@ describe('headless recorded-session snapshots', () => {
               for (const log of actualLogs.slice(1)) {
                 expect(records(log.content).some(event => event.type === 'request/context')).toBe(false)
               }
+            }
+            if (scenario.name === 'script-default') {
+              const events = parseSessionLog(actualLogs[0]!.content)
+              expect(events.filter(event => event.type === 'tool/call').map(event => event.data.name)).toEqual(['run_code'])
+              expect(events.filter(event => event.type === 'tool/ptc-dispatch').map(event => event.data.name)).toEqual(['bash', 'bash'])
             }
             if (scenario.name === 'advanced-toolchain') verifyAdvancedToolchain(actualLogs)
             if (scenario.name === 'session-query-spill') {

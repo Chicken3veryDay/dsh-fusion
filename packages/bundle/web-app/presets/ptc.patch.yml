@@ -1,3 +1,4 @@
+# Persisted ptc ids remain valid; execution inherits the deployment default.
 # Agent preset ptc: one `@deepseek-ai/dsh-agent-preset` declaration inserted
 # after the web patch. Edits saved from the Web editor override this row's
 # `config.plugins` by id from the profile patch.
@@ -122,8 +123,6 @@
             config:
               fetch: true
               searchTimeoutMs: 60000
-          - id: tool-executor-ptc
-            name: '@deepseek-ai/dsh-tool-executor-ptc'
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
           - id: tool-plugin-manager

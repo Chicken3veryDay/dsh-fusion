@@ -29,6 +29,8 @@ kind: "package-bundle"
 <a id="use-this-package"></a>
 ## 使用本包
 
+持久化的 `ptc` preset ID 仍受支持，并与 `standard` 继承同一个部署执行器；它不会挂载另一个执行器。
+
 启动 GUI、打开浏览器，然后开始与 agent（智能体）对话。flag 用于微调本次调用。
 
 ### 启动 Web GUI
@@ -102,7 +104,7 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 ### patch 语义
 
-patch 会替换目标行的整个 `config`，因此每个 Web 行都重述自己拥有的每个键：基础行上的 persona 前缀模板与 `session-query-sqlite` 值，随后 `insert` 添加 Web 宿主行、传输层与浏览器名录。`webserver`、`web-runtime` 与 `connection` 行都注入 `webStartup` 提供方并直接读取本次调用的取值；Connection 的被接受 authority 全部来自 `ctx.webStartup.trustedHosts`，Host/Origin 栅栏则独立于该列表接受监听器的绑定 IP。bundle 继承原生工具执行；[PTC overlay](../../../apps/cli/config/examples/ptc.yml) 可切换部署执行器。base 以进程级挂载的按 agent 工具行在这里被禁用，由 preset 名录接管；每项宿主层与 preset 层归属决策的理由以行内注释写在 patch 里。
+patch 会替换目标行的整个 `config`，因此每个 Web 行都重述自己拥有的每个键：基础行上的 persona 前缀模板与 `session-query-sqlite` 值，随后 `insert` 添加 Web 宿主行、传输层与浏览器名录。`webserver`、`web-runtime` 与 `connection` 行都注入 `webStartup` 提供方并直接读取本次调用的取值；Connection 的被接受 authority 全部来自 `ctx.webStartup.trustedHosts`，Host/Origin 栅栏则独立于该列表接受监听器的绑定 IP。bundle 继承通过 `run_code` 的 Node PTC 执行；[原生 opt-out overlay](../../../apps/cli/config/examples/native.yml) 可切换部署执行器。base 以进程级挂载的按 agent 工具行在这里被禁用，由 preset 名录接管；每项宿主层与 preset 层归属决策的理由以行内注释写在 patch 里。
 
 ### 公告应用 URL
 

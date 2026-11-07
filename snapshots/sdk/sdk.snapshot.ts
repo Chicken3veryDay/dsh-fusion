@@ -226,6 +226,10 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
   'ptc-cancel': {
     patches: [fileURLToPath(new URL('./ptc-cancel/runtime.cordis.yml', import.meta.url))],
   },
+  'script-default': {
+    expectedFinalResponse: 'CODE_ONE+CODE_TWO',
+    expectedTools: { run_code: ['code', 'description'] },
+  },
   'ptc-turn': {
     patches: [fileURLToPath(new URL('./ptc-turn/runtime.cordis.yml', import.meta.url))],
     expectedFinalResponse: 'CODE_ONE+CODE_TWO',

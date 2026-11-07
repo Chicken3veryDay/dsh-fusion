@@ -31,3 +31,10 @@
 - insert:
     - id: account-signout-fixture
       name: './account-signout.mjs'
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

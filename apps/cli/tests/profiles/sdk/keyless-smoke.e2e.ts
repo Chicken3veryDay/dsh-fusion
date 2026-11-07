@@ -57,7 +57,7 @@ describe('Python SDK dsh profile keyless smoke', () => {
     { label: 'reports max-token turns with mapping enabled through env', envValue: 'true', editorEnabled: false },
     { label: 'reports max-token turns with mapping disabled through env', envValue: 'false', editorEnabled: false },
     { label: 'allows an explicit patch to enable str_replace_editor', envValue: undefined, editorEnabled: true },
-    { label: 'uses the PTC executor overlay despite the retired environment selector', envValue: undefined, editorEnabled: false, ptc: true },
+    { label: 'uses the default PTC executor despite the retired environment selector', envValue: undefined, editorEnabled: false, ptc: true },
   ])('$label', async (scenario) => {
     const { envValue, editorEnabled } = scenario
     const ptc = 'ptc' in scenario && scenario.ptc
@@ -91,7 +91,7 @@ describe('Python SDK dsh profile keyless smoke', () => {
       '--profile',
       'sdk',
       ...(editorEnabled ? ['--patch', editorPatch] : []),
-      ...(ptc ? ['--patch', join(repoRoot, 'apps/cli/config/examples/ptc.yml')] : []),
+      ...(!ptc ? ['--patch', join(repoRoot, 'apps/cli/config/examples/native.yml')] : []),
     ], {
       cwd: repoRoot,
       env: {
@@ -232,7 +232,7 @@ describe('Python SDK dsh profile keyless smoke', () => {
   }, 40_000)
 
   it.each([
-    { label: 'boots the standalone minimal profile through its generated manifest', editorEnabled: false, imageEnabled: false, optOut: false, offloadEnabled: false },
+    { label: 'boots the standalone minimal profile with explicit native tool calling', editorEnabled: false, imageEnabled: false, optOut: false, offloadEnabled: false },
     { label: 'executes the documented editor opt-in patch with sdk-minimal', editorEnabled: true, imageEnabled: false, optOut: false, offloadEnabled: false },
     { label: 'sends a read_image result to the model with sdk-minimal', editorEnabled: false, imageEnabled: true, optOut: false, offloadEnabled: false },
     { label: 'offloads an over-budget image and continues with sdk-minimal', editorEnabled: false, imageEnabled: true, optOut: false, offloadEnabled: true },
@@ -307,6 +307,8 @@ describe('Python SDK dsh profile keyless smoke', () => {
       ...launch.args,
       '--profile',
       'sdk-minimal',
+      // Native schema, editor and image protocol coverage has separate PTC-default snapshots.
+      '--patch', join(repoRoot, 'apps/cli/config/examples/native.yml'),
       ...(editorEnabled || optOut || offloadEnabled ? ['--patch', editorPatch] : []),
     ], {
       cwd: repoRoot,
@@ -550,7 +552,8 @@ it.each(['unset', 'empty', 'bundled', 'full', 'python-only', 'python-only-no-cli
   await writeFile(cliPatch, JSON.stringify(mode === 'python-only-no-cli' ? [{ id: 'skill-office', config: { assetRoot: join(root, 'resources', 'office-skills'), cli: false } }] : []))
   const officeLaunch = resolveExampleLaunch({
     srcBin: fileURLToPath(new URL('../../../src/bin.ts', import.meta.url)), mode: 'lib',
-    configArgs: ['--profile', 'sdk', '--patch', cliPatch],
+    // Resource discovery and raw tool-schema checks are independent of the executor default.
+    configArgs: ['--profile', 'sdk', '--patch', join(repoRoot, 'apps/cli/config/examples/native.yml'), '--patch', cliPatch],
     env: { DSH_HOME: home, DSH_PRIMARY_RUNTIME: mode === 'unset' || mode === 'bundled' ? undefined : mode === 'empty' ? '' : source + '/',
       DSH_BUNDLED_PRIMARY_RUNTIME: mode === 'unset' ? undefined : mode === 'bundled' || mode === 'empty' ? source : join(root, 'unused-default'),
       DSH_PERMISSION_MODE: 'danger-full-access', DSH_TELEMETRY_DISABLED: '1',

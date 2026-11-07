@@ -25,6 +25,8 @@ kind: "package-bundle"
 <a id="use-this-package"></a>
 ## 使用本包
 
+所有随附 profile 默认通过 `run_code` 使用 Node PTC 程序。已注册工具作为程序绑定提供；[原生执行](../../core/tool-executor-native/README.zh.md#use-this-package) 是显式的部署或 Agent 作用域选择。
+
 你会自动获得 dsh 核心：随发行版交付的 `web`、`headless`、`sdk` 与 `acp` profile 已包含它，自定义 profile 则把它列为第一个组合包。之后一切无需任何额外配置即可工作。
 
 ### 最小自定义 profile

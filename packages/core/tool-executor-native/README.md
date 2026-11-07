@@ -31,6 +31,8 @@ Add this row to a composition with `dsh-tools` mounted. The nearest scoped execu
 - name: '@deepseek-ai/dsh-tool-executor-native'
 ```
 
+Shipped profiles default to Node PTC. To select native calls for a deployment, apply [the native overlay](../../../apps/cli/config/examples/native.yml) with `--patch` or the SDK `patches` option. To override only one Agent scope, mount the row above inside that preset’s `config.plugins`; the nearest executor wins over the deployment executor.
+
 Configure [agent-loop concurrency](../agent-loop/README.md) for Agent steps; the loop reads the limit once per batch. This plugin has no configuration fields. Direct `NativeToolExecutor` callers may pass a constructor callback, defaulting to `10`, which is sampled for each tool group when the batch omits `maxParallelToolCalls`. Limits must be positive integers; `1` selects serial execution.
 
 -----

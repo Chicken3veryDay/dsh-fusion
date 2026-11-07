@@ -35,3 +35,10 @@
     - id: snapshot-feedback-producer
       name: './feedback-producer.mjs'
       disabled: !!js "process.env.DSH_SNAPSHOT_FEEDBACK !== '1'"
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

@@ -23,7 +23,7 @@ The SDK stdio application as a `dsh` profile bundle over [`dsh-base`](../base/RE
 <a id="use-this-package"></a>
 ## Use this package
 
-The `sdk` profile includes native desktop tools and model context. Native tool execution is the default. For PTC, pass the [executor overlay](../../../apps/cli/config/examples/ptc.yml) through `--patch` or the `patches` option in the TypeScript or Python SDK. `DSH_TOOLS_MODE` is ignored.
+The `sdk` profile includes native desktop tools and model context. Node PTC execution through `run_code` is the default. For native tool calling, pass the [executor overlay](../../../apps/cli/config/examples/native.yml) through `--patch` or the `patches` option in the TypeScript or Python SDK. `DSH_TOOLS_MODE` is ignored.
 
 The startup provider binds stdin EOF to the launcher's bounded successful shutdown. SDK protocol `shutdown`, SIGINT, and SIGTERM retain their owning server or launcher paths; disposal drains the root profile tree and persistence. Stdout is reserved for newline-delimited JSON-RPC frames. The bundle disables model-generated session titles because the SDK exposes no title surface; deterministic fallback titles remain durable without an auxiliary model request. The inherited projection cache checkpoints SDK-created sessions for later consumers; its durability barrier flushes each covered log prefix before publishing the cache row and may split otherwise coalesced JSONL runs. A deployment selects a different complete composition through profile bundles and patch files, not another app bin.
 
@@ -48,7 +48,7 @@ The Python runtime exposes explicitly downloaded authoring resources and Office 
 
 #### What the model sees
 
-The profile inherits the base system prompt, including the `You are an AI agent powered by DeepSeek Harness.` identity, and adds the same model-interpolated coding persona as the Web and headless profiles. Each Session receives its current directory in required user-role context from [`dsh-working-directory`](../../session/working-directory/README.md). Default file tool schemas include `read`, `write`, and `edit`; they omit `str_replace_editor`. The model also receives `present`, `ask_user_question`, `plugin_manager`, schedule tools, shared file-reference guidance, and time context. Child agents cannot use schedule tools. The [`time-context`](../../context/time-context/README.md) row accepts a fallback time zone. Skills use the configured resources described above.
+The profile inherits the base system prompt, including the `You are an AI agent powered by DeepSeek Harness.` identity, and adds the same model-interpolated coding persona as the Web and headless profiles. Each Session receives its current directory in required user-role context from [`dsh-working-directory`](../../session/working-directory/README.md). The generated program SDK includes file tools `read`, `write`, and `edit`; they omit `str_replace_editor`. The SDK also declares `present`, `ask_user_question`, `plugin_manager`, and schedule tools; shared file-reference guidance and time context remain model input. Child agents cannot use schedule tools. The [`time-context`](../../context/time-context/README.md) row accepts a fallback time zone. Skills use the configured resources described above.
 
 #### Token effect
 
@@ -56,7 +56,7 @@ The profile adds a coding-persona sentence, the mounted tool definitions and gui
 
 #### KV Cache effect
 
-Enabling `plugin_manager` changes the tool-schema prefix from earlier SDK versions. The static prefix is stable for a fixed profile, provider, model, and tool roster. Runtime values append to logged user context. Profile changes take effect on the next process because the shipped SDK profile uses startup-only patches.
+Enabling `plugin_manager` changes the generated SDK in the system prompt. The static prefix is stable for a fixed profile, provider, model, and tool roster. Runtime values append to logged user context. Profile changes take effect on the next process because the shipped SDK profile uses startup-only patches.
 
 ## Known Limitations and Deferred Work
 

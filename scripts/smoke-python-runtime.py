@@ -242,8 +242,9 @@ def write_profile_patch(
     name: str,
     sessions: Path,
     patches: list[dict[str, object]],
+    *, native: bool = True,
 ) -> Path:
-    """Write one JSON-form dsh profile patch with deterministic persistence."""
+    """Pin protocol-only cases to native; default-executor cases leave selection untouched."""
     path = root / name
     path.write_text(json.dumps([
         {
@@ -251,6 +252,8 @@ def write_profile_patch(
             "config": {"root": str(sessions), "compression": "none"},
         },
         {"id": "session-telemetry-otel", "disabled": True},
+        *([{"id": "tool-executor-native", "disabled": False},
+           {"id": "tool-executor-ptc", "disabled": True}] if native else []),
         *patches,
     ], indent=2))
     return path
@@ -261,8 +264,6 @@ def write_advanced_profile_patch(
 ) -> Path:
     """Write the shared custom, snapshot, and restart profile patch."""
     return write_profile_patch(root, name, sessions, [
-        {"id": "tool-executor-native", "disabled": mode != "native"},
-        {"id": "tool-executor-ptc", "disabled": mode != "ptc"},
         {
             "id": "system-prompt",
             "config": {
@@ -285,7 +286,7 @@ def write_advanced_profile_patch(
             {"id": "cordis-host-runner", "name": "@deepseek-ai/dsh-cordis-host-runner"},
             {"id": "cordis-tool", "name": "@deepseek-ai/dsh-tool-cordis"},
         ]},
-    ])
+    ], native=mode == "native")
 
 
 def write_mcp_patch(root: Path, sessions: Path, server_script: Path) -> Path:
@@ -458,8 +459,9 @@ def completion_chunks(body: dict[str, object]) -> list[dict[str, object]]:
     if minimal_prompt is not None:
         return tool_call_chunks(
             "minimal-bash-1",
-            MINIMAL_SHELL_TOOL,
-            {"command": MINIMAL_SHELL_COMMAND},
+            "run_code" if any(tool.get("name") == "run_code" for tool in body.get("tools", [])) else MINIMAL_SHELL_TOOL,
+            ({"code": f"return await tools.{MINIMAL_SHELL_TOOL}({json.dumps({'command': MINIMAL_SHELL_COMMAND})})", "description": "First persistent shell call"}
+             if any(tool.get("name") == "run_code" for tool in body.get("tools", [])) else {"command": MINIMAL_SHELL_COMMAND}),
         )
     scenario_prompts = {
         SNAPSHOT_DIRECT_CHILD_PROMPT,
@@ -658,15 +660,16 @@ def minimal_tool_followup(
     """Verify the checked-in minimal composition's persistent PTY."""
     if not call_id.startswith("minimal-"):
         return None
-    if call_id == "minimal-bash-1" and tool_name == MINIMAL_SHELL_TOOL:
+    if call_id == "minimal-bash-1" and tool_name in (MINIMAL_SHELL_TOOL, "run_code"):
         if "COUNT=1" not in tool_text:
             raise AssertionError(f"first persistent shell call lost its output: {tool_text}")
         return tool_call_chunks(
             "minimal-bash-2",
-            MINIMAL_SHELL_TOOL,
-            {"command": MINIMAL_SHELL_COMMAND},
+            tool_name,
+            ({"code": f"return await tools.{MINIMAL_SHELL_TOOL}({json.dumps({'command': MINIMAL_SHELL_COMMAND})})", "description": "Second persistent shell call"}
+             if tool_name == "run_code" else {"command": MINIMAL_SHELL_COMMAND}),
         )
-    if call_id == "minimal-bash-2" and tool_name == MINIMAL_SHELL_TOOL:
+    if call_id == "minimal-bash-2" and tool_name in (MINIMAL_SHELL_TOOL, "run_code"):
         expected = f"COUNT=2 CWD={MINIMAL_SHELL_SECOND_CWD}"
         if expected.lower() not in tool_text.lower():
             raise AssertionError(f"persistent shell did not retain state: {tool_text}")
@@ -1637,6 +1640,9 @@ def smoke_sdk_minimal(
         if in_history:
             patch = root / "in-history.patch.yml"
             patch.write_text(json.dumps([
+                # Prompt-history projection coverage is independent of executor selection.
+                {"id": "tool-executor-native", "disabled": False},
+                {"id": "tool-executor-ptc", "disabled": True},
                 {"id": "llm-deepseek", "config": {"models": [
                     {"id": "smoke-model", "systemPromptUpdate": "in-history"},
                 ]}},
@@ -1673,6 +1679,9 @@ def smoke_sdk_minimal(
                 files, update_snapshots, IN_HISTORY_SNAPSHOT_DIRECTORY, IN_HISTORY_SNAPSHOT_FILENAMES,
             )
         else:
+            assert [tool["name"] for tool in requests[0]["tools"]] == ["run_code"]
+            assert [event["data"]["name"] for event in result.events if event.get("type") == "tool/call"] == ["run_code", "run_code"]
+            assert [event["data"]["name"] for event in result.events if event.get("type") == "tool/ptc-dispatch"] == [MINIMAL_SHELL_TOOL] * 2
             files = build_minimal_snapshot_files(requests, root)
             compare_snapshot_files(
                 files, update_snapshots, MINIMAL_SNAPSHOT_DIRECTORY, MINIMAL_SNAPSHOT_FILENAMES,
@@ -1954,13 +1963,13 @@ def smoke_sdk_snapshot_mode(
             {"id": "snapshot-feedback-producer", "name": (
                 Path(__file__).resolve().parent.parent / "snapshots/sdk/text-turn/feedback-producer.mjs"
             ).as_uri()},
-        ]}])
+        ]}], native=mode == "native")
         creation_patch = write_profile_patch(root, "creation.patch.yml", sessions, [
             {"insert": [{
                 "id": "serial-created-fixture",
                 "name": str(Path(__file__).resolve().parents[1] / "packages/core/agent-loop/tests/fixtures/serial-created.mjs"),
             }]},
-        ])
+        ], native=mode == "native")
         with DeepSeekHarness(
             provider="deepseek-official",
             model="smoke-model",

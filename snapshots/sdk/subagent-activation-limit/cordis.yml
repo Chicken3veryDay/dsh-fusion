@@ -6,3 +6,10 @@
 - insert:
     - id: subagent-activation-limit
       name: '../../../packages/test-support/session-snapshot/tests/fixtures/subagent-activation-limit.ts'
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

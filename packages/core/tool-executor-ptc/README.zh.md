@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+随附 profile 默认选择此执行器和 Node 运行时。自定义组合必须显式挂载；仍可按部署或 Agent 作用域选择[原生执行](../tool-executor-native/README.zh.md#use-this-package)。
+
 将此行加入已经挂载 `dsh-tools` 的组合。最近作用域的执行器决定工具行为；同一作用域只允许一个执行器。
 
 ```yaml

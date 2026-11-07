@@ -54,6 +54,8 @@ describe('dsh-sdk-minimal bundle', () => {
       ['system-prompt', '@deepseek-ai/dsh-system-prompt'],
       ['tools', '@deepseek-ai/dsh-tools'],
       ['tool-executor-native', '@deepseek-ai/dsh-tool-executor-native'],
+      ['tool-executor-ptc', '@deepseek-ai/dsh-tool-executor-ptc'],
+      ['ptc-runtime', '@deepseek-ai/dsh-ptc-runtime-node'],
       ['mcp-resources', '@deepseek-ai/dsh-mcp-resources'],
       ['agent', '@deepseek-ai/dsh-agent'],
       ['llm-retry', '@deepseek-ai/dsh-llm-retry'],
@@ -79,6 +81,8 @@ describe('dsh-sdk-minimal bundle', () => {
       includeRuntimeContext: false,
       personaPrefix: { __jsExpr: "process.env.DSH_SYSTEM_PROMPT ?? 'You are a helpful software engineer assistant.'" },
     })
+    expect(rows.find(row => row.id === 'tool-executor-native')?.disabled).toBe(true)
+    expect(rows.find(row => row.id === 'tool-executor-ptc')?.disabled).toBeUndefined()
     expect(rows.find(row => row.id === 'agent-loop')?.config).toEqual({ agents: [] })
     expect(rows.find(row => row.id === 'tool-fs')?.config).toEqual({ read: false, readImage: true, write: false, edit: false })
     expect(rows.find(row => row.id === 'compaction-basic')?.config).toBeUndefined()

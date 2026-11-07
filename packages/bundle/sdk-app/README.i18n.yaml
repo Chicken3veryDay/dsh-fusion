@@ -15,8 +15,8 @@
   en: 4e53164159b5ce41
   zh: 89582dc0294d0776
 /deepseek-ai-dsh-sdk-app/use-this-package:
-  en: 63aa871622cea3af
-  zh: 8f00a69640caadc5
+  en: 7d7e8959db0a3184
+  zh: 4da70d0a4464649d
 /deepseek-ai-dsh-sdk-app/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -24,14 +24,14 @@
   en: 4f88e647c6df4f42
   zh: 2bd3e4b0bdfe9412
 /deepseek-ai-dsh-sdk-app/model-experience/sdk-model-context/what-the-model-sees:
-  en: 6b46520441d75a00
-  zh: 04851fd123960847
+  en: c57aa5d10f860f94
+  zh: 7e3d54bf2e684fa7
 /deepseek-ai-dsh-sdk-app/model-experience/sdk-model-context/token-effect:
   en: cef8efe97fe1ff16
   zh: c052ab3e6706efa6
 /deepseek-ai-dsh-sdk-app/model-experience/sdk-model-context/kv-cache-effect:
-  en: b1169743449b2272
-  zh: 98d465d802bf55c1
+  en: 8f0e5f9552d6c3ff
+  zh: 1136627ded6f60ed
 /deepseek-ai-dsh-sdk-app/known-limitations-and-deferred-work:
   en: d1d4567b7d2b9d8d
   zh: c1618617d1562d8b

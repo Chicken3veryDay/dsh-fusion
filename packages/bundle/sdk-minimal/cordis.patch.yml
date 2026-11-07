@@ -122,6 +122,13 @@
 
     - id: tool-executor-native
       name: '@deepseek-ai/dsh-tool-executor-native'
+      disabled: true
+
+    - id: tool-executor-ptc
+      name: '@deepseek-ai/dsh-tool-executor-ptc'
+
+    - id: ptc-runtime
+      name: '@deepseek-ai/dsh-ptc-runtime-node'
 
     - id: mcp-resources
       name: '@deepseek-ai/dsh-mcp-resources'

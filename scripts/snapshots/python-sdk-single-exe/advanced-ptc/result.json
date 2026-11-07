@@ -186,8 +186,22 @@
       "surfaceOp": "append"
     },
     {
-      "type": "request/header",
+      "type": "session/title",
       "seq": 14,
+      "time": 0,
+      "data": {
+        "title": "Run the advanced packaged-runtime snapsh",
+        "messageSeqs": [
+          11
+        ],
+        "source": {
+          "kind": "fallback"
+        }
+      }
+    },
+    {
+      "type": "request/header",
+      "seq": 15,
       "time": 0,
       "data": {
         "header": {
@@ -210,26 +224,12 @@
     },
     {
       "type": "request/context",
-      "seq": 15,
+      "seq": 16,
       "time": 0,
       "data": {
         "provider": "deepseek-official",
         "model": "smoke-model",
         "contextWindow": 1000000
-      }
-    },
-    {
-      "type": "session/title",
-      "seq": 16,
-      "time": 0,
-      "data": {
-        "title": "Run the advanced packaged-runtime snapsh",
-        "messageSeqs": [
-          11
-        ],
-        "source": {
-          "kind": "fallback"
-        }
       }
     },
     {
@@ -1268,8 +1268,28 @@
       "payload": {
         "sessionId": "{{parent}}",
         "event": {
-          "type": "request/header",
+          "type": "session/title",
           "seq": 14,
+          "time": 0,
+          "data": {
+            "title": "Run the advanced packaged-runtime snapsh",
+            "messageSeqs": [
+              11
+            ],
+            "source": {
+              "kind": "fallback"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "session.event",
+      "payload": {
+        "sessionId": "{{parent}}",
+        "event": {
+          "type": "request/header",
+          "seq": 15,
           "time": 0,
           "data": {
             "header": {
@@ -1298,32 +1318,12 @@
         "sessionId": "{{parent}}",
         "event": {
           "type": "request/context",
-          "seq": 15,
+          "seq": 16,
           "time": 0,
           "data": {
             "provider": "deepseek-official",
             "model": "smoke-model",
             "contextWindow": 1000000
-          }
-        }
-      }
-    },
-    {
-      "method": "session.event",
-      "payload": {
-        "sessionId": "{{parent}}",
-        "event": {
-          "type": "session/title",
-          "seq": 16,
-          "time": 0,
-          "data": {
-            "title": "Run the advanced packaged-runtime snapsh",
-            "messageSeqs": [
-              11
-            ],
-            "source": {
-              "kind": "fallback"
-            }
           }
         }
       }

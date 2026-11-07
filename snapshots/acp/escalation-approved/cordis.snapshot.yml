@@ -50,3 +50,10 @@
         command: "printf 'escalated\\n' > /tmp/dsh-escalated.txt && cat /tmp/dsh-escalated.txt && rm /tmp/dsh-escalated.txt"
         recordedPath: /tmp/dsh-escalated.txt
         livePath: !!js process.env.DSH_SNAPSHOT_SPILL_ROOT + '/dsh-escalated.txt'
+
+# Protocol and projection coverage retains native calls; PTC defaults have separate scenarios.
+- id: tool-executor-native
+  disabled: false
+
+- id: tool-executor-ptc
+  disabled: true

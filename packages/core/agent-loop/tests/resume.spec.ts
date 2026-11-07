@@ -1,3 +1,6 @@
+import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
+import * as PtcToolExecutor from '@deepseek-ai/dsh-tool-executor-ptc'
+import { PtcRuntime, type PtcRunRequest } from '@deepseek-ai/dsh-ptc-runtime'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { ToolCallId, createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -18,7 +21,7 @@ import { SessionAlreadyExistsError, type SessionHandle } from '@deepseek-ai/dsh-
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { MockAdapter, textResponse } from './mock-adapter.ts'
+import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -35,14 +38,18 @@ async function persistentHarness(adapter: MockAdapter): Promise<{ ctx: Context; 
   return { ctx: await mountPersistentHarness(root, adapter), root }
 }
 
-async function mountPersistentHarness(root: string, adapter: MockAdapter, compression?: 'none'): Promise<Context> {
+async function mountPersistentHarness(root: string, adapter: MockAdapter, compression?: 'none', ptc = false): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
-  await ctx.plugin(NativeToolExecutor)
+  if (ptc) {
+    provideWorkingDirectoryFixture(ctx)
+    await ctx.plugin(ResumedRuntime)
+    await ctx.plugin(PtcToolExecutor)
+  } else await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(AgentRegistry)
   // The backend mounts BEFORE the loop so root teardown unwinds the loop
   // first: live agents drain their writers into still-open handles.
@@ -1492,4 +1499,47 @@ describe('configured-start failure edges', () => {
     expect(failures).toEqual([])
     await configured.fiber.dispose()
   })
+})
+
+/** Deterministic external evaluator; the resumed loop and persisted history stay real. */
+class ResumedRuntime extends PtcRuntime {
+  readonly language = 'typescript'
+  readonly isolation = 'test'
+  resolve(request: PtcRunRequest) {
+    return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: request.timeoutMs ?? 120_000 }
+  }
+  async run() { return { logs: ['resumed program'] } }
+}
+
+it('resumes native tool history under PTC and selects run_code for new calls', async () => {
+  const sessionId = SessionId('native-history-ptc-resume')
+  const firstAdapter = new MockAdapter([toolCallResponse('historical', 'echo', {}), textResponse('native done')])
+  const { ctx: first, root } = await persistentHarness(firstAdapter)
+  first.tools.register(defineContentToolFixture({
+    name: 'echo', description: 'Echo a historical result.', parameters: {},
+    execute: async () => [{ type: 'text', text: 'historical result' }],
+  }))
+  const initial = await first.agents.create({ sessionId, agentOptions: { provider: 'mock', model: 'mock' } })
+  try {
+    initial.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'native turn' }], source: { kind: 'user' } }))
+    await waitForIdle(first, initial.agent)
+    expect(initial.agent.session.snapshotEvents().some(event => event.type === 'tool/call' && event.data.name === 'echo')).toBe(true)
+  } finally { await initial.dispose(); await first.fiber.dispose() }
+  const adapter = new MockAdapter([
+    toolCallResponse('new-program', 'run_code', { code: 'console.log("resumed program")', description: 'Continue after resume' }),
+    textResponse('PTC done'),
+  ])
+  const second = await mountPersistentHarness(root, adapter, undefined, true)
+  try {
+    const resumed = await second.agents.resume({ resumeSessionId: sessionId })
+    resumed.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } }))
+    await waitForIdle(second, resumed.agent)
+    expect(adapter.requests[0]?.tools?.map(tool => tool.name)).toEqual(['run_code'])
+    expect(JSON.stringify(adapter.requests[0]?.messages)).toContain('historical result')
+    const results = resumed.agent.session.snapshotEvents().filter(event => event.type === 'tool/result')
+    expect(resumed.agent.session.snapshotEvents().filter(event => event.type === 'tool/call').map(event => event.data.name)).toEqual(['echo', 'run_code'])
+    expect(results).toHaveLength(2)
+    expect(results.every(event => !event.data.message.isError)).toBe(true)
+    await resumed.dispose()
+  } finally { await second.fiber.dispose() }
 })

@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-当 SDK 客户端需要小型、显式的 coding agent 运行时时，请使用 `dsh --profile sdk-minimal`。该 profile 默认公布按平台选择的持久 shell、`read_image` 和 `working_directory`，把会话持久化为未压缩 JSONL，并从 SDK 初始化请求选择模型。它提供完整 Cordis 配置树，并排除 `dsh-base`、Web、settings、托管凭据、遥测、文本文件工具、workspace 指令、skill（技能）、jobs 与 subagent。其 danger-full-access 策略允许 shell 修改进程可访问的任何路径，因此只能配合隔离 workspace 使用。
+当 SDK 客户端需要小型、显式的 coding agent 运行时时，请使用 `dsh --profile sdk-minimal`。该 profile 默认提供 `run_code`，将按平台选择的持久 shell、`read_image` 和 `working_directory` 作为程序绑定，把会话持久化为未压缩 JSONL，并从 SDK 初始化请求选择模型。它提供完整 Cordis 配置树，并排除 `dsh-base`、Web、settings、托管凭据、遥测、文本文件工具、workspace 指令、skill（技能）、jobs 与 subagent。其 danger-full-access 策略允许 shell 修改进程可访问的任何路径，因此只能配合隔离 workspace 使用。
 
 ## 目录
 
@@ -24,6 +24,8 @@ kind: "package-bundle"
 
 <a id="use-this-package"></a>
 ## 使用本包
+
+工具执行默认使用 Node PTC：模型接收 `run_code`，shell、图像读取与工作目录工具作为生成的程序绑定提供。通过 `patches` 应用[原生 overlay](../../../apps/cli/config/examples/native.yml) 可使用直接工具调用。
 
 直接启动该 profile，或从 Python SDK 选择它。提供显式 `DSH_HOME`、使用一次性 workspace，并通过 `DEEPSEEK_API_KEY` 提供模型凭据。
 
@@ -80,11 +82,11 @@ dsh --profile sdk-minimal
 
 #### 模型看到的内容
 
-系统提示词取 `DSH_SYSTEM_PROMPT`，未设置时使用 `You are a helpful software engineer assistant.`。未配置 MCP 服务器时，对外公布的工具为 `read_image`、`working_directory`，以及 Linux/macOS 上 agent 所有的持久 `bash` 或 Windows 上的 `pwsh`。必需的用户上下文提供当前目录。可选运行时上下文、文本文件工具、workspace 指令、skill、jobs 控制与 Harness 身份均不存在。
+系统提示词以 `DSH_SYSTEM_PROMPT` 或未设置时的 `You are a helpful software engineer assistant.` 开头，随后包含 PTC 指令与生成的 SDK。可直接调用的工具是 `run_code`。未配置 MCP 服务器时，其程序绑定为 `read_image`、`working_directory`，以及 Linux/macOS 上 agent 所有的持久 `bash` 或 Windows 上的 `pwsh`。必需的用户上下文提供当前目录。可选运行时上下文、文本文件工具、workspace 指令、skill、jobs 控制与 Harness 身份均不存在。
 
 #### Token 影响
 
-默认是一个稳定 persona、三个工具 schema，以及初始目录与后续变更的用户上下文。已配置 MCP 服务器会添加自己的工具、共享资源工具及可用的服务器指令。图片消耗模型输入 token。图片超过路由预算时，[图片省略](../../compaction/compaction-image-offload/README.zh.md)会永久将较早的图片位置替换为包含附件与路径的占位文本，并重试请求或压缩摘要。上下文压力达到配置阈值时，自动压缩会额外发起摘要请求，并用摘要替换较早的模型可见历史；持久 JSONL 日志保留这些事件。
+默认是一个稳定 persona、PTC 指令、一个 `run_code` schema、三个生成的工具绑定，以及初始目录与后续变更的用户上下文。已配置 MCP 服务器会添加自己的工具、共享资源工具及可用的服务器指令。图片消耗模型输入 token。图片超过路由预算时，[图片省略](../../compaction/compaction-image-offload/README.zh.md)会永久将较早的图片位置替换为包含附件与路径的占位文本，并重试请求或压缩摘要。上下文压力达到配置阈值时，自动压缩会额外发起摘要请求，并用摘要替换较早的模型可见历史；持久 JSONL 日志保留这些事件。
 
 #### KV Cache 影响
 

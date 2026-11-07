@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use `dsh --profile sdk-minimal` when an SDK client needs a small, explicit coding-agent runtime. By default, the profile advertises a platform-selected persistent shell, `read_image`, and `working_directory`, persists sessions as uncompressed JSONL, and selects the model from the SDK initialization request. It supplies a complete Cordis tree and excludes `dsh-base`, Web, settings, managed credentials, telemetry, text file tools, workspace instructions, skills, jobs, and subagents. Its danger-full-access policy lets the shell modify any path available to the process, so use it only with an isolated workspace.
+Use `dsh --profile sdk-minimal` when an SDK client needs a small, explicit coding-agent runtime. By default, the profile exposes `run_code` with a platform-selected persistent shell, `read_image`, and `working_directory` as program bindings, persists sessions as uncompressed JSONL, and selects the model from the SDK initialization request. It supplies a complete Cordis tree and excludes `dsh-base`, Web, settings, managed credentials, telemetry, text file tools, workspace instructions, skills, jobs, and subagents. Its danger-full-access policy lets the shell modify any path available to the process, so use it only with an isolated workspace.
 
 ## Table of Contents
 
@@ -24,6 +24,8 @@ Use `dsh --profile sdk-minimal` when an SDK client needs a small, explicit codin
 
 <a id="use-this-package"></a>
 ## Use this package
+
+Tool execution defaults to Node PTC: the model receives `run_code`, and the shell, image reader, and working-directory tools are generated program bindings. Apply the [native overlay](../../../apps/cli/config/examples/native.yml) through `patches` to request direct tool calling.
 
 Launch the profile directly or select it from the Python SDK. Supply an explicit `DSH_HOME`, use a disposable workspace, and provide the model credential through `DEEPSEEK_API_KEY`.
 
@@ -80,11 +82,11 @@ The bundle's single insert is the complete application tree: SDK stdio startup a
 
 #### What the model sees
 
-The system prompt is `DSH_SYSTEM_PROMPT` or `You are a helpful software engineer assistant.`. With no MCP server configured, the advertised tools are `read_image`, `working_directory`, and owner-scoped persistent `bash` on Linux/macOS or `pwsh` on Windows. Required user context supplies the current directory. Optional runtime context, text file tools, workspace instructions, skills, jobs controls, and Harness identity are absent.
+The system prompt starts with `DSH_SYSTEM_PROMPT` or `You are a helpful software engineer assistant.`, followed by PTC instructions and the generated SDK. The directly callable tool is `run_code`. With no MCP server configured, its program bindings are `read_image`, `working_directory`, and owner-scoped persistent `bash` on Linux/macOS or `pwsh` on Windows. Required user context supplies the current directory. Optional runtime context, text file tools, workspace instructions, skills, jobs controls, and Harness identity are absent.
 
 #### Token effect
 
-By default, one stable persona, three tool schemas, and user context for the initial directory and subsequent changes. Configured MCP servers add their tools, shared resource tools, and available server instructions. Images consume model input tokens. When images exceed the route budget, [image offload](../../compaction/compaction-image-offload/README.md) permanently replaces older image occurrences with attachment/path placeholders and retries the request or compaction summary. Automatic compaction sends an additional summarization request when context pressure reaches the configured threshold and replaces older model-visible history with its summary; the durable JSONL log retains those events.
+By default, one stable persona, PTC instructions, one `run_code` schema, three generated tool bindings, and user context for the initial directory and subsequent changes. Configured MCP servers add their tools, shared resource tools, and available server instructions. Images consume model input tokens. When images exceed the route budget, [image offload](../../compaction/compaction-image-offload/README.md) permanently replaces older image occurrences with attachment/path placeholders and retries the request or compaction summary. Automatic compaction sends an additional summarization request when context pressure reaches the configured threshold and replaces older model-visible history with its summary; the durable JSONL log retains those events.
 
 #### KV Cache effect
 

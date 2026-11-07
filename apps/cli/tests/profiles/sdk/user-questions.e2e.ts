@@ -55,7 +55,7 @@ it.each([
   const entered = Promise.withResolvers<AbortSignal>()
   const harness = state.harness = new DeepSeekHarness({
     cwd: root, dshHome: join(root, '.dsh'), env, model: 'deepseek-v4-pro', maxTokens: 1234, initializeTimeoutMs: 30_000,
-    patches: mode === 'ptc' ? [fileURLToPath(new URL('../../../config/examples/ptc.yml', import.meta.url))] : [],
+    patches: mode === 'native' ? [fileURLToPath(new URL('../../../config/examples/native.yml', import.meta.url))] : [],
     onUserQuestion: async (request, { signal }) => {
       expect(signal.aborted).toBe(false)
       seen.push(request)
