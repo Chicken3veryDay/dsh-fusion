@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CgroupEventsWatch } from '../src/cgroup-events.ts'
+import type { CgroupFileWatcher } from '../src/cgroup-events.ts'
 
 const directories: string[] = []
 afterEach(() => {
@@ -112,11 +113,14 @@ describe('CgroupEventsWatch on the real filesystem', () => {
 
   it('ignores events and errors from a watcher it already released', () => {
     const tree = realTree()
-    const watchers: Array<{ listeners: Map<string, (error?: Error) => void>; closed: number }> = []
-    const watchFile = (): { on: (event: string, listener: (error?: Error) => void) => void; close: () => void } => {
-      const watcher = { listeners: new Map<string, (error?: Error) => void>(), closed: 0 }
+    const watchers: Array<{ listeners: Map<string, (error: Error) => void>; closed: number }> = []
+    const watchFile = (): CgroupFileWatcher => {
+      const watcher = { listeners: new Map<string, (error: Error) => void>(), closed: 0 }
       watchers.push(watcher)
-      return { on: (event, listener) => { watcher.listeners.set(event, listener) }, close: () => { watcher.closed += 1 } }
+      return {
+        on(event: string, listener: (error: Error) => void) { watcher.listeners.set(event, listener) },
+        close() { watcher.closed += 1 },
+      }
     }
     const wake = vi.fn()
     const report = vi.fn()
@@ -124,7 +128,7 @@ describe('CgroupEventsWatch on the real filesystem', () => {
     expect(watch.attach(tree.group)).toBe(true)
     watch.detach()
     expect(watch.attach(tree.group)).toBe(true)
-    watchers[0]?.listeners.get('change')?.()
+    watchers[0]?.listeners.get('change')?.(new Error('change listeners take no argument'))
     watchers[0]?.listeners.get('error')?.(new Error('late'))
     expect({ event: watch.hasEvent(), wakes: wake.mock.calls.length, reports: report.mock.calls.length })
       .toEqual({ event: false, wakes: 0, reports: 0 })
