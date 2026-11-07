@@ -372,8 +372,8 @@ export class JsonlSessionHandle implements SessionHandle {
     const joined = this.joinClose()
     if (this.storeFlushScope.getStore()?.pending !== true) return joined
     void joined.catch((_error: unknown) => {
-      // The reentrant caller receives only the refusal; the real close result is
-      // reported to every caller outside the callback and recorded as uncertainty.
+      // The reentrant caller receives only the refusal. Later close() callers join the real result;
+      // a reserved writer also records its failure as uncertainty, while an ordinary close frees its claim.
     })
     return Promise.reject(new JsonlSessionCloseReentryError(this.id))
   }

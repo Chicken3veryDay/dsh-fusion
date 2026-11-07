@@ -1236,7 +1236,8 @@ export class SessionStore extends Service {
   }
 
   /**
-   * Return the exact pending withdrawal join for one opted-in Session.
+   * Return the withdrawal join for one opted-in Session once withdrawal has begun: pending while producers
+   * join, then settled; a failed withdrawal keeps its rejected join until the Session detaches.
    * @param session - exact live Session to inspect.
    * @returns the withdrawal completion, or undefined for an ordinary or already-detached Session.
    */
