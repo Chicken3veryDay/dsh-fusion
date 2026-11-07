@@ -489,6 +489,23 @@ export function startStep(session: Session, turn: number, step = 1): void {
   session.append('step/start', { turn, step })
 }
 
+/**
+ * Launch the composition's commands through the runtime's process-group path instead of a transient systemd scope.
+ *
+ * On Linux with a user manager the local runtime wraps every spawn in `systemd-run --scope` and polls `systemctl`
+ * until the scope empties, about 250 ms per command whatever the command does, and far more while the host is busy.
+ * The panel and the worktree service run several Git commands per inspection or worktree step, so those waits made
+ * these specs take seconds and overrun the case budget under load. The specs assert panel and worktree behavior,
+ * not process containment, which `subprocess-local` tests on its own. A non-Linux `platform` is the runtime's
+ * documented test hook for taking the path macOS ships; the commands still run as real Git processes.
+ * @param ctx - composition that mounted the local subprocess runtime.
+ */
+function spawnWithoutScopes(ctx: Context): void {
+  const subprocess = ctx.subprocess
+  if (!(subprocess instanceof LocalSubprocessRuntime)) throw new Error('the composition does not mount the local subprocess runtime')
+  if (process.platform === 'linux') subprocess.internals = { platform: 'darwin' }
+}
+
 /** A booted composition without the panel Remote, with one live Session and its idle Agent. */
 export interface Runtime {
   readonly ctx: Context
@@ -533,6 +550,7 @@ export async function runtime(cwd: string, options: BenchOptions = {}): Promise<
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(LocalFileSystem, { cwd })
     await ctx.plugin(LocalSubprocessRuntime)
+    spawnWithoutScopes(ctx)
     await ctx.plugin(RecordingSandbox, sandbox)
     await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: cwd })
     await ctx.plugin(WorkingDirectoryService)
