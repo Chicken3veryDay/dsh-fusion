@@ -579,6 +579,25 @@ describe('compaction', () => {
     expect(text).toContain('Tools/@/deploy_status')
   })
 
+  it('lists only the newest dropped paths that fit the bound and counts the rest', async () => {
+    const w = await world({ maxDroppedBytes: 64 })
+    const first = conversation(w.session, { 2: await loadedContexts(w, ['Instructions/Project/AGENTS.md']) })
+    await w.engine.compactRegion(first.start, first.end, w.agent, SIGNAL)
+    const second = conversation(w.session, { 2: await loadedContexts(w, ['Tools/Global/deploy']) })
+    await w.engine.compactRegion(second.start, second.end, w.agent, SIGNAL)
+
+    const decision = await agentEvents(w.ctx, w.agent).waterfall(
+      'agent/pre-step', { modelSelection: SELECTION, messages: [], turn: 9, step: 2, signal: SIGNAL },
+      () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
+    )
+    const catalog = (decision.kind === 'enter' ? decision.messages : [])[0]
+    const text = catalog?.content.map(block => block.type === 'text' ? block.text : '').join('') ?? ''
+    expect(text).toContain('Dropped by compaction')
+    expect(text).toContain('Tools/@/deploy_status')
+    expect(text).not.toContain('Instructions/Project/AGENTS.md/')
+    expect(text).toMatch(/and \d+ more/)
+  })
+
   it('removes a dropped entry once the same material is loaded again', async () => {
     const w = await world()
     const { start, end } = conversation(w.session, { 2: await loadedContexts(w, ['Tools/Global/deploy']) })
@@ -864,6 +883,17 @@ describe('projection edge cases', () => {
     expect(w.tree.activeTools(w.agent).size).toBe(0)
   })
 
+  it('revokes nothing when a compaction price is not followed by its replacement', async () => {
+    const w = await world()
+    const [message] = await loadedContexts(w, ['Tools/Global/deploy'])
+    const logged = w.session.append('user/message', message!, { surfaceOp: 'append' })
+    const handle = await w.ctx.sessionProjections.register(contextTreeProjectionDefinition)
+    w.session.append('compaction/prune', { shadowedRange: { start: logged.seq, end: logged.seq }, shadowedSeqs: [logged.seq], shadowedTokenCount: 1 })
+    w.session.append('turn/start', { turn: 1 })
+    expect(handle.stateOf(w.session).activations.map(entry => entry.seq)).toEqual([logged.seq])
+    expect([...w.tree.activeTools(w.agent)].sort()).toEqual(['deploy_run', 'deploy_status'])
+  })
+
   it('keeps a catalog that sits in the retained tail while grants before it are revoked', async () => {
     const w = await world()
     const published = await agentEvents(w.ctx, w.agent).waterfall(
@@ -913,6 +943,38 @@ describe('curator seams', () => {
     await release()
     const restored = await w.tree.browse(w.agent, { path: 'Instructions/Project' })
     expect(restored.nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])
+  })
+
+  it('leaves the file node alone when none of a curated group sections exist', async () => {
+    const w = await world()
+    w.tree.registerCuratedGroups(() => [{
+      root: 'Instructions', origin: 'project', name: 'rules', title: 'Project rules', summary: 'Use before changing code.', sections: ['sec_missing'], tools: [],
+    }])
+    const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project' })
+    expect(listing.nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])
+  })
+
+  it('adds no context to a request that names no agent or has no signal', async () => {
+    const w = await world()
+    const sections = await projectSections(w)
+    w.tree.registerEagerCore(() => sections)
+    expect(await w.ctx.systemPrompt.requestContext({})).toEqual([])
+    expect(await w.ctx.systemPrompt.requestContext({ scope: w.agent })).toEqual([])
+  })
+
+  it('does not grant a core section whose file grew past the budget before it was read', async () => {
+    const probe = await world()
+    const testing = (await probe.ctx.contextIndex.snapshot({ workingDirectory: probe.project }))
+      .sections.find(section => section.kind === 'project-instructions' && section.headingPath.at(-1) === 'Testing')!
+    const w = await world({ coreBytes: testing.bytes })
+    w.tree.registerEagerCore(() => [testing.id])
+    const index = w.ctx.contextIndex
+    const read = index.read.bind(index)
+    vi.spyOn(index, 'read').mockImplementationOnce((...args) => {
+      write(join(w.project, 'AGENTS.md'), `# Project rules\n\nUse pnpm.\n\n## Testing\n\nRun vitest. ${'It grew. '.repeat(40)}\n`)
+      return read(...args)
+    })
+    expect(grants(await stepMessages(w, 1))).toHaveLength(0)
   })
 
   it('places tools by a curated group ahead of the other assigners', async () => {
