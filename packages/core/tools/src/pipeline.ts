@@ -7,7 +7,7 @@ import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { assertNever, deepFreeze, snapshotJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
-import { TOOL_ABORTED, TOOL_ABORTED_BEFORE_DISPATCH, ToolNotFoundError, ToolOutputError } from './contracts.ts'
+import { TOOL_ABORTED, TOOL_ABORTED_BEFORE_DISPATCH, ToolNotFoundError, ToolOutputError, ToolResultError } from './contracts.ts'
 import { validateJsonSchemaValue } from './json-schema.ts'
 import type { ToolsService } from './index.ts'
 import type { ResolvedToolSet, ToolDefinition, ToolExecutionInput, ToolExecutionMode, ToolExecution, ToolRunContext, ToolExecutionResult, ToolExecutionSuccess, ToolErrorInfo, ToolExecutionToken, PreToolDecision, PostToolDecision } from './contracts.ts'
@@ -703,7 +703,17 @@ function createExecutionToken(): ToolExecutionToken {
   return Symbol('dsh.tool.execution') as ToolExecutionToken
 }
 
+/** Read delegated failures without allowing hostile thrown proxies to escape normalization. */
+function delegatedFailure(error: unknown): ToolExecutionResult | undefined {
+  try { return error instanceof ToolResultError ? error.result : undefined } catch (_error) {
+    // A thrown proxy may reject prototype inspection; the generic error formatter owns it.
+    return undefined
+  }
+}
+
 function toolErrorResult(error: unknown): ToolExecutionResult {
+  const delegated = delegatedFailure(error)
+  if (delegated !== undefined) return delegated
   const info = errorInfo(error)
   const message = toolErrorMessage(error)
   return {
