@@ -198,8 +198,8 @@
   en: 4294f78d26ed985b
   zh: 4294f78d26ed985b
 /session-persistence-event-catalog/events/plan/plan-mode-log-only:
-  en: 9ae5537eeae238de
-  zh: 6be761c7fd83fdce
+  en: bcc1f048e7a31f1e
+  zh: a9c29711722cd6c7
 /session-persistence-event-catalog/events/request:
   en: a8df82440ebdf5f8
   zh: a8df82440ebdf5f8
@@ -2082,8 +2082,8 @@
   en: a74e3dfa51c987af
   zh: 6c3c87974d7a7260
 /session-persistence-event-catalog/resolved-persistence-types/active~2:
-  en: 9ddf3296a586985f
-  zh: a9b1d3f983d8ce16
+  en: 783cd0e9123a1627
+  zh: f4e79d9e5f6b7afb
 /session-persistence-event-catalog/resolved-persistence-types/adapterid-baseurl-canonicalmodelid-catalogrevision:
   en: eb3282de3f33e6d2
   zh: 1f9245856d4b45ca
