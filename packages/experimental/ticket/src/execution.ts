@@ -21,11 +21,12 @@ declare module '@deepseek-ai/cordis' {
   interface Context { ticketExecution: TicketExecutionService }
   interface Events {
     /**
-     * Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on
-     * the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves
-     * when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt
+     * Collects the reservations of execution-owned attempts whose producers may still run in this host. Each reservation is
+     * registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it;
+     * it leaves when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt
      * settled, or, once the attempt is `unknown`, when its producers' own signals prove they stopped, including after the
-     * service that admitted them was torn down.
+     * service that admitted them was torn down. Admission excludes the work scopes of shared-workspace reservations, and
+     * restart recovery of a resumed root leaves every collected attempt to the producers that hold it.
      * @param collect - Receives each reservation synchronously.
      * @mode emit
      */
@@ -101,8 +102,8 @@ interface AttemptRun {
   readonly ticketId: TicketView['id']
   readonly attemptId: TicketAttemptSnapshot['id']
   readonly fingerprint: string
-  /** Shared-workspace scopes read from the Ticket revision the admission checks; absent for isolated worktrees. */
-  readonly scope?: TicketProducerReservation
+  /** The attempt's ownership record and work scopes, read from the Ticket revision the admission checks. */
+  readonly reservation: TicketProducerReservation
   /** Aborted exactly when the state becomes aborted; effects of preparation observe only this signal. */
   readonly lifetime: AbortController
   state: AttemptState
@@ -226,13 +227,13 @@ export class TicketExecutionService extends Service {
       if (unsettled) throw new TicketError('Recovered Ticket attempt requires settlement reconciliation before execution', 'TICKET_ATTEMPT_STATE')
       this.preflight(request)
       // The admission's compare-and-set requires this revision, so these are the scopes it reserves.
-      const scope: TicketProducerReservation | undefined = request.workspace.kind === 'shared-workspace' ? {
+      const reservation: TicketProducerReservation = {
         rootId: root.id, ticketId: request.ticketId, attemptId: request.attemptId, workspace: request.workspace,
         executor: request.executor, scopes: assignment.workScopes,
-      } : undefined
+      }
       const run: AttemptRun = {
         key, caller, rootId: root.id, ownerId: assignment.ownerId, ticketId: request.ticketId, attemptId: request.attemptId,
-        fingerprint, ...scope === undefined ? {} : { scope }, lifetime: new AbortController(), state: { kind: 'admitting', aborted: false },
+        fingerprint, reservation, lifetime: new AbortController(), state: { kind: 'admitting', aborted: false },
         jobs: [], producers: new Map(), listeners: new Set(), queue: Promise.resolve(), recordings: new Map(),
       }
       this.runs.set(key, run)
@@ -293,13 +294,12 @@ export class TicketExecutionService extends Service {
     return settlement
   }
 
-  /** Register the run's shared-workspace scopes on the root context, in the step that records its admission. */
+  /** Register the run's reservation on the root context, in the step that records its admission. */
   private retain(run: AttemptRun): void {
-    const scope = run.scope
+    const { reservation } = run
     const { root } = this.ctx
     // An unloading host admits nothing afterwards, and its exit ends the producers it ran.
-    if (scope === undefined || run.retained !== undefined || root.fiber.state === FiberState.UNLOADING
-      || root.fiber.state === FiberState.DISPOSED) return
+    if (run.retained !== undefined || root.fiber.state === FiberState.UNLOADING || root.fiber.state === FiberState.DISPOSED) return
     const disposers: (() => boolean)[] = []
     let released = false
     const retained: RetainedReservation = {
@@ -309,12 +309,12 @@ export class TicketExecutionService extends Service {
         for (const dispose of disposers) dispose()
       },
     }
-    disposers.push(root.on('ticket/collect-reservations', (collect) => { collect(scope) }))
+    disposers.push(root.on('ticket/collect-reservations', (collect) => { collect(reservation) }))
     // A host that settles the attempt declares its producers ended or abandoned.
     disposers.push(root.on('session/event', (session, event) => {
-      if (session.id !== scope.rootId || event.type !== 'ticket/state') return
-      const attempt = event.data.ticket.id === scope.ticketId && 'attempts' in event.data.ticket
-        ? event.data.ticket.attempts.find(item => item.id === scope.attemptId) : undefined
+      if (session.id !== reservation.rootId || event.type !== 'ticket/state') return
+      const attempt = event.data.ticket.id === reservation.ticketId && 'attempts' in event.data.ticket
+        ? event.data.ticket.attempts.find(item => item.id === reservation.attemptId) : undefined
       if (attempt?.status === 'settled') retained.release()
     }))
     run.retained = retained

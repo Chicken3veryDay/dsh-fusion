@@ -782,7 +782,9 @@ export class TicketService extends Service {
           held.push({ rootId: root, workspace: attempt.workspace, executor: attempt.executor, scopes, producer: false })
         }
         // Execution producers can outlive the service generations and the root log that admitted them.
-        this.ctx.emit('ticket/collect-reservations', (reservation) => { held.push({ ...reservation, producer: true }) })
+        this.ctx.emit('ticket/collect-reservations', (reservation) => {
+          if (reservation.workspace.kind === 'shared-workspace') held.push({ ...reservation, producer: true })
+        })
         for (const reservation of held) {
           const world = request.executor.kind === 'remote' ? request.executor.world : undefined
           const otherWorld = reservation.executor.kind === 'remote' ? reservation.executor.world : undefined
@@ -890,7 +892,8 @@ export class TicketService extends Service {
   }
 
   /** Finish what this service owns for one root that became live: replay known outcomes, and settle in-process attempts
-   * an earlier host admitted, since their producers ended with that host. */
+   * an earlier host admitted, since their producers ended with that host. An attempt whose reservation is still registered
+   * on the root context belongs to producers that run in this host, whatever service generation admitted them. */
   private async recoverRoot(session: Session): Promise<void> {
     if (this.projection === undefined || this.ctx.sessions.get(session.id) !== session) return
     const writes: Promise<unknown>[] = []
@@ -899,13 +902,17 @@ export class TicketService extends Service {
     }
     const state = this.projection.stateOf(session)
     if (!this.activationRoots.has(session.id) && state.failure === undefined) {
+      const owned = new Set<string>()
+      this.ctx.emit('ticket/collect-reservations', (reservation) => {
+        if (reservation.rootId === session.id) owned.add(JSON.stringify([session.id, reservation.ticketId, reservation.attemptId]))
+      })
       for (const ticket of state.tickets) for (const attempt of ticket.attempts) {
         const key = JSON.stringify([session.id, ticket.id, attempt.id])
         // Only the execution owner writes reserved operation records, starting with its admission, so they mark an attempt
         // this host family admitted. Before its workspace stage no producer of any placement has started; an in-process
         // producer ends with its host in every unsettled phase.
         const inProcess = attempt.executor.kind === 'in-process' && ['preparing', 'running', 'stopping'].includes(attempt.status)
-        if (this.settlements.has(key) || (!inProcess && attempt.status !== 'preparing')
+        if (owned.has(key) || this.settlements.has(key) || (!inProcess && attempt.status !== 'preparing')
           || !ticket.operations.some(item => item.id.startsWith(executionOperationPrefix(attempt.id)))) continue
         const settlement: Settlement = {
           rootId: session.id, ticketId: ticket.id, attemptId: attempt.id, assignmentId: attempt.assignmentId, actorId: session.id,
