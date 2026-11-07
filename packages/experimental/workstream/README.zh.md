@@ -40,7 +40,7 @@ Workstream 是一个根 Session 的持久化团队记录。它把完整的 Works
 
 模型调用方需要使用服务时，挂载 `WorkstreamTools`。挂载工具是可选的，与服务相互独立。配置字段均为正的安全整数：`maxMembers`（16）、`maxMessages`（256）、`maxSnapshotBytes`（1048576）、`maxMessageBytes`（65536）和 `maxWaitMs`（3600000）。超出限制时返回 `WORKSTREAM_LIMIT`。
 
-错误是 `WorkstreamError`，其 code 为 `WORKSTREAM_UNAUTHORIZED`、`WORKSTREAM_NOT_FOUND`、`WORKSTREAM_CONFLICT`、`WORKSTREAM_LIMIT`、`WORKSTREAM_INVALID_INPUT`、`WORKSTREAM_UNKNOWN`、`WORKSTREAM_DISPOSED`、`WORKSTREAM_PARTIAL_HANDOFF` 或 `WORKSTREAM_NOT_READY`。`WORKSTREAM_UNKNOWN` 表示该效果可能已发生；再次操作前应检查持久化记录。
+错误是 `WorkstreamError`，其 code 为 `WORKSTREAM_UNAUTHORIZED`、`WORKSTREAM_NOT_FOUND`、`WORKSTREAM_CONFLICT`、`WORKSTREAM_LIMIT`、`WORKSTREAM_INVALID_INPUT`、`WORKSTREAM_UNKNOWN`、`WORKSTREAM_DISPOSED`、`WORKSTREAM_PARTIAL_HANDOFF`、`WORKSTREAM_NOT_READY` 或 `WORKSTREAM_CAPACITY`。`WORKSTREAM_UNKNOWN` 表示该效果可能已发生；再次操作前应检查持久化记录。`WORKSTREAM_CAPACITY` 表示 Subagent 在任何子 Session 存在之前，因每个根的激活上限（`maxActiveSubagents`）拒绝了该成员：`addMember` 会删除它已提交的 `provisioning` 记录，因此不会保留任何成员、名称或操作 id，错误信息会给出该上限。某个成员的回合结束或被停止后会释放一个名额；此时同一操作会创建该成员，若池仍然已满则再次返回 `WORKSTREAM_CAPACITY`。
 
 `workstream` 键的 [Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径，对未拥有 Workstream 的 Session 其值为 `null`。浏览器安全类型从 `@deepseek-ai/dsh-experimental-workstream/client` 导入，类型从 `@deepseek-ai/dsh-experimental-workstream/types` 导入。
 

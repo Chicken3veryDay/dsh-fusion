@@ -10,7 +10,7 @@ import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import { steerHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
-import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
+import { foldSubagentDescriptor, SubagentError } from '@deepseek-ai/dsh-subagent'
 import { TicketError, type AssignTicketRequest, type CreateTicketRequest, type EndTicketRequest, type TicketId, type TicketView } from '@deepseek-ai/dsh-experimental-ticket'
 import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 import { acceptedMessage } from './accepted-message.ts'
@@ -211,7 +211,8 @@ export class WorkstreamService extends Service {
    * @param caller - owner or current coordinator.
    * @param rootSessionId - stable technical owner.
    * @param request - immutable intent and cancellation before acceptance.
-   * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.
+   * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch, and a Subagent
+   * activation-limit refusal throws WORKSTREAM_CAPACITY with no member recorded.
    */
   async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember> {
     const outcome = await this.enqueue(rootSessionId, (): Promise<ProvisionOutcome> => this.provisionMember(caller, rootSessionId, request))
@@ -264,8 +265,25 @@ export class WorkstreamService extends Service {
       await this.ctx.sessions.flush(session)
       return { kind: 'provisioned', member: await this.reconcileMember(owner, this.state(owner), member, request.signal, started.messageId) }
     } catch (error: unknown) {
+      if (error instanceof SubagentError && error.code === 'ACTIVATION_LIMIT_REACHED') return this.refuseMember(owner, member, error)
       return { kind: 'uncertain', owner, memberId: member.id, error }
     }
+  }
+
+  /** Subagent refuses at its activation limit before any child Session exists, so the refusal is definite: remove the
+   * `provisioning` record, freeing its name and operation id, and report a capacity refusal that the same operation may retry.
+   * @throws WorkstreamError `WORKSTREAM_CAPACITY` once the removal is durable, or `WORKSTREAM_UNKNOWN` when it is not. */
+  private async refuseMember(owner: Agent, member: WorkstreamMember, refusal: SubagentError): Promise<never> {
+    const snapshot = this.state(owner)
+    try {
+      await this.commit(owner, { ...snapshot, revision: snapshot.revision + 1, members: snapshot.members.filter(candidate =>
+        candidate.id !== member.id) })
+    } catch (error: unknown) {
+      throw new WorkstreamError(`Member "${member.name}" was not started, but removing its provisioning record is uncertain; retry the same operation`,
+        'WORKSTREAM_UNKNOWN', { cause: new AggregateError([refusal, error], 'Capacity refusal rollback failed') })
+    }
+    throw new WorkstreamError(`Member "${member.name}" was not added: ${refusal.message}. Nothing was recorded; a member whose turn ends or that is stopped frees a slot, then retry the same operation`,
+      'WORKSTREAM_CAPACITY', { cause: refusal })
   }
 
   /** Transfer the coordinator role to a member, moving Ticket coordination with it, while preserving every child parent and root log.

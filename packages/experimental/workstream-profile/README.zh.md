@@ -45,7 +45,7 @@ patch 在 `dsh-base` 之后插入三个服务、三个工具行和 Web 面板：
 | `workstream-evidence`、`tool-workstream-evidence` | `ctx.workstreamEvidence` | `workstream_evidence_*` |
 | `ui-workstream` | `ctx.workstreamPanel`、Web 页头 action | — |
 
-patch 中每个服务限制都是显式 Config 值，与包默认值相同。
+patch 中每个服务限制都是显式 Config 值，与包默认值相同。Workstream 的 `maxMembers`（16）统计每个已记录的成员，包括已停止的成员；Subagent 的 `maxActiveSubagents`（默认 8）限制一个根下同时运行的子 Session 数量，成员和其他子 Session 都计入。池已满时添加成员会以 `WORKSTREAM_CAPACITY` 被拒绝，且不记录任何内容；在某个成员的回合结束或被停止后，用同一操作重试。
 
 本层不为 `ticket_assign` 添加守卫。Ticket 接受任何 Session 作为受派人，因此 Workstream 注册了 Ticket 分配授权方，在 Ticket 队列内的分配提交时拒绝不是该根 Workstream 活跃子成员的受派人（`TICKET_AUTHORITY`），规则与 `workstream_assign_ticket` 相同。因此，停止操作在分配排队等待期间完成时，该分配仍会被拒绝。没有 Workstream 的根交给 Ticket 处理。Workstream 的 Ticket 命令授权方同样会在写入提交时，拒绝由非所有者、非活跃子成员发出的其他 `ticket_*` 写入。`ticket_*` 工具依赖 `workstreams`，因此会随其一起卸载。卸载前已由工具交给 Ticket 的 `ticket_*` 调用仍由 Workstream 的授权方决定，卸载会等待它完成。
 

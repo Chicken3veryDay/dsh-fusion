@@ -45,7 +45,7 @@ The patch inserts three services, three tool rows, and the Web panel after `dsh-
 | `workstream-evidence`, `tool-workstream-evidence` | `ctx.workstreamEvidence` | `workstream_evidence_*` |
 | `ui-workstream` | `ctx.workstreamPanel`, Web header action | — |
 
-Every service limit is an explicit Config value in the patch, equal to the package default.
+Every service limit is an explicit Config value in the patch, equal to the package default. Workstream `maxMembers` (16) counts every recorded member, stopped members included, while Subagent `maxActiveSubagents` (default 8) bounds the children of one root running at the same time, members and other children alike. A member added while that pool is full is refused with `WORKSTREAM_CAPACITY` and nothing is recorded; retry the same operation after a member's turn ends or it is stopped.
 
 The profile adds no guard to `ticket_assign`. Ticket accepts any Session as an assignee, so Workstream registers a Ticket assignment authority that refuses, inside Ticket's queued assignment, an assignee that is not an active child member of the root's Workstream (`TICKET_AUTHORITY`), the same rule as `workstream_assign_ticket`. A stop that completes while the assignment waits in Ticket's queue therefore still refuses it. A root with no Workstream is left to Ticket. Workstream's Ticket command authority likewise refuses every other `ticket_*` write by an actor that is not the owner or an active child member when the write commits. The `ticket_*` tools depend on `workstreams`, so they unload with it. A `ticket_*` call that a tool already passed to Ticket before the unload is still decided by Workstream's authorities, and the unload waits for it.
 
