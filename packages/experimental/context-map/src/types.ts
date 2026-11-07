@@ -150,8 +150,22 @@ export interface MapView {
 export interface MapChange {
   readonly kind: 'committed' | 'work-waiting' | 'note-filed' | 'holder-gone'
   readonly ownerSessionId: SessionId
-  /** The agent that vanished while holding the role; set for `holder-gone`. */
+  /** The edit a `committed` change logged. */
+  readonly op?: MapOpKind
+  /** The holder that left: the agent that vanished (`holder-gone`) or gave up the role (`committed` with `op: 'release'`). */
   readonly holderId?: SessionId
+  /** The work an owner step found waiting; set for `work-waiting`. */
+  readonly work?: CurationWork
+}
+
+/** Curation work waiting for a curator. */
+export interface CurationWork {
+  /** What is waiting: an unprocessed index, pending notes, stale notes, or a note refused for lack of room. */
+  readonly reasons: readonly ('index' | 'pending' | 'stale' | 'space')[]
+  /** Fingerprint of the waiting work; it changes when the work does. */
+  readonly signature: string
+  /** Claims already logged for this exact work, including those before a restart. */
+  readonly attempts: number
 }
 
 /** Request to set or create a group. */

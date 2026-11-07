@@ -84,10 +84,8 @@ it('R4-M3 a map filled close to maxSnapshotBytes can still be claimed by the def
   for (const [length, cites] of [[400, 4], [200, 1], [60, 1], [16, 1]] as const) {
     while (await add('n'.repeat(length), refs(cites))) { /* fill */ }
   }
-  await map.release(holder, { rootSessionId: w.owner.id })
-  expect(map.snapshotOf(w.owner).curatorId).toBeNull()
-
-  // Leave enough content room for one pending note, then consume it before the next claim.
+  // Leave enough content room for one pending note, then consume it before the next claim. The
+  // holder releases the role afterwards; that release hands the waiting work to the default curator.
   let text = Math.min(400, 65_536 - size() - 110)
   for (;; text -= 5) {
     try {
@@ -98,6 +96,8 @@ it('R4-M3 a map filled close to maxSnapshotBytes can still be claimed by the def
     }
   }
   expect(map.snapshotOf(w.owner).pending).toHaveLength(1)
+  await map.release(holder, { rootSessionId: w.owner.id })
+  expect(map.snapshotOf(w.owner).curatorId).toBeNull()
   await Promise.race([request(1), failed.promise])
   await w.ctx.contextCurator.idle(w.owner.id)
   expect({ requests: w.adapter.requests.length, warnings: warn.mock.calls.map(args => String(args[0])) }, 'the curator must be able to take the role to file or drop the note and shrink the map').toEqual({ requests: 1, warnings: [] })

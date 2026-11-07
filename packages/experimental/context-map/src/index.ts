@@ -39,6 +39,7 @@ import { contextMapProjectionDefinition, type ContextMapProjectionState } from '
 import { byteLength } from './text.ts'
 import type {
   Config,
+  CurationWork,
   MapChange,
   MapGroup,
   MapGroupId,
@@ -126,16 +127,6 @@ export interface NoteRequest extends MapTarget {
   readonly cites?: readonly string[]
 }
 
-/** Curation work waiting for a curator. */
-export interface CurationWork {
-  /** What is waiting: an unprocessed index, pending notes, stale notes, or a note refused for lack of room. */
-  readonly reasons: readonly ('index' | 'pending' | 'stale' | 'space')[]
-  /** Fingerprint of the waiting work; it changes when the work does. */
-  readonly signature: string
-  /** Claims already logged for this exact work, including those before a restart. */
-  readonly attempts: number
-}
-
 /** Request to take or hand over the curator role. */
 export interface ClaimRequest extends MapTarget {
   /** Agent that becomes the holder; defaults to the caller, and only the map owner may name another agent. */
@@ -197,17 +188,20 @@ export class ContextMapService extends Service {
     this.ctx.contextTree.registerCuratedGroups(agent => this.groupsFor(agent))
     this.ctx.contextTree.registerEagerCore(agent => this.snapshotOfRoot(agent).core)
     this.ctx.contextTree.registerManagedTools(CURATOR_TOOL_NAMES, agent => this.curatedRoots(agent).length > 0)
+    // Prepended so the observation runs after every ordinary pre-step listener, including the tree's
+    // catalog check, and can reuse the index refresh that check made for this step.
     this.ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+      const before = this.ctx.contextIndex.refreshes()
       const decision = await next()
       if (decision.kind === 'reject' || agent.session.header.parentSession !== undefined) return decision
       try {
-        await this.observe(agent, signal)
+        await this.observe(agent, signal, before)
       } catch (error: unknown) {
         signal.throwIfAborted()
         this.ctx.logger.warn(`context map: index observation failed: ${String(error)}`)
       }
       return decision
-    })
+    }, { prepend: true })
     this.ctx.on('agent/disposed', ({ agent }) => {
       const owners = [...this.heldOwners.get(agent.id) ?? []]
       this.heldOwners.delete(agent.id)
@@ -423,19 +417,25 @@ export class ContextMapService extends Service {
   }
 
   /**
-   * Record a short fact for the curator to verify and file. Any member of the lineage may; the
-   * working agent's context carries only this call and its one-line answer.
+   * Record a short fact for the curator to verify and file. Any member of the lineage may, except a
+   * holder other than the owner and the agents that holder started: a pending note is work for the
+   * curator, so a curator run that filed one would start its own next run. The working agent's
+   * context carries only this call and its one-line answer.
    * @param caller - the exact live agent.
    * @param request - the text and optional citations.
    * @param signal - cancellation.
    * @returns the pending note id and how many notes now wait.
-   * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait.
+   * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait,
+   * `CONTEXT_MAP_UNAUTHORIZED` when the caller is, or descends from, a holder other than the owner.
    */
   async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }> {
     const owner = this.member(caller, request.rootSessionId)
     const facts = await this.facts(owner, signal)
     this.live(caller)
     const current = this.snapshotOf(owner)
+    if (current.curatorId !== null && current.curatorId !== owner.id && this.lineageOf(caller).has(current.curatorId)) {
+      throw new ContextMapError('You hold the curator role for this map; file the fact yourself with map_note add under a group instead of context_note', 'CONTEXT_MAP_UNAUTHORIZED')
+    }
     if (current.pending.length >= this.config.maxPendingNotes) {
       this.notify({ kind: 'note-filed', ownerSessionId: owner.id })
       throw new ContextMapError(`${current.pending.length} notes already wait for the curator; try again later`, 'CONTEXT_MAP_LIMIT')
@@ -760,7 +760,10 @@ export class ContextMapService extends Service {
     // A finished hold has seen every refusal made before it started; later ones still wait.
     if (op.kind === 'release') this.spaceSeen.set(owner.id, this.spaceAtClaim.get(owner.id) ?? this.spaceRefusals.get(owner.id) ?? 0)
     await this.ctx.sessions.flush(owner.session)
-    this.notify({ kind: op.kind === 'note-pending' ? 'note-filed' : 'committed', ownerSessionId: owner.id })
+    if (op.kind === 'note-pending') this.notify({ kind: 'note-filed', ownerSessionId: owner.id })
+    else if (op.kind === 'release' && op.target !== undefined) {
+      this.notify({ kind: 'committed', ownerSessionId: owner.id, op: op.kind, holderId: brandString<SessionId>(op.target) })
+    } else this.notify({ kind: 'committed', ownerSessionId: owner.id, op: op.kind })
     return structuredClone(snapshot)
   }
 
@@ -804,6 +807,17 @@ export class ContextMapService extends Service {
     return this.snapshotOf(this.rootOf(agent))
   }
 
+  /** A live agent and its live ancestors. */
+  private lineageOf(agent: Agent): ReadonlySet<SessionId> {
+    const ids = new Set<SessionId>()
+    for (let current: Agent | undefined = agent; current !== undefined;) {
+      ids.add(current.id)
+      const parentId: SessionId | undefined = current.session.header.parentSession
+      current = parentId === undefined ? undefined : this.ctx.agents.get(parentId)
+    }
+    return ids
+  }
+
   /** The root agent of a lineage, or the highest live ancestor when a parent is no longer live. */
   private rootOf(agent: Agent): Agent {
     let current = agent
@@ -833,18 +847,24 @@ export class ContextMapService extends Service {
     })
   }
 
-  private async facts(owner: Agent, signal: AbortSignal | undefined): Promise<IndexFacts> {
+  /**
+   * Index facts for an owner's map. With `since`, a refresh of the owner's directory that committed
+   * after that refresh ordinal is reused instead of refreshing again.
+   */
+  private async facts(owner: Agent, signal: AbortSignal | undefined, since?: number): Promise<IndexFacts> {
     if (this.disposed) throw new ContextMapError('context map disposed', 'CONTEXT_MAP_DISPOSED')
-    const snapshot = await this.ctx.contextIndex.snapshot(
-      { workingDirectory: await this.ctx.workingDirectory.ensure(owner, signal) },
-      signal,
-    )
+    const scope = { workingDirectory: await this.ctx.workingDirectory.ensure(owner, signal) }
+    const latest = since === undefined ? undefined : this.ctx.contextIndex.latest(scope)
+    const snapshot = latest !== undefined && since !== undefined && latest.refresh > since
+      ? latest.snapshot
+      : await this.ctx.contextIndex.snapshot(scope, signal)
+    const read = this.ctx.contextIndex.lastRead(scope)
     const sections = new Map(snapshot.sections.map(section => [section.id, section]))
     // A read that finishes after its owner was disposed must not recreate the owner's cache.
     if (this.ctx.agents.get(owner.id) === owner) {
       this.hashes.set(owner.id, new Map(snapshot.sections.map(section => [section.id, section.hash])))
     }
-    return { sections, digest: digestOf(snapshot.sections) }
+    return { sections, digest: digestOf(snapshot.sections), read }
   }
 
   /**
@@ -884,13 +904,15 @@ export class ContextMapService extends Service {
   }
 
   /**
-   * Announce waiting work at every owner step that has some. Announcements are not remembered: the
-   * curator decides what an announcement means, so a watcher that missed one or failed before its
-   * claim sees the work again at the next step.
+   * Announce waiting work, with its fingerprint and attempts, at every owner step that has some.
+   * Announcements are not remembered: the curator decides what an announcement means, so a watcher
+   * that missed one or failed before its claim sees the work again at the next step. A refresh made
+   * during the step after the `since` ordinal is reused.
    */
-  private async observe(agent: Agent, signal: AbortSignal): Promise<void> {
-    if (this.workOf(agent, await this.facts(agent, signal)) === null) return
-    this.notify({ kind: 'work-waiting', ownerSessionId: agent.id })
+  private async observe(agent: Agent, signal: AbortSignal, since: number): Promise<void> {
+    const work = this.workOf(agent, await this.facts(agent, signal, since))
+    if (work === null) return
+    this.notify({ kind: 'work-waiting', ownerSessionId: agent.id, work })
   }
 
   /** Drop everything kept in memory for an owner whose agent was disposed; its map stays in its Session. */

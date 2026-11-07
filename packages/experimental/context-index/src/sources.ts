@@ -1,6 +1,6 @@
 /** Source discovery over the filesystem service, bounded reads, and per-source sectioning. */
 import { dirname, join, relative } from 'node:path'
-import type { FileSystem, FsDirEntry, FsTarget, FsVersion } from '@deepseek-ai/dsh-fs'
+import type { FileSystem, FsDirEntry, FsInfo, FsTarget, FsVersion } from '@deepseek-ai/dsh-fs'
 import { FsError } from '@deepseek-ai/dsh-fs'
 import { toPosix, type ResolvedConfig } from './config.ts'
 import { contentHash, deriveSectionId, deriveSourceId } from './ids.ts'
@@ -27,10 +27,42 @@ export interface Candidate {
   readonly size: number | undefined
 }
 
-/** Candidates in precedence order plus what could not be probed. */
+/**
+ * How long a directory's version must stay unchanged before a listing taken under it is trusted
+ * without listing again. Filesystem timestamps are coarse (FAT stores modification times in 2-second
+ * steps), so an entry added in the same timestamp step as a listing leaves the directory's version
+ * unchanged; listing once more after this interval sees it.
+ */
+export const LISTING_SETTLE_MS = 2_000
+
+/** One child of a listed directory, without the metadata that goes stale while the directory is unchanged. */
+export interface ListedEntry {
+  readonly name: string
+  readonly type: FsDirEntry['type']
+  readonly target: FsTarget
+}
+
+/** A documentation directory listing kept between refreshes and reused while the directory's version is unchanged. */
+export interface Listing {
+  /** Version of the directory observed before the listing was taken. */
+  readonly version: FsVersion
+  /** Children in name order. */
+  readonly entries: readonly ListedEntry[]
+  /** `performance.now()` when the listing was taken. */
+  readonly listedAt: number
+  /**
+   * The directory already had `version` at least {@link LISTING_SETTLE_MS} before this listing, so no
+   * later change can share that version; an unsettled listing is reused only within that interval.
+   */
+  readonly settled: boolean
+}
+
+/** Candidates in precedence order, what could not be probed, and the documentation listings used. */
 export interface Discovery {
   readonly candidates: Candidate[]
   readonly diagnostics: ContextDiagnostic[]
+  /** Listings by directory target key, for the next discovery of the same working directory. */
+  readonly listings: ReadonlyMap<string, Listing>
 }
 
 /** Section metadata before the snapshot assigns `order`. */
@@ -134,34 +166,70 @@ async function fileCandidate(
   return { kind, path, group, target: found.target, version: found.version, size: found.size }
 }
 
+/** A child to visit: from a fresh listing it carries the metadata the listing observed. */
+type Visit = ListedEntry & { readonly version?: FsVersion; readonly size?: number }
+
 async function discoverDocs(
   fs: FileSystem,
   config: ResolvedConfig,
   cwd: string,
   seen: Set<string>,
   diagnostics: ContextDiagnostic[],
+  prior: ReadonlyMap<string, Listing>,
   signal: AbortSignal,
-): Promise<Candidate[]> {
+): Promise<{ candidates: Candidate[]; listings: Map<string, Listing> }> {
   const candidates: Candidate[] = []
+  const listings = new Map<string, Listing>()
   const visited = new Set<string>()
   const matches = (name: string): boolean => {
     const lower = name.toLowerCase()
     return config.docExtensions.some(extension => lower.endsWith(extension))
   }
   const limit = { reached: false }
-  const walk = async (directory: FsTarget, display: string, depth: number): Promise<void> => {
-    if (visited.has(directory.targetKey)) return
-    visited.add(directory.targetKey)
+  const inspect = (target: FsTarget, path: string, code: 'unreadable' | 'directory-unreadable'): Promise<FsInfo | undefined> => (
+    fs.stat(target, signal).catch((error: unknown) => {
+      signal.throwIfAborted()
+      diagnostics.push({ code, path, message: `cannot inspect ${code === 'unreadable' ? 'file' : 'directory'}: ${describe(error)}` })
+      return undefined
+    })
+  )
+  /** Children of a directory: the kept listing while the directory is unchanged, else a new listing. */
+  const childrenOf = async (directory: FsTarget, display: string, version: FsVersion): Promise<readonly Visit[] | undefined> => {
+    const kept = prior.get(directory.targetKey)
+    const now = performance.now()
+    if (kept?.version === version && (kept.settled || now - kept.listedAt < LISTING_SETTLE_MS)) {
+      listings.set(directory.targetKey, kept)
+      return kept.entries
+    }
     let entries: FsDirEntry[]
     try {
       entries = await fs.listDir(directory, signal)
     } catch (error: unknown) {
       signal.throwIfAborted()
       diagnostics.push({ code: 'directory-unreadable', path: display, message: `cannot list directory: ${describe(error)}` })
-      return
+      return undefined
     }
     const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-    for (const entry of sorted) {
+    listings.set(directory.targetKey, {
+      version,
+      entries: sorted.map(({ name, type, target }) => ({ name, type, target })),
+      listedAt: now,
+      settled: kept?.version === version,
+    })
+    return sorted
+  }
+  const walk = async (directory: FsTarget, display: string, depth: number, observed: FsVersion | undefined): Promise<void> => {
+    if (visited.has(directory.targetKey)) return
+    visited.add(directory.targetKey)
+    let version = observed
+    if (version === undefined) {
+      const info = await inspect(directory, display, 'directory-unreadable')
+      if (info?.type !== 'directory') return
+      version = info.version
+    }
+    const children = await childrenOf(directory, display, version)
+    if (children === undefined) return
+    for (const entry of children) {
       if (limit.reached) return
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
       const path = `${display}/${entry.name}`
@@ -170,7 +238,7 @@ async function discoverDocs(
           diagnostics.push({ code: 'limit-exceeded', path, message: `directory is deeper than maxDocDepth (${config.maxDocDepth}) and was not indexed` })
           continue
         }
-        await walk(entry.target, path, depth + 1)
+        await walk(entry.target, path, depth + 1, entry.version)
         continue
       }
       if (entry.type !== 'file' || !matches(entry.name) || seen.has(entry.target.targetKey)) continue
@@ -182,12 +250,9 @@ async function discoverDocs(
       let version = entry.version
       let size = entry.size
       if (version === undefined) {
-        const info = await fs.stat(entry.target, signal).catch((error: unknown) => {
-          signal.throwIfAborted()
-          diagnostics.push({ code: 'unreadable', path, message: `cannot inspect file: ${describe(error)}` })
-          return undefined
-        })
-        if (info === undefined) continue
+        // A kept listing has no file versions: an edit changes the file, not its directory.
+        const info = await inspect(entry.target, path, 'unreadable')
+        if (info?.type !== 'file') continue
         version = info.version
         size = info.size
       }
@@ -200,11 +265,11 @@ async function discoverDocs(
     if (found.kind === 'failed') {
       diagnostics.push({ code: 'directory-unreadable', path: root, message: `cannot inspect documentation root: ${describe(found.error)}` })
     } else if (found.kind === 'present' && found.type === 'directory') {
-      await walk(found.target, root, 0)
+      await walk(found.target, root, 0, found.version)
     }
     if (limit.reached) break
   }
-  return candidates
+  return { candidates, listings }
 }
 
 /**
@@ -217,13 +282,16 @@ async function discoverDocs(
  * @param fs - the filesystem service.
  * @param config - resolved configuration.
  * @param cwd - absolute working directory.
+ * @param listings - documentation listings from the previous discovery of `cwd`; a directory whose
+ * version is unchanged is not listed again, but each of its documentation files is still statted.
  * @param signal - cancellation for every probe.
- * @returns present candidates and diagnostics for probes that failed.
+ * @returns present candidates, diagnostics for probes that failed, and the listings to keep.
  */
 export async function discoverCandidates(
   fs: FileSystem,
   config: ResolvedConfig,
   cwd: string,
+  listings: ReadonlyMap<string, Listing>,
   signal: AbortSignal,
 ): Promise<Discovery> {
   const diagnostics: ContextDiagnostic[] = []
@@ -265,8 +333,9 @@ export async function discoverCandidates(
       }
     }
   }
-  candidates.push(...await discoverDocs(fs, config, cwd, seen, diagnostics, signal))
-  return { candidates, diagnostics }
+  const docs = await discoverDocs(fs, config, cwd, seen, diagnostics, listings, signal)
+  candidates.push(...docs.candidates)
+  return { candidates, diagnostics, listings: docs.listings }
 }
 
 /** A source's decoded text with its raw byte size and digest, or the reason it cannot be used. */

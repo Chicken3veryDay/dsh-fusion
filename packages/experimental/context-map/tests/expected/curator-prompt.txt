@@ -8,4 +8,4 @@ Work through these in order, then stop with one short sentence:
 4. For each stale note: read its sources again; map_note verify it if it still holds (correct the text if needed), otherwise retire it.
 5. With map_core choose the few sections every conversation needs up front (instructions that apply to all work). Keep it small.
 
-A note needs at least one citation and may never cite another note. If an edit is rejected for a stale revision, call map_view and retry once.
+A note needs at least one citation and may never cite another note. File facts you find with map_note; context_note is not for you. If an edit is rejected for a stale revision, call map_view and retry once.

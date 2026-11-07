@@ -15,6 +15,8 @@ export interface IndexFacts {
   readonly sections: ReadonlyMap<ContextSectionId, ContextSectionMeta>
   /** Digest of every section id and hash; changes when any indexed text changes. */
   readonly digest: string
+  /** Hash of the text the latest read of each section returned; it differs from the index hash when the file changed after that read. */
+  readonly read: ReadonlyMap<ContextSectionId, string>
 }
 
 /** Roots a group may sit under. */
@@ -153,9 +155,19 @@ export function buildGroup(
 }
 
 /**
+ * The hash a citation of a section carries: the hash of the text last read from it, which is the
+ * text a citer checked, or the indexed hash when nobody read the section. A citer cannot claim a
+ * hash the index did not serve.
+ */
+function citedHash(id: ContextSectionId, facts: IndexFacts): string {
+  return facts.read.get(id) ?? sectionMeta(id, facts).hash
+}
+
+/**
  * Turn model-supplied citation strings into typed citations. A `sec_…` id becomes a section citation
- * stamped with the hash the index has now, so a citer cannot claim a hash it did not check; a
- * `ref:…` string becomes an evidence citation. Anything that names a note is refused.
+ * stamped with the hash of the text last read from it (see {@link citedHash}), so a file edited after
+ * that read leaves the note stale; a `ref:…` string becomes an evidence citation. Anything that names
+ * a note is refused.
  * @param raw - citation strings.
  * @param facts - live index facts.
  * @param snapshot - the map, whose note ids a citation may not name.
@@ -175,7 +187,7 @@ export function parseCites(raw: readonly string[], facts: IndexFacts, snapshot: 
       cites.push({ kind: 'evidence', ref })
     } else if (SECTION_ID.test(text)) {
       const id = knownSection(text, facts)
-      cites.push({ kind: 'section', id, hash: sectionMeta(id, facts).hash })
+      cites.push({ kind: 'section', id, hash: citedHash(id, facts) })
     } else {
       invalid(`citation "${text}" must be a section id (sec_…) or "ref:" followed by an evidence reference`)
     }
@@ -208,19 +220,18 @@ export function isStale(cites: readonly MapCite[], facts: IndexFacts): boolean {
 }
 
 /**
- * Re-stamp a note's section citations with the current hashes.
+ * Re-stamp a note's section citations with the hashes of the text last read from them (see {@link citedHash}).
  * @param cites - the note's citations.
  * @param facts - live index facts.
- * @returns citations with current hashes.
+ * @returns citations with the hashes of the text read; current hashes once the sources were read again.
  * @throws {@link ContextMapError} `CONTEXT_MAP_NOT_FOUND` when a cited section no longer exists.
  */
 export function restamp(cites: readonly MapCite[], facts: IndexFacts): MapCite[] {
   return cites.map((cite) => {
     if (cite.kind === 'evidence') return cite
-    const section = facts.sections.get(cite.id)
-    if (section === undefined) {
+    if (!facts.sections.has(cite.id)) {
       throw new ContextMapError(`cited section ${cite.id} no longer exists; retire the note or cite another source`, 'CONTEXT_MAP_NOT_FOUND')
     }
-    return { kind: 'section', id: cite.id, hash: section.hash }
+    return { kind: 'section', id: cite.id, hash: citedHash(cite.id, facts) }
   })
 }

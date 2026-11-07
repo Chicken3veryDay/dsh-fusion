@@ -96,6 +96,13 @@ export interface ContextIndexSnapshot {
   readonly diagnostics: readonly ContextDiagnostic[]
 }
 
+/** The snapshot a refresh committed, with that refresh's ordinal; see `ContextIndexService.latest`. */
+export interface ContextIndexRefresh {
+  readonly snapshot: ContextIndexSnapshot
+  /** Ordinal of the committing refresh across every working directory; compare with `refreshes()`. */
+  readonly refresh: number
+}
+
 /** Byte bound for one {@link ContextReadResult}; values above the configured ceiling are lowered to it. */
 export interface ContextReadBudget {
   /** Total UTF-8 bytes of returned section text; defaults to the configured `maxReadBytes`. */

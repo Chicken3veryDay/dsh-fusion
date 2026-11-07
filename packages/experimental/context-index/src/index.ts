@@ -16,13 +16,14 @@ import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import { renderCatalog } from './catalog.ts'
 import { ConfigSchema, resolveConfig, type ResolvedConfig } from './config.ts'
 import { ContextIndexError } from './error.ts'
-import { buildRecord, discoverCandidates, readSource, sectionsOf, type SourceRecord } from './sources.ts'
+import { buildRecord, discoverCandidates, readSource, sectionsOf, type Listing, type SourceRecord } from './sources.ts'
 import { truncateUtf8 } from './text.ts'
 import type {
   Config,
   ContextCatalog,
   ContextCatalogBudget,
   ContextDiagnostic,
+  ContextIndexRefresh,
   ContextIndexScope,
   ContextIndexSnapshot,
   ContextReadBudget,
@@ -48,6 +49,10 @@ interface IndexState {
   readonly snapshot: ContextIndexSnapshot
   readonly records: ReadonlyMap<string, SourceRecord>
   readonly signature: string
+  /** Documentation listings the next refresh reuses while their directories are unchanged. */
+  readonly listings: ReadonlyMap<string, Listing>
+  /** Ordinal of the refresh that committed this state, counted across every working directory. */
+  readonly refresh: number
 }
 
 /** A section re-read from disk: its text and the metadata derived from that same text. */
@@ -74,6 +79,9 @@ export class ContextIndexService extends Service {
 
   private readonly config: ResolvedConfig
   private readonly states = new Map<string, IndexState>()
+  /** Hash of the text each section's latest `read` returned, per working directory; dropped with its state. */
+  private readonly served = new Map<string, Map<ContextSectionId, string>>()
+  private committed = 0
   private readonly flights = new Map<string, Flight>()
   /** Every accepted refresh and body read until it settles, independent of which flight is still joinable. */
   private readonly inflight = new Set<Promise<unknown>>()
@@ -151,10 +159,45 @@ export class ContextIndexService extends Service {
       }
       const body = this.bodyOf(fresh, remaining)
       bodies.push(body)
+      this.serve(state.snapshot.scope.workingDirectory, body)
       used += body.bytes
       remaining = body.truncated ? 0 : remaining - body.bytes
     }
     return { revision: state.snapshot.revision, sections: bodies, missing, omitted, usedBytes: used, maxBytes, diagnostics }
+  }
+
+  /**
+   * The state the latest refresh of a working directory committed, without refreshing.
+   * @param scope - the working directory.
+   * @returns the snapshot and the ordinal of the refresh that committed it, or undefined when the
+   * directory has not been indexed or was evicted.
+   * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.
+   */
+  latest(scope: ContextIndexScope): ContextIndexRefresh | undefined {
+    this.assertLive()
+    const state = this.states.get(this.directoryOf(scope))
+    return state === undefined ? undefined : { snapshot: state.snapshot, refresh: state.refresh }
+  }
+
+  /**
+   * How many refreshes have committed, across every working directory. A caller that notes this
+   * number and later finds a {@link latest} refresh above it knows that refresh committed in between.
+   * @returns the ordinal of the latest committed refresh; 0 before the first.
+   */
+  refreshes(): number {
+    return this.committed
+  }
+
+  /**
+   * The hash of the text each section's latest `read` in a working directory returned, whoever read
+   * it. A section whose current hash differs was last read as other text.
+   * @param scope - the working directory.
+   * @returns a detached map; empty when no section was read or the directory was evicted.
+   * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.
+   */
+  lastRead(scope: ContextIndexScope): ReadonlyMap<ContextSectionId, string> {
+    this.assertLive()
+    return new Map(this.served.get(this.directoryOf(scope)))
   }
 
   /**
@@ -167,6 +210,14 @@ export class ContextIndexService extends Service {
   renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBudget = {}): ContextCatalog {
     this.assertLive()
     return renderCatalog(sections, this.effectiveBudget(budget.maxBytes, this.config.maxCatalogBytes, 'maxBytes'))
+  }
+
+  private serve(directory: string, body: ContextSectionBody): void {
+    // A read that settles after its directory was evicted must not recreate the entry.
+    if (!this.states.has(directory)) return
+    const served = this.served.get(directory) ?? new Map<ContextSectionId, string>()
+    served.set(body.id, body.hash)
+    this.served.set(directory, served)
   }
 
   /** Build a body from the section as just re-read, so its hash and size describe the returned text. */
@@ -303,7 +354,7 @@ export class ContextIndexService extends Service {
       throw new ContextIndexError(`workingDirectory "${directory}" is not an existing directory`, 'CONTEXT_INDEX_INVALID_INPUT')
     }
     const prior = this.states.get(directory)
-    const discovery = await discoverCandidates(fs, config, directory, signal)
+    const discovery = await discoverCandidates(fs, config, directory, prior?.listings ?? new Map(), signal)
     const diagnostics: ContextDiagnostic[] = [...discovery.diagnostics]
     const loaded = new Map<string, SourceRecord>()
     const ordered: SourceRecord[] = []
@@ -342,7 +393,7 @@ export class ContextIndexService extends Service {
       ordered.push(record)
     }
     signal.throwIfAborted()
-    return this.commit(directory, prior, loaded, ordered, diagnostics)
+    return this.commit(directory, prior, loaded, ordered, diagnostics, discovery.listings)
   }
 
   private commit(
@@ -351,6 +402,7 @@ export class ContextIndexService extends Service {
     loaded: ReadonlyMap<string, SourceRecord>,
     ordered: readonly SourceRecord[],
     diagnostics: readonly ContextDiagnostic[],
+    listings: ReadonlyMap<string, Listing>,
   ): IndexState {
     const kept: SourceRecord[] = []
     const digests = new Map<string, Set<string>>()
@@ -385,14 +437,20 @@ export class ContextIndexService extends Service {
         diagnostics,
       }
     }
-    const state: IndexState = { snapshot, records: loaded, signature }
+    const state: IndexState = { snapshot, records: loaded, signature, listings, refresh: ++this.committed }
     // Re-inserting keeps the Map in least-recently-used order.
     this.states.delete(directory)
     this.states.set(directory, state)
+    const served = this.served.get(directory)
+    if (served !== undefined && snapshot !== prior?.snapshot) {
+      const present = new Set(snapshot.sections.map(section => section.id))
+      for (const id of served.keys()) if (!present.has(id)) served.delete(id)
+    }
     while (this.states.size > this.config.maxIndexedDirectories) {
       const oldest = this.states.keys().next()
       if (oldest.done === true) break
       this.states.delete(oldest.value)
+      this.served.delete(oldest.value)
     }
     return state
   }
@@ -410,6 +468,7 @@ export class ContextIndexService extends Service {
     await Promise.allSettled([...this.inflight])
     this.flights.clear()
     this.states.clear()
+    this.served.clear()
   }
 }
 

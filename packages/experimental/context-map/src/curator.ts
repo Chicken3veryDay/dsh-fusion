@@ -24,7 +24,7 @@ import '@deepseek-ai/dsh-subagent'
 import { CuratorConfigSchema, resolveCuratorConfig, type ResolvedCuratorConfig } from './config.ts'
 import { ContextMapError } from './error.ts'
 import { selectCuratorRoute } from './route.ts'
-import type { CuratorConfig, MapChange } from './types.ts'
+import type { CurationWork, CuratorConfig, MapChange } from './types.ts'
 import type {} from './index.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -44,7 +44,7 @@ const PROMPT = [
   '4. For each stale note: read its sources again; map_note verify it if it still holds (correct the text if needed), otherwise retire it.',
   '5. With map_core choose the few sections every conversation needs up front (instructions that apply to all work). Keep it small.',
   '',
-  'A note needs at least one citation and may never cite another note. If an edit is rejected for a stale revision, call map_view and retry once.',
+  'A note needs at least one citation and may never cite another note. File facts you find with map_note; context_note is not for you. If an edit is rejected for a stale revision, call map_view and retry once.',
 ].join('\n')
 
 /** Why a run was asked to stop before its subagent ended on its own. */
@@ -73,10 +73,11 @@ type CuratorState =
 /** Everything that moves a record between states. */
 type CuratorEvent =
   /**
-   * Work may wait. `news` is a filed or refused note or a foreign holder gone; an owner step's
-   * announcement is not news, because every later owner step announces waiting work again.
+   * Work may wait. `news` is a filed or refused note or a foreign holder gone or released; an owner
+   * step's announcement is not news, because every later owner step announces waiting work again.
+   * `work` is the work the owner step found, so evaluating it reads nothing again.
    */
-  | { readonly kind: 'trigger'; readonly news: boolean }
+  | { readonly kind: 'trigger'; readonly news: boolean; readonly work?: CurationWork }
   /** Evaluation found work this curator may start. */
   | { readonly kind: 'eligible'; readonly work: string }
   /** Evaluation ended the announcement: no work, a live holder, attempts used up, no cheap route, or a failed read. */
@@ -203,7 +204,14 @@ export class DefaultContextCurator extends Service {
     const run = this.runOf(record?.owner === owner ? record : undefined)
     switch (change.kind) {
       case 'committed': {
-        if (record === undefined || run === undefined) return
+        if (run === undefined) {
+          // A live holder that gave up the role hands its waiting work back. A vanished holder is
+          // `holder-gone`; a release of a dead holder or of this curator's own run is not news.
+          if (change.op === 'release' && change.holderId !== undefined && this.ctx.agents.get(change.holderId) !== undefined
+            && this.ctx.contextMap.snapshotOf(owner).curatorId === null) this.trigger(owner, true)
+          return
+        }
+        if (record === undefined) return
         const holder = this.ctx.contextMap.snapshotOf(owner).curatorId
         // While claiming, the map is unclaimed or already this run's; afterwards it must stay this run's.
         // A role released because this run's own child is gone is the run ending, not a move.
@@ -221,7 +229,7 @@ export class DefaultContextCurator extends Service {
         this.trigger(owner, true)
         return
       case 'work-waiting':
-        this.trigger(owner, false)
+        this.trigger(owner, false, change.work)
         return
       case 'note-filed':
         this.trigger(owner, true)
@@ -231,7 +239,7 @@ export class DefaultContextCurator extends Service {
     }
   }
 
-  private trigger(owner: Agent, news: boolean): void {
+  private trigger(owner: Agent, news: boolean, work?: CurationWork): void {
     if (this.stopping) return
     let record = this.records.get(owner.id)
     if (record !== undefined && record.owner !== owner) {
@@ -246,7 +254,7 @@ export class DefaultContextCurator extends Service {
       }
       this.records.set(owner.id, record)
     }
-    this.transition(record, { kind: 'trigger', news })
+    this.transition(record, { kind: 'trigger', news, ...work === undefined ? {} : { work } })
   }
 
   /** The only place a record changes state; side effects start here and report back through events. */
@@ -263,7 +271,7 @@ export class DefaultContextCurator extends Service {
         if (event.kind === 'trigger' && !record.closing) {
           record.retrigger = false
           enter({ kind: 'announced' })
-          this.track(this.evaluate(record))
+          this.track(this.evaluate(record, event.work))
         } else if (event.kind === 'stop' && record.closing) {
           this.dispose(record, enter)
         }
@@ -352,8 +360,11 @@ export class DefaultContextCurator extends Service {
     this.tasks.add(tracked)
   }
 
-  /** Decide whether announced work starts a run; every outcome ends the announcement explicitly. */
-  private async evaluate(record: OwnerRecord): Promise<void> {
+  /**
+   * Decide whether announced work starts a run; every outcome ends the announcement explicitly.
+   * Work an owner step found is used as found; news reads the waiting work once.
+   */
+  private async evaluate(record: OwnerRecord, announced: CurationWork | undefined): Promise<void> {
     const { owner } = record
     const still = (): boolean => record.state.kind === 'announced' && !record.closing
     try {
@@ -366,13 +377,7 @@ export class DefaultContextCurator extends Service {
         // The recorded holder did not survive a restart; its claim no longer excludes anyone.
         await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
       }
-      const view = await this.ctx.contextMap.view(owner, { rootSessionId: owner.id })
-      if (!still()) return
-      if (view.pending.length === 0 && !view.indexChanged && view.staleNotes === 0 && view.needsSpace !== true) {
-        this.transition(record, { kind: 'ineligible' })
-        return
-      }
-      const work = await this.ctx.contextMap.curationWork(owner)
+      const work = announced ?? await this.ctx.contextMap.curationWork(owner)
       if (!still()) return
       const route = owner.model.current()
       const routeKey = `${work?.signature ?? ''}|${route?.provider ?? ''}/${route?.model ?? ''}`
