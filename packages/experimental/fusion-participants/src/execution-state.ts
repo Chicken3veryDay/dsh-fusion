@@ -1,7 +1,7 @@
 /** Required log-only task execution facts; folding never invokes a host adapter. */
 import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const sessionId = z.string().min(1).transform(SessionId)
@@ -45,15 +45,17 @@ const rootRecordSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('granted'), data: grantedSchema }),
   z.strictObject({ type: z.literal('revoked'), data: revokedSchema }),
 ])
+/** Fork-copied prefix length; Fusion records inside it belong to the source Session and are never folded. */
+const inherited = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionLogOffset)
 const baseStateSchema = z.strictObject({
-  sessionId, opened: openedSchema.nullable(), lastGeneration: generation.nullable(),
+  sessionId, inheritedEventCount: inherited, opened: openedSchema.nullable(), lastGeneration: generation.nullable(),
   grant: grantedSchema.nullable(), revoke: revokedSchema.nullable(), entries: z.array(entrySchema),
   history: z.array(rootRecordSchema),
 })
 type BaseState = z.infer<typeof baseStateSchema>
 
-function emptyState(id: SessionId): BaseState {
-  return { sessionId: id, opened: null, lastGeneration: null, grant: null, revoke: null, entries: [], history: [] }
+function emptyState(id: SessionId, inheritedEventCount: SessionLogOffset): BaseState {
+  return { sessionId: id, inheritedEventCount, opened: null, lastGeneration: null, grant: null, revoke: null, entries: [], history: [] }
 }
 
 function applyRoot(state: BaseState, record: z.infer<typeof rootRecordSchema>): BaseState {
@@ -81,7 +83,7 @@ function applyRoot(state: BaseState, record: z.infer<typeof rootRecordSchema>): 
 }
 
 const stateSchema = baseStateSchema.refine((state) => {
-  let replay = emptyState(state.sessionId)
+  let replay = emptyState(state.sessionId, state.inheritedEventCount)
   try {
     for (const record of state.history) replay = applyRoot(replay, record)
   } catch (_error: unknown) {
@@ -124,9 +126,10 @@ function sameAttempt(left: EffectStarted, right: EffectSettled): boolean {
 
 /** Strict local history; the owner verifies root/participant links after all retained leases load. */
 export const executionProjection = {
-  key: 'fusionExecution', stateVersion: 1, stateSchema,
-  init: header => emptyState(header.id),
+  key: 'fusionExecution', stateVersion: 2, stateSchema,
+  init: (header, inheritedEventCount) => emptyState(header.id, inheritedEventCount),
   apply(state, event) {
+    if (event.seq < state.inheritedEventCount) return state
     switch (event.type) {
       case 'fusion/execution-opened': return applyRoot(state, { type: 'opened', data: openedSchema.parse(event.data) })
       case 'fusion/execution-granted': return applyRoot(state, { type: 'granted', data: grantedSchema.parse(event.data) })

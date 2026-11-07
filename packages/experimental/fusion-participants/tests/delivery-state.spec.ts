@@ -2,6 +2,8 @@
 import { expect, it, vi } from 'vitest'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import { admissionProjection, receiverProjection, createIntent, DeliveryId, intentSchema, contentHash } from '../src/delivery-state.ts'
+import { executionProjection } from '../src/execution-state.ts'
+import { rosterProjection } from '../src/state.ts'
 import { mount, read } from './harness.ts'
 
 it('restores the full root input from a checkpoint plus suffix, retaining state for unrelated records', async () => {
@@ -79,11 +81,13 @@ it('validates durable reconstruction and checkpoint invariants without normalizi
   expect(intentSchema.safeParse({ ...intent, text: 'changed' }).success).toBe(false)
   expect(contentHash({ ...input, rootSessionId: task.roster.rootSessionId, origin: { kind: 'user' } }))
     .not.toBe(contentHash({ ...input, text: '\ud800\né', rootSessionId: task.roster.rootSessionId, origin: { kind: 'user' } }))
-  const state = { sessionId: task.roster.rootSessionId, entries: [{ intent, intentSeq: SessionSeq(1), completion: null }] }
+  const state = { sessionId: task.roster.rootSessionId, inheritedEventCount: SessionLogOffset(0),
+    entries: [{ intent, intentSeq: SessionSeq(1), completion: null }] }
   expect(admissionProjection.stateSchema.safeParse(state).success).toBe(true)
   expect(admissionProjection.stateSchema.safeParse({ ...state, entries: [...state.entries, ...state.entries] }).success).toBe(false)
   expect(admissionProjection.stateSchema.safeParse({ ...state, sessionId: input.targetParticipantId }).success).toBe(false)
-  expect(receiverProjection.stateSchema.safeParse({ sessionId: input.targetParticipantId, turn: null, step: null, calls: [],
+  expect(receiverProjection.stateSchema.safeParse({ sessionId: input.targetParticipantId, inheritedEventCount: SessionLogOffset(0),
+    turn: null, step: null, calls: [],
     entries: [{ intent, acceptanceSeq: SessionSeq(2), instructionSeq: SessionSeq(1) }] }).success).toBe(false)
   await task.dispose()
 })
@@ -197,5 +201,31 @@ it('restores receiver protocol data through version fallback and removes late re
   await handle.dispose()
   expect(ctx.sessionProjections.checkpoint(target)).not.toHaveProperty('lateFusionReceiver')
   expect(handle.stateOf(target)).toBe(state)
+  await task.dispose()
+})
+
+it('folds no Fusion record inherited by a fork of a task root and restores that state from a checkpoint', async () => {
+  const { ctx } = await mount()
+  const task = await ctx.fusionParticipants.prepare('single-test')
+  const root = ctx.sessions.get(task.roster.rootSessionId)!
+  await task.delivery.admitUser({ deliveryId: DeliveryId('before-fork'), targetParticipantId: task.roster.roles.participant!,
+    inboxTarget: 'next-turn', correlationId: null, text: 'stays with the source root' })
+  const fork = ctx.sessions.fork(root)
+  expect(fork.inheritedEventCount).toBe(root.seq)
+  const admissions = await ctx.sessionProjections.register({ ...admissionProjection, key: 'forkFusionAdmissions' })
+  const rosters = await ctx.sessionProjections.register({ ...rosterProjection, key: 'forkFusionRoster' })
+  const executions = await ctx.sessionProjections.register({ ...executionProjection, key: 'forkFusionExecution' })
+  expect(admissions.stateOf(root).entries).toHaveLength(1)
+  expect(admissions.stateOf(fork)).toEqual({ sessionId: fork.id, inheritedEventCount: fork.inheritedEventCount, entries: [] })
+  // Recovery refuses a root without its own roster, so a fork is never a second task root.
+  expect(rosters.stateOf(fork)).toEqual({ inheritedEventCount: fork.inheritedEventCount, roster: null, established: [] })
+  expect(executions.stateOf(fork).opened).toBeNull()
+  expect(executions.stateOf(fork).history).toEqual([])
+  const full = ctx.sessionProjections.checkpoint(fork)
+  for (const key of ['forkFusionAdmissions', 'forkFusionRoster', 'forkFusionExecution'] as const) {
+    expect(ctx.sessionProjections.restore({ [key]: full[key]! }, fork.snapshotEvents(), SessionLogOffset(0), fork.header,
+      fork.inheritedEventCount).checkpoint[key]).toEqual(full[key])
+  }
+  await Promise.all([admissions.dispose(), rosters.dispose(), executions.dispose()])
   await task.dispose()
 })

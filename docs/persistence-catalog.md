@@ -598,7 +598,7 @@ Source: [`packages/feedback/command-feedback/src/types.ts:40`](../packages/feedb
 'fusion/delivery-accepted': DeliveryIntent
 ```
 
-Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:87`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:90`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-completed--log-only"></a>
 
@@ -609,7 +609,7 @@ Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:87`](.
 'fusion/delivery-completed': DeliveryCompletion
 ```
 
-Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:89`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:92`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-intent--log-only"></a>
 
@@ -620,7 +620,7 @@ Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:89`](.
 'fusion/delivery-intent': DeliveryIntent
 ```
 
-Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:85`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:88`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusioneffect-reconciled--log-only"></a>
 
@@ -631,7 +631,7 @@ Source: [`packages/experimental/fusion-participants/src/delivery-state.ts:85`](.
 'fusion/effect-reconciled': z.infer<typeof reconciledSchema>
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:115`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:117`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusioneffect-settled--log-only"></a>
 
@@ -642,7 +642,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:115`]
 'fusion/effect-settled': EffectSettled
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:113`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:115`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusioneffect-started--log-only"></a>
 
@@ -653,7 +653,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:113`]
 'fusion/effect-started': EffectStarted
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:111`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:113`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-granted--log-only"></a>
 
@@ -664,7 +664,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:111`]
 'fusion/execution-granted': z.infer<typeof grantedSchema>
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:107`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:109`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-opened--log-only"></a>
 
@@ -675,7 +675,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:107`]
 'fusion/execution-opened': z.infer<typeof openedSchema>
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:105`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:107`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-revoked--log-only"></a>
 
@@ -686,7 +686,7 @@ Source: [`packages/experimental/fusion-participants/src/execution-state.ts:105`]
 'fusion/execution-revoked': z.infer<typeof revokedSchema>
 ```
 
-Source: [`packages/experimental/fusion-participants/src/execution-state.ts:109`](../packages/experimental/fusion-participants/src/execution-state.ts)
+Source: [`packages/experimental/fusion-participants/src/execution-state.ts:111`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionparticipant-established--log-only"></a>
 

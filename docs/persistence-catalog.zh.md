@@ -600,7 +600,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-accepted': DeliveryIntent
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:87`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:90`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-completed--log-only"></a>
 
@@ -611,7 +611,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-completed': DeliveryCompletion
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:89`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:92`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusiondelivery-intent--log-only"></a>
 
@@ -622,7 +622,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/delivery-intent': DeliveryIntent
 ```
 
-来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:85`](../packages/experimental/fusion-participants/src/delivery-state.ts)
+来源：[`packages/experimental/fusion-participants/src/delivery-state.ts:88`](../packages/experimental/fusion-participants/src/delivery-state.ts)
 
 <a id="fusioneffect-reconciled--log-only"></a>
 
@@ -633,7 +633,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/effect-reconciled': z.infer<typeof reconciledSchema>
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:115`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:117`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusioneffect-settled--log-only"></a>
 
@@ -644,7 +644,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/effect-settled': EffectSettled
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:113`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:115`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusioneffect-started--log-only"></a>
 
@@ -655,7 +655,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/effect-started': EffectStarted
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:111`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:113`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-granted--log-only"></a>
 
@@ -666,7 +666,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/execution-granted': z.infer<typeof grantedSchema>
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:107`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:109`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-opened--log-only"></a>
 
@@ -677,7 +677,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/execution-opened': z.infer<typeof openedSchema>
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:105`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:107`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionexecution-revoked--log-only"></a>
 
@@ -688,7 +688,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'fusion/execution-revoked': z.infer<typeof revokedSchema>
 ```
 
-来源：[`packages/experimental/fusion-participants/src/execution-state.ts:109`](../packages/experimental/fusion-participants/src/execution-state.ts)
+来源：[`packages/experimental/fusion-participants/src/execution-state.ts:111`](../packages/experimental/fusion-participants/src/execution-state.ts)
 
 <a id="fusionparticipant-established--log-only"></a>
 

@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
-import { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 const sessionId = z.string().min(1).transform(SessionId)
@@ -58,7 +58,9 @@ const rootEntry = z.strictObject({ intent: intentSchema, intentSeq: seq, complet
     && row.completion.decisionInputRevision === row.intent.decisionInputRevision
     && row.completion.targetParticipantId === row.intent.targetParticipantId)
 
-const rootStateSchema = z.strictObject({ sessionId, entries: z.array(rootEntry) }).refine(state =>
+/** Fork-copied prefix length; Fusion records inside it belong to the source Session and are never folded. */
+const inherited = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionLogOffset)
+const rootStateSchema = z.strictObject({ sessionId, inheritedEventCount: inherited, entries: z.array(rootEntry) }).refine(state =>
   new Set(state.entries.map(row => row.intent.deliveryId)).size === state.entries.length
   && state.entries.every((row, index) => row.intent.rootSessionId === state.sessionId
     && row.intent.order === index + 1 && row.intent.decisionInputRevision === index + 1
@@ -68,7 +70,8 @@ export type AdmissionState = z.infer<typeof rootStateSchema>
 const receiverEntry = z.strictObject({ intent: intentSchema, acceptanceSeq: seq, instructionSeq: seq.nullable() })
 const callSchema = z.strictObject({ id: z.string(), turn: z.number(), step: z.number(), started: seq.nullable() })
 const receiverStateSchema = z.strictObject({
-  sessionId, entries: z.array(receiverEntry), turn: z.number().nullable(), step: z.number().nullable(), calls: z.array(callSchema),
+  sessionId, inheritedEventCount: inherited, entries: z.array(receiverEntry),
+  turn: z.number().nullable(), step: z.number().nullable(), calls: z.array(callSchema),
 }).refine(state => new Set(state.entries.map(row => row.intent.deliveryId)).size === state.entries.length
   && state.entries.every((row, index) => row.intent.targetParticipantId === state.sessionId
     && (row.instructionSeq === null ? index === state.entries.length - 1 : row.instructionSeq > row.acceptanceSeq)
@@ -120,9 +123,10 @@ export function contentHash(input: {
 
 /** Root input/outbox projection; transport completion never removes the original input. */
 export const admissionProjection = {
-  key: 'fusionAdmissions', stateVersion: 1, stateSchema: rootStateSchema,
-  init: header => ({ sessionId: header.id, entries: [] }),
+  key: 'fusionAdmissions', stateVersion: 2, stateSchema: rootStateSchema,
+  init: (header, inheritedEventCount) => ({ sessionId: header.id, inheritedEventCount, entries: [] }),
   apply(state, event) {
+    if (event.seq < state.inheritedEventCount) return state
     if (event.type === 'fusion/delivery-intent') {
       const intent = intentSchema.parse(event.data)
       const last = state.entries.at(-1)
@@ -146,9 +150,10 @@ export const admissionProjection = {
 
 /** Receiver projection tracks the original insertion, never just the current pending inbox. */
 export const receiverProjection = {
-  key: 'fusionDeliveries', stateVersion: 1, stateSchema: receiverStateSchema,
-  init: header => ({ sessionId: header.id, entries: [], turn: null, step: null, calls: [] }),
+  key: 'fusionDeliveries', stateVersion: 2, stateSchema: receiverStateSchema,
+  init: (header, inheritedEventCount) => ({ sessionId: header.id, inheritedEventCount, entries: [], turn: null, step: null, calls: [] }),
   apply(state, event) {
+    if (event.seq < state.inheritedEventCount) return state
     const pending = state.entries.find(row => row.instructionSeq === null)
     if (event.type === 'fusion/delivery-accepted') {
       const intent = intentSchema.parse(event.data)

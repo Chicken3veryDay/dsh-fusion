@@ -38,7 +38,7 @@ it('rejects duplicate, orphan, mismatched and reconciled producer facts', async 
     const start = events.find((event): event is SessionEvent<'fusion/effect-started'> => event.type === 'fusion/effect-started')
     const result = events.find((event): event is SessionEvent<'fusion/effect-settled'> => event.type === 'fusion/effect-settled')
     if (start === undefined || result === undefined) throw new Error('missing durable effect facts')
-    const empty = executionProjection.init(f.child.session.header)
+    const empty = executionProjection.init(f.child.session.header, f.child.session.inheritedEventCount)
     const unrelatedStart = { ...start, data: { ...start.data, attemptId: startedSchema.shape.attemptId.parse(randomUUID()) } }
     const pending = executionProjection.apply(executionProjection.apply(empty, unrelatedStart), start)
     const settled = executionProjection.apply(pending, result)
@@ -88,7 +88,7 @@ it('rejects conflicting root chains, grants and revokes including forged checkpo
     const grant = events.find((event): event is SessionEvent<'fusion/execution-granted'> => event.type === 'fusion/execution-granted')
     const revoke = events.find((event): event is SessionEvent<'fusion/execution-revoked'> => event.type === 'fusion/execution-revoked')
     if (opened === undefined || grant === undefined || revoke === undefined) throw new Error('missing root history')
-    const empty = executionProjection.init(f.root.session.header)
+    const empty = executionProjection.init(f.root.session.header, f.root.session.inheritedEventCount)
     const closed = executionProjection.apply(empty, opened)
     const granted = executionProjection.apply(closed, grant)
     expect(() => executionProjection.apply(empty, grant)).toThrow()
