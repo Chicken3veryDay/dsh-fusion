@@ -758,14 +758,15 @@ export class TicketService extends Service {
     if (request.workspace.kind === 'shared-workspace') await this.reconcileStoredReservations()
     const key = JSON.stringify([session.id, request.ticketId, request.attemptId])
     const recorded = capture === undefined ? undefined : () => {
-      if (!this.settlements.has(key)) {
-        this.settlements.set(key, {
+      let settlement = this.settlements.get(key)
+      if (settlement === undefined) {
+        settlement = {
           rootId: session.id, ticketId: request.ticketId, attemptId: request.attemptId, assignmentId: request.assignmentId,
           actorId: request.actorId, diagnostics: [],
-        })
+        }
+        this.settlements.set(key, settlement)
       }
-      const settlement = this.settlements.get(key)
-      if (settlement !== undefined) capture(this.recorder(settlement))
+      capture(this.recorder(settlement))
     }
     // Scope checks and append run synchronously in the Session queue; durability never holds a host-wide lock.
     return await this.attemptOperation(session, request, 'begin', (ticket) => {
@@ -841,7 +842,7 @@ export class TicketService extends Service {
         // The ledger takes ownership synchronously, before any write that can fail.
         settlement.outcome ??= outcome
         settlement.workspaceReceipt ??= facts?.workspaceReceipt
-        return this.writeSettlement(settlement)
+        return this.writeSettlement(settlement, settlement.outcome)
       },
     }
   }
@@ -862,9 +863,7 @@ export class TicketService extends Service {
   }
 
   /** Write the ledger's settlement to the live root; the entry and its reservation leave only after a durable flush. */
-  private async writeSettlement(settlement: Settlement): Promise<TicketView> {
-    const { outcome } = settlement
-    if (outcome === undefined) throw new TicketError('Ticket attempt settlement has no observed outcome', 'TICKET_ATTEMPT_STATE')
+  private async writeSettlement(settlement: Settlement, outcome: NonNullable<Settlement['outcome']>): Promise<TicketView> {
     const pending = (cause?: unknown) => new TicketError(`Ticket attempt "${settlement.attemptId}" ended ${outcome}; `
       + `resume Session "${settlement.rootId}" to persist its settlement`, 'TICKET_SETTLEMENT_PENDING', cause === undefined ? undefined : { cause })
     const root = this.ctx.sessions.get(settlement.rootId)
@@ -898,7 +897,9 @@ export class TicketService extends Service {
     if (this.projection === undefined || this.ctx.sessions.get(session.id) !== session) return
     const writes: Promise<unknown>[] = []
     for (const settlement of this.settlements.values()) {
-      if (settlement.rootId === session.id && settlement.outcome !== undefined) writes.push(this.writeSettlement(settlement))
+      if (settlement.rootId === session.id && settlement.outcome !== undefined) {
+        writes.push(this.writeSettlement(settlement, settlement.outcome))
+      }
     }
     const state = this.projection.stateOf(session)
     if (!this.activationRoots.has(session.id) && state.failure === undefined) {
@@ -920,7 +921,7 @@ export class TicketService extends Service {
             : 'The admission ended with the host that admitted it before any producer started; recovered as cancelled'],
         }
         this.settlements.set(key, settlement)
-        writes.push(this.writeSettlement(settlement))
+        writes.push(this.writeSettlement(settlement, 'cancelled'))
       }
     }
     const failures = (await Promise.allSettled(writes))
@@ -932,7 +933,7 @@ export class TicketService extends Service {
   private async drainSettlements(): Promise<void> {
     for (const settlement of [...this.settlements.values()]) {
       if (settlement.outcome === undefined) continue
-      try { await this.writeSettlement(settlement) } catch (error: unknown) {
+      try { await this.writeSettlement(settlement, settlement.outcome) } catch (error: unknown) {
         this.ctx.logger.warn(`Ticket attempt "${settlement.attemptId}" in Session "${settlement.rootId}" ended ${settlement.outcome}, `
           + `but its settlement is not durable; resuming that Session settles it: ${String(error)}`)
       }
@@ -980,18 +981,17 @@ export class TicketService extends Service {
       this.assertParticipant(ticket, request.actorId)
       if (request.specRevision !== ticket.specification.revision) throw new TicketError('candidate specification is stale', 'TICKET_STALE_REVISION')
       if (ticket.candidates.length >= this.config.maxReports) throw new TicketError('candidate limit exhausted', 'TICKET_LIMIT')
+      const reportIds: TicketReportId[] = []
       for (const id of request.assignmentIds) {
         const assignment = this.assignment(ticket, id)
         const report = ticket.reports.find(item => item.id === assignment.latestReportId)
         if (report?.kind !== 'result' || report.specRevision !== ticket.specification.revision) throw new TicketError(`Assignment "${id}" requires a current result before candidate submission`, 'TICKET_ACCEPTANCE')
+        reportIds.push(report.id)
       }
       return { ...ticket, currentCandidateId: request.candidateId, candidates: [...ticket.candidates, {
         id: request.candidateId, specRevision: request.specRevision, content: request.content,
         assignmentIds: [...request.assignmentIds],
-        reportIds: request.assignmentIds.flatMap((id) => {
-          const reportId = this.assignment(ticket, id).latestReportId
-          return reportId === undefined ? [] : [reportId]
-        }), authorId: request.actorId, createdAt: Date.now(),
+        reportIds, authorId: request.actorId, createdAt: Date.now(),
       }] }
     })
   }
@@ -1078,7 +1078,9 @@ export class TicketService extends Service {
     return { ...ticket, attempts: ticket.attempts.map(item => item.id === next.id ? next : item) }
   }
 
-  private async attemptOperation<T extends TicketMutationRequest & { readonly operationId: TicketOperationId }>(
+  private async attemptOperation<
+    T extends TicketMutationRequest & { readonly operationId: TicketOperationId; readonly attemptId: TicketAttemptId },
+  >(
     session: Session, request: T, kind: 'begin' | 'update' | 'settle', update: (ticket: TicketSnapshot) => TicketSnapshot,
     options: AttemptOperationOptions = {},
   ): Promise<TicketView> {
@@ -1098,10 +1100,11 @@ export class TicketService extends Service {
         return ticket
       }
       // Settlement compacted this committed operation into its tombstone; an identical retry reports the recorded Ticket.
-      const tombstone = ticket.operations.find(item => item.retiredIds?.includes(request.operationId))
-      if (tombstone !== undefined) {
-        if (!('attemptId' in request) || request.attemptId !== tombstone.attemptId) throw new TicketError('Operation belongs to another, settled attempt', 'TICKET_ATTEMPT_STATE')
-        const retired = tombstone.retiredRequests?.[tombstone.retiredIds?.indexOf(request.operationId) ?? -1]
+      for (const tombstone of ticket.operations) {
+        const index = tombstone.retiredIds?.indexOf(request.operationId)
+        if (index === undefined || index < 0) continue
+        if (request.attemptId !== tombstone.attemptId) throw new TicketError('Operation belongs to another, settled attempt', 'TICKET_ATTEMPT_STATE')
+        const retired = tombstone.retiredRequests?.[index]
         if (retired !== undefined && retired !== fingerprint && retired !== legacyFingerprint) throw new TicketError('operation identity was reused with different arguments', 'TICKET_OPERATION_CONFLICT')
         await this.durable(session)
         return ticket
@@ -1114,23 +1117,20 @@ export class TicketService extends Service {
       if (!executionOwned && ticket.revision !== request.expectedRevision) throw new TicketError('Ticket revision changed', 'TICKET_STALE_REVISION')
       if (ticket.terminalOutcome !== undefined) throw new TicketError('Ticket is terminal', 'TICKET_TERMINAL')
       const changed = update(ticket)
-      const attemptId = 'attemptId' in request && typeof request.attemptId === 'string'
-        ? changed.attempts.find(item => item.id === request.attemptId)?.id : undefined
-      const retired = attemptId === undefined || !changed.attempts.some(item => item.id === attemptId && item.status === 'settled')
+      const attemptId = request.attemptId
+      const retired = !changed.attempts.some(item => item.id === attemptId && item.status === 'settled')
         ? [] : ticket.operations.filter(item => item.attemptId === attemptId)
-      // Fingerprints are retained only when every retired id has one, so the two lists stay aligned index for index.
-      const retiredRequests = retired.every(item => (item.retiredIds?.length ?? 0) === (item.retiredRequests?.length ?? 0))
-        ? retired.flatMap(item => [item.request, ...item.retiredRequests ?? []]) : undefined
-      const admitted = options.admittedBy === undefined || attemptId === undefined ? []
+      const retiredRequests = retired.map(item => item.request)
+      const admitted = options.admittedBy === undefined ? []
         : [{ id: options.admittedBy, request: fingerprint, attemptId }]
       const next = {
         ...changed, revision: ticket.revision + 1, updatedAt: Date.now(),
         operations: [...ticket.operations.filter(item => !retired.includes(item)), ...admitted, {
           id: request.operationId, request: fingerprint,
-          ...attemptId === undefined ? {} : { attemptId },
+          attemptId,
           ...retired.length === 0 ? {} : {
-            retiredIds: retired.flatMap(item => [item.id, ...item.retiredIds ?? []]),
-            ...retiredRequests === undefined ? {} : { retiredRequests },
+            retiredIds: retired.map(item => item.id),
+            retiredRequests,
           },
         }],
       }
@@ -1195,9 +1195,13 @@ export class TicketService extends Service {
     })
   }
 
-  private state(session: Session): TicketProjectionState {
+  private projectionState(session: Session): TicketProjectionState {
     if (this.projection === undefined) throw new TicketError('Ticket service is not initialized', 'TICKET_RECOVERY_FAILED')
-    const state = this.projection.stateOf(session)
+    return this.projection.stateOf(session)
+  }
+
+  private state(session: Session): TicketProjectionState {
+    const state = this.projectionState(session)
     if (state.failure !== undefined) throw new TicketError(`Ticket recovery failed: ${state.failure}`, 'TICKET_RECOVERY_FAILED')
     return state
   }
@@ -1298,8 +1302,7 @@ export class TicketService extends Service {
   }
 
   private retainScopes(session: Session): void {
-    if (this.projection === undefined) return
-    this.retainState(session.id, this.projection.stateOf(session))
+    this.retainState(session.id, this.projectionState(session))
   }
 
   private retainState(root: SessionId, state: TicketProjectionState): void {

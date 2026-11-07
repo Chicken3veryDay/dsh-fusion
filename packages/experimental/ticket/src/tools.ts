@@ -57,10 +57,7 @@ function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue
 }
 
-function workScopes(value: readonly Record<string, JsonValue>[]): WorkScope[]
-function workScopes(value: undefined): undefined
-function workScopes(value: readonly Record<string, JsonValue>[] | undefined): WorkScope[] | undefined {
-  if (value === undefined) return undefined
+function workScopes(value: readonly Record<string, JsonValue>[]): WorkScope[] {
   return value.map((row) => {
     const path = row.path
     const access = row.access

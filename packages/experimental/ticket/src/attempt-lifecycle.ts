@@ -86,9 +86,11 @@ export function isTerminal(state: AttemptState): boolean {
   return state.kind === 'handed' || state.kind === 'released'
 }
 
+/* v8 ignore start -- closed-union exhaustiveness helper; every caller passes never. */
 function assertNever(value: never): never {
   throw new Error(`Unhandled attempt lifecycle value: ${JSON.stringify(value)}`)
 }
+/* v8 ignore stop */
 
 const reject = (state: AttemptState, event: AttemptEvent): AttemptRejection =>
   ({ kind: 'rejected', reason: `Ticket attempt in ${state.kind} cannot accept ${event.type}` })
@@ -210,6 +212,7 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
         case 'cancel-failed': return state
         default: return reject(state, event)
       }
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(state)
   }
 }
@@ -253,6 +256,7 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
     // No producer handle exists before publication, apart from an activation whose release the stop observes.
     case 'cancel-failed':
     case 'reconciled': return reject(state, event)
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(event)
   }
 }
@@ -273,6 +277,7 @@ export function uncertaintyDiagnostic(stage: UncertaintyStage, captured?: Attemp
   switch (stage) {
     case 'stop-unknown': return 'Cancellation did not establish producer settlement; reservation retained'
     case 'cleanup-unknown': return `Producers reported ${captured ?? 'succeeded'}, but releasing their resources was not confirmed; reservation retained`
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(stage)
   }
 }
@@ -318,6 +323,7 @@ export function attemptAdmitsCommand(status: DurableAttemptStatus, command: Atte
     case 'report-result':
       return settled && status !== 'settled:succeeded'
         ? { kind: 'rejected', reason: 'a failed or cancelled attempt cannot report a result' } : 'allowed'
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(command)
   }
 }
@@ -336,6 +342,7 @@ function describeState(state: AttemptState): string {
     case 'running':
     case 'uncertain':
     case 'released': return state.kind
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(state)
   }
 }
@@ -357,6 +364,7 @@ function variants(kind: AttemptState['kind']): { readonly label: string; readonl
     case 'running':
     case 'uncertain':
     case 'released': return [{ label: '', state: { kind } }]
+    /* v8 ignore next -- closed-union exhaustiveness guard; no typed variant reaches this branch. */
     default: return assertNever(kind)
   }
 }

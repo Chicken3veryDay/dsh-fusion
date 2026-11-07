@@ -149,4 +149,6 @@ Ticket state changes do not alter request headers or model prompt prefixes.
 <a id="dev-note"></a>
 ### Dev Note
 
+Run `pnpm exec vitest run packages/experimental/ticket packages/experimental/workstream --coverage --coverage.include='packages/experimental/ticket/src/**'` for the Ticket coverage check and its Workstream consumers. The check enforces 100% lines, branches, functions, and statements for each Ticket source file.
+
 This package is experimental and has no stability promise. Session events are the authority; projection checkpoints are only replay shortcuts.

@@ -45,7 +45,7 @@ export function validateTicketReferences(tickets: readonly TicketSnapshot[]): vo
     if (active.has(id)) reject(`Ticket dependency or parent cycle at "${id}"`)
     if (visited.has(id)) return
     active.add(id)
-    for (const child of edges.get(id) ?? []) visit(child)
+    for (const child of edges.get(id) as readonly TicketId[]) visit(child)
     active.delete(id)
     visited.add(id)
   }
@@ -58,7 +58,7 @@ export function validateTicketReferences(tickets: readonly TicketSnapshot[]): vo
  * @returns Nothing; throws when any acceptance obligation remains unsettled.
  */
 export function assertTicketAcceptance(ticket: TicketSnapshot, tickets: readonly TicketSnapshot[]): void {
-  function require(value: boolean, message: string): void {
+  function require(value: boolean, message: string): asserts value {
     if (!value) throw new TicketError(message, 'TICKET_ACCEPTANCE')
   }
   require(ticket.attempts.every(attempt => attempt.status === 'settled'), 'all execution attempts must settle before acceptance')
@@ -66,7 +66,6 @@ export function assertTicketAcceptance(ticket: TicketSnapshot, tickets: readonly
   require(ticket.attentions.every(attention => attention.status === 'resolved'), 'unresolved attention prevents acceptance')
   const candidate = ticket.candidates.find(item => item.id === ticket.currentCandidateId)
   require(candidate !== undefined && candidate.specRevision === ticket.specification.revision, 'submit a candidate for the current specification before acceptance')
-  if (candidate === undefined) return
   const required = ticket.assignments.filter(assignment => assignment.contribution === 'required')
   for (const assignment of required) {
     const report = ticket.reports.find(item => item.id === assignment.latestReportId)
@@ -76,7 +75,7 @@ export function assertTicketAcceptance(ticket: TicketSnapshot, tickets: readonly
     if (assignment.activeAttemptId !== undefined) {
       const attempt = ticket.attempts.find(item => item.id === assignment.activeAttemptId)
       require(attempt?.status === 'settled' && attempt.outcome === 'succeeded'
-        && report?.attemptId === attempt.id && attempt.specRevision === ticket.specification.revision,
+        && report.attemptId === attempt.id && attempt.specRevision === ticket.specification.revision,
       `Assignment "${assignment.id}" lacks a settled successful current attempt`)
     }
   }
@@ -84,7 +83,7 @@ export function assertTicketAcceptance(ticket: TicketSnapshot, tickets: readonly
     const check = ticket.checks.filter(item => item.candidateId === candidate.id && item.criterionId === criterion.id
       && item.specRevision === ticket.specification.revision).at(-1)
     require(check?.outcome === 'pass', `criterion "${criterion.id}" requires a passing current check`)
-    if (criterion.independent && check !== undefined) {
+    if (criterion.independent) {
       const contributors = ticket.assignments.filter(assignment => candidate.assignmentIds.includes(assignment.id))
       require(candidate.authorId !== check.authorId && contributors.every(assignment => assignment.ownerId !== check.authorId),
         `criterion "${criterion.id}" requires an independent author`)

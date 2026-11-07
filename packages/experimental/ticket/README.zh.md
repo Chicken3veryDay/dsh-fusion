@@ -151,4 +151,6 @@ Ticket 状态变化不会修改请求头或模型提示词前缀。
 <a id="dev-note"></a>
 ### 开发备注
 
+运行 `pnpm exec vitest run packages/experimental/ticket packages/experimental/workstream --coverage --coverage.include='packages/experimental/ticket/src/**'`，执行 Ticket 覆盖率检查及其 Workstream 消费者测试。该检查要求每个 Ticket 源文件的行、分支、函数及语句覆盖率均达到 100%。
+
 此包处于实验阶段，没有稳定性承诺。Session 事件是权威来源，投影检查点只用于加速重放。
