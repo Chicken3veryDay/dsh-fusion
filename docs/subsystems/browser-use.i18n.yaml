@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/browser-use.md
 /browser-use:
-  en: cd05ea3cce57be7c
-  zh: 0406930d7d7c4f66
+  en: f0c957c7b7cada50
+  zh: 5da52b9f4c61aa73
 /browser-use/choose-a-provider:
   en: 4a28753cbf96be45
   zh: 052facac6b5cce91
