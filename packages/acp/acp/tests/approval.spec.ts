@@ -72,13 +72,14 @@ describe('ACP machine permission policy', () => {
     const foreign = {
       session: {
         id: request.agent.session.id,
-        header: request.agent.session.header,
         seq: events.length,
         eventAt: (seq: number) => events[seq],
         snapshotEvents: () => events,
         append: () => ({}),
       },
     } as unknown as Agent
+    // Projection folding reads the Session header; the foreign Agent shares the owned Session's identity.
+    Object.defineProperty(foreign.session, 'header', { value: request.agent.session.header })
     await expect(harness.ctx.approval.request({ agent: foreign, toolName: 'bash', callId: ToolCallId('call') }))
       .resolves.toBe('unavailable')
     expect(harness.permissionRequests).toHaveLength(0)
