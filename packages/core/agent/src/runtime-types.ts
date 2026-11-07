@@ -320,7 +320,9 @@ declare module '@deepseek-ai/cordis' {
     /**
      * One message left the inbox inside its open turn. If the proposed step
      * is rejected, the claimed message ends here: it is neither discarded nor
-     * re-emitted as a user/message, and the turn closes without a step.
+     * re-emitted as a user/message, and the turn closes without a step. A
+     * non-cancellation failure before its commit still commits it as a
+     * user/message before the turn ends, and resume commits it after a crash.
      * @param payload.agent - the agent whose inbox changed.
      * @param payload.message - the claimed message.
      * @param payload.turn - the owning turn.

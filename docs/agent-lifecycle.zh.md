@@ -31,8 +31,10 @@ sequenceDiagram
   Driver->>Prompt: <code>system-prompt/assemble</code> waterfall with the step tool set
   Driver->>Hooks: <code>agent/pre-step</code> waterfall
   Hooks-->>Driver: authoritative reject or enter(messages)
-  alt proposed step rejected, first batch empty, or pre-step failed
+  alt proposed step rejected or first batch empty
     Driver-->>Driver: claimed batch stays removed, the open turn spends no step
+  else pre-step or step preparation failed
+    Driver->>Session: proposed <code>step/start</code>, empty <code>system/message</code> head if none exists, claimed <code>user/message</code>s, <code>step/end</code>
   else enter proposed step
   Driver->>Session: <code>step/start</code>
   Driver->>Hooks: <code>agent/request</code> waterfall
@@ -91,6 +93,8 @@ sequenceDiagram
 以返回的 `agent/pre-step` 决策为准；通过包装 `next()` 的监听器会保留下游消息与 `startsRequestSeries`，除非有意替换。steering（中途引导）和注入的上下文在后续的认领操作取得其下一步骤批次后，会经过同一 waterfall（瀑布式事件）。
 
 唤醒只在获准的发起方边界内提交 `agent/status` running。宿主卸载关闭发起方准入后，唤醒不会启动驱动器：输入保持排队，Agent 保持空闲，卸载不等待任何轮次。
+
+已认领的批次恰好送达一次。只有取消和权威的 reject 会在不产生 `user/message` 的情况下消耗它。当 pre-step 监听器、工具解析、`agent/request`、`prepareCall()` 或 `system-prompt/request-context` 提供方在批次提交前失败时，驱动器在 `turn/end { error }` 之前把它作为 `user/message` 提交到失败的步骤内，或提交到为此打开的拟议步骤内。尚无系统节点的 Session 先收到一个空的 `system/message` 头节点，首个请求会用提示词替换它。恢复时，若末尾未关闭的轮次有从未提交的认领，会在中断收尾事件之前提交它；仍有排队的 next-turn 输入时还会唤醒驱动器。
 
 需要可回放 transcript（文本记录）数据的 SDK 用户应当消费 `session/event`；`agent/*` 是用于队列与状态、提示词拦截、请求构造、steering、继续执行和错误处理的实时协调接口。
 

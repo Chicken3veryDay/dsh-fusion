@@ -385,7 +385,7 @@ Source: [`packages/core/agent/src/types.ts`](../../packages/core/agent/src/types
 
 `agent/pre-step` receives one payload carrying the exclusive claimed batch (`messages`), the proposed step's coordinates (`turn`, `step`), and the current turn's cancellation `signal`. The initial proposal runs inside an open turn before any step; a tool continuation may submit an empty claimed batch between steps:
 
-It returns a `PreStepDecision`. Reject opens no step. Enter supplies the complete message batch appended after `step/start`; claimed messages omitted by the final decision remain removed, while input inserted after the claim stays pending:
+It returns a `PreStepDecision`. Reject opens no step. Enter supplies the complete message batch appended after `step/start`; claimed messages omitted by the final decision remain removed, while input inserted after the claim stays pending. A listener failure does not consume the claimed batch: the driver commits it inside the proposed step before the turn ends with an error:
 
 ```ts type-equiv
 /** Whether and with which messages the loop enters a proposed step. */
@@ -1969,13 +1969,15 @@ Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/s
 
 #### `agent/inbox/claimed` — emit
 
-One message left the inbox inside its open turn. If the proposed step is rejected, the claimed message ends here: it is neither discarded nor re-emitted as a user/message, and the turn closes without a step.
+One message left the inbox inside its open turn. If the proposed step is rejected, the claimed message ends here: it is neither discarded nor re-emitted as a user/message, and the turn closes without a step. A non-cancellation failure before its commit still commits it as a user/message before the turn ends, and resume commits it after a crash.
 
 ```ts cordis-catalog
 /**
  * One message left the inbox inside its open turn. If the proposed step
  * is rejected, the claimed message ends here: it is neither discarded nor
- * re-emitted as a user/message, and the turn closes without a step.
+ * re-emitted as a user/message, and the turn closes without a step. A
+ * non-cancellation failure before its commit still commits it as a
+ * user/message before the turn ends, and resume commits it after a crash.
  * @param payload.agent - the agent whose inbox changed.
  * @param payload.message - the claimed message.
  * @param payload.turn - the owning turn.

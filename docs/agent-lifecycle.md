@@ -29,8 +29,10 @@ sequenceDiagram
   Driver->>Prompt: <code>system-prompt/assemble</code> waterfall with the step tool set
   Driver->>Hooks: <code>agent/pre-step</code> waterfall
   Hooks-->>Driver: authoritative reject or enter(messages)
-  alt proposed step rejected, first batch empty, or pre-step failed
+  alt proposed step rejected or first batch empty
     Driver-->>Driver: claimed batch stays removed, the open turn spends no step
+  else pre-step or step preparation failed
+    Driver->>Session: proposed <code>step/start</code>, empty <code>system/message</code> head if none exists, claimed <code>user/message</code>s, <code>step/end</code>
   else enter proposed step
   Driver->>Session: <code>step/start</code>
   Driver->>Hooks: <code>agent/request</code> waterfall
@@ -89,6 +91,8 @@ The `assistant/message` event records every successful provider call, including 
 The returned `agent/pre-step` decision is authoritative; listeners wrapping `next()` preserve downstream messages and `startsRequestSeries` unless replacement is intentional. Steering and injected context pass through the same waterfall after a later claim operation takes their next-step batch.
 
 A wake commits `agent/status` running only inside an admitted initiator boundary. Once host unload closes initiator admission, a wake starts no driver: the input stays queued, the Agent stays idle, and unload waits on no turn.
+
+A claimed batch is delivered exactly once. Only cancellation and an authoritative reject consume it without a `user/message`. When a pre-step listener, tool resolution, `agent/request`, `prepareCall()`, or a `system-prompt/request-context` provider fails before the batch commits, the driver commits it as `user/message` inside the failed step, or inside the proposed step it opens for that commit, before `turn/end { error }`. A Session without a system node first receives an empty `system/message` head, which the first request replaces with the prompt. Resume commits a claim that an open tail turn never committed before the interrupted closers, and wakes the driver when queued next-turn input remains.
 
 SDK users that need replayable transcript data should consume `session/event`; `agent/*` is the live coordination API for queue/status, prompt interception, request construction, steering, continuation, and errors.
 

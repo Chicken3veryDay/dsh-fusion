@@ -393,7 +393,7 @@ pre-step 决策使用与持久 user-role 输入相同、带标识的 `UserMessag
 
 `agent/pre-step` 接收一个 payload，携带独占的已领取批次（`messages`）、拟进入步骤的坐标（`turn`、`step`）与当前轮次的取消 `signal`。首次提案在已打开的轮次内、任何步骤开始前运行；工具 continuation 可以在步骤之间提交空的已领取批次：
 
-它返回 `PreStepDecision`。reject 不会打开步骤。enter 提供在 `step/start` 后追加的完整消息批次；最终决策省略的已领取消息保持已删除，而领取后插入的输入仍留待后续处理：
+它返回 `PreStepDecision`。reject 不会打开步骤。enter 提供在 `step/start` 后追加的完整消息批次；最终决策省略的已领取消息保持已删除，而领取后插入的输入仍留待后续处理。监听器失败不会消耗已领取的批次：驱动器会在轮次以错误结束之前，把它提交到拟议步骤内：
 
 ```ts type-equiv
 /** Whether and with which messages the loop enters a proposed step. */
@@ -1981,13 +1981,15 @@ Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/s
 
 #### `agent/inbox/claimed` — emit
 
-One message left the inbox inside its open turn. If the proposed step is rejected, the claimed message ends here: it is neither discarded nor re-emitted as a user/message, and the turn closes without a step.
+One message left the inbox inside its open turn. If the proposed step is rejected, the claimed message ends here: it is neither discarded nor re-emitted as a user/message, and the turn closes without a step. A non-cancellation failure before its commit still commits it as a user/message before the turn ends, and resume commits it after a crash.
 
 ```ts cordis-catalog
 /**
  * One message left the inbox inside its open turn. If the proposed step
  * is rejected, the claimed message ends here: it is neither discarded nor
- * re-emitted as a user/message, and the turn closes without a step.
+ * re-emitted as a user/message, and the turn closes without a step. A
+ * non-cancellation failure before its commit still commits it as a
+ * user/message before the turn ends, and resume commits it after a crash.
  * @param payload.agent - the agent whose inbox changed.
  * @param payload.message - the claimed message.
  * @param payload.turn - the owning turn.

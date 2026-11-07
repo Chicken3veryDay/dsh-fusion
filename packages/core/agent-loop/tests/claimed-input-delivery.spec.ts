@@ -53,7 +53,7 @@ async function send(agent: Agent, text: string): Promise<void> {
 }
 
 function userTexts(request: GenerateOptions | undefined): string[] {
-  return (request?.messages ?? []).filter(message => message.role === 'user' && message.source.kind === 'user')
+  return (request?.messages ?? []).filter(message => message.role === 'user' && message.source?.kind === 'user')
     .flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : []))
 }
 
