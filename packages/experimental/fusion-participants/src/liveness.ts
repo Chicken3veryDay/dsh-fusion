@@ -72,9 +72,12 @@ export class TaskAdmission implements Admission {
   /**
    * Add a host-declaring lifetime before enrollment can mint capabilities; its teardown closes task admission.
    * @param fiber - declaring fiber; its dependency closure is bound.
+   * @returns rollback that removes only the lifetimes this binding added; a latched closure stays closed.
    */
-  bind(fiber: Fiber): void {
-    for (const dependency of dependencyClosure(fiber)) this.fibers.add(dependency)
+  bind(fiber: Fiber): () => void {
+    const added = [...dependencyClosure(fiber)].filter(dependency => !this.fibers.has(dependency))
+    for (const dependency of added) this.fibers.add(dependency)
+    return () => { for (const dependency of added) this.fibers.delete(dependency) }
   }
 
   admits(): boolean {

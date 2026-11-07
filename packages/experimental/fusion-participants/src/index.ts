@@ -83,7 +83,12 @@ export default class FusionParticipants extends Service {
   private readonly abort = new AbortController()
   private readonly pending = new Map<Promise<PreparedParticipants>, Promise<void>>()
   private readonly owned = new Map<PreparedParticipants, () => Promise<void>>()
-  private readonly executionOwners = new WeakMap<PreparedParticipants, { owner: TaskExecutionOwner; admission: TaskAdmission }>()
+  private readonly executionOwners = new WeakMap<PreparedParticipants, {
+    owner: TaskExecutionOwner
+    admission: TaskAdmission
+    /** Host registration releases the task runs after its admitted execution drain. */
+    releases: Set<() => Promise<void>>
+  }>()
   private readonly hosts = new WeakMap<PreparedParticipants, { provider: ExecutionHostProvider; caller: Context['fiber']; done: Promise<TaskExecutionHost> }>()
   private readonly release = Promise.withResolvers<void>()
   private readonly lifetime: { ctx: Context; resources: Scope }
@@ -175,7 +180,7 @@ export default class FusionParticipants extends Service {
       this.abort.signal.throwIfAborted()
       const entry = this.executionOwners.get(task)
       if (entry === undefined || !this.owned.has(task)) throw new ExecutionBlockedError('identity')
-      const { owner, admission } = entry
+      const { owner, admission, releases } = entry
       const previous = this.hosts.get(task)
       if (previous !== undefined) {
         if (previous.provider !== provider || previous.caller !== caller.fiber) throw new ExecutionBlockedError('host-replacement')
@@ -189,18 +194,28 @@ export default class FusionParticipants extends Service {
       // Cordis emits `internal/status` synchronously when a fiber starts unloading, while effect cleanup is
       // asynchronous. Disposing the owner at that edge closes delivery and execution admission before the join.
       // The host effect owns the listener, so a refused registration leaves no root-owned callback behind.
-      caller.effect(() => {
+      // Declaring-fiber teardown disposes the owner; task cleanup and enrollment rollback only detach.
+      let detached = false
+      const removeHost = caller.effect(() => {
         let removeStatus: () => void
         try {
           removeStatus = caller.root.on('internal/status', (fiber) => {
             if (chain.has(fiber) && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
           })
         } catch (error: unknown) { throw new ExecutionBlockedError('not-live', error) }
-        return () => { removeStatus(); return owner.dispose() }
+        return () => { removeStatus(); if (!detached) return owner.dispose() }
       }, 'fusion-participants.execution-host')
-      admission.bind(caller.fiber)
+      const release = async (): Promise<void> => { detached = true; releases.delete(release); await removeHost() }
+      releases.add(release)
+      const unbind = admission.bind(caller.fiber)
       this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
-      void owner.enroll(provider).then(completion.resolve, completion.reject)
+      void owner.enroll(provider).then(completion.resolve, async (error: unknown) => {
+        // Failed enrollment publishes nothing that outlives it; the owner's own memo still refuses replacement.
+        unbind()
+        this.hosts.delete(task)
+        const [rollback] = await Promise.allSettled([release()])
+        completion.reject(rollback.status === 'rejected' ? new AggregateError([error, rollback.reason], 'enrollment and rollback failed') : error)
+      })
     } catch (error: unknown) { completion.reject(error) }
     return completion.promise
   }
@@ -277,6 +292,7 @@ export default class FusionParticipants extends Service {
     let disposal: Promise<void> | undefined
     let removeFence: (() => void | Promise<void>) | undefined
     let removeStatus: (() => void) | undefined
+    const hostReleases = new Set<() => Promise<void>>()
     let prepared: PreparedParticipants | undefined
     let delivery: DeliveryOwner | undefined
     let execution: TaskExecutionOwner | undefined
@@ -315,7 +331,10 @@ export default class FusionParticipants extends Service {
             try { await lease.dispose() } catch (error: unknown) { errors.push(error) }
           }
           try { await composition?.dispose() } catch (error: unknown) { errors.push(error) }
-          try { removeStatus?.() } catch (error: unknown) { errors.push(error) }
+          // Host registrations outlive the task only through their declaring fiber; release them after the drain.
+          for (const release of [...hostReleases, () => removeStatus?.()]) {
+            try { await release() } catch (error: unknown) { errors.push(error) }
+          }
           await removeFence?.()
           if (errors.length > 0) throw new AggregateError(errors, 'participant task cleanup failed')
           for (const remove of withdrawals.splice(0)) remove()
@@ -425,7 +444,7 @@ export default class FusionParticipants extends Service {
         },
         dispose,
       })
-      this.executionOwners.set(prepared, { owner: executionOwner, admission })
+      this.executionOwners.set(prepared, { owner: executionOwner, admission, releases: hostReleases })
       setFence(fence)
       this.owned.set(prepared, drain)
       acquired.resolve()
