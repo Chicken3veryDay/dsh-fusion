@@ -27,6 +27,7 @@ interface MapRequest {
   readonly model: string
   readonly effort: string | null
   readonly tools: string[]
+  readonly sdk: string
   readonly bytes: number
   readonly hasNote: boolean
   readonly hasGroupTitle: boolean
@@ -34,6 +35,7 @@ interface MapRequest {
 }
 
 interface Request {
+  readonly wireTools: string[]
   readonly tools: string[]
   readonly hasCatalog: boolean
   readonly catalogIsUpdate: boolean
@@ -54,6 +56,8 @@ interface LogEvent {
   readonly data?: {
     readonly source?: { readonly kind?: string }
     readonly op?: { readonly kind?: string }
+    readonly name?: string
+    readonly parentCallId?: string
     readonly message?: { readonly toolCallId: string; readonly content: readonly { readonly type: string; readonly text?: string }[] }
     readonly header?: { readonly tools?: readonly { readonly name: string; readonly [key: string]: unknown }[] }
   }
@@ -97,6 +101,7 @@ async function run(
       '    thresholdRatio: 0.8',
       '    headroomTokens: 1800',
       '    retainTokens: 20',
+      ...options.script === undefined ? ['    auto: false'] : [],
       '- insert:',
       '    - id: context-script-llm',
       `      name: '${options.script ?? scriptPlugin}'`,
@@ -146,9 +151,10 @@ const hasProbe = (request: Request): boolean => PROBES.some(tool => request.tool
 
 describe('Context tree profile layer through the real Loader', () => {
   it('hides a tool until context_load, shows it on the next request, and hides it again after compaction', async () => {
-    const { requests, sources } = await run([...BASE, PROFILE])
+    const { requests, sources, sessions } = await run([...BASE, PROFILE])
     const [first, loaded, probed] = requests as [Request, Request, Request]
 
+    expect(requests.every(request => request.wireTools.join() === 'run_code')).toBe(true)
     expect(hasProbe(first)).toBe(false)
     expect(first.tools).toEqual(expect.arrayContaining(['context_browse', 'context_load', 'read', 'bash']))
     expect(first.hasCatalog).toBe(true)
@@ -160,20 +166,27 @@ describe('Context tree profile layer through the real Loader', () => {
     // Activated tools keep the same position on the following request: cache-stable.
     expect(probed.tools).toEqual(loaded.tools)
 
-    // Compaction runs in a pre-step, after that step's tool set is resolved: the request it lands in
-    // already has the activation replaced by its stub and the tree republished, and the declarations
-    // follow one step later.
+    // The fixture compacts after two successful probe programs. Admission and the SDK
+    // must then reflect revocation, and the stub must survive later requests.
     const compacted = requests.findIndex((request, index) => index > 1 && !request.hasActivation)
     expect(compacted).toBeGreaterThan(2)
     expect(requests.slice(2, compacted).every(request => request.hasActivation)).toBe(true)
     expect(requests[compacted]!.hasStub).toBe(true)
     expect(requests[compacted]!.hasCatalog).toBe(true)
     expect(requests[compacted]!.catalogIsUpdate).toBe(true)
+    expect(requests[compacted]!.tools).toEqual(first.tools)
     const after = requests.slice(compacted + 1)
     expect(after.length).toBeGreaterThan(0)
     expect(after.every(request => !hasProbe(request) && request.hasStub)).toBe(true)
     expect(after[0]!.tools).toEqual(first.tools)
 
+    const events = sessions.flat()
+    expect(events.filter(event => event.type === 'tool/ptc-dispatch' && PROBES.includes(event.data?.name ?? ''))
+      .map(event => event.data?.name)).toEqual(['probe_beta', 'probe_alpha'])
+    const denied = events.filter(event => event.type === 'tool/result'
+      && ['cs-load', 'cs-denied-after-compaction'].includes(event.data?.message?.toolCallId ?? ''))
+    expect(denied).toHaveLength(2)
+    expect(denied.every(event => event.data?.message?.content.some(block => block.text?.includes('hidden-probe-denied')))).toBe(true)
     expect(sources).toEqual(expect.arrayContaining(['context-tree-catalog', 'context-activation']))
   }, 180_000)
 
@@ -213,10 +226,9 @@ describe('Context tree profile layer through the real Loader', () => {
     const initialView = sessions.flat().find(event => event.type === 'tool/result' && event.data?.message?.toolCallId === 'cm-view-1')
     expect(initialView).toBeDefined()
     const view = JSON.parse(initialView!.data!.message!.content.map(block => block.text ?? '').join('')) as LoggedMapView
-    const schema = sessions.flat().filter(event => event.type === 'request/header')
-      .flatMap(event => event.data?.header?.tools ?? []).find(tool => tool.name === 'map_view')
-    expect(schema).toBeDefined()
-    await expect(JSON.stringify({ schema, view: {
+    const sdk = curator[0]!.sdk
+    expect(sdk).toContain('map_view:')
+    await expect(JSON.stringify({ sdk, view: {
       ...view,
       ownerSessionId: '<owner>',
       curatorId: '<curator>',

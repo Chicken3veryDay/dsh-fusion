@@ -103,7 +103,7 @@ For model-reviewed full-access execution, explicitly enable [Auto review for hea
 
 `tool_result.error`, when present, preserves the durable `{ name, code, reason? }` error fields under the same output limits. `AUTO_REVIEW_DENIED` identifies a final policy denial; `AUTO_REVIEW_FAILED` identifies a reviewer failure. Either leaves the call body unexecuted. A truncated record may omit structured detail; inspect the persisted Session when the complete reason is needed.
 
-A call made inside a `run_code` program is also streamed: its `tool_call` and `tool_result` carry the sub-call id (`<run_code id>:ptc:<n>`) as `callId`, plus a `parentCallId` naming the `run_code` call, which still emits its own `tool_call` and `tool_result` around them. Top-level events have no `parentCallId`, and a nested `tool_call.input` is the JSON-normalized argument object the program passed.
+A call made inside a `run_code` program is also streamed: its `tool_call` and `tool_result` carry the sub-call id (`<run_code id>:ptc:<n>`) as `callId`, plus a `parentCallId` naming the `run_code` call, which still emits its own `tool_call` and `tool_result` around them. Top-level events have no `parentCallId`, and a nested `tool_call.input` is the JSON-normalized argument object the program passed. Nested input, results, and structured errors use the same string, key, and complete-line limits as top-level events.
 
 ### When to use it
 

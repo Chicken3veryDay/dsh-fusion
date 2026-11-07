@@ -1,6 +1,7 @@
 /** Keyless adapter that records the model-visible tool list and mounted services, then ends the turn. */
 
 import { writeFileSync } from 'node:fs'
+import { modelToolNames } from './model-tools.ts'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 
 const SERVICES = ['tickets', 'workstreams', 'workstreamEvidence', 'agentTeams']
@@ -15,7 +16,7 @@ class ToolProbeAdapter extends LlmAdapter {
     const out = process.env.WORKSTREAM_PROBE_OUT
     if (out === undefined) throw new Error('WORKSTREAM_PROBE_OUT must name the probe output file')
     const mounted = Object.fromEntries(SERVICES.map(service => [service, this.ctx.get(service) !== undefined]))
-    writeFileSync(out, JSON.stringify({ tools: options.tools.map(tool => tool.name), mounted }))
+    writeFileSync(out, JSON.stringify({ tools: modelToolNames(options), wireTools: options.tools.map(tool => tool.name), mounted }))
     const text = 'WORKSTREAM_PROBE_OK'
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text }

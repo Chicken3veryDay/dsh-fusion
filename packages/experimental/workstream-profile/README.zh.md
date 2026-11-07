@@ -91,11 +91,11 @@ Agent Teams 保持未挂载。`WorkstreamService` 通过 `ctx.subagents` 的收�
 
 #### 模型看到什么
 
-38 个 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 工具 schema，以及 `TicketTools` 注册的 `ticket-tools:policy` 系统提示段。本层自身不添加文本。
+38 个 `ticket_*`、`workstream_*` 与 `workstream_evidence_*` 工具在随附的 `run_code` 默认模式下作为 `tools:sdk` 中的程序绑定提供，显式使用原生执行器时则提供工具 schema，另有 `TicketTools` 注册的 `ticket-tools:policy` 系统提示段。本层自身不添加文本。
 
 #### Token 影响
 
-本层增加三个包的工具 schema 和一个策略段。
+本层增加三个包的生成 SDK 声明或原生工具 schema，以及一个策略段。
 
 #### KV Cache 影响
 

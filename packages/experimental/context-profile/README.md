@@ -65,11 +65,11 @@ Defaults of the tree, including the base tool list, are documented in the [conte
 
 #### What the model sees
 
-The `context_browse` and `context_load` schemas, the catalog message, and, after a load, grant and activation messages, all described in the [context tree Model Experience](../context-tree/README.md#model-experience). The layer adds no text of its own. Tools outside the base set are not declared until loaded.
+The `context_browse` and `context_load` schemas, the catalog message, and, after a load, grant and activation messages, all described in the [context tree Model Experience](../context-tree/README.md#model-experience). The layer adds no text of its own. With the shipped PTC executor, only `run_code` is directly callable; admitted tools appear in `tools:sdk` and its program bindings. Tools outside the base set are absent from both until loaded for the next step, and compaction revokes both declarations and bindings. A running program retains its admitted tool set.
 
 #### Token effect
 
-The layer removes every non-base tool schema from each request and adds the two tree schemas, the `context_note` schema, and the catalog. Map curation costs the working conversation nothing: it happens in the curator's own Session on a cheaper route. The 4096-byte instruction cap shortens the eager instruction text; the omitted part stays reachable through `Instructions` in the tree.
+The layer removes unloaded non-base tool declarations from each request and adds the tree and `context_note` declarations and catalog; PTC renders those declarations as a generated SDK, while native execution renders tool schemas. Map curation costs the working conversation nothing: it happens in the curator's own Session on a cheaper route. The 4096-byte instruction cap shortens the eager instruction text; the omitted part stays reachable through `Instructions` in the tree.
 
 #### KV Cache effect
 

@@ -3,6 +3,7 @@
  * Loader, in-process, with only the model provider replaced by a scripted adapter. The probe below drives one owner and
  * one member through the model-visible tools across a restart.
  */
+import { modelToolCall, modelToolNames } from './fixtures/model-tools.ts'
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,7 +35,7 @@ export class ScriptAdapter extends LlmAdapter {
   }
 
   async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const request: Request = { session: String(options.sessionId), tools: (options.tools ?? []).map(tool => tool.name),
+    const request: Request = { session: String(options.sessionId), tools: modelToolNames(options),
       text: options.messages.map(textOf).join('\n'), options }
     this.requests.push(request)
     const step = options.messages.filter(message => message.role === 'assistant').length
@@ -57,10 +58,10 @@ export class ScriptAdapter extends LlmAdapter {
     if ('fail' in next) throw new Error(next.fail)
     if ('call' in next) {
       const id = ToolCallId(next.id ?? `${next.call}-${String(this.requests.length)}`)
-      const args = JSON.stringify(next.args)
+      const call = modelToolCall(options, next.call, next.args)
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield { type: 'tool-call-delta', index: 0, id, name: next.call, argumentsDelta: args }
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: next.call, arguments: args } }
+      yield { type: 'tool-call-delta', index: 0, id, name: call.name, argumentsDelta: call.arguments }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: call.name, arguments: call.arguments } }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
@@ -195,10 +196,12 @@ export async function debug(value: unknown): Promise<void> {
   await writeFile(join(process.env.REVIEW_DEBUG_DIR ?? tmpdir(), 'review-debug.json'), JSON.stringify(value, undefined, 1))
 }
 
-/** The `tool/call` and `tool/result` fields `toolResults` reads; other event types leave them absent. */
+/** Native and program-dispatch fields read from the durable tool log. */
 interface ToolEventData {
   readonly callId?: string
   readonly name?: string
+  readonly isError?: boolean
+  readonly content?: readonly { readonly text?: string }[]
   readonly message?: { readonly toolCallId: string; readonly isError: boolean; readonly content: readonly { readonly text?: string }[] }
 }
 export interface LogEvent { readonly type: string; readonly data?: ToolEventData; readonly parentSession?: string; readonly id?: string }
@@ -219,16 +222,21 @@ export async function readLogs(home: string): Promise<Map<string, LogEvent[]>> {
   return out
 }
 
-/** Tool results the model saw, in order, for one session's requests. */
+/** Logical tool outcomes in commit order; successful program transports are omitted, but failed programs remain visible. */
 export function toolResults(events: readonly LogEvent[]): { name: string; isError: boolean; text: string }[] {
   const names = new Map<string, string>()
   const out: { name: string; isError: boolean; text: string }[] = []
   for (const event of events) {
     const data = event.data
     if (event.type === 'tool/call' && data?.callId !== undefined && data.name !== undefined) names.set(data.callId, data.name)
+    if (event.type === 'tool/ptc-dispatch' && data?.name !== undefined && data.isError !== undefined && data.content !== undefined) {
+      out.push({ name: data.name, isError: data.isError, text: data.content.map(block => block.text ?? '').join('') })
+    }
     const message = event.type === 'tool/result' ? data?.message : undefined
     if (message !== undefined) {
-      out.push({ name: names.get(message.toolCallId) ?? '?', isError: message.isError,
+      const name = names.get(message.toolCallId) ?? '?'
+      if (name === 'run_code' && !message.isError) continue
+      out.push({ name, isError: message.isError,
         text: message.content.map(block => block.text ?? '').join('') })
     }
   }
@@ -247,6 +255,7 @@ it.runIf((expect.getState().testPath ?? '').endsWith('review-opus-autonomy-e2e-h
   }
   expect(await runTask(ctx, owner, 'probe')).toBe('idle')
   const first = adapter.requests[0]!
+  expect(first.options.tools?.map(tool => tool.name)).toEqual(['run_code'])
   const results = toolResults((await readLogs(world.home)).get('owner-root')!)
   await debug({ first: first.tools, counts: adapter.requests.map(r => [r.session, r.tools.length]), results,
     last: adapter.requests.at(-1)!.tools })

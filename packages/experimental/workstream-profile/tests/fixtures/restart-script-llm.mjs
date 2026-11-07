@@ -5,6 +5,7 @@
  */
 
 import { writeFileSync } from 'node:fs'
+import { modelToolCall } from './model-tools.ts'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
 
 const PREFIX = 'rs-'
@@ -23,9 +24,10 @@ class RestartScriptAdapter extends LlmAdapter {
     if (results.length < script.length) {
       const step = script[results.length]
       const id = `${PREFIX}${String(results.length)}`
+      const call = modelToolCall(options, step.name, step.arguments)
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield { type: 'tool-call-delta', index: 0, id, name: step.name, argumentsDelta: JSON.stringify(step.arguments) }
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: step.name, arguments: JSON.stringify(step.arguments) } }
+      yield { type: 'tool-call-delta', index: 0, id, name: call.name, argumentsDelta: call.arguments }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: call.name, arguments: call.arguments } }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
       return
     }
