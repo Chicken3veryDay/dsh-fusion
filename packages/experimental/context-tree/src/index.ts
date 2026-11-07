@@ -114,9 +114,10 @@ export class ContextTreeService extends Service {
     this.ctx.compaction.registerRevocableSource('context-grant', grantStub)
     this.ctx.compaction.registerRevocableSource('context-activation', activationStub)
     this.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) => {
-      // Base tools keep registration order; activations follow in logged order. Role tools append
-      // after activations so gaining a role preserves the existing declaration prefix.
-      const base = [...candidates.keys()].filter(name => this.baseTools.has(name))
+      // Base tools follow the configured `baseTools` order, so a provider that reloads keeps its
+      // place; activations follow in logged order. Role tools append after activations so gaining a
+      // role preserves the existing declaration prefix.
+      const base = this.config.baseTools.filter(name => candidates.has(name))
       const managed = [...candidates.keys()].filter(name => !this.baseTools.has(name) && this.managedAdmits(name, agent))
       const activated = [...activeToolNames(this.stateFor(agent))]
         .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
