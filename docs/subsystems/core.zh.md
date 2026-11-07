@@ -2241,15 +2241,16 @@ Source: [`packages/preset/agent-preset-registry/src/types.ts`](../../packages/pr
 
 #### `ticket/collect-reservations` — emit
 
-Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt settled, or, once the attempt is `unknown`, when its producers' own signals prove they stopped, including after the service that admitted them was torn down.
+Collects the reservations of execution-owned attempts whose producers may still run in this host. Each reservation is registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt settled, or, once the attempt is `unknown`, when its producers' own signals prove they stopped, including after the service that admitted them was torn down. Admission excludes the work scopes of shared-workspace reservations, and restart recovery of a resumed root leaves every collected attempt to the producers that hold it.
 
 ```ts cordis-catalog
 /**
- * Collects the work-scope reservations of execution producers that may still write. Each reservation is registered on
- * the root context when its admission is recorded, so a replaced Ticket or execution service still sees it; it leaves
- * when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt
+ * Collects the reservations of execution-owned attempts whose producers may still run in this host. Each reservation is
+ * registered on the root context when its admission is recorded, so a replaced Ticket or execution service still sees it;
+ * it leaves when its attempt is handed to the settlement ledger or released, when its root Session log records the attempt
  * settled, or, once the attempt is `unknown`, when its producers' own signals prove they stopped, including after the
- * service that admitted them was torn down.
+ * service that admitted them was torn down. Admission excludes the work scopes of shared-workspace reservations, and
+ * restart recovery of a resumed root leaves every collected attempt to the producers that hold it.
  * @param collect - Receives each reservation synchronously.
  * @mode emit
  */

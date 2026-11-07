@@ -420,8 +420,8 @@ export type TicketAttemptExecutor =
   | { readonly kind: 'in-process' }
   | { readonly kind: 'dedicated-process'; readonly provider: string }
   | { readonly kind: 'remote'; readonly provider: string; readonly world: string }
-/** Work scopes held for an execution-owned attempt while its producers may still write, independent of the Ticket and
- * execution service generations and of the attempt's root Session log. */
+/** An execution-owned attempt whose producers may still run, with its work scopes, independent of the Ticket and execution
+ * service generations and of the attempt's root Session log; admission excludes only shared-workspace scopes. */
 export interface TicketProducerReservation {
   readonly rootId: SessionId
   readonly ticketId: TicketId
