@@ -17,7 +17,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
-import type { ContextSectionId } from '@deepseek-ai/dsh-experimental-context-index/types'
+import type { ContextSectionId, ContextSectionMeta } from '@deepseek-ai/dsh-experimental-context-index/types'
 import type { CuratedGroup } from '@deepseek-ai/dsh-experimental-context-tree/types'
 import '@deepseek-ai/dsh-experimental-context-index'
 import '@deepseek-ai/dsh-experimental-context-tree'
@@ -873,11 +873,14 @@ export class ContextMapService extends Service {
       : await this.ctx.contextIndex.snapshot(scope, signal)
     const read = this.ctx.contextIndex.lastRead(scope)
     const sections = new Map(snapshot.sections.map(section => [section.id, section]))
-    // A read that finishes after its owner was disposed must not recreate the owner's cache.
-    if (this.ctx.agents.get(owner.id) === owner) {
-      this.hashes.set(owner.id, new Map(snapshot.sections.map(section => [section.id, section.hash])))
-    }
+    this.rememberHashes(owner, snapshot.sections)
     return { sections, digest: digestOf(snapshot.sections), read }
+  }
+
+  /** Keep the section hashes an owner last saw; a read that finishes after its owner was disposed must not recreate them. */
+  private rememberHashes(owner: Agent, sections: readonly ContextSectionMeta[]): void {
+    if (this.ctx.agents.get(owner.id) !== owner) return
+    this.hashes.set(owner.id, new Map(sections.map(section => [section.id, section.hash])))
   }
 
   /**
