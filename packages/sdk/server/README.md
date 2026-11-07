@@ -37,7 +37,9 @@ The plugin publishes the `sdkSessionActivation` readiness marker once its remind
 
 The supported commands below are existing Desktop native operations that can execute without a GUI. `/permission <preset>` uses that native path; the Desktop `/model` picker uses a separate model-selection API.
 
-`session/query` is the wire entry used by high-level SDK `run()` for strings and content-block arrays. Ordinary inputs retain their blocks and use the existing prompt queue. The full SDK recognizes bare `/compact`, `/permission <preset>` with a non-blank preset, `/plan [off|message]`, and `/goal [objective|clear|edit objective|pause|resume]` identified by their official definition IDs. Bare `/permission` or `/权限`, `/compact extra`, and all other input including `/model` remain ordinary prompts. A missing command also preserves the prompt path; a selected handler's failure never falls back. An unknown preset is a native command error. Encoded image blocks accompany recognized commands through native attachment admission. `session/prompt` remains the low-level queued-input entry without native slash-command routing.
+`session/query` is the wire entry used by high-level SDK `run()` for strings and content-block arrays. Ordinary inputs retain their blocks and use the existing prompt queue. The full SDK recognizes bare `/compact`, `/permission <preset>` with a non-blank preset, `/plan [off|message]`, and `/goal [objective|clear|edit objective|pause|resume]` identified by their official definition IDs. Bare `/permission` or `/权限`, `/compact extra`, and all other input including `/model` remain ordinary prompts. A missing builtin command also preserves the prompt path; a selected handler's failure never falls back. An unknown preset is a native command error. Encoded image blocks accompany recognized commands through native attachment admission. `session/prompt` remains the low-level queued-input entry without native slash-command routing.
+
+Explicit `queryCommandDefinitions` entries must all exist in the receiving Agent’s command registry before slash input is routed. A missing or shadowed definition, or an absent commands service with configured entries, rejects the query before enqueueing or inference. Load the command plugin or remove the unavailable definition from the overlay; ordinary non-slash prompts remain available.
 
 Host and Desktop adapters share `dsh-commands/builtin` for definition identity and English/Chinese aliases. The aliases `/压缩`, `/权限`, `/计划`, and `/目标` follow their official definitions after renaming; execution uses the current registered name. Exact names take precedence, but an unrelated same-name definition is not an SDK builtin and remains an ordinary prompt. Other builtin capabilities remain outside the SDK command set.
 
@@ -64,7 +66,7 @@ The plugin creates one agent per `sessionId` on first use. A registered model ad
 | Field | Default | Meaning |
 |---|---|---|
 | `maxTokensAsSuccess` | `false` | Report max-token turn/subagent termination as a successful SDK result |
-| `queryCommandDefinitions` | `[]` | Additional exact command definition ids admitted by `session.query`; renamed commands follow identity, unrelated same-name definitions remain prompts |
+| `queryCommandDefinitions` | `[]` | Additional exact command definition ids admitted by `session.query`; renamed commands follow identity; missing or shadowed definitions reject slash queries |
 
 The profile composition owns each root agent's tools. `input`, `output`, and `exit` are runtime-only transport hooks for tests; production uses process stdio and `process.exit`. The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sdk-jsonrpc-server) is the exhaustive source for every accepted field.
 
