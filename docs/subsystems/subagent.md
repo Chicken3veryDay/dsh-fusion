@@ -512,9 +512,10 @@ async drainDescendants(parents: readonly Agent[]): Promise<void>
 
 /**
  * Release selected direct children of one exact live parent. Other children
- * of the same parent remain admitted and resident. A delivery to a selected
- * child that is in flight when the drain begins is refused with
- * `ACTIVATION_CLOSING` unless its message was already accepted; the drain
+ * of the same parent remain admitted and resident. A delivery that this
+ * parent sent to a selected child and that is in flight when the drain begins
+ * is refused with `ACTIVATION_CLOSING` unless its message was already
+ * accepted; the drain never refuses a delivery another parent sent. It
  * waits for work holding a selected child's lock and releases what it
  * published. A delivery that starts after the drain began is ordered after
  * it. A target that is neither resident nor being materialized, and a
@@ -523,8 +524,9 @@ async drainDescendants(parents: readonly Agent[]): Promise<void>
  * @param parent - exact live direct parent authorizing the selected release.
  * @param childIds - durable direct-child ids to release.
  * @returns once every selected activation released its execution handle.
- * @throws {SubagentError} `UNAUTHORIZED` when a resident target belongs to a
- *   different parent or the supplied parent identity is stale.
+ * @throws {SubagentError} `UNAUTHORIZED` when a target that is resident when
+ *   the drain begins, or that work holding its lock published, belongs to a
+ *   different parent, or when the supplied parent identity is stale.
  */
 async drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void>
 
