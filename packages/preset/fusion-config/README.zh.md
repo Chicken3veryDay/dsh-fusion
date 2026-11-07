@@ -67,7 +67,7 @@ kind: "package-reference"
 |---|---|
 | `credentialRef` | 用于物化内置目录的主机凭证引用，不是凭证值 |
 | `agentPreset` | 内置选择使用的现有能力组合 |
-| `providers` | 按提供方 id 索引的显式 pi-ai 配置；空配置会被阻止 |
+| `providers` | 按提供方 id 索引的显式 pi-ai 配置；加载时拒绝 `__proto__`；空配置会被阻止 |
 | `declarations` | 精确提供方和 wire-id 的 `tools`、`structuredDecisions`、`efforts` 声明；缺失则阻止 |
 | `bindings` | 新目录版本中的精确模型声明；保留版本不可覆盖 |
 | `selections` | 唯一名称、选择版本、预设、拓扑和辅助角色映射 |

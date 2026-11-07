@@ -67,7 +67,7 @@ This minimal row reports blocked provider configuration without contacting the n
 |---|---|
 | `credentialRef` | Host credential reference used to materialize the shipping catalog; never the value |
 | `agentPreset` | Existing capability composition for shipping choices |
-| `providers` | Explicit pi-ai profiles keyed by provider id; empty is blocked, not an inferred route |
+| `providers` | Explicit pi-ai profiles keyed by provider id; `__proto__` is rejected at load; empty is blocked, not an inferred route |
 | `declarations` | Exact provider/wire-id declarations with `tools`, `structuredDecisions` and supported `efforts`; absent evidence blocks |
 | `bindings` | Additional exact model declarations under new catalog revisions; reserved revisions cannot be overwritten |
 | `selections` | Additional unique names with explicit selection revision, agent preset, topology and auxiliary map |

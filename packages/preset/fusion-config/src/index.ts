@@ -44,7 +44,11 @@ const providerSchema = z.strictObject({
 const documentSchema = z.strictObject({
   credentialRef: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
   agentPreset: z.string().min(1),
-  providers: z.record(z.string().min(1), providerSchema),
+  providers: z.preprocess((value) => {
+    // Zod records omit this own key without validating its provider declaration.
+    if (typeof value === 'object' && value !== null && Object.hasOwn(value, '__proto__')) return undefined
+    return value
+  }, z.record(z.string().min(1), providerSchema)),
   declarations: z.array(declaration),
   bindings: z.array(definitionSchema),
   selections: z.array(selectionSchema),
