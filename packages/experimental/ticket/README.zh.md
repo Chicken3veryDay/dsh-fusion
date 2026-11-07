@@ -79,9 +79,9 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 | `released` | — | — | — | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | — | ✗ |
 <!-- END GENERATED ticket-attempt-lifecycle -->
 
-进入动作：变为已中止会中止每个提供者调用都观察的准备生命周期。进入 `stopping` 会启动一次停止。每次进入 `cancel` 意图都会向每个尚未结束的生产者发送新的取消请求，因此取消请求失败后再次 `dispose()` 会重新请求，已结束的生产者则无需请求即可被观察。一个 `settlementTimeoutMs` 截止时间限定整个停止：等待中的 Job 准入、对生产者的观察、未知状态记录的写入，以及等待账本使已移交的结果持久化。截止时仍在进行的账本写入会使调用以 `TICKET_SETTLEMENT_PENDING` 拒绝；因为 `handed` 是终态，不会应用 `stop-failed`。观察失败或超时时，先应用 `stop-failed` 或 `cleanup-failed`，再写入一次 `stop-unknown` 或 `cleanup-unknown`；截止时仍在进行的写入会继续，其失败会被记录到日志。进入 `handed` 会在任何可能失败的写入之前，把结果和已知工作区回执同步交给账本；进入 `handed` 或 `released` 会释放执行预留以及注册在根上下文中的预留。因此，已发布尝试的 `prepare` 只有在停止和账本交接完成后才会拒绝，中止后不会留下运行中的句柄。
+进入动作：变为已中止会中止每个提供者调用都观察的准备生命周期。进入 `stopping` 会启动一次停止。每次进入 `cancel` 意图都会向每个尚未结束的生产者发送新的取消请求，因此取消请求失败后再次 `dispose()` 会重新请求，已结束的生产者则无需请求即可被观察。一个 `settlementTimeoutMs` 截止时间限定整个停止：等待中的 Job 准入、对生产者的观察、未知状态记录的写入，以及等待账本使已移交的结果持久化。截止时仍在进行的账本写入会使调用以 `TICKET_SETTLEMENT_PENDING` 拒绝；因为 `handed` 是终态，不会应用 `stop-failed`。观察失败或超时时，先应用 `stop-failed` 或 `cleanup-failed`，再写入一次 `stop-unknown` 或 `cleanup-unknown`；截止时仍在进行的写入会继续，其失败会被记录到日志。进入 `handed` 会在任何可能失败的写入之前，把结果和已知工作区回执同步交给账本；进入 `handed` 或 `released` 会释放执行预留以及注册在根上下文中的预留。已取消的 `prepare` 等待停止和账本移交，因此取消后不会留下运行中的句柄。账本等待使用新的 `settlementTimeoutMs` 截止时间；若停止已报告 `TICKET_SETTLEMENT_PENDING`，则立即拒绝，不再等待。账本写入成功时只报告准备失败，写入失败或超时则单独报告。记录未知准备状态也使用新的截止时间；等待中的写入会继续，预留保持不变。
 
-`TicketService` 中的结算账本把 `settled` 快照写入存活根。根已关闭时返回 `TICKET_SETTLEMENT_PENDING`，恢复该根会重放写入。刷新失败时，下一次结算重试或该根上的 Ticket 写入会重新刷新，清理时还会最后尝试一次。若根的存储 Session 被删除，该结果随之丢弃。只有使结算持久化的刷新，或在账本已持有结果后删除根的存储 Session，才会释放范围预留和账本条目。`failed` 和 `cancelled` 释放分配；`succeeded` 保持分配开放，以便提交结果报告。持久化为 `unknown` 的尝试由宿主调用者通过 `settleAttempt` 结算。
+`TicketService` 中的结算账本把 `settled` 快照写入存活根。根已关闭时返回 `TICKET_SETTLEMENT_PENDING`，恢复该根会重放写入。刷新失败时，下一次结算重试或该根上的 Ticket 写入会重新刷新，清理时还会最后尝试一次。若根的存储 Session 被删除，该结果随之丢弃。只有使结算持久化的刷新，或在账本已持有结果后删除根的存储 Session，才会释放范围预留和账本条目。`failed` 和 `cancelled` 释放分配；`succeeded` 保持分配开放，以便提交结果报告。持久化为 `unknown` 的尝试由宿主调用者通过 `settleAttempt` 结算。清理会等待已移交的写入完成，不设截止时间。
 
 生命周期只采信各生产者所保证的信号。注册表记录、记录的终态以及 Agent 销毁都不能证明生产者的任何状态，从不被当作结算。
 
