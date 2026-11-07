@@ -25,6 +25,25 @@ export function fiberChain(fiber: Fiber): ReadonlySet<Fiber> {
   return chain
 }
 
+/**
+ * Collect every lifetime a fiber's work depends on: its ancestors and, transitively, the provider fibers
+ * (with their ancestors) of each service implementation the fiber and those lifetimes committed to.
+ * A provider's teardown withdraws its implementation and unloads dependents only after its own status edge.
+ * @param fiber - lifetime whose work is admitted.
+ * @returns dependency closure, read from Cordis `committed` implementations at call time.
+ */
+export function dependencyClosure(fiber: Fiber): ReadonlySet<Fiber> {
+  const closure = new Set<Fiber>()
+  const pending = [fiber]
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    for (let current = next; !closure.has(current); current = current.parent.fiber) {
+      closure.add(current)
+      for (const impl of Object.values(current.committed ?? {})) pending.push(impl.ctx.fiber)
+    }
+  }
+  return closure
+}
+
 /** Admission view consumed by the task owners; construction and closure belong to the acquisition owner. */
 export interface Admission {
   /** Synchronous conjunction of every lifetime that fences new task work. */
@@ -34,31 +53,33 @@ export interface Admission {
 }
 
 /**
- * Task admission lifetime: the owner and initiating caller chains, the task signal, every enrolled
- * host-declaring chain, and the owners' disposing state. A closed or failed conjunct never reopens.
+ * Task admission lifetime: the dependency closures of the owner fiber, the initiating caller and every enrolled
+ * host-declaring fiber, the task signal, and the owners' disposing state. The first failed conjunct closes
+ * admission permanently, even if its fiber later reloads to ACTIVE.
  */
 export class TaskAdmission implements Admission {
   private readonly fibers = new Set<Fiber>()
   private closed = false
 
   /**
-   * @param chains - owner and initiating caller lifetimes, including their ancestors.
+   * @param lifetimes - owner and initiating caller fibers; each contributes its dependency closure.
    * @param signal - task cancellation.
    */
-  constructor(chains: Iterable<ReadonlySet<Fiber>>, private readonly signal: AbortSignal) {
-    for (const chain of chains) this.bind(chain)
+  constructor(lifetimes: Iterable<Fiber>, private readonly signal: AbortSignal) {
+    for (const fiber of lifetimes) this.bind(fiber)
   }
 
   /**
-   * Add a host-declaring chain before enrollment can mint capabilities; its teardown closes task admission.
-   * @param chain - declaring fiber and its ancestors.
+   * Add a host-declaring lifetime before enrollment can mint capabilities; its teardown closes task admission.
+   * @param fiber - declaring fiber; its dependency closure is bound.
    */
-  bind(chain: ReadonlySet<Fiber>): void {
-    for (const fiber of chain) this.fibers.add(fiber)
+  bind(fiber: Fiber): void {
+    for (const dependency of dependencyClosure(fiber)) this.fibers.add(dependency)
   }
 
   admits(): boolean {
-    return !this.closed && !this.signal.aborted && [...this.fibers].every(fiberAdmits)
+    if (!this.closed && (this.signal.aborted || ![...this.fibers].every(fiberAdmits))) this.closed = true
+    return !this.closed
   }
 
   close(): void { this.closed = true }

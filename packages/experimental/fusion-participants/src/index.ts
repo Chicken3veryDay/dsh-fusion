@@ -22,7 +22,7 @@ import { TaskExecutionOwner, ExecutionBlockedError } from './execution.ts'
 import type { ExecutionSnapshot } from './execution.ts'
 import { executionProjection } from './execution-state.ts'
 import type { ExecutionState } from './execution-state.ts'
-import { TaskAdmission, fiberChain } from './liveness.ts'
+import { TaskAdmission, dependencyClosure, fiberAdmits, fiberChain } from './liveness.ts'
 import { rosterProjection } from './state.ts'
 import type { RosterState } from './state.ts'
 
@@ -87,8 +87,8 @@ export default class FusionParticipants extends Service {
   private readonly hosts = new WeakMap<PreparedParticipants, { provider: ExecutionHostProvider; caller: Context['fiber']; done: Promise<TaskExecutionHost> }>()
   private readonly release = Promise.withResolvers<void>()
   private readonly lifetime: { ctx: Context; resources: Scope }
-  /** Owner fiber and its ancestors; their teardown closes every task's admission. */
-  private readonly ownerChain: ReturnType<typeof fiberChain>
+  /** Owner fiber; its dependency closure belongs to every task's admission lifetime. */
+  private readonly ownerFiber: Context['fiber']
   private stopping: Promise<void> | undefined
   private readonly cleanupErrors: unknown[] = []
   private admissions!: ProjectionHandle<AdmissionState>
@@ -98,7 +98,7 @@ export default class FusionParticipants extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'fusionParticipants')
-    this.ownerChain = fiberChain(ctx.fiber)
+    this.ownerFiber = ctx.fiber
     const resources = createScope(ctx, {}, { observeCleanup: true })
     this.lifetime = { ctx: resources.ctx, resources }
     ctx.effect(function* (this: FusionParticipants) {
@@ -169,6 +169,7 @@ export default class FusionParticipants extends Service {
    */
   registerExecutionHost(task: PreparedParticipants, provider: ExecutionHostProvider): Promise<TaskExecutionHost> {
     const caller = this.ctx
+    const completion = Promise.withResolvers<TaskExecutionHost>()
     try {
       caller.fiber.assertActive()
       this.abort.signal.throwIfAborted()
@@ -182,19 +183,26 @@ export default class FusionParticipants extends Service {
         if (phase === 'stopped' || phase === 'revoking') throw new ExecutionBlockedError('not-live')
         return previous.done
       }
-      const completion = Promise.withResolvers<TaskExecutionHost>()
-      this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
+      // Refuse a withdrawing declaring lifetime before publishing enrollment state or registering effects.
+      if (![...dependencyClosure(caller.fiber)].every(fiberAdmits) || !admission.admits()) throw new ExecutionBlockedError('not-live')
       const chain = fiberChain(caller.fiber)
-      admission.bind(chain)
       // Cordis emits `internal/status` synchronously when a fiber starts unloading, while effect cleanup is
       // asynchronous. Disposing the owner at that edge closes delivery and execution admission before the join.
-      const removeStatus = caller.root.on('internal/status', (fiber) => {
-        if (chain.has(fiber) && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
-      })
-      caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
+      // The host effect owns the listener, so a refused registration leaves no root-owned callback behind.
+      caller.effect(() => {
+        let removeStatus: () => void
+        try {
+          removeStatus = caller.root.on('internal/status', (fiber) => {
+            if (chain.has(fiber) && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
+          })
+        } catch (error: unknown) { throw new ExecutionBlockedError('not-live', error) }
+        return () => { removeStatus(); return owner.dispose() }
+      }, 'fusion-participants.execution-host')
+      admission.bind(caller.fiber)
+      this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
       void owner.enroll(provider).then(completion.resolve, completion.reject)
-      return completion.promise
-    } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
+    } catch (error: unknown) { completion.reject(error) }
+    return completion.promise
   }
 
   private track(
@@ -379,7 +387,7 @@ export default class FusionParticipants extends Service {
       // Every admission entry checks this one lifetime, so an observer that runs before a status fence cannot
       // admit new work; host enrollment binds its declaring chain into the same lifetime.
       const ancestors = fiberChain(this.ctx.fiber)
-      const admission = new TaskAdmission([this.ownerChain, ancestors], signal)
+      const admission = new TaskAdmission([this.ownerFiber, this.ctx.fiber], signal)
       delivery = new DeliveryOwner({
         ctx: this.lifetime.ctx, root: root.session, signal, admission,
         participants: new Map([...participants].map(([id, lease]) => [id, lease.session])),

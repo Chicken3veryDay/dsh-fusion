@@ -3,13 +3,17 @@ import { expect, it } from 'vitest'
 import { FiberState } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import Llm from '@deepseek-ai/dsh-llm'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import Participants, { DeliveryId } from '../src/index.ts'
 import type { AdmissionSnapshot, ExecutionHostProvider } from '../src/index.ts'
 import { mount, read } from './harness.ts'
 
-/** `service` is the opt-in owner fiber; `execution-owner` is direct execution-owner disposal through its host. */
-type Lifetime = 'caller' | 'caller-ancestor' | 'host' | 'host-ancestor' | 'service' | 'execution-owner'
+/**
+ * `service` is the opt-in owner fiber; `execution-owner` is direct execution-owner disposal through its host;
+ * `provider:<name>` is the fiber providing each service the owner injects; `transitive:llm` is a provider of those providers.
+ */
+type Lifetime = 'caller' | 'caller-ancestor' | 'host' | 'host-ancestor' | 'service' | 'execution-owner' | `provider:${string}` | 'transitive:llm'
 /** Earlier observers precede every Fusion listener; later ones follow them; held disposal also probes its cleanup window. */
 type Teardown = 'restart-early' | 'restart-late' | 'dispose-held'
 interface Observation {
@@ -19,7 +23,8 @@ interface Observation {
   readonly enrolled: boolean
 }
 
-const fiberLifetimes = ['caller', 'caller-ancestor', 'host', 'host-ancestor', 'service'] as const
+const fiberLifetimes: Lifetime[] = ['caller', 'caller-ancestor', 'host', 'host-ancestor', 'service',
+  ...Participants.inject.map((name): Lifetime => `provider:${name}`), 'transitive:llm']
 const cells: [Lifetime, Teardown][] = [
   ...fiberLifetimes.flatMap(lifetime => (['restart-early', 'restart-late', 'dispose-held'] as const).map((teardown): [Lifetime, Teardown] => [lifetime, teardown])),
   ['execution-owner', 'dispose-held'],
@@ -34,7 +39,9 @@ it.each(cells)('refuses every admission entry at the %s %s cutoff', async (lifet
   const declaring = createScope(hostParent?.ctx ?? ctx, {})
   const scope = lifetime === 'caller' ? caller : lifetime === 'caller-ancestor' ? callerParent
     : lifetime === 'host' ? declaring : lifetime === 'host-ancestor' ? hostParent : undefined
-  const watched: Context['fiber'] | undefined = lifetime === 'execution-owner' ? undefined : scope?.ctx.fiber ?? service
+  const providerFiber = lifetime === 'transitive:llm' ? [...ctx.registry.get(Llm)!.fibers][0]!
+    : lifetime.startsWith('provider:') ? service.committed![lifetime.slice('provider:'.length)]!.ctx.fiber : undefined
+  const watched: Context['fiber'] | undefined = lifetime === 'execution-owner' ? undefined : scope?.ctx.fiber ?? providerFiber ?? service
   let probe: (() => void) | undefined
   const observe = () => ctx.root.on('internal/status', (fiber) => {
     if (fiber === watched && fiber.state === FiberState.UNLOADING) probe?.()
@@ -59,6 +66,7 @@ it.each(cells)('refuses every admission entry at the %s %s cutoff', async (lifet
   const resident = await task.adopt('executor')
   const sender = await task.adopt('userFacingLead')
   const handles: AgentHandle[] = [resident, sender]
+  const logs = [ctx.sessions.get(task.roster.rootSessionId)!, resident.agent.session, sender.agent.session]
   const host = await enrollVia.registerExecutionHost(task, provider('matrix-held'))
   const spare = await enrollVia.registerExecutionHost(ungranted, provider('matrix-grant'))
   const late = provider('matrix-late')
@@ -99,7 +107,7 @@ it.each(cells)('refuses every admission entry at the %s %s cutoff', async (lifet
   let stopping: Promise<void> | undefined
   try {
     stopping = lifetime === 'execution-owner' ? host.dispose()
-      : teardown === 'dispose-held' ? scope?.dispose() ?? service.dispose()
+      : teardown === 'dispose-held' ? scope?.dispose() ?? watched!.dispose()
         : watched!.restart()
     if (lifetime === 'execution-owner') runProbe('edge')
     if (teardown === 'dispose-held') {
@@ -120,9 +128,13 @@ it.each(cells)('refuses every admission entry at the %s %s cutoff', async (lifet
     }
     expect({ grant: observeState().grant, enrolled: observeState().enrolled }).toEqual({ grant: baseline.grant, enrolled: false })
     expect(counts).toEqual({ registrations: 1, preparations: 0, bodies: 0, cleanups: 1 })
-    for (const id of [task.roster.rootSessionId, resident.agent.id, sender.agent.id]) {
-      expect((await read(ctx, id)).filter(event => event.type.startsWith('fusion/delivery-')
-        || event.type === 'agent/inbox/spliced' && event.data.inserted.length > 0)).toEqual([])
+    // In-memory appends are the only route to the log; a disposed persistence provider cannot be read back.
+    const persistence = ctx.get('sessionPersistence') !== undefined
+    for (const session of logs) {
+      for (const events of [session.ownEvents(), ...persistence ? [await read(ctx, session.id)] : []]) {
+        expect(events.filter(event => event.type.startsWith('fusion/delivery-')
+          || event.type === 'agent/inbox/spliced' && event.data.inserted.length > 0)).toEqual([])
+      }
     }
     expect(adapter.requests).toHaveLength(0)
   } finally {
