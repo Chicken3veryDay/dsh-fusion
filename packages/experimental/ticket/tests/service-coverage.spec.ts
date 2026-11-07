@@ -154,6 +154,7 @@ it('continues legacy assignments without slots and refuses slots held by another
   const request = () => ({ ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, assignmentId: assignment.id })
   ticket = await actor(() => ctx.tickets.claim(session, request()))
   expect(ticket.executionSlots).toEqual([])
+  await expect(actor(() => ctx.tickets.claim(session, request()))).rejects.toMatchObject({ code: 'TICKET_ASSIGNMENT_STATE' })
   ticket = await actor(() => ctx.tickets.release(session, request()))
   expect(ticket.assignments[0]!.status).toBe('released')
   await expect(actor(() => ctx.tickets.release(session, request()))).rejects.toMatchObject({ code: 'TICKET_ASSIGNMENT_STATE' })
@@ -182,4 +183,133 @@ it('does not create Tickets in another technical owner Session', async () => {
   const other = ctx.sessions.create(SessionId('another-technical-owner'))
   await expect(actor(() => ctx.tickets.create(other, { subject: 'Wrong owner', description: '' }))).rejects.toMatchObject({ code: 'TICKET_AUTHORITY' })
   expect(ctx.tickets.list(session)).toEqual([])
+})
+
+it('requires initialization before reading a constructed service', async () => {
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  await ctx.plugin(SessionStore)
+  const service = new TicketService(ctx)
+  const session = ctx.sessions.create(SessionId('not-initialized'))
+  expect(() => service.list(session)).toThrow('not initialized')
+})
+
+it('requires workspace-bearing admission for exclusive scopes', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  ticket = await actor(() => ctx.tickets.assign(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: session.id, subject: 'Exclusive', workScopes: [{ path: 'src', access: 'write', exclusive: true }] }))
+  await expect(actor(() => ctx.tickets.claim(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, assignmentId: ticket.assignments[0]!.id }))).rejects.toMatchObject({ code: 'TICKET_ATTEMPT_STATE' })
+})
+
+it('lets a delegated coordinator hand back authority while denying other participants', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  await ticketActor(ctx, SessionId('delegate'), async () => {})
+  ticket = await actor(() => ctx.tickets.handoff(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, newCoordinatorId: SessionId('delegate') }))
+  ticket = await ticketActor(ctx, SessionId('delegate'), () => ctx.tickets.handoff(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: SessionId('delegate'), newCoordinatorId: session.id }))
+  expect(ticket.coordinatorId).toBe(session.id)
+})
+
+it('refuses execution before dependencies complete and refuses operation identity reuse', async () => {
+  const { ctx, session, create, actor } = await harness()
+  const dependency = await create('Dependency')
+  let ticket = await actor(() => ctx.tickets.create(session, { subject: 'Dependent', description: '', dependencies: [dependency.id] }))
+  ticket = await actor(() => ctx.tickets.assign(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: session.id, subject: 'Build' }))
+  const begin = {
+    ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id,
+    assignmentId: ticket.assignments[0]!.id, attemptId: TicketAttemptId('dependent'), operationId: TicketOperationId('dependent'),
+    workspace: { kind: 'isolated-worktree' as const, directory: '/workspace' }, executor: { kind: 'in-process' as const } }
+  await expect(actor(() => ctx.tickets.beginAttempt(session, begin))).rejects.toMatchObject({ code: 'TICKET_ACCEPTANCE' })
+  ticket = await actor(() => ctx.tickets.revise(session, {
+    ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, dependencies: [], acceptanceCriteria: [],
+  }))
+  await actor(() => ctx.tickets.beginAttempt(session, { ...begin, expectedRevision: ticket.revision }))
+  await expect(actor(() => ctx.tickets.beginAttempt(session, { ...begin, workspace: { ...begin.workspace, directory: '/changed' } }))).rejects.toMatchObject({ code: 'TICKET_OPERATION_CONFLICT' })
+})
+
+it('separates remote execution worlds and nonexclusive and read-only workspace access', async () => {
+  const { ctx, session, create, actor } = await harness()
+  ctx.on('ticket/collect-reservations', (collect) => { collect({
+    rootId: session.id, ticketId: TicketId('isolated-producer'), attemptId: TicketAttemptId('isolated-producer'),
+    workspace: { kind: 'isolated-worktree', directory: '/other' }, executor: { kind: 'in-process' }, scopes: [],
+  }) })
+  let sequence = 0
+  async function admit(scopes: import('../src/types.ts').WorkScope[], world?: string) {
+    let ticket = await create(`Scopes ${String(sequence++)}`)
+    ticket = await actor(() => ctx.tickets.assign(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: session.id, subject: 'Work', workScopes: scopes }))
+    return actor(() => ctx.tickets.beginAttempt(session, {
+      ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, assignmentId: ticket.assignments[0]!.id, attemptId: TicketAttemptId(`scope-${String(sequence)}`), operationId: TicketOperationId(`scope-${String(sequence)}`), workspace: { kind: 'shared-workspace', directory: '/workspace', baseCommit: 'a'.repeat(40) }, executor: world === undefined ? { kind: 'in-process' } : { kind: 'remote', provider: 'remote', world } }))
+  }
+  const exclusive = [{ path: 'src', access: 'write', exclusive: true }] satisfies import('../src/types.ts').WorkScope[]
+  await admit(exclusive, 'one')
+  await admit(exclusive, 'two')
+  await admit([{ path: 'src', access: 'read' }], 'one')
+  await admit([{ path: 'docs', access: 'write' }])
+  await admit([{ path: 'docs', access: 'write' }])
+  await admit([{ path: 'read-only', access: 'read', exclusive: true }])
+  await admit([{ path: 'read-only', access: 'write', exclusive: true }])
+  expect(ctx.tickets.list(session)).toHaveLength(7)
+})
+
+it('rejects a superseded settled attempt and execution commands on terminal Tickets', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  const request = () => ({ ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id })
+  ticket = await actor(() => ctx.tickets.assign(session, { ...request(), ownerId: session.id, subject: 'Work' }))
+  const assignmentId = ticket.assignments[0]!.id
+  const begin = (id: string) => ({ ...request(), assignmentId, attemptId: TicketAttemptId(id), operationId: TicketOperationId(id), workspace: { kind: 'isolated-worktree' as const, directory: '/workspace' }, executor: { kind: 'in-process' as const } })
+  ticket = await actor(() => ctx.tickets.beginAttempt(session, begin('first')))
+  ticket = await actor(() => ctx.tickets.settleAttempt(session, { ...request(), attemptId: TicketAttemptId('first'), operationId: TicketOperationId('settle-first'), outcome: 'cancelled' }))
+  ticket = await actor(() => ctx.tickets.beginAttempt(session, begin('second')))
+  await expect(actor(() => ctx.tickets.updateAttempt(session, { ...request(), attemptId: TicketAttemptId('first'), operationId: TicketOperationId('superseded'), status: 'unknown' }))).rejects.toMatchObject({ code: 'TICKET_STALE_ATTEMPT' })
+  ticket = await actor(() => ctx.tickets.settleAttempt(session, { ...request(), attemptId: TicketAttemptId('second'), operationId: TicketOperationId('settle-second'), outcome: 'cancelled' }))
+  ticket = await actor(() => ctx.tickets.cancel(session, { ...request(), summary: 'Done' }))
+  await expect(actor(() => ctx.tickets.updateAttempt(session, { ...request(), attemptId: TicketAttemptId('second'), operationId: TicketOperationId('after-terminal'), status: 'unknown' }))).rejects.toMatchObject({ code: 'TICKET_TERMINAL' })
+})
+
+it.each(['completed', 'failed', 'cancelled'] as const)('refuses to end a historical %s Ticket without a terminal outcome', async (status) => {
+  const { ctx, session, create, actor } = await harness()
+  const current = await create()
+  const { specification: _spec, attempts: _attempts, candidates: _candidates, checks: _checks,
+    operations: _operations, missionPlans: _plans, ...legacy } = current
+  const id = TicketId(`legacy-${status}`)
+  session.append('ticket/state', { version: 1, sessionId: session.id, ticket: { ...legacy, id, status } })
+  await expect(actor(() => ctx.tickets.cancel(session, { ticketId: id, expectedRevision: 1, actorId: session.id, summary: 'Again' }))).rejects.toMatchObject({ code: 'TICKET_TERMINAL' })
+})
+
+it('preserves other assignments and questions while reporting and answering', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  const request = () => ({ ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id })
+  for (const subject of ['First', 'Second']) ticket = await actor(() => ctx.tickets.assign(session, { ...request(), ownerId: session.id, subject }))
+  ticket = await actor(() => ctx.tickets.report(session, { ...request(), assignmentId: ticket.assignments[0]!.id, kind: 'progress', summary: 'Working' }))
+  expect(ticket.assignments[1]!.status).toBe('assigned')
+  for (const question of ['First?', 'Second?']) ticket = await actor(() => ctx.tickets.ask(session, { ...request(), question }))
+  ticket = await actor(() => ctx.tickets.answer(session, { ...request(), questionId: ticket.questions[0]!.id, answer: 'Yes' }))
+  expect(ticket.questions[1]!.status).toBe('open')
+})
+
+it('records explicit workspace and runtime facts through the host attempt commands', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  const request = () => ({ ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id })
+  ticket = await actor(() => ctx.tickets.assign(session, { ...request(), ownerId: session.id, subject: 'Work' }))
+  const attemptId = TicketAttemptId('host-facts')
+  ticket = await actor(() => ctx.tickets.beginAttempt(session, { ...request(), assignmentId: ticket.assignments[0]!.id, attemptId, operationId: TicketOperationId('host-facts-begin'), workspace: { kind: 'isolated-worktree', directory: '/workspace' }, executor: { kind: 'in-process' } }))
+  const workspaceReceipt = { directory: '/workspace/checkout', baseCommit: 'a'.repeat(40) }
+  const runtimeReceipt = { runtimeId: 'runtime', providerId: 'in-process' }
+  ticket = await actor(() => ctx.tickets.updateAttempt(session, { ...request(), attemptId, operationId: TicketOperationId('host-facts-update'), status: 'running', workspaceReceipt, runtimeReceipt }))
+  ticket = await actor(() => ctx.tickets.report(session, { ...request(), assignmentId: ticket.assignments[0]!.id, attemptId, kind: 'failure', summary: 'Producer failed' }))
+  ticket = await actor(() => ctx.tickets.settleAttempt(session, { ...request(), attemptId, operationId: TicketOperationId('host-facts-settle'), outcome: 'failed', workspaceReceipt, runtimeReceipt }))
+  expect(ticket.attempts[0]).toMatchObject({ status: 'settled', outcome: 'failed', workspaceReceipt, runtimeReceipt })
+})
+
+it('reserves execution settlement identities recovered from durable history', async () => {
+  const { ctx, session, create, actor } = await harness()
+  let ticket = await create()
+  ticket = await actor(() => ctx.tickets.assign(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: session.id, subject: 'Work' }))
+  const attemptId = TicketAttemptId('reserved')
+  session.append('ticket/state', { version: 2, sessionId: session.id, ticket: { ...ticket, revision: ticket.revision + 1, operations: [{ id: TicketOperationId('ticket-execution:["reserved","settled"]'), request: 'historical-operation' }] } })
+  ticket = ctx.tickets.get(session, ticket.id)
+  await expect(actor(() => ctx.tickets.beginAttempt(session, { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, assignmentId: ticket.assignments[0]!.id, attemptId, operationId: TicketOperationId('reserved-begin'), workspace: { kind: 'isolated-worktree', directory: '/workspace' }, executor: { kind: 'in-process' } }))).rejects.toMatchObject({ code: 'TICKET_OPERATION_CONFLICT' })
 })
