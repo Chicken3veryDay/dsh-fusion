@@ -946,7 +946,6 @@ export class ContextMapService extends Service {
 
   private async releaseGone(ownerId: SessionId, holderId: SessionId): Promise<void> {
     const owner = this.ctx.agents.get(ownerId)
-    /* v8 ignore if -- the disposal handler runs this synchronously and drops a disposed owner from `heldOwners` */
     if (owner === undefined || this.disposed) return
     const current = this.snapshotOf(owner)
     if (current.curatorId !== holderId) return
