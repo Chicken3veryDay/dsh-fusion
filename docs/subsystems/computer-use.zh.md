@@ -4,7 +4,7 @@
 
 计算机操作让 Agent 通过 DSH 自有的交互能力观察并操作本地桌面。DSH 的共享能力称为 **computer use（计算机操作）**；**Cua Driver** 是上游实现的名称。
 
-当 Linux 图形 Host 能够初始化原生 Cua Driver 时，Web 和 Desktop 组合会启用规范化桌面工具。没有就绪 Linux 提供方的 Host 会将这些工具从 Agent 请求中移除，并通过 Host 设置状态报告提供方诊断。
+Web 和 Desktop 组合安装计算机操作和交互注册表。桌面工具需要[显式启用提供方](../../packages/experimental/computer-use-cua-driver-native/README.zh.md)；没有就绪提供方的 Host 会将这些工具从 Agent 请求中移除。
 
 [Computer Use](../../packages/experimental/cua-bundle/README.zh.md) 提供 macOS CUA 及权限设置 的可选实验性开关。
 
@@ -21,7 +21,7 @@ CUA provider 通过 `ctx.cuaAccess` 提供系统权限状态、用户主动申�
 
 ## 选择提供方
 
-在同一组合中挂载 [`dsh-computer-use`](../../packages/computer-use/computer-use/README.zh.md) 和一个提供方。第一方 Web 和 Desktop 组合默认挂载原生 Linux Cua Driver；其他提供方仍作为显式替代方案。
+在同一组合中挂载 [`dsh-computer-use`](../../packages/computer-use/computer-use/README.zh.md) 和一个提供方。第一方 Web 和 Desktop 组合挂载能力注册表；所有桌面提供方都需要显式启用。
 
 | 提供方 | 运行时 |
 |---|---|

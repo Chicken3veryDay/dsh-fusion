@@ -4,7 +4,7 @@ English | [中文](computer-use.zh.md)
 
 Computer use lets an Agent observe and operate the local desktop through a DSH-owned interaction capability. The shared DSH capability is called **computer use**; **Cua Driver** names the upstream implementation.
 
-The Web and Desktop compositions enable the normalized desktop tools when a Linux graphical Host can initialize the native Cua Driver. A Host without a ready Linux provider leaves those tools out of the Agent's request and reports the provider diagnostic through Host setup state.
+The Web and Desktop compositions install the computer-use and interaction registries. Desktop tools require [explicit provider activation](../../packages/experimental/computer-use-cua-driver-native/README.md); a Host without a ready provider leaves those tools out of the Agent's request.
 
 [Computer Use](../../packages/experimental/cua-bundle/README.md) provides an optional experimental switch for macOS CUA permission setup.
 
@@ -21,7 +21,7 @@ The CUA provider owns `ctx.cuaAccess` for system-permission status, explicit sys
 
 ## Choose a provider
 
-Mount [`dsh-computer-use`](../../packages/computer-use/computer-use/README.md) and one provider in the same composition. The first-party Web and Desktop compositions mount the native Linux Cua Driver by default; other providers remain explicit alternatives.
+Mount [`dsh-computer-use`](../../packages/computer-use/computer-use/README.md) and one provider in the same composition. The first-party Web and Desktop compositions mount the capability registries; every desktop provider requires explicit activation.
 
 | Provider | Runtime |
 |---|---|
