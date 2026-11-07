@@ -103,11 +103,11 @@ export class WorkstreamTools extends Service {
       name: 'workstream_wait', description:
         'Wait until the Workstream changes or a Ticket that concerns you changes (every Ticket for the owner and coordinator; '
         + 'otherwise Tickets naming you as coordinator or assignee), with cancellation and a finite timeout. Returns at once when '
-        + 'such a change was committed after your read, including your own; other activity never ends the wait. '
-        + 'After it returns, read again and wait with the new revision and cursor.',
+        + 'such a change was committed after your cursor, including your own; other activity never ends the wait. '
+        + 'Returns { timedOut, revision, cursor }; wait again with that revision and cursor to see only later changes.',
       parameters: { root_session_id: root, after_revision: { type: 'integer', required: true, description:
-        'Workstream revision from your last workstream_get.' }, after_cursor: { type: 'integer', description:
-        'Cursor from the same workstream_get. Omit it to count every change committed after that revision.' },
+        'Workstream revision from your last workstream_get or workstream_wait.' }, after_cursor: { type: 'integer', description:
+        'Cursor from that same result. Omit it to count every change committed after that revision.' },
       timeout_ms: { type: 'integer', required: true, description: 'Positive timeout bounded by maxWaitMs.' } }, output,
       execute: async (args, exec) => z.json().parse(await this.ctx.workstreams.waitForChange(caller(exec.agent),
         SessionId(args.root_session_id), { afterRevision: args.after_revision, ...args.after_cursor === undefined ? {} : {

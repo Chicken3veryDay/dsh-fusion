@@ -59,6 +59,8 @@ async function setup() {
   return { ctx, owner, member, ticket: asked }
 }
 
+const anyCursor: unknown = expect.any(Number)
+
 describe('Workstream wait cursor', () => {
   it('wakes at once for a Ticket answer committed between the member read and its wait', async () => {
     const { ctx, owner, member, ticket } = await setup()
@@ -67,12 +69,12 @@ describe('Workstream wait cursor', () => {
     await ctx.agents.withInitiator(owner, () => ctx.tickets.answer(owner.session, { ticketId: ticket.id,
       expectedRevision: ticket.revision, actorId: owner.id, questionId: ticket.questions[0]!.id, answer: 'Use the shared interface' }))
     await expect(ctx.workstreams.waitForChange(member, owner.id, { afterRevision: revision, timeoutMs: 60_000, signal }))
-      .resolves.toEqual({ timedOut: false, revision })
+      .resolves.toEqual({ timedOut: false, revision, cursor: owner.session.seq })
     await expect(ctx.workstreams.waitForChange(member, owner.id, { afterRevision: revision, afterCursor: cursor, timeoutMs: 60_000,
-      signal })).resolves.toEqual({ timedOut: false, revision })
+      signal })).resolves.toEqual({ timedOut: false, revision, cursor: owner.session.seq })
     // A cursor read after the answer has nothing left to report.
     await expect(ctx.workstreams.waitForChange(member, owner.id, { afterRevision: revision, afterCursor: ctx.workstreams.cursor(member,
-      owner.id), timeoutMs: 50, signal })).resolves.toEqual({ timedOut: true, revision })
+      owner.id), timeoutMs: 50, signal })).resolves.toEqual({ timedOut: true, revision, cursor: anyCursor })
     await expect(ctx.workstreams.waitForChange(member, owner.id, { afterRevision: revision, afterCursor: -1, timeoutMs: 50, signal }))
       .rejects.toMatchObject({ code: 'WORKSTREAM_INVALID_INPUT' })
   })
@@ -85,7 +87,7 @@ describe('Workstream wait cursor', () => {
       signal })
     owner.followup(createUserMessage({ content: [{ type: 'text', text: 'Keep the owner busy' }], source: { kind: 'user' } }))
     await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Unrelated', description: 'Owner-only work' })
-    await expect(waiting).resolves.toEqual({ timedOut: true, revision })
+    await expect(waiting).resolves.toEqual({ timedOut: true, revision, cursor: anyCursor })
     expect(owner.session.seq).toBeGreaterThan(cursor + 1)
 
     const concerning = ctx.workstreams.waitForChange(member, owner.id, { afterRevision: revision,
@@ -93,7 +95,38 @@ describe('Workstream wait cursor', () => {
     const next = await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Follow-up', description: 'For the member' })
     await ctx.workstreams.assignTicket(owner, owner.id, { ticketId: next.id, expectedRevision: next.revision, ownerId: member.id,
       subject: 'Continue' })
-    await expect(concerning).resolves.toEqual({ timedOut: false, revision })
+    await expect(concerning).resolves.toEqual({ timedOut: false, revision, cursor: anyCursor })
+  })
+
+  it('a member loop that chains the returned revision and cursor wakes once per concerning change and never spins', async () => {
+    const { ctx, owner, member, ticket } = await setup()
+    let position = { revision: ctx.workstreams.get(member, owner.id).revision, cursor: ctx.workstreams.cursor(member, owner.id) }
+    const outcomes: boolean[] = []
+    /** One loop turn: wait from the last result while `activity` runs, then continue from what the wait returned. */
+    const turn = async (activity: () => Promise<unknown>, timeoutMs = 400): Promise<void> => {
+      const waiting = ctx.workstreams.waitForChange(member, owner.id, { afterRevision: position.revision,
+        afterCursor: position.cursor, timeoutMs, signal })
+      await activity()
+      const result = await waiting
+      expect(result.cursor).toBeGreaterThanOrEqual(position.cursor)
+      position = { revision: result.revision, cursor: result.cursor }
+      outcomes.push(result.timedOut)
+    }
+    const unrelated = async (subject: string): Promise<void> => {
+      owner.followup(createUserMessage({ content: [{ type: 'text', text: subject }], source: { kind: 'user' } }))
+      await ctx.workstreams.createTicket(owner, owner.id, { subject, description: 'Owner-only work' })
+    }
+    await turn(() => unrelated('First unrelated'))
+    await turn(() => ctx.agents.withInitiator(owner, () => ctx.tickets.answer(owner.session, { ticketId: ticket.id,
+      expectedRevision: ticket.revision, actorId: owner.id, questionId: ticket.questions[0]!.id, answer: 'Use the shared interface' })))
+    await turn(() => unrelated('Second unrelated'))
+    // A concerning change committed between two waits is reported once, by the next wait, and not again.
+    await ctx.workstreams.sendMessage(owner, owner.id, { operationId: WorkstreamOperationId('note'), targetId: member.id,
+      text: 'Answered', signal })
+    await turn(() => Promise.resolve())
+    await turn(() => unrelated('Third unrelated'))
+    expect(outcomes).toEqual([true, false, true, false, true])
+    expect(position.revision).toBe(ctx.workstreams.get(member, owner.id).revision)
   })
 
   it('wakes the owner for every root Ticket', async () => {
@@ -102,6 +135,6 @@ describe('Workstream wait cursor', () => {
     const waiting = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision,
       afterCursor: ctx.workstreams.cursor(owner, owner.id), timeoutMs: 60_000, signal })
     await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Any', description: 'Owner sees it' })
-    await expect(waiting).resolves.toEqual({ timedOut: false, revision })
+    await expect(waiting).resolves.toEqual({ timedOut: false, revision, cursor: owner.session.seq })
   })
 })

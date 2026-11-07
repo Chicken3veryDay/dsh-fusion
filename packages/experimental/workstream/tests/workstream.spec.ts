@@ -253,14 +253,16 @@ describe('durable Workstream authority and delivery', () => {
 
   it('waits on durable events, bounds timeout, cancels and releases waiters on shutdown', async () => {
     const { ctx, owner, fiber } = await setup()
+    const anyCursor: unknown = expect.any(Number)
     const revision = ctx.workstreams.get(owner, owner.id).revision
     const waiting = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, timeoutMs: 1_000, signal })
     await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Unrelated progress', description: '' })
-    await expect(waiting).resolves.toEqual({ timedOut: false, revision })
+    await expect(waiting).resolves.toEqual({ timedOut: false, revision, cursor: anyCursor })
     await expect(ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, timeoutMs: 1, signal,
-    })).resolves.toEqual({ timedOut: false, revision })
+    })).resolves.toEqual({ timedOut: false, revision, cursor: anyCursor })
     await expect(ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, afterCursor:
-      ctx.workstreams.cursor(owner, owner.id), timeoutMs: 1, signal })).resolves.toEqual({ timedOut: true, revision })
+      ctx.workstreams.cursor(owner, owner.id), timeoutMs: 1, signal })).resolves.toEqual({ timedOut: true, revision,
+      cursor: anyCursor })
     const abort = new AbortController()
     const cursor = ctx.workstreams.cursor(owner, owner.id)
     const cancelled = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, afterCursor: cursor, timeoutMs: 1_000,

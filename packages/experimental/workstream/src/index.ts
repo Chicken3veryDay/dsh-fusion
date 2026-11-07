@@ -40,6 +40,8 @@ export interface WorkstreamMembership {
 export interface WorkstreamWaitResult {
   readonly timedOut: boolean
   readonly revision: number
+  /** Position after the last root event committed when the wait returned; pass it as the next `afterCursor`. */
+  readonly cursor: number
 }
 
 const defaults: Required<Config> = {
@@ -449,8 +451,9 @@ export class WorkstreamService extends Service {
    * @param rootSessionId - explicit Workstream root.
    * @param request - last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation.
    * Without `afterCursor`, every concerning event committed after `afterRevision` counts.
-   * @returns at once when the revision differs from `afterRevision` or a concerning event is at or after the cursor;
-   * otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+   * @returns the current revision and cursor, at once when the revision differs from `afterRevision` or a concerning event
+   * is at or after the cursor, otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+   * Waiting again with the returned revision and cursor reports only later concerning events.
    */
   async waitForChange(
     caller: Agent, rootSessionId: SessionId,
@@ -462,13 +465,15 @@ export class WorkstreamService extends Service {
     if (request.afterCursor !== undefined && (!Number.isSafeInteger(request.afterCursor) || request.afterCursor < 0
       || request.afterCursor > owner.session.seq))
       throw new WorkstreamError('afterCursor must be a cursor read from this Workstream', 'WORKSTREAM_INVALID_INPUT')
-    if (snapshot.revision !== request.afterRevision) return { timedOut: false, revision: snapshot.revision }
+    const result = (timedOut: boolean): WorkstreamWaitResult =>
+      ({ timedOut, revision: this.state(owner).revision, cursor: owner.session.seq })
+    if (snapshot.revision !== request.afterRevision) return result(false)
     const state = this.projection.stateOf(owner.session)
     const from = request.afterCursor ?? (state.snapshotSeq ?? -1) + 1
     const concerned = (snapshotNow: WorkstreamSnapshot): boolean =>
       caller.id === snapshotNow.ownerSessionId || caller.id === snapshotNow.coordinatorId
     const seen = Math.max(state.snapshotSeq ?? -1, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
-    if (seen >= from) return { timedOut: false, revision: snapshot.revision }
+    if (seen >= from) return result(false)
     const signal = AbortSignal.any([request.signal, this.lifetime.signal])
     signal.throwIfAborted()
     return new Promise((resolve, reject) => {
@@ -483,9 +488,9 @@ export class WorkstreamService extends Service {
           const ticket = ticketParticipants(event.data)
           if (ticket.sessionId !== owner.id || (!concerned(this.state(owner)) && !ticket.participants.includes(caller.id))) return
         } else return
-        cleanup(); resolve({ timedOut: false, revision: this.state(owner).revision })
+        cleanup(); resolve(result(false))
       })
-      const timer = setTimeout(() => { cleanup(); resolve({ timedOut: true, revision: this.state(owner).revision }) }, request.timeoutMs)
+      const timer = setTimeout(() => { cleanup(); resolve(result(true)) }, request.timeoutMs)
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) abort()
     })
