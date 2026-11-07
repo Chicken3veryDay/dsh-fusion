@@ -38,5 +38,5 @@ it('a recorder-less retry of an unflushed admission is refused and frees the ass
   const current = ctx.tickets.get(root.session, ticket.id)
   const fresh = await ctx.ticketExecution.prepare(worker, { ...request(root, current, 'confirm-retry-fresh') })
     .then(async (handle) => { await handle.dispose(); return 'published' }, code)
-  expect({ retry, fresh }).toEqual({ retry: 'TICKET_RECOVERY_FAILED', fresh: 'published' })
+  expect({ retry, fresh }).toEqual({ retry: 'TICKET_ATTEMPT_STATE', fresh: 'published' })
 })

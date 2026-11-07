@@ -486,19 +486,23 @@ export class TicketExecutionService extends Service {
       }
       this.assertCaller(run.caller)
       if (isAborted(run.state)) throw run.abortReason as Error
-      await this.ctx.agents.withInitiator(run.caller, () => this.ctx.tickets.beginAttempt(this.liveRoot(request.rootSessionId), {
-        ticketId: request.ticketId, expectedRevision: request.expectedRevision, actorId: run.caller.id,
-        assignmentId: request.assignmentId, attemptId: request.attemptId, operationId: request.operationId,
-        workspace: request.workspace, executor: request.executor,
-        ...request.assignmentRevision === undefined ? {} : { assignmentRevision: request.assignmentRevision },
-        ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
-      }, (controller) => {
-        // The admission is in the in-memory log: from here an abort hands the attempt to the ledger, behind this write.
-        recorder = controller
-        run.recorder = controller
-        this.retain(run)
-        this.apply(run, { type: 'admitted' })
-      }))
+      const ticket = await this.ctx.agents.withInitiator(run.caller, () => this.ctx.tickets.beginAttempt(
+        this.liveRoot(request.rootSessionId), {
+          ticketId: request.ticketId, expectedRevision: request.expectedRevision, actorId: run.caller.id,
+          assignmentId: request.assignmentId, attemptId: request.attemptId, operationId: request.operationId,
+          workspace: request.workspace, executor: request.executor,
+          ...request.assignmentRevision === undefined ? {} : { assignmentRevision: request.assignmentRevision },
+          ...request.modelSelection === undefined ? {} : { modelSelection: request.modelSelection },
+        }, (controller) => {
+          // The admission is in the in-memory log: from here an abort hands the attempt to the ledger, behind this write.
+          recorder = controller
+          run.recorder = controller
+          this.retain(run)
+          this.apply(run, { type: 'admitted' })
+        }))
+      if (recorder === undefined && ticket.attempts.some(attempt => attempt.id === request.attemptId && attempt.status === 'settled')) {
+        throw new TicketError('A host already settled this Ticket attempt; prepare a fresh attempt', 'TICKET_ATTEMPT_STATE')
+      }
     } catch (error: unknown) {
       if (recorder === undefined) {
         this.apply(run, { type: 'admission-refused' })
