@@ -135,7 +135,17 @@ export class CgroupEventsWatch {
     return populated === '1' ? 'populated' : 'empty'
   }
 
-  /** Stop watching. Safe to repeat. */
+  /**
+   * Release the watch at the end of one observation. A watch that was healthy may be attached again
+   * by a later observation of the same scope; a silent or degraded one stays as it was.
+   */
+  detach(): void {
+    const healthy = this.watcher !== undefined
+    this.close()
+    if (healthy) this.attempted = false
+  }
+
+  /** Stop watching for good. Safe to repeat. */
   close(): void {
     const watcher = this.watcher
     this.watcher = undefined

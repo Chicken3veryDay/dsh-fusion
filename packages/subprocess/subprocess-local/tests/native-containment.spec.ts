@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -174,6 +174,24 @@ async function waitUntil(condition: () => boolean, what: string): Promise<void> 
 /** A descendant that outlives its direct parent until the test creates `flag`. */
 function lingeringDescendantCommand(pidFile: string, flag: string): string {
   return `sh -c 'echo $$ > "$1"; while [ ! -e "$2" ]; do sleep 0.02; done' sh ${JSON.stringify(pidFile)} ${JSON.stringify(flag)} >/dev/null 2>&1 & exit 0`
+}
+
+/**
+ * End a lingering descendant on every path (pass, fail or timeout) and stop the transient scope that holds it,
+ * so no unit keeps polling a release file the test never wrote or whose directory is gone.
+ */
+function releaseLingering(flag: string, pid: number | undefined): void {
+  writeFileSync(flag, '')
+  if (pid === undefined) return
+  let unit: string | undefined
+  try {
+    unit = /dsh-subprocess-[^/\s]*\.scope/u.exec(readFileSync(`/proc/${String(pid)}/cgroup`, 'utf8'))?.[0]
+  } catch { /* the descendant already exited */ }
+  try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+  if (unit === undefined) return
+  try {
+    execFileSync('systemctl', ['--user', 'stop', unit], { stdio: 'ignore', timeout: 10_000 })
+  } catch { /* the scope was already collected */ }
 }
 
 const literalArgv = process.platform === 'linux' ? probeLinuxScope() : undefined
@@ -364,12 +382,10 @@ while :; do sleep 60; done
     const handle = bindManagedProcess(request, launchLinuxScope(request, targetEnvironment(request), scopeOptions, internals))
     let descendant: number | undefined
     try {
-      // Production observes the range after the direct child settles; a query issued while systemd is
-      // still creating the transient unit can read it as loaded but inactive.
-      await handle.done
-      descendant = await waitForPid(pidFile)
+      // The range wait starts at spawn, while systemd may still be creating the transient unit.
       const waiting = handle.waitForExit()
       await attached.promise
+      descendant = await waitForPid(pidFile)
       let settled = false
       void waiting.then(() => { settled = true })
       await nextLoopTurn()
@@ -385,11 +401,9 @@ while :; do sleep 60; done
       await nextLoopTurn()
       expect(inotifyWatchCount()).toBe(baselineWatches)
     } finally {
+      releaseLingering(flag, descendant)
       handle.terminate()
       await Promise.allSettled([handle.done, handle.waitForExit()])
-      if (descendant !== undefined) {
-        try { process.kill(descendant, 'SIGKILL') } catch { /* already exited */ }
-      }
     }
   }, 15_000)
 
@@ -410,10 +424,7 @@ while :; do sleep 60; done
       await nextLoopTurn()
       expect(inotifyWatchCount()).toBe(baselineWatches)
     } finally {
-      writeFileSync(flag, '')
-      if (descendant !== undefined) {
-        try { process.kill(descendant, 'SIGKILL') } catch { /* already contained */ }
-      }
+      releaseLingering(flag, descendant)
       await fiber.dispose()
     }
   }, 15_000)
