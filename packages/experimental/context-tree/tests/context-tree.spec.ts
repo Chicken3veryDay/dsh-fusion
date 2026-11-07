@@ -27,7 +27,7 @@ import { executeModelToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import ToolRuntime, { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ContextTreeService, { ContextTreeError, ContextTreeTools, DEFAULT_BASE_TOOLS, type Config } from '../src/index.ts'
-import { catalogMessage } from '../src/messages.ts'
+import { catalogMessage, grantOverhead } from '../src/messages.ts'
 import { contextTreeProjectionDefinition } from '../src/projection.ts'
 import { buildTree, findNode, viewOf } from '../src/tree.ts'
 
@@ -1010,8 +1010,19 @@ async function reviewStep(w: World): Promise<UserMessage[]> {
   return decision.kind === 'enter' ? decision.messages : []
 }
 
+/** A load budget that holds the first project section whole and cuts the second one after a few bytes of text. */
+async function cutsSecondProjectSection(): Promise<number> {
+  const probe = await world()
+  const listing = await probe.tree.browse(probe.agent, { path: 'Instructions/Project/AGENTS.md' })
+  const metas = (await probe.ctx.contextIndex.snapshot({ workingDirectory: probe.project })).sections
+    .filter(section => section.kind === 'project-instructions')
+  const frame = (index: number) => ({ path: listing.nodes[index]!.path, anchor: metas[index]!.anchor, hash: metas[index]!.hash })
+  // The second section is shorter than the full cut notice, so only the compact frame cuts it.
+  return grantOverhead(frame(0), false, 'full') + metas[0]!.bytes + grantOverhead(frame(1), true, 'compact') + 4
+}
+
 it.each(['queued', 'claimed', 'logged'] as const)('R1 a section cut by a folder load can be reloaded in full while %s', async (stage) => {
-  const w = await world({ maxLoadBytes: 32 })
+  const w = await world({ maxLoadBytes: await cutsSecondProjectSection() })
   const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project/AGENTS.md' })
   const first = await w.tree.load(w.agent, { paths: ['Instructions/Project/AGENTS.md'] })
   expect(first.result.granted).toHaveLength(2)

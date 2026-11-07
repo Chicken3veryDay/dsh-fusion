@@ -26,9 +26,14 @@ import {
   activationStub,
   catalogDigest,
   catalogMessage,
+  GRANT_FORMS,
+  grantFrame,
   grantMessage,
+  grantOverhead,
   grantStub,
+  grantText,
   type CatalogBranch,
+  type GrantFrame,
 } from './messages.ts'
 import { formatPath, parsePath, splitPath } from './paths.ts'
 import { byteLength, clip } from './text.ts'
@@ -36,6 +41,7 @@ import {
   activeToolNames,
   contextTreeProjectionDefinition,
   grantedHashes,
+  newestGrants,
   withPendingGrants,
   type ContextTreeProjectionState,
 } from './projection.ts'
@@ -99,6 +105,10 @@ export class ContextTreeService extends Service {
   private readonly groupProviders = new Set<CuratedGroupProvider>()
   private readonly coreProviders = new Set<EagerCoreProvider>()
   private readonly managed = new Set<{ readonly names: ReadonlySet<string>; readonly admit: (agent: Agent) => boolean }>()
+  /** Per agent, the tools its newest step resolution saw registered but not admitted by their own `when` or an earlier policy. */
+  private readonly unavailable = new WeakMap<Agent, ReadonlySet<string>>()
+  /** Agents already told that hidden tools cannot be loaded because the tree tools are not registered. */
+  private readonly reportedUnloadable = new WeakSet<Agent>()
   private projection!: ProjectionHandle<ContextTreeProjectionState>
   private disposed = false
 
@@ -114,6 +124,8 @@ export class ContextTreeService extends Service {
     this.ctx.compaction.registerRevocableSource('context-grant', grantStub)
     this.ctx.compaction.registerRevocableSource('context-activation', activationStub)
     this.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) => {
+      const registered = this.ctx.tools.definitions(agent).map(definition => definition.name)
+      this.unavailable.set(agent, new Set(registered.filter(name => !candidates.has(name))))
       // Base tools follow the configured `baseTools` order, so a provider that reloads keeps its
       // place; activations follow in logged order. Role tools append after activations so gaining a
       // role preserves the existing declaration prefix.
@@ -121,7 +133,9 @@ export class ContextTreeService extends Service {
       const managed = [...candidates.keys()].filter(name => !this.baseTools.has(name) && this.managedAdmits(name, agent))
       const activated = [...activeToolNames(this.stateFor(agent))]
         .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
-      return orderedAdmission([...base, ...activated, ...managed])
+      const admitted = [...base, ...activated, ...managed]
+      this.reportUnloadable(agent, [...candidates.keys()].filter(name => !admitted.includes(name)))
+      return orderedAdmission(admitted)
     })
     this.ctx.on('agent/pre-step', async ({ agent, signal, step }, next): Promise<PreStepDecision> => {
       const decision = await next()
@@ -144,6 +158,20 @@ export class ContextTreeService extends Service {
       }
       return [...messages, ...await this.pendingContext(agent, signal, pending)]
     })
+  }
+
+  /**
+   * Log once per agent that the policy hides tools the agent has no way to load, because
+   * `context_browse` or `context_load` is not registered for it.
+   */
+  private reportUnloadable(agent: Agent, hidden: readonly string[]): void {
+    if (hidden.length === 0 || this.reportedUnloadable.has(agent)) return
+    if (this.ctx.tools.get('context_browse', agent) !== undefined && this.ctx.tools.get('context_load', agent) !== undefined) return
+    this.reportedUnloadable.add(agent)
+    this.ctx.logger.error(
+      `context tree hides ${clip(hidden.join(', '), 400)} from agent ${agent.id}, but context_browse or context_load is not registered, `
+      + 'so the agent cannot load them; mount ContextTreeTools beside ContextTreeService (the context profile layer does)',
+    )
   }
 
   /** The catalog when it changed, then the core grants, for messages that are about to be logged. */
@@ -368,6 +396,7 @@ export class ContextTreeService extends Service {
     }
 
     const held = grantedHashes(state)
+    const newest = newestGrants(state)
     const alreadyLoaded: string[] = []
     const toRead: ContextSectionId[] = []
     for (const [id, leaf] of sectionNodes) {
@@ -377,22 +406,45 @@ export class ContextTreeService extends Service {
     const contexts: UserMessage[] = []
     const granted: ContextGrantedSection[] = []
     const omittedSections: string[] = []
-    if (toRead.length > 0) {
+    const pathOf = (id: ContextSectionId): string => formatPath(sectionNodes.get(id)?.node.segments ?? [id])
+    const supersededBy = (id: ContextSectionId, hash: string): string | undefined => {
+      const earlier = newest.get(id)?.hash
+      return earlier === undefined || earlier === hash ? undefined : earlier
+    }
+    const plan = this.planLoad([...sectionNodes].filter(([id]) => toRead.includes(id)).map(([id, leaf]) => {
+      const frame = grantFrame(formatPath(leaf.node.segments), leaf.section.anchor, leaf.section.hash, supersededBy(id, leaf.section.hash))
+      return { id, frame, bytes: leaf.section.bytes }
+    }))
+    for (const id of plan.omitted) omittedSections.push(pathOf(id))
+    if (plan.ids.length > 0) {
       const read = await this.ctx.contextIndex.read(
         { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
-        toRead,
-        { maxBytes: this.config.maxLoadBytes },
+        plan.ids,
+        { maxBytes: plan.textBytes },
         signal,
       )
+      // The plan used the snapshot's sizes; the rendered messages, wrappers included, are held to the budget again.
+      let left = this.config.maxLoadBytes
       for (const body of read.sections) {
         const leaf = sectionNodes.get(body.id)
         if (leaf === undefined) continue
         const path = formatPath(leaf.node.segments)
-        contexts.push(grantMessage(path, body, leaf.section.kind))
+        const supersedes = supersededBy(body.id, body.hash)
+        const frame = grantFrame(path, body.anchor, body.hash, supersedes)
+        const fit = body.text === ''
+          ? undefined
+          : GRANT_FORMS.map(form => ({ form, bytes: byteLength(grantText(frame, body.text, body.truncated, form)) }))
+            .find(entry => entry.bytes <= left)
+        if (fit === undefined) {
+          omittedSections.push(path)
+          continue
+        }
+        left -= fit.bytes
+        contexts.push(grantMessage(path, body, leaf.section.kind, { supersedes, form: fit.form }))
         granted.push({ path, anchor: body.anchor, bytes: body.bytes, truncated: body.truncated })
       }
-      for (const id of [...read.omitted]) omittedSections.push(formatPath(sectionNodes.get(id)?.node.segments ?? [id]))
-      for (const id of read.missing) missing.push(formatPath(sectionNodes.get(id)?.node.segments ?? [id]))
+      for (const id of read.omitted) omittedSections.push(pathOf(id))
+      for (const id of read.missing) missing.push(pathOf(id))
     }
 
     const alreadyActive: string[] = []
@@ -414,6 +466,45 @@ export class ContextTreeService extends Service {
       contexts,
       result: { granted, activated, alreadyLoaded, alreadyActive, missing, omittedSections, omittedTools },
     }
+  }
+
+  /**
+   * Choose the sections one load reads so that their grant messages, wrappers included, fit
+   * `maxLoadBytes`: whole sections with the full frame while they fit, then one cut section with
+   * the most detailed frame that leaves room for text. Everything after the cut is omitted.
+   */
+  private planLoad(entries: readonly { readonly id: ContextSectionId; readonly frame: GrantFrame; readonly bytes: number }[]): {
+    ids: ContextSectionId[]
+    textBytes: number
+    omitted: ContextSectionId[]
+  } {
+    const ids: ContextSectionId[] = []
+    const omitted: ContextSectionId[] = []
+    let remaining = this.config.maxLoadBytes
+    let textBytes = 0
+    let cut = false
+    for (const entry of entries) {
+      if (cut) {
+        omitted.push(entry.id)
+        continue
+      }
+      const whole = grantOverhead(entry.frame, false, 'full') + entry.bytes
+      if (whole <= remaining) {
+        ids.push(entry.id)
+        textBytes += entry.bytes
+        remaining -= whole
+        continue
+      }
+      cut = true
+      const overhead = GRANT_FORMS.map(form => grantOverhead(entry.frame, true, form)).find(bytes => bytes < remaining)
+      if (overhead === undefined) {
+        omitted.push(entry.id)
+        continue
+      }
+      ids.push(entry.id)
+      textBytes += remaining - overhead
+    }
+    return { ids, textBytes, omitted }
   }
 
   /** Intersect logged candidates with the Session-owned current surface; queued grants remain eligible. */
@@ -446,7 +537,7 @@ export class ContextTreeService extends Service {
       sources: snapshot.sources,
       sections: snapshot.sections,
       tools: this.ctx.tools.definitions(agent)
-        .filter(definition => !this.isManaged(definition.name))
+        .filter(definition => !this.isManaged(definition.name) && this.unavailable.get(agent)?.has(definition.name) !== true)
         .map(definition => ({
           name: definition.name,
           description: definition.description,
@@ -469,7 +560,12 @@ export class ContextTreeService extends Service {
     return false
   }
 
-  /** Grants for core sections neither the conversation nor `pending` holds, within `coreBytes` after the charges of both. */
+  /**
+   * Grants for core sections neither the conversation nor `pending` holds with their current text,
+   * within `coreBytes`. The newest eager grant of each section charges the budget until revocation,
+   * and selected sections held only through explicit loads charge their size. A section whose file
+   * changed is granted again marked as replacing the earlier copy, whose charge it takes over.
+   */
   private async pendingCore(
     agent: Agent, signal: AbortSignal, pending: readonly UserMessage[],
   ): Promise<{ messages: UserMessage[]; keys: string[] }> {
@@ -479,38 +575,47 @@ export class ContextTreeService extends Service {
     const tree = await this.treeFor(agent, signal)
     const state = withPendingGrants(this.stateFor(agent), pending)
     const held = grantedHashes(state)
+    const newest = newestGrants(state)
     const leaves = new Map(leavesOf(tree.root).sections.map(leaf => [leaf.section.id, leaf]))
     const heldGrants = [...state.grants, ...[...state.claimed, ...state.inbox].flatMap(entry => entry.grants)]
     // Earlier writers did not distinguish explicit loads from eager grants.
     if (heldGrants.some(grant => grant.coreBytes === null)) return none
-    const heldCore = heldGrants.reduce((sum, grant) => sum + (grant.coreBytes ?? 0), 0)
-    const selectedHeld = wanted.reduce((sum, id) => {
+    const eager = new Map<string, { hash: string; bytes: number }>()
+    for (const grant of heldGrants) {
+      if (grant.coreBytes !== null && grant.coreBytes > 0) eager.set(grant.key, { hash: grant.hash, bytes: grant.coreBytes })
+    }
+    let charged = [...eager.values()].reduce((sum, grant) => sum + grant.bytes, 0)
+    for (const id of wanted) {
       const leaf = leaves.get(id)
-      if (leaf === undefined || held.get(id) !== leaf.section.hash
-        || heldGrants.some(grant => (
-          grant.key === id && grant.hash === leaf.section.hash && grant.coreBytes !== null && grant.coreBytes > 0
-        ))) return sum
-      return sum + leaf.section.bytes
-    }, 0)
-    let room = Math.max(0, this.config.coreBytes - heldCore - selectedHeld)
+      const heldExplicitly = leaf !== undefined && held.get(id) === leaf.section.hash && eager.get(id)?.hash !== leaf.section.hash
+      if (heldExplicitly) charged += leaf.section.bytes
+    }
+    let room = this.config.coreBytes - charged
+    let released = 0
     const missing = wanted.filter((id) => {
       const leaf = leaves.get(id)
-      if (leaf === undefined || held.get(id) === leaf.section.hash || leaf.section.bytes > room) return false
-      room -= leaf.section.bytes
+      if (leaf === undefined || held.get(id) === leaf.section.hash) return false
+      const release = eager.get(id)?.bytes ?? 0
+      if (leaf.section.bytes > room + release) return false
+      room += release - leaf.section.bytes
+      released += release
       return true
     })
     if (missing.length === 0) return none
     const read = await this.ctx.contextIndex.read(
       { workingDirectory: await this.ctx.workingDirectory.ensure(agent, signal) },
       missing,
-      { maxBytes: this.config.coreBytes - heldCore - selectedHeld },
+      { maxBytes: this.config.coreBytes - charged + released },
       signal,
     )
     // A section cut by the budget is not granted: its hash would count it as held without its full text.
     const granted = read.sections.flatMap((body) => {
       const leaf = leaves.get(body.id)
       if (leaf === undefined || body.truncated) return []
-      return [{ key: body.id, message: grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind, body.bytes) }]
+      const earlier = newest.get(body.id)?.hash
+      const supersedes = earlier === undefined || earlier === body.hash ? undefined : earlier
+      const message = grantMessage(formatPath(leaf.node.segments), body, leaf.section.kind, { coreBytes: body.bytes, supersedes })
+      return [{ key: body.id, message }]
     })
     return { messages: granted.map(entry => entry.message), keys: granted.map(entry => entry.key) }
   }
@@ -536,18 +641,22 @@ export class ContextTreeService extends Service {
 
   private async pendingCatalog(agent: Agent, signal: AbortSignal, regranted: ReadonlySet<string>): Promise<UserMessage | undefined> {
     const tree = await this.treeFor(agent, signal)
+    const curated = new Set([...this.groupProviders].flatMap(provider => provider(agent))
+      .map(group => formatPath([group.root, group.origin === 'global' ? 'Global' : 'Project', group.name])))
     const branches: CatalogBranch[] = []
     for (const root of tree.root.children) {
       for (const origin of root.children) {
         if (isEmptyBranch(origin)) continue
         const view = viewOf(origin)
-        branches.push({ path: view.path, summary: view.summary })
+        const groups = origin.children.filter(child => curated.has(formatPath(child.segments)) && !isEmptyBranch(child))
+          .map(child => ({ path: formatPath(child.segments), summary: child.summary }))
+        branches.push({ path: view.path, summary: view.summary, ...groups.length === 0 ? {} : { groups } })
       }
     }
     if (branches.length === 0) return undefined
     const state = this.stateFor(agent)
     if (state.catalog?.digest === catalogDigest(branches)) return undefined
-    return catalogMessage(branches, state.published, this.droppedPaths(state, regranted))
+    return catalogMessage(branches, state.published, this.droppedPaths(state, regranted), this.config.maxBrowseBytes)
   }
 }
 

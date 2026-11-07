@@ -205,3 +205,19 @@ export function grantedHashes(state: ContextTreeProjectionState): ReadonlyMap<st
   }
   return hashes
 }
+
+/**
+ * The newest grant of each section the conversation holds or is about to hold, complete or not,
+ * in the order of {@link grantedHashes}.
+ * @param state - projection state.
+ * @returns each section's newest grant, keyed by section id.
+ */
+export function newestGrants(
+  state: ContextTreeProjectionState,
+): ReadonlyMap<string, { readonly hash: string; readonly coreBytes: number | null }> {
+  const newest = new Map<string, { hash: string; coreBytes: number | null }>()
+  for (const entry of [...state.grants, ...[...state.claimed, ...state.inbox].flatMap(pending => pending.grants)]) {
+    newest.set(entry.key, { hash: entry.hash, coreBytes: entry.coreBytes })
+  }
+  return newest
+}

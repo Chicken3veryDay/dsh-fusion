@@ -188,6 +188,11 @@ export interface ContextGrantSource {
   readonly truncated?: true
   /** Bytes charged to the eager-core budget until revocation; zero for explicit loads, absent in earlier records. */
   readonly coreBytes?: number
+  /**
+   * Digest of an earlier grant of this section that the conversation still held and that no longer
+   * matched the file; the message text says it is out of date.
+   */
+  readonly supersedes?: string
 }
 
 /** Tool activation message source; revocable at compaction. */
