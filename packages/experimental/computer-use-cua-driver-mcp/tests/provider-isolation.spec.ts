@@ -65,7 +65,7 @@ async function mount(options: { unrelated: boolean; executor: typeof executors[n
   const agent = { ctx, id: SessionId('cua-isolation'), session: Session.create(SessionId('cua-isolation')) } as Agent
   const signal = new AbortController().signal
   const session: InteractionSession = await provider!.open(agent, signal)
-  return { ctx, agent, signal, session, calls, root, runtime: ctx.ptcRuntime as ScriptRuntime }
+  return { ctx, agent, signal, session, calls, root, provider: provider!, runtime: ctx.ptcRuntime as ScriptRuntime }
 }
 
 it.each(executors)('does not run an admission-hidden unrelated tool whose name ends in the requested raw operation (%s)', async (executor) => {
@@ -123,13 +123,23 @@ it.each([
   { domain: 'desktop', method: 'act', action: { kind: '' } },
   { domain: 'desktop', method: 'act', action: { kind: 'execute_shell' } },
   { domain: 'desktop', method: 'act', action: { kind: 'scroll' } },
-  { domain: 'desktop', method: 'observe' },
+  { domain: 'desktop', method: 'observe', applicationId: '9' },
+  { domain: 'desktop', method: 'observe', applicationId: '9', windowId: '7' },
+  { domain: 'desktop', method: 'observe', applicationId: 'abc', windowId: '7' },
 ] satisfies import('@deepseek-ai/dsh-interaction').InteractionOperation[])('rejects unsupported normalized operations before invoking MCP input (%j)', async (operation) => {
   const h = await mount({ unrelated: false, executor: 'native' })
   await expect(h.session.execute(operation, h.signal)).rejects.toThrow()
   expect(await readFile(join(h.root, 'driver.ndjson'), 'utf8')).not.toContain('"event":"call"')
 })
 
+interface DriverEvent { event: string; name?: string; arguments?: Record<string, unknown> }
+
+async function driverCalls(root: string): Promise<DriverEvent[]> {
+  const events = (await readFile(join(root, 'driver.ndjson'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as DriverEvent)
+  return events.filter(event => event.event === 'call')
+}
+
+// get_window_state and click take integer pid/window_id; the decorated desktop_click in the catalog is never selected.
 it.each(['observe', 'screenshot', 'act'] as const)('maps %s to its own fallback catalog and forwards target fields', async (method) => {
   const h = await mount({ unrelated: false, executor: 'native', mode: 'interaction' })
   const target = { domain: 'desktop' as const, applicationId: '9', windowId: '7' }
@@ -137,10 +147,31 @@ it.each(['observe', 'screenshot', 'act'] as const)('maps %s to its own fallback 
     ? { ...target, method, action: { kind: 'click', x: 3 } }
     : { ...target, method }
   await expect(h.session.execute(operation, h.signal)).resolves.toMatchObject({ isError: false })
-  const events = (await readFile(join(h.root, 'driver.ndjson'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { event: string; name?: string; arguments?: Record<string, unknown> })
-  expect(events.filter(event => event.event === 'call')).toMatchObject([{ name: method === 'act' ? 'desktop_click' : 'get_desktop_state',
-    arguments: { application_id: '9', window_id: '7', ...method === 'act' ? { x: 3 } : method === 'screenshot' ? { include_screenshot: true } : {} } }])
+  const calls = await driverCalls(h.root)
+  expect(calls).toHaveLength(1)
+  expect(calls[0]).toMatchObject({ name: method === 'act' ? 'click' : 'get_window_state' })
+  expect(calls[0]!.arguments).toEqual({ pid: 9, window_id: 7, ...method === 'act' ? { x: 3 } : method === 'screenshot' ? { include_screenshot: true, include_accessibility_tree: false } : {} })
   await h.session.close()
+})
+
+it.each(['observe', 'screenshot'] as const)('maps %s without ids to the whole-display observation tool', async (method) => {
+  const h = await mount({ unrelated: false, executor: 'native' })
+  await expect(h.session.execute({ domain: 'desktop', method }, h.signal)).resolves.toMatchObject({ isError: false })
+  expect(await driverCalls(h.root)).toMatchObject([{ name: 'get_desktop_state', arguments: {} }])
+  expect(h.provider.describe()).toMatchObject({ methods: ['observe', 'screenshot'], actionKinds: [] })
+})
+
+it('advertises only what its live catalog executes', async () => {
+  const h = await mount({ unrelated: false, executor: 'native', mode: 'interaction' })
+  expect(h.provider.describe()).toMatchObject({ methods: ['observe', 'screenshot', 'act'], actionKinds: ['click'], availability: 'ready' })
+})
+
+it('rejects an act action that repeats a target id or passes an undeclared argument', async () => {
+  const h = await mount({ unrelated: false, executor: 'native', mode: 'interaction' })
+  const target = { domain: 'desktop' as const, method: 'act' as const, applicationId: '9', windowId: '7' }
+  await expect(h.session.execute({ ...target, action: { kind: 'click', pid: 9 } }, h.signal)).rejects.toThrow('must not repeat')
+  await expect(h.session.execute({ ...target, action: { kind: 'click', button: 'left' } }, h.signal)).rejects.toThrow('does not accept')
+  expect(await driverCalls(h.root)).toEqual([])
 })
 
 it('refuses normalized calls until its MCP connection is ready', async () => {
@@ -157,6 +188,7 @@ it('refuses normalized calls until its MCP connection is ready', async () => {
   const starting = ctx.plugin(Provider, { command: process.execPath, args: [fixture, root], reconnect: { enabled: false } })
   const provider = await registered.promise
   const agent = { ctx, id: SessionId('cua-startup'), session: Session.create(SessionId('cua-startup')) } as Agent
+  expect(provider.describe()).toMatchObject({ methods: [], actionKinds: [], availability: 'ready' })
   const session = await provider.open(agent, new AbortController().signal)
   await expect(session.execute({ domain: 'desktop', method: 'screenshot' }, new AbortController().signal)).rejects.toThrow('not connected')
   await starting

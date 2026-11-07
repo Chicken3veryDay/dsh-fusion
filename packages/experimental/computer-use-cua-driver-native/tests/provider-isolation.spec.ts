@@ -113,19 +113,34 @@ it.each([
   await expect(h.session.execute(operation, h.signal)).rejects.toThrow()
   expect(fixture.calls).toEqual([])
 })
+// get_window_state takes integer `pid` and `window_id`; the driver rejects string ids and `application_id`.
 it.each(['observe', 'screenshot'] as const)('maps %s to the native observation tool with explicit target fields', async (method) => {
   const h = await mount('native')
   const result = await h.session.execute({ domain: 'desktop', method, applicationId: '9', windowId: '7' }, h.signal)
   expect(result).toMatchObject({ isError: false })
-  expect(fixture.calls).toMatchObject([{ name: 'get_window_state', args: { application_id: '9', window_id: '7', ...method === 'screenshot' ? { include_screenshot: true } : {} } }])
+  expect(fixture.calls).toHaveLength(1)
+  expect(fixture.calls[0]).toMatchObject({ name: 'get_window_state', args: { pid: 9, window_id: 7 } })
+  expect(Object.keys(fixture.calls[0]!.args).sort()).toEqual(method === 'screenshot' ? ['include_accessibility_tree', 'include_screenshot', 'pid', 'window_id'] : ['pid', 'window_id'])
+  if (method === 'screenshot') expect(fixture.calls[0]!.args).toMatchObject({ include_screenshot: true, include_accessibility_tree: false })
 })
 
-it('matches decorated upstream operation names without changing normalized arguments', async () => {
+// Action kinds map to exact tool names, so a decorated name is a different tool.
+it('does not match decorated upstream operation names', async () => {
   fixture.list = async () => JSON.stringify({ tools: [{ name: 'linux_desktop_click', inputSchema: { type: 'object' } }] })
   const h = await mount('native')
-  await expect(h.session.execute({ domain: 'desktop', method: 'act', action: { kind: 'click', x: 3 } }, h.signal)).resolves.toMatchObject({ isError: false })
-  expect(fixture.calls).toMatchObject([{ name: 'linux_desktop_click', args: { x: 3 } }])
-  await expect(h.session.execute({ domain: 'desktop', method: 'observe' }, h.signal)).rejects.toThrow('observation tool')
+  await expect(h.session.execute({ domain: 'desktop', method: 'act', action: { kind: 'click', x: 3 } }, h.signal)).rejects.toThrow('not supported')
+  await expect(h.session.execute({ domain: 'desktop', method: 'observe' }, h.signal)).rejects.toThrow('whole-display observation')
+  expect(fixture.calls).toEqual([])
+  expect(h.provider.describe()).toMatchObject({ methods: [], actionKinds: [] })
+})
+
+it('observes the whole display without ids and rejects a half target', async () => {
+  fixture.list = async () => JSON.stringify({ tools: [{ name: 'get_desktop_state', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }] })
+  const h = await mount('native')
+  await expect(h.session.execute({ domain: 'desktop', method: 'observe' }, h.signal)).resolves.toMatchObject({ isError: false })
+  expect(fixture.calls).toMatchObject([{ name: 'get_desktop_state', args: {} }])
+  await expect(h.session.execute({ domain: 'desktop', method: 'observe', applicationId: '9' }, h.signal)).rejects.toThrow('both applicationId and windowId')
+  expect(fixture.calls).toHaveLength(1)
 })
 
 it('reports platform availability and refuses already-cancelled sessions and operations', async () => {
@@ -140,7 +155,7 @@ it('advertises Linux readiness and explains unavailable platforms without openin
   const platform = process.platform
   try {
     Object.defineProperty(process, 'platform', { value: 'linux' })
-    expect(h.provider.describe()).toMatchObject({ availability: 'ready', methods: ['observe', 'act', 'screenshot'] })
+    expect(h.provider.describe()).toMatchObject({ availability: 'ready', methods: ['observe', 'screenshot', 'act'], actionKinds: ['click'] })
     Object.defineProperty(process, 'platform', { value: 'darwin' })
     const unavailable = h.provider.describe()
     expect(unavailable.availability).toBe('unavailable')

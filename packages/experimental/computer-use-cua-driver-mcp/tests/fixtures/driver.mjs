@@ -30,7 +30,9 @@ lines.on('line', (line) => {
       break
     case 'tools/list':
       result = { tools: mode === 'interaction' ? [
-        { name: 'get_desktop_state', inputSchema: { type: 'object' } },
+        { name: 'get_desktop_state', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+        { name: 'get_window_state', inputSchema: { type: 'object', properties: { pid: { type: 'integer' }, window_id: { type: 'integer' }, include_screenshot: { type: 'boolean' }, include_accessibility_tree: { type: 'boolean' } }, required: ['pid', 'window_id'], additionalProperties: false } },
+        { name: 'click', inputSchema: { type: 'object', properties: { pid: { type: 'integer' }, window_id: { type: 'integer' }, x: { type: 'number' } }, required: ['pid', 'window_id'], additionalProperties: false } },
         { name: 'desktop_click', inputSchema: { type: 'object' } },
       ] : [
         { name: 'screenshot', description: 'Capture the selected display.', inputSchema: { type: 'object', properties: { display: { type: 'integer', minimum: 0 } }, required: ['display'], additionalProperties: false } },

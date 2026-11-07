@@ -1094,7 +1094,7 @@ export interface Config {
 
 - `inject`: `computerUse` · `tools`
 - `refs`: [`McpClient`](../packages/mcp/mcp-client/src/index.ts)
-- `source`: [`packages/experimental/computer-use-cua-driver-mcp/src/index.ts:28`](../packages/experimental/computer-use-cua-driver-mcp/src/index.ts)
+- `source`: [`packages/experimental/computer-use-cua-driver-mcp/src/index.ts:29`](../packages/experimental/computer-use-cua-driver-mcp/src/index.ts)
 
 ```ts config-catalog
 /** Installed executable and MCP connection overrides. */

@@ -46,6 +46,20 @@ it('refuses absent, unavailable, and retired Agent capabilities', async () => {
   await release()
 })
 
+it('hides a provider from, and rejects a direct run for, an Agent it does not admit', async () => {
+  const { ctx, agent } = await setup()
+  const open = vi.fn<InteractionProvider['open']>(async () => ({ execute: async () => 'ran', close: async () => {} }))
+  const admits = vi.fn<NonNullable<InteractionProvider['admits']>>(() => false)
+  const release = ctx.interaction.register({ ...provider(open), admits })
+  expect(ctx.interaction.available(agent, 'desktop')).toBe(false)
+  await expect(ctx.interaction.run(agent, 'desktop', operation, signal)).rejects.toThrow('not available to this Session')
+  expect(open).not.toHaveBeenCalled()
+  admits.mockReturnValue(true)
+  expect(ctx.interaction.available(agent, 'desktop')).toBe(true)
+  await expect(ctx.interaction.run(agent, 'desktop', operation, signal)).resolves.toBe('ran')
+  await release()
+})
+
 it('serializes operations and makes repeated disposal await the same cleanup', async () => {
   const { ctx, agent } = await setup()
   const entered = Promise.withResolvers<undefined>()

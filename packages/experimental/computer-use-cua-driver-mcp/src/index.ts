@@ -14,6 +14,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-computer-use'
+import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 
 /** Cordis plugin identity for the installed Cua Driver provider. */
 export const name = 'experimental-computer-use-cua-driver-mcp'
@@ -104,8 +105,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               if (server === undefined) throw new Error('Cua Driver MCP is not connected')
               if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
               const planned = planDesktopOperation(desktopCatalog(server), operation)
-              const registration = server.current().get(planned.tool)
-              if (registration === undefined) throw new Error(`Cua Driver MCP does not expose ${planned.tool}`)
+              // The plan read this tool's schema from the same registration map in this synchronous turn.
+              const registration = server.current().get(planned.tool) as RegisteredTool
               const result = await ctx.tools.invoke({
                 registration, arguments: planned.args, signal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
               })
