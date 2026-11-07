@@ -136,7 +136,7 @@ const runKey = (rootId: Session['id'], request: Pick<PrepareTicketExecutionReque
 
 const asError = (value: unknown, message: string): Error => value instanceof Error ? value : new Error(message, { cause: value })
 
-/** Whether a rejected Subagent start reports that rolling back its unpublished child failed, so the child may still run. */
+/** Whether a rejected Subagent start reports that releasing an execution it created failed, so that execution may still run. */
 const rollbackFailed = (error: unknown): boolean => error instanceof SubagentError && error.code === 'ACTIVATION_TEARDOWN_FAILED'
 
 /** Serializes attempt admission, retains uncertain resources, and waits for producer settlement. */
