@@ -490,6 +490,9 @@ export class WorkstreamService extends Service {
       })
       const timer = setTimeout(() => { cleanup(); resolve(result(true)) }, request.timeoutMs)
       signal.addEventListener('abort', abort, { once: true })
+      // Listener registration dispatches `internal/listener` synchronously; an observer there can abort before the abort
+      // listener exists, and adding it to an aborted signal does not replay the abort.
+      if (signal.aborted) abort()
     })
   }
 
