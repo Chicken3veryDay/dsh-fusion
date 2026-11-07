@@ -64,12 +64,18 @@ export interface AttemptRejection {
   readonly reason: string
 }
 
-/** Whether preparation must end as cancelled at its next forward step. */
+/** Whether preparation must end as cancelled at its next forward step.
+ * @param state - Current phase.
+ * @returns Whether the phase carries the aborted flag.
+ */
 export function isAborted(state: AttemptState): boolean {
   return 'aborted' in state && state.aborted
 }
 
-/** Whether the execution owner no longer holds the attempt. */
+/** Whether the execution owner no longer holds the attempt.
+ * @param state - Current phase.
+ * @returns Whether the phase is `handed` or `released`.
+ */
 export function isTerminal(state: AttemptState): boolean {
   return state.kind === 'handed' || state.kind === 'released'
 }

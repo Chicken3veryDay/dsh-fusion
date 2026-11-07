@@ -1363,6 +1363,17 @@ registerCoordinatorAuthority(authority: (session: Session, requested: SessionId)
  */
 registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void
 
+/** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
+ *
+ * `beginAttempt` consults every guard inside the Session's command queue, after the scope checks and in the same
+ * synchronous step as the append. The guard receives every unsettled attempt this service knows from live roots and
+ * from the stored-root scan, and refuses by throwing a `TicketError`, which fails the admission unchanged and appends
+ * nothing; any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.
+ * @param guard - synchronous decision over the known unsettled attempts.
+ * @returns disposer that removes the guard.
+ */
+registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void
+
 /** Read all Tickets recovered from one Session's durable log.
  * @param session - Session whose log is replayed.
  * @returns recovered Ticket views.
