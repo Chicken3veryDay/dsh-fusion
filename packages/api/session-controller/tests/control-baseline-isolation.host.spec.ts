@@ -44,7 +44,7 @@ it('delivers healthy Sessions and reports the Session whose projection fold thro
 
   const isolated = await firstBaseline(control)
   expect(Object.keys(isolated.value.projections)).toEqual([healthy.session.id])
-  expect(isolated.value.projections[healthy.session.id]).toMatchObject({ values: { inbox: expect.anything() } })
+  expect(isolated.value.projections[healthy.session.id]?.values).toHaveProperty('inbox')
   expect(isolated.value.failed).toEqual([broken.session.id])
   expect(logged).toHaveBeenCalledWith(expect.stringMatching(/Session "broken-session".*broken fold/))
 
