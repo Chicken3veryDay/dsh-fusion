@@ -914,6 +914,20 @@ describe('same-session goal driving', () => {
     expect(test.adapter.requests).toHaveLength(0)
   })
 
+  it('restores claimed input when cancellation follows a downstream step admission', async () => {
+    const test = await harness([])
+    test.ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
+      const decision = await next()
+      if (messages[0]?.source.kind === 'goal') agent.cancel({ kind: 'user' })
+      return decision
+    })
+    test.ctx.goals.create(test.agent, { objective: 'cancel after admission' })
+    const goal = await waitForGoal(test.ctx, test.agent, current => current?.phase === 'paused')
+    await test.agent.whenIdle()
+    expect(goal?.roundsStarted).toBe(0)
+    expect(test.adapter.requests).toHaveLength(0)
+  })
+
   it('rejects the step when downstream cancellation clears the reservation', async () => {
     const test = await harness([])
     let cancelled = false

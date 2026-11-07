@@ -61,6 +61,8 @@ Host 与桌面适配器共用 `dsh-commands/builtin` 的定义身份及中英文
 
 插件在首次使用时为每个 `sessionId` 创建一个 agent。已注册的模型适配器优先用于该路由；尚无适配器负责的 `deepseek-official` 路由会挂载 DeepSeek 适配器，任何其他尚无适配器负责的提供方都会导致初始化失败。初始化成功前，所选适配器会解析确切模型与可选推理强度。
 
+插件 schema 会为省略的 `queryCommandDefinitions` 提供空列表。
+
 ### 配置
 
 | 字段 | 默认值 | 含义 |

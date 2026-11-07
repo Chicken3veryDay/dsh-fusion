@@ -48,7 +48,7 @@ export const Config: Schema<JsonRpcConfig> = Schema.object({
  */
 export function apply(ctx: Context, config: JsonRpcConfig): void {
   // Cordis applies the schema default before invoking the plugin.
-  const resolvedConfig = config as JsonRpcConfig & { maxTokensAsSuccess: boolean }
+  const resolvedConfig = config as JsonRpcConfig & { maxTokensAsSuccess: boolean; queryCommandDefinitions: string[] }
   // Protocol shutdown owns the complete runtime process, so it must await the
   // root lifecycle (including persistence) before exiting.
   const rootFiber = ctx.root.fiber
@@ -62,9 +62,7 @@ export function apply(ctx: Context, config: JsonRpcConfig): void {
   const transport = new JsonRpcLineTransport(input, output)
   const server = new HarnessSdkJsonRpcServer(ctx, transport, {
     maxTokensAsSuccess: resolvedConfig.maxTokensAsSuccess,
-    ...config.queryCommandDefinitions === undefined ? {} : {
-      queryCommandDefinitions: config.queryCommandDefinitions.map(CommandDefinitionId),
-    },
+    queryCommandDefinitions: resolvedConfig.queryCommandDefinitions.map(CommandDefinitionId),
   })
   // Compositions can order Schedule after its activation handler is installed.
   // Like the app startup marker, this carries readiness, not another control API.

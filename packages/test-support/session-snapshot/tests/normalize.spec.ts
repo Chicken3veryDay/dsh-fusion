@@ -562,7 +562,7 @@ describe('normalizeSessionLog', () => {
       reports: [{ createdAt: 1793922585365 }], terminalOutcome: { at: 1793922585366, kind: 'completed' } } } }
     const text = '{"id":"t","createdAt":1793922585363,"updatedAt":1793922585364,"revision":1,"short":{"at":12}}'
     const call = (callId: string, name: string) => ({ type: 'tool/call', data: { callId, name, arguments: '{}' } })
-    const result = (callId: string) => ({ type: 'tool/result', data: { message: { toolCallId: callId, content: [{ type: 'text', text }, { type: 'image' }] } } })
+    const result = (callId: string) => ({ type: 'tool/result', data: { message: { toolCallId: callId, content: [{ type: 'text', text }, { type: 'image' }, null, 42] } } })
     const bare = [{ type: 'ticket/state', data: null }, { type: 'tool/call', data: null }, { type: 'tool/call', data: { callId: 1, name: 'ticket_get' } }, { type: 'tool/result', data: { message: null } },
       { type: 'tool/result', data: { message: { toolCallId: 'a', content: 'x' } } }]
     const out = normalizeSessionLog([header({}), state, call('a', 'ticket_get'), result('a'), call('b', 'workstream_get'), result('b'),
@@ -572,6 +572,7 @@ describe('normalizeSessionLog', () => {
       terminalOutcome: { at: 0, kind: 'completed' } })
     const zeroed = '{"id":"t","createdAt":0,"updatedAt":0,"revision":1,"short":{"at":12}}'
     expect(out[3]?.data.message.content[0]?.text).toBe(zeroed)
+    expect(out[3]?.data.message.content.slice(2)).toEqual([null, 42])
     expect(out[5]?.data.message.content[0]?.text).toBe(zeroed)
     expect(out[7]?.data.message.content[0]?.text).toBe(text)
     expect(out[8]?.data.message.content[0]?.text).toBe(text)

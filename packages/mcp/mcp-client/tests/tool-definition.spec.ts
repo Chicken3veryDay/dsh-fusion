@@ -67,4 +67,30 @@ describe('MCP result callback adaptation', () => {
       }
     },
   )
+  it('keeps content supplied before projection when the canonical value is unchanged', async () => {
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(NativeToolExecutor)
+      const definition = createMcpToolDefinition(ctx, {
+        name: 'content_override', rawName: 'override', description: 'Content projection fixture.',
+        inputSchema: { type: 'object' },
+        call: async () => ({ content: [{ type: 'image', mimeType: 'image/png', data: 'AQ==' }] }),
+      })
+      const project = definition.projectContent?.bind(definition)
+      const content = [{ type: 'text' as const, text: 'execution middleware content' }]
+      ctx.tools.register({ ...definition, projectContent(exec, result) {
+        return project?.(exec, { ...result, content }) ?? content
+      } })
+      const result = await executeToolFixture(ctx, {
+        name: 'content_override', callId: ToolCallId('content-override'), arguments: {},
+        signal: new AbortController().signal,
+      })
+      expect(result.isError).toBe(false)
+      expect(result.value).toEqual({ content: [{ type: 'image', mimeType: 'image/png', data: 'AQ==' }] })
+      expect(result.content).toEqual(content)
+    } finally { await ctx.fiber.dispose() }
+  })
+
 })
