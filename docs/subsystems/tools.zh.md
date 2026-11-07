@@ -179,7 +179,7 @@ interface ToolRestriction {
 
 ## 条件准入 — 步骤拥有的准入集合
 
-注册可以携带 `when` 条件。AgentLoop 为每个拟议步骤以捕获的模型选择调用一次 `ctx.tools.resolve()`；返回的集合决定该步骤的工具声明、执行器分区以及批次中的每次调用，包括 PTC 程序的子调用。`ctx.tools.executable()` 在执行时应用集合，没有集合时排除条件注册。同名替换或新的限制会阻止尚未开始的调用使用已准入的注册，步骤的批次结束后循环释放集合。
+注册可以携带 `when` 条件。AgentLoop 为每个拟议步骤以捕获的模型选择调用一次 `ctx.tools.resolve()`；返回的集合决定该步骤的工具声明、执行器分区以及批次中的每次调用，包括 PTC 程序的子调用。`ctx.tools.executable()` 在执行时应用集合，没有集合时排除条件注册。同名替换或新的限制会阻止尚未开始的调用使用已准入的注册，步骤的批次结束后循环释放集合。冻结请求之前，若集合不再产生其捕获的准入定义，或解析开始后提交的历史改变了集合经验证的准入结果，循环会以 `TOOL_ADMISSION_FAILED` 结束回合。
 
 ```ts type-equiv
 /** Inputs for a tool's step-time activation condition. */

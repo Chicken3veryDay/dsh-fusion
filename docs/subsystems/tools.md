@@ -179,7 +179,7 @@ interface ToolRestriction {
 
 ## Conditional activation — step-owned admission
 
-A registration may carry a `when` condition. AgentLoop calls `ctx.tools.resolve()` once per proposed step with the captured model selection; the returned set decides that step's tool declarations, executor sections, and every call in its batch, including PTC program subcalls. `ctx.tools.executable()` applies the set at execution and, without one, excludes conditional registrations. A same-name replacement or a new restriction stops unstarted calls from using an admitted registration, and the loop disposes the set once the step's batch settles.
+A registration may carry a `when` condition. AgentLoop calls `ctx.tools.resolve()` once per proposed step with the captured model selection; the returned set decides that step's tool declarations, executor sections, and every call in its batch, including PTC program subcalls. `ctx.tools.executable()` applies the set at execution and, without one, excludes conditional registrations. A same-name replacement or a new restriction stops unstarted calls from using an admitted registration, and the loop disposes the set once the step's batch settles. Before freezing a request, the loop fails the turn with `TOOL_ADMISSION_FAILED` when the set no longer yields the admitted definitions it captured, or when history committed after resolution began changes the set's validated admission.
 
 ```ts type-equiv
 /** Inputs for a tool's step-time activation condition. */

@@ -99,7 +99,8 @@ turn/start
      append entered and pending messages as user/message; reconcile retained runtime context
      readmit tools; compare captured inputs -> reassemble and reconcile if changed
      log request/header, tool-registry messages, and request/context as needed
-     validate final-history admission once if reconciliation added messages; fail if unstable
+     if history changed since readmission began: validate admission once against it; fail if unstable
+     recheck admitted definitions and executor against live registrations; fail if changed
      derive and freeze model history from the log
      stream the bound prepared call -> llm/stream -> agent/assistant-stream start
        agent/assistant-stream chunk*

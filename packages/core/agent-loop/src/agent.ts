@@ -394,12 +394,31 @@ export class ReactLoopAgent implements Agent {
     executor = this.loopCtx.tools.selectExecutor(this),
   ): RequestInputs {
     return Object.freeze({
-      definitions,
-      executor,
-      ordered: toolSet.ordered === true,
+      ...this.toolInputs(toolSet, definitions, executor),
       contexts: Object.freeze(renderContextSections(assembly).map(section =>
         createHash('sha256').update(JSON.stringify([section.name, section.text])).digest('hex'))),
     })
+  }
+
+  /** Read the live admitted definitions, executor, and ordering without rendering context. */
+  private toolInputs(
+    toolSet: ResolvedToolSet,
+    definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
+    executor = this.loopCtx.tools.selectExecutor(this),
+  ): Omit<RequestInputs, 'contexts'> {
+    return { definitions, executor, ordered: toolSet.ordered === true }
+  }
+
+  /** Record the surface nodes and content generation that admission or validation reads. */
+  private historyCheckpoint(): { readonly nodes: readonly SessionSeq[]; readonly generation: number } {
+    return { nodes: [...this.session.surface.nodes], generation: this.session.surface.contentGeneration }
+  }
+
+  /** Whether no surface node was appended, removed, or replaced since the checkpoint. */
+  private historyUnchanged(checkpoint: { readonly nodes: readonly SessionSeq[]; readonly generation: number }): boolean {
+    const { nodes, contentGeneration } = this.session.surface
+    return checkpoint.generation === contentGeneration && checkpoint.nodes.length === nodes.length
+      && checkpoint.nodes.every((seq, index) => nodes[index] === seq)
   }
 
   /**
@@ -437,7 +456,7 @@ export class ReactLoopAgent implements Agent {
   }
 
   /** Compare admission identities and ordering without rereading ordinary runtime facts. */
-  private sameToolInputs(before: RequestInputs, after: RequestInputs): boolean {
+  private sameToolInputs(before: Omit<RequestInputs, 'contexts'>, after: Omit<RequestInputs, 'contexts'>): boolean {
     return before.executor === after.executor && before.ordered === after.ordered
       && before.definitions.length === after.definitions.length
       && before.definitions.every((definition, index) => after.definitions[index] === definition)
@@ -635,26 +654,27 @@ export class ReactLoopAgent implements Agent {
         before, decision, preparedCall, requestContext, firstAttempt, startsRequestSeries, { turn, step }, signal,
       )
       firstAttempt = false
+      // Admission reads this history; the checkpoint precedes resolution and assembly because both await.
+      const admitted = this.historyCheckpoint()
       await this.reselectForRequest(decision, signal)
-      const admittedNodes = [...this.session.surface.nodes]
-      const admittedGeneration = this.session.surface.contentGeneration
-      const { assembly, toolSet } = decision.tools
+      const { assembly, toolSet, inputs } = decision.tools
       this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal, unsent)
       const request = await this.buildRequest(
         config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, async () => {
-          const nodes = [...this.session.surface.nodes]
-          const generation = this.session.surface.contentGeneration
-          if (admittedGeneration !== this.session.surface.contentGeneration || nodes.length !== admittedNodes.length
-            || nodes.some((seq, index) => seq !== admittedNodes[index])) {
-            // One reconciliation may publish changed context or tool notices. Verify its fixed point
-            // without another resolution or assembly; an unstable selection must never reach dispatch.
+          if (!this.historyUnchanged(admitted)) {
+            // History committed after the checkpoint (reconciliation, tool notices, or a concurrent append
+            // during assembly) may change admission. Verify its fixed point without another resolution or
+            // assembly; an unstable selection must never reach dispatch.
+            const settled = this.historyCheckpoint()
             await toolSet.validate()
-            if (!this.sameToolInputs(decision.tools.inputs, this.requestInputs(toolSet, assembly))
-              || generation !== this.session.surface.contentGeneration
-              || nodes.length !== this.session.surface.nodes.length
-              || nodes.some((seq, index) => seq !== this.session.surface.nodes[index])) {
+            if (!this.historyUnchanged(settled)) {
               throw new ToolAdmissionError(new Error('Request context did not settle after admission; retry the turn'))
             }
+          }
+          // Registrations can be withdrawn or replaced during any await since resolution, including
+          // assembly; the frozen declarations must still be exactly the live admitted definitions.
+          if (!this.sameToolInputs(inputs, this.toolInputs(toolSet))) {
+            throw new ToolAdmissionError(new Error('Tool registrations changed after admission; retry the turn'))
           }
         },
       )

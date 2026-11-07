@@ -67,7 +67,7 @@ ctx.systemPrompt.section({
 
 `refreshContext(assembly, context)` 在 pre-step 与路由准备之后刷新已注册的运行时事实。它保留已接纳的段、工具、变量及仅由组装 waterfall 添加的上下文，应用当前的可选上下文抑制，并恢复缺失的必需条目。将变化的事实放在上下文 provider 中；已注册上下文的文本会在准入前再次读取。`requestContext(context, pending)` 在每次请求准备后运行 `system-prompt/request-context`。提供方返回存活历史以及已接受但尚未提交的 `pending` 消息中缺少的额外用户消息。循环在请求时工具准入之前提交这些消息、已接受用户消息与刷新的运行时快照；提供方不认领收件箱消息。若准入改变组装结果，循环协调一次上下文，并在发起请求前验证稳定性。
 
-agent loop 在 `agent/pre-step` 之前为每个拟议步骤调用一次 `assemble(context)`，并传入该步骤捕获的模型选择（`context.modelSelection`）与准入工具集合（`context.toolSet`）。展示监听器接收段落、上下文与变量；工具声明仍由提供方持有。依赖工具的段落回调通过 `context.toolSet` 读取与执行相同的步骤集合。
+agent loop 在 `agent/pre-step` 之前为每个拟议步骤调用一次 `assemble(context)`，并传入该步骤捕获的模型选择（`context.modelSelection`）与准入工具集合（`context.toolSet`）。展示监听器接收段落、上下文与变量；工具声明仍由提供方持有。依赖工具的段落回调通过 `context.toolSet` 读取与执行相同的步骤集合。请求时准入改变已捕获输入时，循环会再组装一次；展示监听器等待期间被撤回的工具注册或追加的历史，会使该请求以 `TOOL_ADMISSION_FAILED` 失败，而不会进入分派。
 
 ### 贡献提示词变量
 
