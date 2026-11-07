@@ -39,7 +39,7 @@ Providers register an effect-owned adapter. The service opens one live resource 
 
 #### What the model sees
 
-The Agent receives only normalized `browser_*` and `desktop_*` tools admitted by its current provider availability. Provider names and setup diagnostics remain Host metadata.
+The Agent receives only normalized `browser_*` and `desktop_*` tools admitted by its current provider availability. A provider may also refuse an Agent whose activation cannot use its resource (`admits`): that Agent sees no normalized tools for the domain and its calls are rejected. Provider names and setup diagnostics remain Host metadata.
 
 #### Token effect
 
@@ -51,6 +51,7 @@ Provider availability changes which interaction tool schemas enter a request; an
 
 ## Known Limitations and Deferred Work
 
+- `desktop-catalog.ts` maps normalized desktop operations onto a Cua Driver catalog: `applicationId` is the driver's integer process id, `windowId` its integer window id, and each action kind resolves to one exact driver tool (`type` to `type_text`; `select` and `perform_action` have none and are not accepted).
 - The service does not provide a provider implementation, OS permission flow, or durable browser or desktop state. Those responsibilities remain with adapters.
 
 ### Dev Note

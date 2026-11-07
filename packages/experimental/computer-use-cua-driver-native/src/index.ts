@@ -7,8 +7,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
-import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
+import type { DesktopCatalog, InteractionOperation } from '@deepseek-ai/dsh-interaction'
+import { desktopActionKinds, desktopMethods, interactionProviderId, planDesktopOperation } from '@deepseek-ai/dsh-interaction'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createMcpToolDefinition } from '@deepseek-ai/dsh-mcp-client'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -39,38 +39,8 @@ const ToolCatalog = z.object({
 /** DeepSeek's function-name alphabet and maximum length are protocol constants. */
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/u
 
-function findTool(catalog: z.infer<typeof ToolCatalog>, names: readonly string[]): string | undefined {
-  return catalog.tools.find(tool => names.some(name => tool.name === name))?.name
-    ?? catalog.tools.find(tool => names.some(name => tool.name.includes(name)))?.name
-}
-
-function interactionTool(
-  catalog: z.infer<typeof ToolCatalog>,
-  operation: InteractionOperation,
-): { name: string; args: Record<string, JsonValue> } {
-  if (operation.domain !== 'desktop') throw new Error('Cua Driver native provider only supplies desktop interaction')
-  const windowArgs = {
-    ...operation.applicationId === undefined ? {} : { application_id: operation.applicationId },
-    ...operation.windowId === undefined ? {} : { window_id: operation.windowId },
-  }
-  if (operation.method === 'observe' || operation.method === 'screenshot') {
-    const name = findTool(catalog, operation.method === 'screenshot'
-      ? ['screenshot', 'get_window_state', 'get_desktop_state']
-      : ['get_window_state', 'get_desktop_state'])
-    if (name === undefined) throw new Error('Cua Driver does not expose a desktop observation tool')
-    return { name, args: { ...windowArgs, ...operation.method === 'screenshot' ? { include_screenshot: true } : {} } }
-  }
-  const action = operation.action
-  if (typeof action !== 'object' || action === null || Array.isArray(action)) {
-    throw new Error('desktop_act requires an object action with kind')
-  }
-  const kind = action.kind
-  if (typeof kind !== 'string') throw new Error('desktop_act action.kind must be a string')
-  if (!isDesktopActionKind(kind)) throw new Error(`desktop_act action.kind "${kind}" is not supported by the normalized facade`)
-  const name = findTool(catalog, [kind, `desktop_${kind}`])
-  if (name === undefined) throw new Error(`Cua Driver does not expose desktop action "${kind}"`)
-  const { kind: _kind, ...args } = action
-  return { name, args: { ...windowArgs, ...args } }
+function desktopCatalog(catalog: z.infer<typeof ToolCatalog>): DesktopCatalog {
+  return { schema: tool => catalog.tools.find(candidate => candidate.name === tool)?.inputSchema }
 }
 
 const GUIDANCE = `Cua Driver native computer-use tools operate the host desktop. Discover the exact app and window, then get a fresh window snapshot before acting. Use element_token from that snapshot, or coordinates from its screenshot. A new snapshot of that window invalidates its earlier element tokens. Select either target or the legacy pid/window_id fields; do not combine them.
@@ -135,13 +105,15 @@ export async function apply(ctx: Context): Promise<void> {
     /** This runtime's own registrations by upstream catalog name; the interaction session invokes only these. */
     const registrations = new Map<string, RegisteredTool>()
     const interaction = inner.get('interaction')
+    const driverCatalog = desktopCatalog(catalog)
     if (interaction !== undefined) {
       const release = interaction.register({
         domain: 'desktop',
         describe: () => ({
           id: interactionProviderId('cua-driver-native'),
           domains: ['desktop'],
-          methods: ['observe', 'act', 'screenshot'],
+          methods: desktopMethods(driverCatalog),
+          actionKinds: desktopActionKinds(driverCatalog),
           availability: process.platform === 'linux' ? 'ready' : 'unavailable',
           ...process.platform === 'linux' ? {} : { detail: 'The first-class desktop adapter currently targets Linux Hosts.' },
         }),
@@ -150,8 +122,9 @@ export async function apply(ctx: Context): Promise<void> {
           return Promise.resolve({
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               operationSignal.throwIfAborted()
-              const selected = interactionTool(catalog, operation)
-              const registration = registrations.get(selected.name) as RegisteredTool
+              if (operation.domain !== 'desktop') throw new Error('Cua Driver native provider only supplies desktop interaction')
+              const selected = planDesktopOperation(driverCatalog, operation)
+              const registration = registrations.get(selected.tool) as RegisteredTool
               const settled = await inner.tools.invoke({
                 registration,
                 arguments: selected.args,

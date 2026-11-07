@@ -34,13 +34,14 @@ lines.on('line', (line) => {
         { name: 'desktop_click', inputSchema: { type: 'object' } },
       ] : [
         { name: 'screenshot', description: 'Capture the selected display.', inputSchema: { type: 'object', properties: { display: { type: 'integer', minimum: 0 } }, required: ['display'], additionalProperties: false } },
+        { name: 'get_desktop_state', description: 'Capture the full display.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
         { name: 'disconnect', description: 'Disconnect the fixture.', inputSchema: { type: 'object', properties: {} } },
       ] }
       break
     case 'tools/call':
       record('call', { name: request.params.name, arguments: request.params.arguments })
-      result = request.params.name === 'screenshot'
-        ? { content: [{ type: 'text', text: `Display ${request.params.arguments.display}` }, { type: 'image', mimeType: 'image/png', data: png }], structuredContent: { display: request.params.arguments.display } }
+      result = request.params.name === 'screenshot' || request.params.name === 'get_desktop_state'
+        ? { content: [{ type: 'text', text: `Display ${request.params.arguments.display ?? 0}` }, { type: 'image', mimeType: 'image/png', data: png }], structuredContent: { display: request.params.arguments.display ?? 0 } }
         : { content: [{ type: 'text', text: 'Disconnected.' }] }
       break
     default:

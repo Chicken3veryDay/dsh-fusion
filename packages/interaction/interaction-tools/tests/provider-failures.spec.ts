@@ -42,9 +42,9 @@ it.each(['browser', 'desktop'] as const)('preserves an underlying %s upstream fa
       await ctx.plugin(DesktopProvider, { command: process.execPath, args: [fixture, root], reconnect: { enabled: false } })
     }
     const agent = await harness.create(SessionId(`review-errors-${domain}`), { provider: 'idle', model: 'fixture' })
-    const rawName = domain === 'browser' ? 'mcp__browser-fixture__browser_navigate' : 'mcp__cua-driver-mcp__screenshot'
+    const rawName = domain === 'browser' ? 'mcp__browser-fixture__browser_navigate' : 'mcp__cua-driver-mcp__get_desktop_state'
     const signal = new AbortController().signal
-    const raw = await executeModelToolFixture(ctx, { agent, name: rawName, arguments: domain === 'browser' ? { url: 'https://example.invalid/' } : { display: 0 }, callId: ToolCallId('raw-control'), signal })
+    const raw = await executeModelToolFixture(ctx, { agent, name: rawName, arguments: domain === 'browser' ? { url: 'https://example.invalid/' } : {}, callId: ToolCallId('raw-control'), signal })
     expect(raw.isError).toBe(true)
     const toolSet = await ctx.tools.resolve({ agent, signal, modelSelection: { provider: 'idle', model: 'fixture' } })
     try {

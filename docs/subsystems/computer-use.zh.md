@@ -28,7 +28,7 @@ CUA provider 通过 `ctx.cuaAccess` 提供系统权限状态、用户主动申�
 | [Cua Driver MCP](../../packages/experimental/computer-use-cua-driver-mcp/README.zh.md) | 通过 MCP 连接已安装的 `cua-driver` 可执行文件 |
 | [Cua Driver 原生](../../packages/experimental/computer-use-cua-driver-native/README.zh.md) | 随 npm 依赖安装的平台原生运行时 |
 
-各提供方提供上游工具目录。兼容服务只注册名称，并拒绝第二个提供方。DSH 交互服务将 Linux 提供方映射为规范化的 `desktop_observe`、`desktop_act` 和 `desktop_screenshot` 工具，模型不会选择提供方。
+各提供方提供上游工具目录。兼容服务只注册名称，并拒绝第二个提供方。DSH 交互服务将 Linux 提供方映射为规范化的 `desktop_observe`、`desktop_act` 和 `desktop_screenshot` 工具，模型不会选择提供方。`applicationId` 和 `windowId` 是驱动的整数进程 id 与窗口 id；不带 id 的观察会捕获整个显示器。`act` 只接受实时目录中存在精确驱动工具的类型（`click`、`type`（对应 `type_text`）、`press_key`、`scroll`、`drag`、`hotkey`、`set_value`）；其他类型和格式错误的 id 会在调用驱动之前被拒绝。
 
 ## 生命周期和桌面共享
 

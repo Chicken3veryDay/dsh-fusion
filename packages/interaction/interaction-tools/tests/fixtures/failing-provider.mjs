@@ -14,7 +14,7 @@ lines.on('line', (line) => {
       reply({ protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'failing-provider', version: '1' } })
       break
     case 'tools/list':
-      reply({ tools: ['browser_navigate', 'screenshot'].map(name => ({ name, description: 'Fails the requested operation.', inputSchema: { type: 'object', properties: {} } })) })
+      reply({ tools: ['browser_navigate', 'get_desktop_state'].map(name => ({ name, description: 'Fails the requested operation.', inputSchema: { type: 'object', properties: {} } })) })
       break
     case 'tools/call':
       reply({ isError: true, content: [{ type: 'text', text: 'Upstream provider failed' }] })

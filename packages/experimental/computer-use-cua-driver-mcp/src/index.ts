@@ -8,13 +8,12 @@ import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
-import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
-import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
+import type { DesktopCatalog, InteractionOperation } from '@deepseek-ai/dsh-interaction'
+import { desktopActionKinds, desktopMethods, interactionProviderId, planDesktopOperation } from '@deepseek-ai/dsh-interaction'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import { type JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-computer-use'
-import type { RegisteredTool } from '@deepseek-ai/dsh-tools'
 
 /** Cordis plugin identity for the installed Cua Driver provider. */
 export const name = 'experimental-computer-use-cua-driver-mcp'
@@ -50,37 +49,9 @@ export const Config: z<Partial<Config>, Config> = z.object({
   }),
 })
 
-/**
- * Map a desktop operation to one of this provider's own MCP registrations. Only the connection's
- * current generation qualifies, so a same-named tool of another provider or scope never does.
- */
-function desktopTool(
-  server: McpClient.McpServerTools,
-  operation: InteractionOperation,
-): { registration: RegisteredTool; args: Record<string, JsonValue> } {
-  if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
-  const tools = server.current()
-  const find = (rawNames: readonly string[]): RegisteredTool => {
-    const registration = rawNames.map(raw => tools.get(raw)).find(candidate => candidate !== undefined)
-    if (registration === undefined) throw new Error(`Cua Driver MCP does not expose ${rawNames.join(' or ')}`)
-    return registration
-  }
-  const target = {
-    ...operation.applicationId === undefined ? {} : { application_id: operation.applicationId },
-    ...operation.windowId === undefined ? {} : { window_id: operation.windowId },
-  }
-  if (operation.method === 'observe' || operation.method === 'screenshot') {
-    return {
-      registration: find(operation.method === 'screenshot' ? ['screenshot', 'get_window_state', 'get_desktop_state'] : ['get_window_state', 'get_desktop_state']),
-      args: { ...target, ...operation.method === 'screenshot' ? { include_screenshot: true } : {} },
-    }
-  }
-  if (typeof operation.action !== 'object' || operation.action === null || Array.isArray(operation.action)) throw new Error('desktop_act action must be an object with kind')
-  const kind = operation.action.kind
-  if (typeof kind !== 'string' || kind.length === 0) throw new Error('desktop_act action.kind must be a non-empty string')
-  if (!isDesktopActionKind(kind)) throw new Error(`desktop_act action.kind "${kind}" is not supported by the normalized facade`)
-  const { kind: _kind, ...args } = operation.action
-  return { registration: find([kind, `desktop_${kind}`]), args: { ...target, ...args } }
+/** The live catalog of this connection's current generation, read from its registrations' declared inputs. */
+function desktopCatalog(server: McpClient.McpServerTools): DesktopCatalog {
+  return { schema: tool => server.current().get(tool)?.definition.parameters }
 }
 
 /**
@@ -117,14 +88,26 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (interaction !== undefined) {
       yield interaction.register({
         domain: 'desktop',
-        describe: () => ({ id: interactionProviderId('cua-driver-mcp'), domains: ['desktop'], methods: ['observe', 'act', 'screenshot'], availability: 'ready' }),
+        describe: () => {
+          const catalog = server === undefined ? undefined : desktopCatalog(server)
+          return {
+            id: interactionProviderId('cua-driver-mcp'),
+            domains: ['desktop'],
+            methods: catalog === undefined ? [] : desktopMethods(catalog),
+            actionKinds: catalog === undefined ? [] : desktopActionKinds(catalog),
+            availability: 'ready',
+          }
+        },
         open(agent: Agent, _signal: AbortSignal) {
           return Promise.resolve({
             execute: async (operation: InteractionOperation, signal: AbortSignal) => {
               if (server === undefined) throw new Error('Cua Driver MCP is not connected')
-              const { registration, args } = desktopTool(server, operation)
+              if (operation.domain !== 'desktop') throw new Error('Cua Driver MCP provider received a browser operation')
+              const planned = planDesktopOperation(desktopCatalog(server), operation)
+              const registration = server.current().get(planned.tool)
+              if (registration === undefined) throw new Error(`Cua Driver MCP does not expose ${planned.tool}`)
               const result = await ctx.tools.invoke({
-                registration, arguments: args, signal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
+                registration, arguments: planned.args, signal, agent, callId: ToolCallId(`interaction-${++interactionCallSequence}`),
               })
               return JSON.parse(JSON.stringify(result)) as JsonValue
             },

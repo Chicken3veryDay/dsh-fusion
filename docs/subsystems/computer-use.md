@@ -28,7 +28,7 @@ Mount [`dsh-computer-use`](../../packages/computer-use/computer-use/README.md) a
 | [Cua Driver MCP](../../packages/experimental/computer-use-cua-driver-mcp/README.md) | An already installed `cua-driver` executable connected through MCP |
 | [Cua Driver native](../../packages/experimental/computer-use-cua-driver-native/README.md) | The platform-native runtime installed with the npm dependency |
 
-Each provider supplies its upstream tool catalog. The compatibility service registers only a name and rejects any second provider. The DSH interaction service maps the Linux provider to normalized `desktop_observe`, `desktop_act`, and `desktop_screenshot` tools without exposing provider selection to the model.
+Each provider supplies its upstream tool catalog. The compatibility service registers only a name and rejects any second provider. The DSH interaction service maps the Linux provider to normalized `desktop_observe`, `desktop_act`, and `desktop_screenshot` tools without exposing provider selection to the model. `applicationId` and `windowId` are the driver's integer process and window ids; an observation without ids captures the whole display. `act` accepts only kinds whose exact driver tool the live catalog exposes (`click`, `type` as `type_text`, `press_key`, `scroll`, `drag`, `hotkey`, `set_value`); other kinds and malformed ids are rejected before any driver call.
 
 ## Lifetime and desktop sharing
 

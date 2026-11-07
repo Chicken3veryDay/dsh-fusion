@@ -38,7 +38,7 @@ export function isBrowserActionKind(value: string): value is BrowserActionKind {
 
 /** Linux desktop action kinds admitted by the normalized desktop facade. */
 export const DESKTOP_ACTION_KINDS = [
-  'click', 'type', 'press_key', 'scroll', 'drag', 'hotkey', 'select', 'set_value', 'perform_action',
+  'click', 'type', 'press_key', 'scroll', 'drag', 'hotkey', 'set_value',
 ] as const
 
 /** A desktop action kind accepted by the normalized desktop facade. */
@@ -81,6 +81,8 @@ export interface InteractionProviderDescription {
   readonly domains: readonly InteractionDomain[]
   /** Normalized operation methods supported by this provider. */
   readonly methods?: readonly string[]
+  /** Normalized `act` kinds this provider executes now; absent when the provider has no per-kind catalog. */
+  readonly actionKinds?: readonly string[]
   /** Current setup/permission state. */
   readonly availability: InteractionAvailability
   /** Human-readable diagnostic owned by the provider. */
@@ -101,6 +103,13 @@ export interface InteractionProvider {
   describe(): InteractionProviderDescription
   /** Domain supplied by this registration. */
   readonly domain: InteractionDomain
+  /**
+   * Whether this exact Agent may use the provider now. Omission admits every Agent.
+   * Checked on every offer and every run, so an Agent refused here sees no normalized tools and cannot reach the provider.
+   * @param agent - live Agent requesting the capability.
+   * @returns false when this Agent's activation has no access to the provider's resource.
+   */
+  admits?(agent: Agent): boolean
   /** Open one live Agent-owned resource. */
   open(agent: Agent, signal: AbortSignal): Promise<InteractionSession>
 }
@@ -151,6 +160,7 @@ export class InteractionService extends Service {
       && registration.provider.describe().availability === 'ready'
       && (method === undefined || registration.provider.describe().methods?.includes(method) === true)
       && this.ctx.get('agents')?.get(agent.id) === agent
+      && registration.provider.admits?.(agent) !== false
   }
 
   /**
@@ -194,6 +204,7 @@ export class InteractionService extends Service {
       throw new Error(`interaction ${domain} is unavailable`)
     }
     if (this.ctx.get('agents')?.get(agent.id) !== agent) throw new Error(`interaction ${domain} requires a live Agent`)
+    if (registration.provider.admits?.(agent) === false) throw new Error(`interaction ${domain} is not available to this Session`)
     const entry = this.entry(registration, agent)
     const combined = AbortSignal.any([signal, entry.controller.signal])
     const task = entry.tail.then(async () => {
@@ -241,5 +252,7 @@ export class InteractionService extends Service {
     })
   }
 }
+
+export * from './desktop-catalog.ts'
 
 export default InteractionService

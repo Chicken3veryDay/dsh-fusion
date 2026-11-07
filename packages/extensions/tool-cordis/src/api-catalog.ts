@@ -7991,11 +7991,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'InteractionProvider',
-    declaration: 'export interface InteractionProvider {\n    describe(): InteractionProviderDescription;\n    readonly domain: InteractionDomain;\n    open(agent: Agent, signal: AbortSignal): Promise<InteractionSession>;\n}',
+    declaration: 'export interface InteractionProvider {\n    describe(): InteractionProviderDescription;\n    readonly domain: InteractionDomain;\n    admits?(agent: Agent): boolean;\n    open(agent: Agent, signal: AbortSignal): Promise<InteractionSession>;\n}',
   },
   {
     name: 'InteractionProviderDescription',
-    declaration: 'export interface InteractionProviderDescription {\n    readonly id: InteractionProviderId;\n    readonly domains: readonly InteractionDomain[];\n    readonly methods?: readonly string[];\n    readonly availability: InteractionAvailability;\n    readonly detail?: string;\n}',
+    declaration: 'export interface InteractionProviderDescription {\n    readonly id: InteractionProviderId;\n    readonly domains: readonly InteractionDomain[];\n    readonly methods?: readonly string[];\n    readonly actionKinds?: readonly string[];\n    readonly availability: InteractionAvailability;\n    readonly detail?: string;\n}',
   },
   {
     name: 'InteractionProviderId',
