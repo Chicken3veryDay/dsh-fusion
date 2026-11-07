@@ -27,7 +27,7 @@ const STOP_BOUND_MS = 5_000
 const DIRECTORY = '/property/shared'
 const SCOPE = [{ path: 'src/shared.ts', access: 'write', exclusive: true }] as const
 
-type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once' | 'disposes-at-start'
+type ProducerKind = 'completes' | 'fails' | 'stubborn' | 'throws-once' | 'cancel-fails' | 'disposes-at-start'
 type StartOutcome = 'establish' | 'refuse' | 'rollback-fails'
 type Action =
   | { readonly kind: 'prepare'; readonly slot: number; readonly dedicated: boolean; readonly signal: boolean; readonly holdAt: number }
@@ -68,6 +68,8 @@ interface Attempt {
   /** A child whose rollback failed: it runs until the drain or a restart ends it, and Ticket holds no handle to it. */
   orphan?: { finished: boolean }
   start?: PromiseWithResolvers<{ start: StartOutcome; cleanup: 'clean' | 'fails'; stubborn: boolean }>
+  /** The provider is waiting for the model's start decision. */
+  deciding: boolean
   pendingJobs: number
   stops: number
 }
@@ -131,6 +133,8 @@ function subagents(world: World) {
       if (world.draining) throw new Error('provider refused')
       const decision = Promise.withResolvers<{ start: StartOutcome; cleanup: 'clean' | 'fails'; stubborn: boolean }>()
       attempt.start = decision
+      attempt.deciding = true
+      void decision.promise.then(() => { attempt.deciding = false }, () => { attempt.deciding = false })
       spec.signal?.addEventListener('abort', () => { decision.reject(new Error('activation cancelled before a child started')) }, { once: true })
       const chosen = await decision.promise
       if (chosen.start === 'refuse') throw new Error('provider refused')
@@ -274,12 +278,23 @@ function target(world: World, action: Action): Attempt | undefined {
     switch (action.kind) {
       case 'job': case 'settle': case 'dispose': return attempt.handle !== undefined && attempt.generation === world.generation
       case 'abort': return attempt.status === 'pending' && attempt.request.signal !== undefined
-      case 'activation': return attempt.start !== undefined && attempt.status === 'pending'
+      case 'activation': return attempt.deciding
       case 'busy': return attempt.handle !== undefined && attempt.request.executor.kind === 'in-process' && attempt.stops === 0
       default: return true
     }
   }
   return action.kind === 'busy' ? mine.findLast(fit) : mine.findLast(fit) ?? mine.at(-1)
+}
+
+/** Some root's flush is held by the model. */
+function held(world: World): boolean {
+  return [...world.flush.values()].some(control => control.gate !== undefined)
+}
+
+/** Wait until an operation an action started has settled or blocks on a gate the model holds, so that the next action meets
+ * the same state on every run. A wait that exhausts its bound is left to the liveness checks. */
+async function until(world: World, settled: () => boolean): Promise<void> {
+  for (let waited = 0; waited < LIVENESS_MS && !settled() && !held(world); waited++) await delay(1)
 }
 
 /** A producer of `attempt` that has not ended. */
@@ -295,20 +310,22 @@ function unreleasable(attempt: Attempt): boolean {
   return attempt.activation?.cleanup === 'fails' || attempt.orphan !== undefined
 }
 
+/** Another attempt still runs a producer, or its producers never confirmed their release and no host settled it yet. */
 function liveProducerElsewhere(world: World, attempt: Attempt): boolean {
-  return world.attempts.some(other => other !== attempt && liveProducer(world, other))
+  return world.attempts.some(other => other !== attempt && (liveProducer(world, other)
+    || (unreleasable(other) && other.epoch === world.epoch && !world.settled.has(other.request.attemptId))))
 }
 
-function prepare(world: World, slot: number, dedicated: boolean, signal: boolean): void {
+function prepare(world: World, slot: number, dedicated: boolean, signal: boolean): Attempt | undefined {
   const root = world.roots[slot]
   const worker = world.workers[slot]
   const caller = dedicated ? root?.agent : worker?.agent
   const ticketId = world.ticketIds[slot]
-  if (root?.session === undefined || root.agent === undefined || caller === undefined || ticketId === undefined) return
+  if (root?.session === undefined || root.agent === undefined || caller === undefined || ticketId === undefined) return undefined
   let ticket
-  try { ticket = world.ctx.tickets.get(root.session, ticketId) } catch { return }
+  try { ticket = world.ctx.tickets.get(root.session, ticketId) } catch { return undefined }
   const assignment = ticket.assignments[0]
-  if (assignment === undefined) return
+  if (assignment === undefined) return undefined
   const id = `${String(world.generation)}-${String(world.serial++)}`
   const abort = new AbortController()
   const request: PrepareTicketExecutionRequest = {
@@ -320,7 +337,7 @@ function prepare(world: World, slot: number, dedicated: boolean, signal: boolean
   }
   const preparation = world.ctx.ticketExecution.prepare(caller, request)
   const attempt: Attempt = { slot, generation: world.generation, epoch: world.epoch, request, caller, abort, preparation,
-    status: 'pending', abortedWhilePending: false, pendingJobs: 0, stops: 0 }
+    status: 'pending', abortedWhilePending: false, deciding: false, pendingJobs: 0, stops: 0 }
   world.attempts.push(attempt)
   void preparation.then((handle) => {
     attempt.status = 'published'
@@ -331,6 +348,7 @@ function prepare(world: World, slot: number, dedicated: boolean, signal: boolean
     attempt.status = 'rejected'
     attempt.error = error
   })
+  return attempt
 }
 
 function startJob(world: World, attempt: Attempt, kind: ProducerKind): void {
@@ -349,6 +367,7 @@ function startJob(world: World, attempt: Attempt, kind: ProducerKind): void {
       cancel() {
         producer.cancels++
         if (kind === 'stubborn') return
+        if (kind === 'cancel-fails') throw new Error('cancellation failed while the producer kept running')
         if ((kind === 'throws-once' || kind === 'disposes-at-start') && producer.cancels === 1) throw new Error('transient cancellation failure')
         done.resolve({ status: 'killed' })
       },
@@ -439,12 +458,13 @@ async function act(world: World, action: Action): Promise<void> {
     case 'prepare':
       // Holding the nth flush of this preparation's root reaches the admission, workspace or runtime write.
       if (action.holdAt > 0) await setFlush(world, action.slot, 'hold', action.holdAt)
-      prepare(world, action.slot, action.dedicated, action.signal)
+      await awaitPreparation(world, prepare(world, action.slot, action.dedicated, action.signal))
       break
     case 'retry':
       if (attempt !== undefined && attempt.caller === world.ctx.agents.get(attempt.caller.id)) {
         const before = attempt.status
-        void world.ctx.ticketExecution.prepare(attempt.caller, attempt.request).then((handle) => {
+        let retried = false
+        void world.ctx.ticketExecution.prepare(attempt.caller, attempt.request).finally(() => { retried = true }).then((handle) => {
           if (before === 'published' && handle !== attempt.handle) world.violations.push(`${attempt.request.attemptId} retry published a second handle`)
         }, (error: unknown) => {
           if (codeOf(error) === undefined && error !== attempt.error && !(error instanceof AggregateError)
@@ -452,6 +472,7 @@ async function act(world: World, action: Action): Promise<void> {
             world.violations.push(`${attempt.request.attemptId} retry rejected with an untyped error: ${String(error)}`)
           }
         })
+        await until(world, () => retried || attempt.deciding)
       }
       break
     case 'abort':
@@ -462,8 +483,14 @@ async function act(world: World, action: Action): Promise<void> {
       break
     case 'activation':
       attempt?.start?.resolve({ start: action.start, cleanup: action.cleanup, stubborn: action.stubborn })
+      await awaitPreparation(world, attempt)
       break
-    case 'job': if (attempt !== undefined && attempt.generation === world.generation) startJob(world, attempt, action.producer); break
+    case 'job':
+      if (attempt !== undefined && attempt.generation === world.generation) {
+        startJob(world, attempt, action.producer)
+        await until(world, () => attempt.pendingJobs === 0)
+      }
+      break
     case 'busy': {
       const worker = world.workers[action.slot]
       if (attempt !== undefined && worker !== undefined && worker.busy === undefined && attempt.status === 'published') {
@@ -483,8 +510,11 @@ async function act(world: World, action: Action): Promise<void> {
       const agent = root.agent
       try {
         const ticket = world.ctx.tickets.get(session, ticketId)
+        let failed = false
         void world.ctx.agents.withInitiator(agent, () => world.ctx.tickets.fail(session, {
           ticketId, expectedRevision: ticket.revision, actorId: agent.id, summary: 'Stopped by the model' })).catch(() => {})
+          .finally(() => { failed = true })
+        await until(world, () => failed)
       } catch { /* A Ticket that cannot be read cannot be failed. */ }
       break
     }
@@ -527,6 +557,11 @@ async function act(world: World, action: Action): Promise<void> {
     default: action satisfies never
   }
   await settleTicks()
+}
+
+/** Wait for a preparation to publish, reject, or wait for the model's activation decision or a held flush. */
+async function awaitPreparation(world: World, attempt: Attempt | undefined): Promise<void> {
+  if (attempt !== undefined) await until(world, () => attempt.status !== 'pending' || attempt.deciding)
 }
 
 /** Await one product call; a call that never settles is a liveness violation. */
@@ -672,7 +707,8 @@ const action: fc.Arbitrary<Action> = fc.oneof(
   { weight: 7, arbitrary: fc.record({ kind: fc.constant('prepare' as const), slot, dedicated: fc.boolean(), signal: fc.boolean(),
     holdAt: fc.integer({ min: 0, max: 3 }) }) },
   { weight: 6, arbitrary: fc.record({ kind: fc.constant('job' as const), slot,
-    producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once', 'disposes-at-start') }) },
+    producer: fc.constantFrom<ProducerKind>('completes', 'fails', 'stubborn', 'stubborn', 'throws-once', 'throws-once', 'cancel-fails',
+      'disposes-at-start') }) },
   { weight: 4, arbitrary: fc.record({ kind: fc.constant('activation' as const), slot,
     start: fc.constantFrom<StartOutcome>('establish', 'establish', 'refuse', 'rollback-fails'),
     cleanup: fc.constantFrom<'clean' | 'fails'>('clean', 'clean', 'fails'), stubborn: fc.boolean() }) },
@@ -703,15 +739,19 @@ const regressions: Action[][] = [
   // R7-2: replacement while a producer without a visible Job still runs: a busy worker, then a stubborn activation.
   [inProcess(0), { kind: 'busy', slot: 0 }, { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
   [dedicated(0), activation(0, 'establish', 'clean', true), { kind: 'drop-root', slot: 0 }, { kind: 'replace' }, inProcess(1)],
-  // R7-2: a Job whose record the owner's cleanup force-failed and removed while its producer runs.
-  [inProcess(0), { kind: 'job', slot: 0, producer: 'throws-once' }, { kind: 'worker-down', slot: 0 }, { kind: 'drop-root', slot: 0 },
+  // R7-2: a Job whose record the owner's cleanup force-failed and removed while its producer runs, then a replacement.
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'cancel-fails' }, { kind: 'worker-down', slot: 0 }, { kind: 'drop-root', slot: 0 },
+    inProcess(1)],
+  [inProcess(0), { kind: 'job', slot: 0, producer: 'cancel-fails' }, { kind: 'worker-down', slot: 0 }, { kind: 'drop-root', slot: 0 },
     { kind: 'replace' }, inProcess(1)],
   // R7-3: Job startup requests a stop before returning its hooks, whose cancel then throws.
   [inProcess(0), { kind: 'job', slot: 0, producer: 'disposes-at-start' }],
   // R7-4: a Subagent start rejected after its rollback failed.
   [dedicated(0), activation(0, 'rollback-fails')],
-  // R7-5: a captured result whose release then fails.
-  [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }],
+  // R7-5: a captured result whose release then fails, then a competing admission.
+  [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }, inProcess(1)],
+  [dedicated(0), activation(0, 'establish', 'fails'), { kind: 'finish', slot: 0 }, { kind: 'settle', slot: 0 }, { kind: 'drop-root', slot: 0 },
+    { kind: 'replace' }, inProcess(1)],
 ]
 
 /* TICKET_PROPERTY_SEED, TICKET_PROPERTY_RUNS and TICKET_PROPERTY_NO_EXAMPLES vary the seed, the run count and the regression
