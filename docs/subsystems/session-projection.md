@@ -16,6 +16,7 @@ interface ProjectionHandle<S> {
    * Session events with this handle's original unit. Do not mutate the live value.
    * @param session - Session whose committed events are folded.
    * @returns the projection state at the Session's current cursor.
+   * @throws {SessionProjectionUnitError} when this unit's fold failed for the Session.
    */
   stateOf(session: Session): S
   /**
@@ -316,7 +317,7 @@ Source: [`packages/session/session-projection-cache/src/index.ts`](../../package
 
 ### `ctx.sessionProjections` — `SessionProjectionRegistry`
 
-`ctx.sessionProjections`: the projection unit table and its drive. The service subscribes to `session/event` once; every committed event passes every registered unit's `apply` (eager drive). A changed state reference computes the next client view; the change feed is notified only when its raw result changes by `Object.is`. Cells build lazily — a unit registered after events flowed, or a session older than the registry, folds `init` over the in-memory log on first touch (event or read). Consumers declare `sessionProjections` as a required injection, await registration during activation, and retain its ready handle. Registrants sharing a key share one unit and are counted. The last release removes the unit from live drives, checkpoints, and client snapshots; retained handles still fold new events on demand using the original unit.
+`ctx.sessionProjections`: the projection unit table and its drive. The service subscribes to `session/event` once; every committed event passes every registered unit's `apply` (eager drive). A changed state reference computes the next client view; the change feed is notified only when its raw result changes by `Object.is`. Cells build lazily — a unit registered after events flowed, or a session older than the registry, folds `init` over the in-memory log on first touch (event or read). Consumers declare `sessionProjections` as a required injection, await registration during activation, and retain its ready handle. Registrants sharing a key share one unit and are counted. The last release removes the unit from live drives, checkpoints, and client snapshots; retained handles still fold new events on demand using the original unit. A unit whose `init` or `apply` throws for a Session fails only for that unit and Session (SessionProjectionUnitError); every other unit keeps its eager drive.
 
 ```ts cordis-catalog
 /**
@@ -351,16 +352,21 @@ onChanged(listener: ProjectionChangeListener): () => void
  * the watermark cache (missing cells fold lazily over the in-memory log).
  * Fully synchronous — every value and `asOfSeq` reflect the same log
  * position. Each value passes its unit's `viewSchema` before leaving.
+ * A snapshot is complete or absent: when a selected client-visible unit has
+ * failed for the Session it throws that unit's error (the first in
+ * registration order) instead of omitting the key. Failed host-only or
+ * unselected units do not affect it.
  * @param session - the session whose projection values are read.
  * @param keys - optional client-visible outputs; state materialization remains complete.
  * @returns the snapshot; `values` is empty when no selected client-visible unit is registered.
+ * @throws {SessionProjectionUnitError} when a selected client-visible unit failed for the Session.
  */
 snapshot( session: Session, keys?: ProjectionKeySelection, ): ProjectionSnapshot
 
 /**
  * Read only already-materialized client-visible cells without folding history.
  * Values may trail the live Session and are therefore hints, not a complete
- * baseline. Missing cells are omitted.
+ * baseline. Missing cells, including those of units failed for the Session, are omitted.
  * @param session - attached Session whose cached cells are inspected.
  * @param keys - optional wire keys to view.
  * @returns the lowest common cached cut, or `undefined` when no wire cell exists.
@@ -388,9 +394,10 @@ summaryKeys(): ReadonlySet<Extract<keyof SessionProjectionMap, string>>
  * cell reference: the watermark cache is this registry's authoritative
  * mutable state, and a caller reaching the live reference could corrupt
  * every subsequent snapshot and frame through it (plain JSON by the unit
- * contract, so the clone is total).
+ * contract, so the clone is total). A unit failed for the Session has no
+ * trusted state and gets no row, so a later restore refolds that key.
  * @param session - the session whose unit states are checkpointed.
- * @returns one row per registered key.
+ * @returns one row per registered key that has not failed for the Session.
  */
 checkpoint(session: Session): ProjectionCheckpoint
 
