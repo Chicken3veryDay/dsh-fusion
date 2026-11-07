@@ -221,7 +221,7 @@ function CatalogRows({
       )}
       {catalog.state === 'error' && (
         <div className={css.error}>
-          <span>{catalog.error?.message ?? t('load.error')}</span>
+          <span>{catalog.error?.code === 'session/projections-failed' ? t('load.projectionsFailed') : catalog.error?.message ?? t('load.error')}</span>
           <button
             type="button"
             className={css.refresh}

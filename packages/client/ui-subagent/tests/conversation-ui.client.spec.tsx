@@ -992,6 +992,20 @@ describe('SubagentHeaderLineage', () => {
     expect(failed.refreshProjection).toHaveBeenCalledWith(PARENT)
   })
 
+  it('shows localized guidance when the Host could not fold the parent projections', () => {
+    const failed = props(catalog({
+      entries: [],
+      state: 'error',
+      error: new RemoteError('session/projections-failed', 'Host diagnostic', { sessionId: PARENT }),
+    }))
+    render(<HeaderCatalog {...failed} />)
+    hoverCatalog(screen.getByRole('button', { name: /0 个子智能体/ }))
+    expect(screen.getByText('主机无法读取此会话的子智能体数据。请重试；若仍失败，请查看主机日志。')).toBeTruthy()
+    expect(screen.queryByText('Host diagnostic')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /重试/ }))
+    expect(failed.refreshProjection).toHaveBeenCalledWith(PARENT)
+  })
+
   it.each(['absent', 'idle', 'loading', 'ready'] as const)('does not expose header-only descendants when the projection read is %s', (state) => {
     const second = 'child-2' as SessionId
     const summaries = {
