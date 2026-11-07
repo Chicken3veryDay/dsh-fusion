@@ -495,6 +495,7 @@ describe('the soft layer', () => {
     const assembly = await ctx.systemPrompt.assemble()
     expect(assembly.tools.map(tool => tool.name)).toEqual([EXIT_PLAN_MODE, 'read'])
     expect(assembly.sections.find(section => section.name === 'plan:policy')?.text).toBe('')
+    expect(ctx.systemPrompt.sectionRevisions().find(([name]) => name === 'plan:policy')).toEqual(['plan:policy', ''])
   })
 
   it('keeps the full toolset in plan mode and renders the configured mode section', async () => {
