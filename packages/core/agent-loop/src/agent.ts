@@ -143,7 +143,10 @@ export class ReactLoopAgent implements Agent {
 
   /** Whether this loop instance has appended its initial/resume request anchor. */
   private requestHeaderLogged = false
-  /** Surface generation at attachment or the preceding built request. */
+  /**
+   * Surface generation at attachment or the preceding built request, advanced past replacements of
+   * nodes no request has carried.
+   */
   private requestSurfaceGeneration: number
   private readonly runtimeContext: RuntimeContextProjection
   /** Process-local revision of assistant frames for this attached Session. */
@@ -604,15 +607,25 @@ export class ReactLoopAgent implements Agent {
         || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
         || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
     })
+    // Replacing a node this attempt committed changes nothing a request carried, so when no other
+    // surface change preceded it, the replacement keeps the request series.
+    const replaceUnsent = (append: () => SessionSeq): SessionSeq => {
+      const continuing = this.requestSurfaceGeneration === this.session.surface.contentGeneration
+      const seq = append()
+      if (continuing) this.requestSurfaceGeneration = this.session.surface.contentGeneration
+      return seq
+    }
     for (const { message, intent } of commits) {
-      system = this.session.append('system/message', { turn, step, message }, intent).seq
+      const append = () => this.session.append('system/message', { turn, step, message }, intent).seq
+      system = typeof intent.surfaceOp === 'object' && intent.surfaceOp.startSeq === unsent?.system
+        ? replaceUnsent(append) : append()
     }
     const commitContext = (message: UserMessage): void => {
       const seq = unsent?.context
-      runtime = this.session.append('user/message', message,
-        seq !== undefined && this.session.surface.nodes.includes(seq)
-          ? { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] }
-          : { surfaceOp: 'append' }).seq
+      runtime = seq !== undefined && this.session.surface.nodes.includes(seq)
+        ? replaceUnsent(() => this.session.append('user/message', message,
+          { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] }).seq)
+        : this.session.append('user/message', message, { surfaceOp: 'append' }).seq
     }
     let contextAdmitted = false
     if (firstAttempt) {

@@ -116,5 +116,9 @@ it('replaces only the unsent in-history prompt and preserves the previous reques
   expect(request?.messages.slice(0, prefix?.length)).toEqual(prefix)
   expect(request?.messages.filter(message => message.role === 'system').map(message => message.content))
     .toEqual([[{ type: 'text', text: 'initial: probe enabled' }], [{ type: 'text', text: 'updated: probe disabled' }]])
-  expect(request?.tools ?? []).toEqual([])
+  // Replacing the unsent prompt keeps the series, so the in-history route keeps the baseline
+  // declaration and withdraws `probe` with a logged removal block.
+  expect((request?.tools ?? []).map(tool => tool.name)).toEqual(['probe'])
+  expect(request?.messages.some(message => message.role === 'developer'
+    && message.content.some(block => block.type === 'tool-removal' && block.toolName === 'probe'))).toBe(true)
 })
