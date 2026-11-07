@@ -479,7 +479,10 @@ describe('prepared-route prompt admission', () => {
     await send(h.agent, 'reject the changed effort')
     expect(adapter.requests).toEqual([])
     const events = h.agent.session.snapshotEvents()
-    expect(events.filter(event => ['request/header', 'user/message', 'system/message'].includes(event.type))).toEqual([])
+    // The failed step admits no request; it commits its claimed input behind the reserved empty prompt head.
+    expect(events.filter(event => ['request/header', 'user/message', 'system/message'].includes(event.type))
+      .map(event => event.type === 'system/message' ? event.data.message.content : event.type === 'user/message' ? event.data.content : event.type))
+      .toEqual([[], [{ type: 'text', text: 'reject the changed effort' }]])
     expect(events.at(-1)).toMatchObject({
       type: 'turn/end', data: { reason: { kind: 'error', error: {
         message: `agent "admission": agent/request proposed reasoning effort "${proposed ?? 'adapter default'}" after step preparation fixed "${selected ?? 'adapter default'}"; use agent.model.select() before step preparation`,

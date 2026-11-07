@@ -1313,8 +1313,10 @@ describe('agent loop', () => {
     send(agent, 'hi')
     await waitForIdle(ctx, agent)
     expect(adapter.requests).toEqual([])
-    expect(agent.session.snapshotEvents().filter(event => ['request/header', 'user/message', 'system/message'].includes(event.type)))
-      .toEqual([])
+    // The failed step admits no request; it commits its claimed input behind the reserved empty prompt head.
+    expect(agent.session.snapshotEvents().filter(event => ['request/header', 'user/message', 'system/message'].includes(event.type))
+      .map(event => event.type === 'system/message' ? event.data.message.content : event.type === 'user/message' ? event.data.content : event.type))
+      .toEqual([[], [{ type: 'text', text: 'hi' }]])
     expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
       type: 'turn/end', data: { reason: { kind: 'error', error: {
         message: `agent "a1": agent/request proposed "${field === 'provider' ? 'other/mock' : 'mock/other'}" after step preparation fixed "mock/mock"; use agent.model.select() before step preparation`,

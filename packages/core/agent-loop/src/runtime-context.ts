@@ -65,7 +65,9 @@ function eventsNewestFirst(session: Session): readonly SessionEvent[] {
  * later active nodes. A series start whose latest surviving node already holds
  * the rendering emits nothing: moving the same text to node 0 would change the
  * request prefix without changing the prompt. Dormant empty tails do not supply
- * effective text or require repeated replacements.
+ * effective text or require repeated replacements. An empty head committed before
+ * the Session's first request is replaced in place, so input that a failed step
+ * committed ahead of any prompt never precedes the prompt.
  */
 export class SystemPromptProjection {
   constructor(private readonly session: Session) {}
@@ -99,7 +101,9 @@ export class SystemPromptProjection {
       return [{ message: createSystemMessage(rendered), intent: { surfaceOp: 'append' } }]
     }
     const latest = nodes.findLast(node => node.text !== '') ?? head
-    if (!input.inHistory || rendered.length === 0 || (input.startsSeries && latest.text !== rendered)) {
+    // Before the first request no cached prefix depends on the reserved head.
+    const reservedHead = latest.text === '' && this.session.requestHeader() === undefined
+    if (!input.inHistory || rendered.length === 0 || reservedHead || (input.startsSeries && latest.text !== rendered)) {
       const updates = nodes.slice(1).filter(node => node.text !== '')
         .map(node => this.replace(node.seq, ''))
       if (head.text !== rendered) updates.push(this.replace(head.seq, rendered))
@@ -108,6 +112,14 @@ export class SystemPromptProjection {
     if (latest.text === rendered) return []
     if (input.unsent === latest.seq) return [this.replace(latest.seq, rendered)]
     return [{ message: createSystemMessage(rendered), intent: { surfaceOp: 'append' } }]
+  }
+
+  /**
+   * The empty head that reserves surface node 0 for input committed before any prompt.
+   * @returns the message to commit before that input, or `undefined` when a system node already exists.
+   */
+  reservation(): SystemMessage | undefined {
+    return this.systemNodes().length === 0 ? createSystemMessage('') : undefined
   }
 
   private replace(seq: SessionSeq, text: string): SystemPromptCommit {

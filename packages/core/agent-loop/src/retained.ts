@@ -1,11 +1,12 @@
 /** Retained Session ownership; adoption borrows the live Session without reopening its writer. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle, RetainedAgentSession, RetainAgentSessionOptions } from '@deepseek-ai/dsh-agent'
-import { interruptedTurnClosers, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionWriterReservation } from '@deepseek-ai/dsh-session-persistence'
 import { z } from 'zod'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import { repairOpenTurn } from './inbox.ts'
 
 const markerSchema = z.strictObject({ rootSessionId: z.string().min(1) })
 
@@ -179,7 +180,7 @@ export async function retainSession(
       if (markers.length !== 1 || markerSchema.parse(markers[0]?.data).rootSessionId !== rootSessionId) {
         throw new Error('retained session ownership does not match the root')
       }
-      const closers = interruptedTurnClosers(read.events)
+      const closers = repairOpenTurn(read.events)
       if (closers.length > 0) await writer.append(closers)
       session = runtime.sessions.prepare(options.sessionId, {
         seed: [...read.events, ...closers], meta: structuredClone(writer.header),

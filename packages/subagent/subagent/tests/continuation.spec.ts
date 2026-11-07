@@ -3100,10 +3100,10 @@ describe('continuable settlement delivery', () => {
     await waitNoActivation(ctx, started.childId)
 
     await vi.waitFor(() => { expect(settlementNotices(parent)).toHaveLength(1) })
-    // The parent must not be told the child finished: the delivery it is still
-    // waiting on was claimed out of the inbox and then swallowed by the failure.
+    // The parent must not be told the child finished: the failed turn commits the
+    // claimed delivery to the child's log, but the child never answered it.
     const child = await loadStoredSession(ctx.sessionPersistence, started.childId)
-    expect(hasUserText(child.events, 'second task')).toBe(false)
+    expect(hasUserText(child.events, 'second task')).toBe(true)
     expect(settlementNotices(parent)[0]!.text).toBe(
       `Background subagent ${started.childId} failed before it finished.\nIts closing message:\nthe answer`,
     )

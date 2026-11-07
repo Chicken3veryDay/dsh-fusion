@@ -941,7 +941,7 @@ describe('turn and step boundary recovery', () => {
     expect(adapter.requests).toHaveLength(0)
   })
 
-  it('a pre-commit step/start validation failure does not invent a step boundary', async () => {
+  it('a pre-commit step/start validation failure commits the claimed input in one step boundary', async () => {
     const adapter = new MockAdapter([textResponse('never reached')])
     const ctx = await harness(adapter)
     const agent = await ctx.agentLoop.create(SessionId('a-stepstart-veto'), { provider: 'mock', model: 'mock' })
@@ -958,13 +958,16 @@ describe('turn and step boundary recovery', () => {
     await waitForIdle(ctx, agent)
 
     expect(adapter.requests).toEqual([])
+    // The vetoed step/start never committed; the failure opens the proposed step once to commit the claimed input.
     expect(boundaryCounts(agent)).toMatchObject({
       turnStart: 1,
       turnEnd: 1,
-      stepStart: 0,
-      stepEnd: 0,
+      stepStart: 1,
+      stepEnd: 1,
       errors: 1,
     })
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message').map(event => event.data.content))
+      .toEqual([[{ type: 'text', text: 'go' }]])
     expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')).toMatchObject({
       data: { reason: { kind: 'error', error: { message: 'reject step-start before commit', code: 'UNKNOWN' } } },
     })

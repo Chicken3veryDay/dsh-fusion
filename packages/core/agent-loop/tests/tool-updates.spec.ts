@@ -218,7 +218,10 @@ describe('step-time tool activation', () => {
     }), { when: async () => { throw new Error('credential storage unavailable') } })
     await send(agent, 'inspect')
     expect(adapter.requests).toEqual([])
-    expect(agent.session.snapshotEvents().filter(event => ['request/header', 'system/message', 'user/message'].includes(event.type))).toEqual([])
+    // Preparation admits no request; the proposed step commits the claimed input behind the reserved empty prompt head.
+    expect(agent.session.snapshotEvents().filter(event => ['request/header', 'system/message', 'user/message'].includes(event.type))
+      .map(event => event.type === 'system/message' ? event.data.message.content : event.type === 'user/message' ? event.data.content : event.type))
+      .toEqual([[], [{ type: 'text', text: 'inspect' }]])
     expect(agent.session.snapshotEvents().find(event => event.type === 'turn/end')?.data)
       .toMatchObject({ reason: { kind: 'error', error: { code: 'TOOL_ACTIVATION_FAILED' } } })
   })

@@ -4,9 +4,11 @@
  * @module @deepseek-ai/dsh-agent-loop/inbox
  */
 
+import { createSystemMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
-import type { Session, SessionEventMap, UserMessage } from '@deepseek-ai/dsh-session'
+import { interruptedTurnClosers, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionEventMap, UserMessage } from '@deepseek-ai/dsh-session'
 import type {
   AgentEventDispatch,
   Inbox as InboxContract,
@@ -64,6 +66,95 @@ export const inboxProjectionDefinition = {
 } satisfies ProjectionDefinition<'inbox', InboxState>
 
 /**
+ * Crash repair for claimed input: the events that commit the batch the open
+ * tail turn claimed after its last `user/message` or `assistant/message`. A
+ * claim is a pure-deletion `agent/inbox/spliced` (removed messages and no
+ * `outcome`); its messages are those the inbox fold held at the claimed range.
+ * The commits land inside the open step, or open the proposed step when the
+ * claim preceded `step/start`, as a live preparation failure does. A log
+ * without a `system/message` first receives the empty head that reserves
+ * surface node 0 for the prompt. Append the result before the interrupted
+ * closers, which close the step, so a process lost between a claim and its
+ * `user/message` commit keeps the accepted input model-visible exactly once.
+ * @param events - the persisted log, possibly ending inside an open turn.
+ * @returns the commit events, numbered after the last event; empty when no open turn holds an uncommitted claim.
+ */
+export function uncommittedClaimCommits(events: readonly SessionEvent[]): SessionEvent[] {
+  let state = inboxProjectionDefinition.init()
+  let turn: number | null = null
+  let step = 1
+  let stepOpen = false
+  let prompted = false
+  let claimed: UserMessage[] = []
+  for (const event of events) {
+    switch (event.type) {
+      case 'turn/start':
+        turn = event.data.turn
+        step = 1
+        stepOpen = false
+        claimed = []
+        break
+      case 'turn/end':
+        turn = null
+        claimed = []
+        break
+      case 'step/start':
+        step = event.data.step
+        stepOpen = true
+        break
+      case 'step/end':
+        step = event.data.step + 1
+        stepOpen = false
+        break
+      case 'system/message':
+        prompted = true
+        break
+      case 'user/message':
+      case 'assistant/message':
+        claimed = []
+        break
+      case 'agent/inbox/spliced': {
+        const { target, start, removedCount = 0, outcome } = event.data
+        if (turn !== null && outcome === undefined && removedCount > 0) {
+          claimed.push(...state[target].slice(start, start + removedCount))
+        }
+        break
+      }
+      // Other event types neither claim nor commit input.
+      default:
+        break
+    }
+    state = inboxProjectionDefinition.apply(state, event)
+  }
+  const last = events.at(-1)
+  if (turn === null || last === undefined || claimed.length === 0) return []
+  let seq = last.seq
+  const commits: SessionEvent[] = []
+  if (!stepOpen) commits.push({ type: 'step/start', seq: SessionSeq(++seq), time: last.time, data: { turn, step } })
+  if (!prompted) {
+    commits.push({
+      type: 'system/message', seq: SessionSeq(++seq), time: last.time,
+      data: { turn, step, message: createSystemMessage('') }, surfaceOp: 'append',
+    })
+  }
+  for (const message of claimed) {
+    commits.push({ type: 'user/message', seq: SessionSeq(++seq), time: last.time, data: message, surfaceOp: 'append' })
+  }
+  return commits
+}
+
+/**
+ * Crash repair for a persisted log whose tail turn is open: the commits of
+ * its uncommitted claimed input, then the interrupted closers.
+ * @param events - the persisted log, possibly ending inside an open turn.
+ * @returns the events to append after `events`; empty when the log is balanced.
+ */
+export function repairOpenTurn(events: readonly SessionEvent[]): SessionEvent[] {
+  const commits = uncommittedClaimCommits(events)
+  return [...commits, ...interruptedTurnClosers([...events, ...commits])]
+}
+
+/**
  * Driver-owned durable Inbox implementation used by ReactLoopAgent and focused
  * provider tests.
  * @param readState - reader for the live Inbox projection state.
@@ -100,7 +191,11 @@ export class ReactLoopInbox implements InboxContract {
   }
 
   /**
-   * Remove and return the complete batch proposed for one step.
+   * Remove and return the complete batch proposed for one step. The driver
+   * delivers a claimed batch exactly once: the step commits it, a step
+   * failure commits it before `turn/end`, and resume commits it after a
+   * process loss. Only cancellation and an authoritative pre-step reject
+   * consume it undelivered.
    * @param target - whether this boundary also consumes one queued turn.
    * @param turn - turn that will own the claimed batch.
    * @returns next-step input followed by the queued turn, when requested.

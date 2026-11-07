@@ -289,6 +289,24 @@ export class ReactLoopAgent implements Agent {
   }
 
   /**
+   * Wake the driver for queued `next-turn` input after a resume. The wake runs one macrotask later, so the caller
+   * that awaited the resume reads the restored queue first; {@link whenIdle} already waits for the resulting turn.
+   * Queued `next-step` input alone waits for the next wake: an `inject()` never opens a turn.
+   */
+  driveQueuedInput(): void {
+    if (this.phase.kind !== 'idle' || this.inbox.nextTurn.length === 0) return
+    const pending = Promise.withResolvers<void>()
+    this.activityDone = pending.promise
+    setImmediate(() => {
+      // A send, cancellation, or disposal in the meantime owns the queue.
+      if (this.activityDone === pending.promise && this.phase.kind === 'idle' && this.inbox.nextTurn.length > 0) {
+        this.wakeDriver()
+      }
+      pending.resolve()
+    })
+  }
+
+  /**
    * Drive a tool-less fake turn in tests; unavailable outside the test runtime.
    * @param input - test-owned follow-up; existing queued input remains ordered.
    */
@@ -335,11 +353,15 @@ export class ReactLoopAgent implements Agent {
     }
   }
 
-  private async preStep(target: InboxTarget, position: { turn: number; step: number }): Promise<PreparedStep> {
+  /**
+   * Propose one step for a batch the caller already claimed.
+   * @param claimed - the claimed batch; {@link turn} returns it to the log when preparation fails.
+   * @param position - turn and step the batch would enter.
+   */
+  private async preStep(claimed: UserMessage[], position: { turn: number; step: number }): Promise<PreparedStep> {
     /* v8 ignore next -- private callers establish the running phase before proposing a step */
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": pre-step outside running phase`)
     const signal = this.phase.abort.signal
-    const claimed = this.inbox.claim(target, position.turn)
     const selection = this.model.current()
     if (selection === undefined) {
       throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`)
@@ -503,14 +525,32 @@ export class ReactLoopAgent implements Agent {
     phase.turn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
+    // Claimed input that no `user/message` has committed yet: a non-cancellation failure commits it inside the
+    // failed step, or inside the proposed step when preparation failed, so a claim is always delivered once.
+    // Commits are observed by identity, so a failure after step 4 of the commit-point order commits nothing twice.
+    const uncommitted = new Map<string, UserMessage>()
+    let proposed = phase.step + 1
+    const stopCommitWatch = this.ctx.on('session/event', (session, event) => {
+      if (session === this.session && event.type === 'user/message') uncommitted.delete(event.data.id)
+    })
     try {
       while (true) {
         signal.throwIfAborted()
         const step = phase.step + 1
-        const decision = await this.preStep(target, { turn, step })
+        proposed = step
+        const claimed = this.inbox.claim(target, turn)
+        for (const message of claimed) uncommitted.set(message.id, message)
+        const decision = await this.preStep(claimed, { turn, step })
         if (decision.kind === 'reject') {
+          // An authoritative reject consumes the batch without delivering it.
+          uncommitted.clear()
           turnEnds = { kind: 'blocked' }
           return false
+        }
+        // The listeners' decision replaces the claimed batch as the input this step owes the log.
+        uncommitted.clear()
+        for (const message of decision.messages) {
+          if (message.source.kind !== 'runtime-context') uncommitted.set(message.id, message)
         }
         try {
           if (turnEnds && decision.messages.length === 0) break
@@ -535,6 +575,14 @@ export class ReactLoopAgent implements Agent {
             // downgrade the turn outcome.
             if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
           } catch (error: unknown) {
+            let failure = error
+            try {
+              if (abortedCancelCause(signal) === undefined) this.commitUndelivered(uncommitted, { turn, step })
+            } catch (commitError: unknown) {
+              failure = new AggregateError([error, commitError], 'Step failed and its claimed input could not be recorded', { cause: error })
+            } finally {
+              uncommitted.clear()
+            }
             try {
               for (const event of toolRecovery.results()) {
                 this.session.append('tool/result', event.data, {
@@ -543,9 +591,9 @@ export class ReactLoopAgent implements Agent {
                 })
               }
             } catch (recoveryError: unknown) {
-              throw new AggregateError([error, recoveryError], 'Step failed and its pending tool results could not be recorded', { cause: error })
+              throw new AggregateError([failure, recoveryError], 'Step failed and its pending tool results could not be recorded', { cause: failure })
             }
-            throw error
+            throw failure
           } finally {
             stopRecovery()
             this.session.append('step/end', { turn, step })
@@ -572,14 +620,29 @@ export class ReactLoopAgent implements Agent {
       // Every failure is structured: an `LlmError` keeps its facts, a tool
       // activation failure keeps its code, and anything else flattens to
       // `errorChain` text under the `UNKNOWN` code.
+      let failure = error
+      // Preparation failed before the proposed step opened: the step opens only to commit the claimed input.
+      if (uncommitted.size > 0 && phase.step < proposed) {
+        try {
+          this.session.append('step/start', { turn, step: proposed })
+          try {
+            this.commitUndelivered(uncommitted, { turn, step: proposed })
+          } finally {
+            this.session.append('step/end', { turn, step: proposed })
+          }
+        } catch (commitError: unknown) {
+          failure = new AggregateError([error, commitError], 'Step preparation failed and its claimed input could not be recorded', { cause: error })
+        }
+      }
       turnEnds = {
         kind: 'error',
-        error: error instanceof LlmError
-          ? error.failure
-          : { message: errorChain(error), code: error instanceof ToolActivationError || error instanceof ToolAdmissionError ? error.code : 'UNKNOWN' },
+        error: failure instanceof LlmError
+          ? failure.failure
+          : { message: errorChain(failure), code: failure instanceof ToolActivationError || failure instanceof ToolAdmissionError ? failure.code : 'UNKNOWN' },
       }
-      this.throwError(error)
+      this.throwError(failure)
     } finally {
+      stopCommitWatch()
       try {
         // oxlint-disable-next-line typescript/no-non-null-assertion -- every exit assigns a turn ending
         this.session.append('turn/end', { turn, reason: turnEnds! })
@@ -593,6 +656,19 @@ export class ReactLoopAgent implements Agent {
     phase.wakeRequested = false
     phase.step = 0
     return true
+  }
+
+  /**
+   * Commit claimed input that a failed step never admitted, inside that open step. A Session without a system
+   * node first receives the empty head that reserves surface node 0 for the prompt.
+   * @param uncommitted - the claimed messages no `user/message` has committed, in claim order.
+   * @param position - the open turn and step.
+   */
+  private commitUndelivered(uncommitted: ReadonlyMap<string, UserMessage>, position: { turn: number; step: number }): void {
+    if (uncommitted.size === 0) return
+    const reservation = this.systemPrompt.reservation()
+    if (reservation !== undefined) this.session.append('system/message', { ...position, message: reservation }, { surfaceOp: 'append' })
+    for (const message of [...uncommitted.values()]) this.session.append('user/message', message, { surfaceOp: 'append' })
   }
 
   /** Commit prompt, accepted input, and runtime context before final-history admission. */

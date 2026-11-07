@@ -27,7 +27,7 @@ import type {
 } from '@deepseek-ai/dsh-agent'
 import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import { interruptedTurnClosers, SessionLogOffset, SessionPreparation } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, SessionPreparation } from '@deepseek-ai/dsh-session'
 import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -37,7 +37,7 @@ import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session
 import { retainSession, runtimeOwnerProjection } from './retained.ts'
 import type { RetainedAuthority, RetainedInitializationCleanup } from './retained.ts'
 import { ReactLoopAgent } from './agent.ts'
-import { inboxProjectionDefinition } from './inbox.ts'
+import { inboxProjectionDefinition, repairOpenTurn } from './inbox.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
 import type {} from './runtime-context.ts'
 
@@ -657,7 +657,7 @@ export class AgentLoop extends Service implements AgentFactory {
       const agent = machine
       assertLive()
 
-      return await agent.runMaintenance(async () => {
+      const published = await agent.runMaintenance(async () => {
         publication = Promise.withResolvers<void>()
         try {
           assertLive()
@@ -690,6 +690,9 @@ export class AgentLoop extends Service implements AgentFactory {
           publication = undefined
         }
       })
+      // Input queued durably before the restart runs without another wake.
+      if (source === 'resume') agent.driveQueuedInput()
+      return published
     } catch (error: unknown) {
       try { await dispose() } catch (cleanup: unknown) {
         if (options.retained) {
@@ -859,16 +862,17 @@ export class AgentLoop extends Service implements AgentFactory {
             (abandoned) => { void abandoned.close() },
           )
           // Semantic crash repair is the agent layer's job: persistence hands
-          // back the physically valid log; an interrupted final turn receives
-          // synthetic closers (missing tool errors, step/end, turn/end) that
-          // are appended through the same handle as an ordinary batch.
+          // back the physically valid log; an interrupted final turn commits its
+          // uncommitted claimed input and receives synthetic closers (missing
+          // tool errors, step/end, turn/end), appended through the same handle
+          // as an ordinary batch.
           const coldRead = await handle.read(0, undefined, { signal: fused })
           fused.throwIfAborted()
           const persisted = coldRead.events
           if (persisted.some(event => event.type === 'agent/runtime-owner')) {
             throw new Error('managed session requires its retained runtime owner')
           }
-          const closers = interruptedTurnClosers(persisted)
+          const closers = repairOpenTurn(persisted)
           if (closers.length > 0) await handle.append(closers)
           preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, {
             seed: [...persisted, ...closers],

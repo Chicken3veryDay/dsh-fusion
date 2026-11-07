@@ -693,7 +693,8 @@ describe('same-session goal driving', () => {
     test.ctx.goals.create(test.agent, { objective: 'survive a throwing hook', maxGoalRounds: 1 })
 
     const goal = await waitForGoal(test.ctx, test.agent, current => current?.activation === 'disarmed')
-    expect(goal).toMatchObject({ phase: 'active', roundsStarted: 0 })
+    // The failed step commits the claimed round prompt, so the admitted round counts without a model call.
+    expect(goal).toMatchObject({ phase: 'active', roundsStarted: 1 })
     expect(test.adapter.requests).toHaveLength(0)
     expect(test.agent.inbox.nextTurn).toHaveLength(0)
   })

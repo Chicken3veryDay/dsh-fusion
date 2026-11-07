@@ -98,7 +98,7 @@ describe('loop-level canonical tool order', () => {
     expect(Object.isFrozen(adapter.requests[0])).toBe(true)
   })
 
-  it('closes a no-step turn when toolOrder names an unregistered tool', async () => {
+  it('closes the turn without a request when toolOrder names an unregistered tool', async () => {
     const adapter = new MockAdapter([textResponse('never sent')])
     const ctx = await harness(adapter, ['ghost', TOOL_ORDER_REST])
     registerNamed(ctx, 'alpha')
@@ -109,7 +109,8 @@ describe('loop-level canonical tool order', () => {
     expect(foldRequestHeader(agent.session.snapshotEvents())).toBeUndefined()
     expect(agent.session.snapshotEvents().some(e => e.type === 'turn/start')).toBe(true)
     expect(agent.session.snapshotEvents().some(e => e.type === 'turn/end')).toBe(true)
-    expect(agent.session.snapshotEvents().some(e => e.type === 'step/start')).toBe(false)
-    expect(agent.session.snapshotEvents().some(e => e.type === 'step/end')).toBe(false)
+    // Failed preparation opens the proposed step only to commit the claimed input.
+    expect(agent.session.snapshotEvents().filter(e => ['step/start', 'system/message', 'user/message', 'step/end'].includes(e.type)).map(e => e.type))
+      .toEqual(['step/start', 'system/message', 'user/message', 'step/end'])
   })
 })
