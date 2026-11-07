@@ -81,8 +81,8 @@
   en: 8d19b18b287e7ca1
   zh: 8d19b18b287e7ca1
 /session-persistence-event-catalog/events/context-map/context-map-state-log-only:
-  en: bf3496c59eb006bf
-  zh: 2840c502fbe38314
+  en: 21950769eee2bee7
+  zh: 52d70a815c613247
 /session-persistence-event-catalog/events/deliverables:
   en: 501dcee7db8f8117
   zh: 501dcee7db8f8117
@@ -2676,8 +2676,8 @@
   en: 4a78a6c5917f298f
   zh: 538d8e9aca191f47
 /session-persistence-event-catalog/resolved-persistence-types/op-snapshot-version:
-  en: adc17bcfcee14684
-  zh: 1ce9af6996af3d39
+  en: d38591665cbf3803
+  zh: f33bc8adef2f36f3
 /session-persistence-event-catalog/resolved-persistence-types/participantid:
   en: 0cf8c5b1dffc93e5
   zh: 5eb00348f0533fea

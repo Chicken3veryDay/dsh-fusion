@@ -515,7 +515,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'context-map/state': { readonly version: 1; readonly op: MapOp; readonly snapshot: MapSnapshot }
 ```
 
-来源：[`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
+来源：[`packages/experimental/context-map/src/index.ts:76`](../packages/experimental/context-map/src/index.ts)
 
 ### `deliverables/*`
 
@@ -11051,7 +11051,7 @@ SHA-256: `8e56cefa6cd4dd5e1683af2f714816519f79e3f1bb296d5765265a6e4cfb15e9`
 
 SHA-256: `9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c`
 
-来源：[`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
+来源：[`packages/experimental/context-map/src/index.ts:76`](../packages/experimental/context-map/src/index.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

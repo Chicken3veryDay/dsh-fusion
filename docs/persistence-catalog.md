@@ -513,7 +513,7 @@ Source: [`packages/compaction/compaction/src/types.ts:34`](../packages/compactio
 'context-map/state': { readonly version: 1; readonly op: MapOp; readonly snapshot: MapSnapshot }
 ```
 
-Source: [`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
+Source: [`packages/experimental/context-map/src/index.ts:76`](../packages/experimental/context-map/src/index.ts)
 
 ### `deliverables/*`
 
@@ -11049,7 +11049,7 @@ Sources: [`packages/experimental/ticket/src/types.ts:447`](../packages/experimen
 
 SHA-256: `9c51f9775d3f550325a5becebbfdea3a51decff90c8d88f91b8237aec7ec390c`
 
-Sources: [`packages/experimental/context-map/src/index.ts:75`](../packages/experimental/context-map/src/index.ts)
+Sources: [`packages/experimental/context-map/src/index.ts:76`](../packages/experimental/context-map/src/index.ts)
 
 | Property | Presence | Type |
 |---|---|---|
