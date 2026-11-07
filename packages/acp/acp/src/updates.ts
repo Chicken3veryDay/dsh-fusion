@@ -2,11 +2,14 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionUpdate, ToolCallContent } from '@agentclientprotocol/sdk'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { errorChain, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-token-meter'
 import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import { assistantBlockToAcp } from './content.ts'
+
+/** Text delivered in place of a result image the attachment store could not read. */
+export const ACP_UNAVAILABLE_IMAGE_NOTICE = '[Image unavailable: the attachment could not be read.]'
 
 /**
  * Convert one committed assistant message and its context usage in block order.
@@ -64,6 +67,8 @@ export function toolCallUpdate(event: SessionEvent<'tool/call'>): SessionUpdate 
 
 /**
  * Finish one generic ACP tool lifecycle from its committed model-facing result.
+ * The update is always produced: an image that cannot be read is replaced by
+ * {@link ACP_UNAVAILABLE_IMAGE_NOTICE}, and the status stays the tool's own outcome.
  * @param ctx - bridge context carrying the attachment store.
  * @param event - committed DSH tool-result event.
  * @returns the standard completed or failed tool-call update.
@@ -105,7 +110,9 @@ export function ptcDispatchStartUpdate(event: SessionEvent<'tool/ptc-dispatch-st
 }
 
 /**
- * Finish one nested tool lifecycle from its settled outcome.
+ * Finish one nested tool lifecycle from its settled outcome. As for
+ * {@link toolResultUpdate}, an unreadable image becomes a text notice, so every
+ * started nested call receives this terminal update.
  * @param ctx - bridge context carrying the attachment store.
  * @param event - committed nested dispatch settlement, durable result content included.
  * @returns the completed or failed update, paired with the start by `subCallId`.
@@ -123,11 +130,21 @@ export async function ptcDispatchUpdate(
   }
 }
 
-/** Convert model-facing result blocks to ACP content, dropping blocks ACP cannot carry. */
+/**
+ * Convert model-facing result blocks to ACP content, dropping blocks ACP cannot carry.
+ * An image that cannot be delivered becomes a text notice, so the result keeps its other blocks and its lifecycle terminates.
+ */
 async function toolContent(ctx: Context, blocks: readonly ContentBlock[]): Promise<ToolCallContent[]> {
   const content: ToolCallContent[] = []
   for (const block of blocks) {
-    const converted = await assistantBlockToAcp(ctx, block)
+    let converted: Awaited<ReturnType<typeof assistantBlockToAcp>>
+    try {
+      converted = await assistantBlockToAcp(ctx, block)
+    } catch (error: unknown) {
+      // Conversion fails only as AcpContentError: no store is mounted, or the attachment cannot be read.
+      ctx.logger.warn(`acp: tool-result image replaced by a notice: ${errorChain(error)}`)
+      converted = { type: 'text', text: ACP_UNAVAILABLE_IMAGE_NOTICE }
+    }
     if (converted !== undefined) content.push({ type: 'content' as const, content: converted })
   }
   return content
