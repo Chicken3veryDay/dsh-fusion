@@ -7,7 +7,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
 import { steerHostSubagentPrompt } from '@deepseek-ai/dsh-subagent/internal'
 import { foldSubagentDescriptor, SubagentError } from '@deepseek-ai/dsh-subagent'
@@ -52,6 +52,17 @@ function bytes(value: unknown): number { return Buffer.byteLength(JSON.stringify
 /** Result of the queued half of `addMember`: a recorded member, or an unconfirmed launch the caller settles outside the queue. */
 type ProvisionOutcome = { readonly kind: 'provisioned'; readonly member: WorkstreamMember }
   | { readonly kind: 'uncertain'; readonly owner: Agent; readonly memberId: SessionId; readonly error: unknown }
+
+/** Turn number of a child's last turn when it is still open or ended aborted or interrupted; undefined otherwise. */
+function unfinishedTurn(events: readonly SessionEvent[]): number | undefined {
+  for (const event of events.toReversed()) {
+    if (event.type === 'turn/start') return event.data.turn
+    if (event.type === 'turn/end') {
+      return event.data.reason.kind === 'aborted' || event.data.reason.kind === 'interrupted' ? event.data.turn : undefined
+    }
+  }
+  return undefined
+}
 
 function deliveryKey(root: SessionId, operationId: WorkstreamOperationId): string { return `${root}\u0000${operationId}` }
 
@@ -137,6 +148,10 @@ export class WorkstreamService extends Service {
     }), 'workstreams.ticketActor()'))
     this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
     this.ready = true
+    // Serial and awaited before the resumed owner's queued input runs, so the notice reaches its first request.
+    this.ctx.on('agent/created', async ({ agent, source, signal }) => {
+      if (source === 'resume') await this.reportUnfinishedMembers(agent, signal)
+    })
     this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')
   }
 
@@ -305,6 +320,7 @@ export class WorkstreamService extends Service {
       if (snapshot.revision !== request.expectedRevision) throw new
       WorkstreamError('Workstream changed; refresh before handoff', 'WORKSTREAM_CONFLICT')
       this.target(snapshot, request.coordinatorId)
+      await this.resumeSuccessor(owner, request.coordinatorId)
       this.liveSuccessor(request.coordinatorId)
       const next:WorkstreamSnapshot = { ...snapshot, revision: snapshot.revision + 1, coordinatorId: request.coordinatorId }
       this.fit(next)
@@ -609,7 +625,27 @@ export class WorkstreamService extends Service {
   private liveSuccessor(id: SessionId): void {
     const agent = this.ctx.agents.get(id)
     if (agent === undefined || this.ctx.sessions.get(agent.id) !== agent.session) throw new
-    WorkstreamError('Target is not a registered live Agent; resume it before handing it the coordinator role', 'WORKSTREAM_INVALID_INPUT')
+    WorkstreamError('Target is not a registered live Agent; send it a message with workstream_send and retry the handoff',
+      'WORKSTREAM_INVALID_INPUT')
+  }
+  /** Cold-resume an active child member that has no registered Agent, delivering a logged notice that starts its turn.
+   *
+   * Runs inside the queued handoff: with no registered Agent the member has no driver, so none of its Workstream tool
+   * calls can be waiting on this root queue, and the calls it makes after the resume serialize behind the commit.
+   * A registered Agent is left to {@link liveSuccessor}. Nothing durable changes in Workstream when the resume fails. */
+  private async resumeSuccessor(owner: Agent, id: SessionId): Promise<void> {
+    if (id === owner.id || this.ctx.agents.get(id) !== undefined) return
+    const text = `The coordinator role of Workstream ${owner.id} is being handed to you. When workstream_get shows your `
+      + 'Session id as coordinatorId, you coordinate its Tickets: create, assign and end them, and hand the role back when done.'
+    const source = { kind: 'workstream-notice' as const, rootSessionId: owner.id, form: 'notice' as const,
+      summary: 'Coordinator role handoff' }
+    try {
+      await steerHostSubagentPrompt(this.ctx.subagents, owner, id, [{ type: 'text', text }], source, this.lifetime.signal)
+    } catch (error: unknown) {
+      if (this.lifetime.signal.aborted) throw new WorkstreamError('Workstream service has stopped', 'WORKSTREAM_DISPOSED', { cause: error })
+      throw new WorkstreamError(`Member ${id} could not be resumed to take the coordinator role; send it a message with `
+        + 'workstream_send and retry the handoff while it runs', 'WORKSTREAM_INVALID_INPUT', { cause: error })
+    }
   }
   private child(snapshot: WorkstreamSnapshot, id: SessionId): WorkstreamMember {
     const member = this.target(snapshot, id)
@@ -662,6 +698,37 @@ export class WorkstreamService extends Service {
       const { events } = await handle.read(0, undefined, { signal })
       return { parent: handle.header.parentSession, events: events.slice(handle.inheritedEventCount) }
     } finally { await handle.close() }
+  }
+  /** Tell a resumed owner which active members are not running although their last turn did not finish.
+   *
+   * Durable `active` membership and a `running` Ticket assignment survive a shutdown that aborted the member's turn, and
+   * nothing resumes the member. The notice is injected without waking the owner; it repeats at each owner resume while the
+   * member's last turn stays unfinished. A member whose log cannot be read is reported as uninspected, never a resume failure. */
+  private async reportUnfinishedMembers(owner: Agent, factorySignal: AbortSignal | undefined): Promise<void> {
+    const snapshot = this.projection.stateOf(owner.session).snapshot
+    if (snapshot === null || snapshot.ownerSessionId !== owner.id) return
+    const members = snapshot.members.filter(member => member.role === 'member' && member.phase === 'active'
+      && this.ctx.agents.get(member.id) === undefined)
+    if (members.length === 0) return
+    const signal = factorySignal === undefined ? this.lifetime.signal : AbortSignal.any([factorySignal, this.lifetime.signal])
+    const found = await Promise.all(members.map(async (member) => {
+      try {
+        const turn = unfinishedTurn((await this.readChild(member.id, signal)).events)
+        return turn === undefined ? undefined : `${member.name} (${member.id}, turn ${String(turn)})`
+      } catch (error: unknown) {
+        this.ctx.logger.warn(`workstream member ${member.id} log could not be read on owner resume: ${String(error)}`)
+        return `${member.name} (${member.id}, log unreadable)`
+      }
+    }))
+    // A cancelled resume or a stopping service has no owner turn left to inform.
+    if (signal.aborted) return
+    const lines = found.filter(line => line !== undefined)
+    if (lines.length === 0) return
+    const text = `These Workstream ${owner.id} members are not running and their last turn did not finish, so their `
+      + `Ticket assignments may still read running: ${lines.join('; ')}. Send each a message with workstream_send to `
+      + 'continue its work, or stop it with workstream_stop.'
+    owner.inject(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'workstream-notice', rootSessionId:
+      owner.id, form: 'notice', summary: boundContextSummary(`Workstream members interrupted: ${String(lines.length)}`) } }))
   }
   private async reconcileMember(owner: Agent, snapshot: WorkstreamSnapshot, member: WorkstreamMember, signal: AbortSignal,
     messageId?: MessageId): Promise<WorkstreamMember> {

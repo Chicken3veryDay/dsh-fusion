@@ -108,5 +108,14 @@ declare module '@deepseek-ai/dsh-llm' {
       readonly operationId: WorkstreamOperationId
       readonly senderSessionId: SessionId
     }
+    /** Workstream state report to one member; other readers preserve the recorded text without this plugin.
+     * @persistenceAttribution
+     */
+    'workstream-notice': {
+      readonly kind: 'workstream-notice'
+      readonly rootSessionId: SessionId
+      readonly form: 'notice'
+      readonly summary: string
+    }
   }
 }

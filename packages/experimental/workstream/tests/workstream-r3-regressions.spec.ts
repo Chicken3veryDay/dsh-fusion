@@ -53,7 +53,7 @@ function request(name: string) {
 }
 
 describe('round-3 Workstream review', () => {
-  it('F1 rejects a disposed successor even when no Ticket needs moving', async () => {
+  it('F1 resumes a disposed successor, so it is live when it becomes coordinator, even when no Ticket needs moving', async () => {
     const { ctx, owner } = await setup()
     const member = await ctx.workstreams.addMember(owner, owner.id, request('coordinator'))
     await ctx.subagents.drainChildren(owner, [member.id])
@@ -69,8 +69,11 @@ describe('round-3 Workstream review', () => {
     expect(before.members.find(candidate => candidate.id === member.id)?.phase).toBe('active')
     const result = await ctx.workstreams.handoff(owner, owner.id,
       { expectedRevision: before.revision, coordinatorId: member.id }).then(() => 'committed', () => 'rejected')
-    expect(result, 'handoff must not commit a coordinator that Ticket handoff rejects as not live').toBe('rejected')
-    expect(ctx.workstreams.get(owner, owner.id)).toEqual(before)
+    expect(result, 'handoff resumes the member instead of refusing an active member between turns').toBe('committed')
+    const live = ctx.agents.get(member.id)
+    expect(live, 'the committed coordinator is a registered live Agent').toBeDefined()
+    expect(ctx.sessions.get(member.id)).toBe(live!.session)
+    expect(ctx.workstreams.get(owner, owner.id).coordinatorId).toBe(member.id)
   })
 
   it('F1 rechecks successor liveness after the final Ticket move', async () => {
