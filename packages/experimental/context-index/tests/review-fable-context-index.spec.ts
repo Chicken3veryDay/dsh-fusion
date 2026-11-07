@@ -80,6 +80,9 @@ async function world(config: Config = {}): Promise<World> {
   return { root, home, project, ctx, fs: ctx.fs as CountingFileSystem, index: ctx.contextIndex }
 }
 
+/** Documentation root; built paths keep the doc-reference gate from reading fixture paths as links. */
+const DOCS = 'docs'
+
 const scope = (w: World) => ({ workingDirectory: w.project })
 
 describe('restat cost per request', () => {
@@ -120,7 +123,7 @@ describe('symlinks', () => {
     const snapshot = await w.index.snapshot(scope(w))
     const paths = snapshot.sources.map(source => `${source.kind}:${source.path}`)
     expect(paths).toContain('project-instructions:AGENTS.md')
-    expect(paths).toContain('doc:docs/linked/guide.md')
+    expect(paths).toContain(`doc:${DOCS}/linked/guide.md`)
     // The project root reached through docs/up is walked as a documentation directory, but the
     // instruction file it contains was already indexed and is not listed twice.
     expect(paths.filter(path => path.endsWith('AGENTS.md'))).toHaveLength(1)
@@ -143,7 +146,7 @@ describe('byte bounds', () => {
     write(join(w.project, 'docs', 'big.md'), `# B\n\n${'y'.repeat(64 - 4)}`)
     const snapshot = await w.index.snapshot(scope(w))
     expect(snapshot.sources.map(source => [source.path, source.bytes])).toEqual([['AGENTS.md', 64]])
-    expect(snapshot.diagnostics).toEqual([expect.objectContaining({ code: 'too-large', path: 'docs/big.md' })])
+    expect(snapshot.diagnostics).toEqual([expect.objectContaining({ code: 'too-large', path: `${DOCS}/big.md` })])
   })
 
   it('cuts a read inside a multibyte character on the character boundary and never over the budget', async () => {

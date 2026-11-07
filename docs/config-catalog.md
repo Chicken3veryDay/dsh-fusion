@@ -1117,7 +1117,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-context-index`
 
 - `inject`: `fs`
-- `source`: [`packages/experimental/context-index/src/types.ts:164`](../packages/experimental/context-index/src/types.ts)
+- `source`: [`packages/experimental/context-index/src/types.ts:171`](../packages/experimental/context-index/src/types.ts)
 
 ```ts config-catalog
 /**
@@ -1163,7 +1163,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-context-map`
 
 - `inject`: `agents` · `sessions` · `sessionProjections` · `contextIndex` · `contextTree` · `workingDirectory`
-- `source`: [`packages/experimental/context-map/src/types.ts:172`](../packages/experimental/context-map/src/types.ts)
+- `source`: [`packages/experimental/context-map/src/types.ts:186`](../packages/experimental/context-map/src/types.ts)
 
 ```ts config-catalog
 /**
