@@ -39,6 +39,7 @@ export const PRODUCT_PACKAGE_POLICY: Readonly<Record<string, ProductPackagePolic
   'packages/typert/generator': { category: 'build', reason: 'Build-time generation of type metadata.' },
   'packages/test-support/agent-loop-testkit': { category: 'test', reason: 'Published agent-loop test harness.' },
   'packages/test-support/tool-testkit': { category: 'test', reason: 'Shared tool definition and execution fixtures for tests and benchmarks.' },
+  'packages/test-support/subprocess-testkit': { category: 'test', reason: 'Shared helper that mounts the local subprocess runtime on its process-group path in tests.' },
   'packages/test-support/client-runtime': { category: 'test', reason: 'Published browser plugin test harness.' },
   'packages/test-support/llm-mock-server': { category: 'test', reason: 'Published model-provider test server.' },
   'packages/test-support/llm-replay': { category: 'test', reason: 'Published recorded-model replay harness.' },

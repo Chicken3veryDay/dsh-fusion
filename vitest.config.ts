@@ -200,6 +200,7 @@ export default defineConfig({
   resolve: { alias: testingAliases },
   test: {
     ...localWorkerBudget,
+    globalSetup: ['./scripts/test-warm-subprocess-runner.ts'],
     setupFiles: [
       './scripts/test-proxy-environment.ts', './scripts/test-dom-environment.ts', './scripts/test-official-listing-guard.ts',
     ],

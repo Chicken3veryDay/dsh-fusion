@@ -8,6 +8,7 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import * as StrReplaceEditor from '@deepseek-ai/dsh-tool-str-replace-editor'
 import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
@@ -31,6 +32,7 @@ it.each(['write', 'edit', 'str_replace_editor'] as const)('captures the resolved
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   const harness = await mountAgentLoopTestHarness(ctx)
   await ctx.plugin(LocalSubprocessRuntime)
+  useProcessGroupContainment(ctx)
   await ctx.plugin(ToolFs)
   await ctx.plugin(StrReplaceEditor)
   await ctx.plugin(WorkspaceChanges)
@@ -72,6 +74,7 @@ it('delegates filesystem intents without a recorded tool actor and preserves a r
   cleanups.push(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
   await ctx.plugin(LocalSubprocessRuntime)
+  useProcessGroupContainment(ctx)
   await ctx.plugin(WorkspaceChanges)
   const target = await ctx.fs.resolve('witness.txt')
   const bare = vi.fn(() => undefined)

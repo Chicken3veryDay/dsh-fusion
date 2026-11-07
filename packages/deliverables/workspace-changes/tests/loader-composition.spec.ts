@@ -13,6 +13,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import { useProcessGroupContainment } from '@deepseek-ai/dsh-subprocess-testkit'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import * as WorkspaceChangesPlugin from '@deepseek-ai/dsh-workspace-changes'
 import { changes, endTurn, git, startTurn, toolCall } from './support.ts'
@@ -57,6 +58,7 @@ describe('real Loader composition', () => {
     } as unknown as NonNullable<typeof context.loader.internal>
     await context.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(join(root, 'cordis.yml')).href } })
     await context.loader.await()
+    useProcessGroupContainment(context)
     const unloaded = [...context.loader.entries()]
       .filter(entry => entry.fiber === undefined && !entry.disabled)
       .map(entry => entry.options.name)
