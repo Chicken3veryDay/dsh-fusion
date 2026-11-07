@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-06-context-grant-supersedes.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-11-06-context-grant-supersedes.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-11-06-context-grant-supersedes:
+  en: 9a4015161ba4f075
+  zh: 3bb9c2f142abb4e0
+/2026-11-06-context-grant-supersedes/summary:
+  en: 3053f590a8335e41
+  zh: a2c86e9343f28c8e
+/2026-11-06-context-grant-supersedes/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-11-06-context-grant-supersedes/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-11-06-context-grant-supersedes/compatibility:
+  en: 623837b48deb858d
+  zh: 9c72ee42826044c5
+/2026-11-06-context-grant-supersedes/verification:
+  en: 7f22fe5d4d1c1391
+  zh: 315c267b140dd3bc
+/2026-11-06-context-grant-supersedes/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

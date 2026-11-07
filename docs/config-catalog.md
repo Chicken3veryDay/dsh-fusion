@@ -1205,7 +1205,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-context-tree`
 
 - `inject`: `tools` · `compaction` · `contextIndex` · `sessionProjections` · `workingDirectory`
-- `source`: [`packages/experimental/context-tree/src/types.ts:223`](../packages/experimental/context-tree/src/types.ts)
+- `source`: [`packages/experimental/context-tree/src/types.ts:228`](../packages/experimental/context-tree/src/types.ts)
 
 ```ts config-catalog
 /**
@@ -1223,7 +1223,7 @@ export interface Config {
   maxBrowseBytes?: number
   /** Most paths one load accepts (default 16). */
   maxLoadPaths?: number
-  /** UTF-8 bytes of section text one load injects (default 32,768). */
+  /** UTF-8 bytes of the grant messages one load injects, frames included (default 32,768). */
   maxLoadBytes?: number
   /** Most tools one load activates (default 32). */
   maxActivatedTools?: number

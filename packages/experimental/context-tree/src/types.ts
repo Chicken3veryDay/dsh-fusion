@@ -236,7 +236,7 @@ export interface Config {
   maxBrowseBytes?: number
   /** Most paths one load accepts (default 16). */
   maxLoadPaths?: number
-  /** UTF-8 bytes of section text one load injects (default 32,768). */
+  /** UTF-8 bytes of the grant messages one load injects, frames included (default 32,768). */
   maxLoadBytes?: number
   /** Most tools one load activates (default 32). */
   maxActivatedTools?: number

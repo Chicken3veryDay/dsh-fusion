@@ -155,7 +155,7 @@ export async function curate(ctx: Context, assistant: Agent, owner: Agent) {
 
 #### Token 影响
 
-标题和摘要在树现有的 `maxBrowseBytes` 之内取代原始的文件名和工具名。地图变化时树会重新发布目录，每次变化最多一次。
+标题和摘要在树现有的 `maxBrowseBytes` 之内取代原始的文件名和工具名。树的目录列出策展分组；某个分组出现、消失或改变摘要时会重新发布目录，每次变化最多一次；笔记和核心选择等其他地图编辑不会重新发布目录。
 
 #### KV 缓存影响
 

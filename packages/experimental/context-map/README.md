@@ -155,7 +155,7 @@ The tree catalog and `context_browse` show curated groups as folders with the cu
 
 #### Token effect
 
-Titles and summaries replace raw file and tool names within the tree's existing `maxBrowseBytes`. The tree republishes its catalog when the map changes, at most once per change.
+Titles and summaries replace raw file and tool names within the tree's existing `maxBrowseBytes`. The tree catalog lists the curated groups and is republished when a group appears, disappears, or changes its summary, at most once per change; other map edits, such as notes and core choices, do not republish it.
 
 #### KV Cache effect
 

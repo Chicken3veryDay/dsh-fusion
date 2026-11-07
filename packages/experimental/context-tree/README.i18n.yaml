@@ -15,11 +15,11 @@
   en: 76368b6b1da79c80
   zh: ddafa933c150c4d1
 /deepseek-ai-dsh-experimental-context-tree/use-this-package:
-  en: b6b36127cb08ea20
-  zh: 662174e352d32902
+  en: d72928734fd72559
+  zh: 1e2869b0b87c29e6
 /deepseek-ai-dsh-experimental-context-tree/use-this-package/the-tree:
-  en: f36fb38b0662cc00
-  zh: 294c24410f0b9995
+  en: 4db5000e414be378
+  zh: 4dd025e527d6a8ea
 /deepseek-ai-dsh-experimental-context-tree/use-this-package/tools:
   en: 20b191451686e33c
   zh: 71f2c8dde92d91b4
@@ -27,17 +27,17 @@
   en: 5e8e0a3be0cbfa00
   zh: 698537fecc16383a
 /deepseek-ai-dsh-experimental-context-tree/use-this-package/curator-seams:
-  en: 3b3fa569a45a5ffd
-  zh: 787f861da4127516
+  en: f415709c69f52cb5
+  zh: 364d973269c7ab87
 /deepseek-ai-dsh-experimental-context-tree/use-this-package/configuration:
-  en: 55e7268b85d37e0a
-  zh: 0e35f24d9df25b44
+  en: 7450deb334fa33e2
+  zh: 395fce26447dbc39
 /deepseek-ai-dsh-experimental-context-tree/use-this-package/events:
   en: 8d9f5711953db7c0
   zh: 1d43e1592689b621
 /deepseek-ai-dsh-experimental-context-tree/understand-the-implementation:
-  en: 0cfe663ae452f066
-  zh: bc5f1d52fe255647
+  en: 1ee9dd56c09e7787
+  zh: b656fb36ddf62d4d
 /deepseek-ai-dsh-experimental-context-tree/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
@@ -45,11 +45,11 @@
   en: b20ad65f6a4bb3e6
   zh: 2b2a12946c6eba9d
 /deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/what-the-model-sees:
-  en: b175e2cc57940f21
-  zh: 38c57aac9e2a68fc
+  en: 12b2a53697ac4848
+  zh: 87e0280d5d2c5033
 /deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/token-effect:
-  en: 904c3e9be8ffb0d4
-  zh: fdfdd651d8236c59
+  en: b6151360393744b2
+  zh: 11dce51f979b1675
 /deepseek-ai-dsh-experimental-context-tree/model-experience/context-tree-tools/kv-cache-effect:
   en: 018118b871904b5d
   zh: 8f9bd6429398a639
@@ -57,29 +57,29 @@
   en: ce0006b65eb45f4e
   zh: a96b72ac47c42cbb
 /deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/what-the-model-sees:
-  en: d65a105fd055c99d
-  zh: c18e92b65dcc5175
+  en: b5e2e3b13e09407a
+  zh: d369270fbd41a1c9
 /deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/token-effect:
-  en: 0018da35fda9891c
-  zh: 47631bf6b8fb2fb2
+  en: 5e868f16f5883209
+  zh: aa88359928928261
 /deepseek-ai-dsh-experimental-context-tree/model-experience/tree-catalog/kv-cache-effect:
-  en: 22e765d1a2564312
-  zh: d8301d808d95c46d
+  en: 1a0d787f98061aed
+  zh: b5c6e09e0e26077c
 /deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations:
   en: be1e80618681ae17
   zh: 42a8160467bdcdb0
 /deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/what-the-model-sees:
-  en: 5a5b16b339c03dd2
-  zh: b4f369e44f0a4dd4
+  en: 86e7f42b4153083a
+  zh: ae8e0668ff7ef4bc
 /deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/token-effect:
-  en: 428874abcc011103
-  zh: 3b80138658158bbc
+  en: 247bed53b8642a6d
+  zh: 0cad7ec441fafcb6
 /deepseek-ai-dsh-experimental-context-tree/model-experience/loaded-sections-and-activations/kv-cache-effect:
   en: 7d38d58e56a1a8ef
   zh: 9def3af5f0ad09b4
 /deepseek-ai-dsh-experimental-context-tree/known-limitations-and-deferred-work:
-  en: d7727404f051d4b5
-  zh: 88fda0f355618c86
+  en: b715d31d7c02d5d9
+  zh: 0ace2fb44e8b5927
 /deepseek-ai-dsh-experimental-context-tree/known-limitations-and-deferred-work/dev-note:
   en: 572f1cb721684820
   zh: 87ab7897146058f1

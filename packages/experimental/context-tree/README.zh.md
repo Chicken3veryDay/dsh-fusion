@@ -24,7 +24,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-在工具注册表、压缩和 Session 投影服务之后，依次挂载 `@deepseek-ai/dsh-experimental-context-index`、本包（默认导出 `ContextTreeService`），再通过一个把具名导出 `ContextTreeTools` 重新导出为默认导出的模块挂载它，因为 Loader 只挂载默认导出（profile 层提供了这样的模块）。[profile 层](../context-profile/README.zh.md)为 profile 完成这些挂载。没有任何已发布的 profile 挂载本包。
+在工具注册表、压缩和 Session 投影服务之后，依次挂载 `@deepseek-ai/dsh-experimental-context-index`、本包（默认导出 `ContextTreeService`），再通过一个把具名导出 `ContextTreeTools` 重新导出为默认导出的模块挂载它，因为 Loader 只挂载默认导出（profile 层提供了这样的模块）。[profile 层](../context-profile/README.zh.md)为 profile 完成这些挂载。没有任何已发布的 profile 挂载本包。没有 `ContextTreeTools` 时，准入策略仍会隐藏 `baseTools` 之外的所有工具，因此某个智能体第一次有工具被隐藏的步骤会记录一条错误，列出被隐藏的工具和缺失的插件。
 
 ### 树结构
 
@@ -33,6 +33,8 @@ kind: "package-reference"
 | `Instructions` | 用户全局指令文件的章节 | 项目指令文件的章节 |
 | `Sources` | 空；没有索引来源属于全局文档 | 项目文档根目录下的 Markdown |
 | `Tools` | 以 `global` 或未记录来源注册的工具 | 以 `project` 来源注册的工具，或由提示或分配器放入 `Project` 的工具 |
+
+`Tools` 只列出可以向该智能体声明的工具：在该智能体最近一次步骤解析工具时，通过了自身 `when` 条件以及先于本策略运行的准入策略的工具。智能体第一次步骤解析之前，树列出所有已注册的工具。
 
 来源由文件或注册的出处决定，绝不由名称决定。文件的来源取自上下文索引的 source。已注册工具的来源取自其注册记录（`ctx.tools.originOf`），由读取配置层的生产方写入：`origin: project` 的 MCP 服务器或 ACP 会话服务器会把其工具放在 `Project` 下，`origin: global` 则放在 `Global` 下。提示或分配器可以覆盖它。注册时没有记录来源的工具读作 `unknown`，仍放在 `Global` 下，并由 `unresolvedToolOrigins` 列出。工具分组来自 `registerToolGroup` 提示，否则来自工具名：`mcp__<server>__*` 成为分组 `mcp-<server>`，至少两个工具共享的首个 `_` 之前的前缀成为该分组，其余进入 `other`。
 
@@ -62,8 +64,8 @@ export function placeTools(ctx: Context) {
 
 三个通用注册接口让策展者塑造树，而树无需导入它；[上下文地图](../context-map/README.zh.md)使用它们。
 
-- `registerCuratedGroups(provider)`：针对某个智能体返回分组（`root`、`origin`、`name`、`title`、`summary`、成员 `sections` 和 `tools`）。策展分组是带有自己标题和摘要的文件夹节点。其章节不再显示文件节点，其工具的位置优先于提示和名称。
-- `registerEagerCore(provider)`：返回树在对话开始时授予一次、压缩之后再授予一次的章节 id，作为普通的已记录授权，受 `coreBytes` 限制。放不进剩余字节的章节被跳过，绝不只授予一部分，其后更小的章节仍可放入。
+- `registerCuratedGroups(provider)`：针对某个智能体返回分组（`root`、`origin`、`name`、`title`、`summary`、成员 `sections` 和 `tools`）。策展分组是带有自己标题和摘要的文件夹节点。其章节不再显示文件节点，其工具的位置优先于提示和名称。目录在各来源文件夹下列出其中每个非空的策展分组。
+- `registerEagerCore(provider)`：返回树在对话开始时授予一次、压缩之后再授予一次的章节 id，作为普通的已记录授权，受 `coreBytes` 限制。放不进剩余字节的章节被跳过，绝不只授予一部分，其后更小的章节仍可放入。文件已改变的章节，若在过期副本的费用转给它之后当前文本仍放得下，会以当前文本再次授予；新授权说明它替换了那份副本。
 - `registerManagedTools(names, admit)`：只有 `admit` 接受的智能体才能看到的工具，在工具准入中强制执行。
 
 ### 配置
@@ -77,13 +79,13 @@ export function placeTools(ctx: Context) {
 | `maxBrowseNodes` | 64 | 一次列表中的节点数 |
 | `maxBrowseBytes` | 8192 | 一次列表渲染后的字节数 |
 | `maxLoadPaths` | 16 | 一次加载调用中的路径数 |
-| `maxLoadBytes` | 32768 | 一次加载加入的章节字节数 |
+| `maxLoadBytes` | 32768 | 一次加载加入的授权消息字节数，包括框架 |
 | `maxActivatedTools` | 32 | 一次加载可激活的工具数 |
 | `maxSummaryBytes` | 160 | 节点摘要的字节数 |
 | `maxDroppedBytes` | 1024 | 重新发布的目录在后续压缩之间保留的已撤销章节列表的字节数 |
 | `coreBytes` | 4096 | 急切核心提供方在对话开始时可授予的章节字节数 |
 
-不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。 浏览结果保留完整路径，仅在需要满足 `maxBrowseBytes` 时裁剪显示标题中的路径。部分章节授权可以重新加载；只有完整授权才抑制重复加载。急切授权在 Session 来源中记录其字节费用。所有仍持有的急切授权，包括之前的选择以及已排队或已认领的授权，都会持续占用 `coreBytes`，直到撤销。更改核心不能在压缩前再累积一整份预算；通过显式加载已持有的选中章节也会占用预算。较早的授权没有记录费用，无法区分其来自急切授予还是显式加载，因此会将新的急切授权推迟到撤销之后。
+不可用的值会在加载时以 `CONTEXT_TREE_INVALID_CONFIG` 失败。 浏览结果保留完整路径，仅在需要满足 `maxBrowseBytes` 时裁剪显示标题中的路径。部分章节授权可以重新加载；只有完整授权才抑制重复加载。急切授权在 Session 来源中记录其字节费用。每个章节最新的仍持有急切授权，包括之前的选择以及已排队或已认领的授权，都会持续占用 `coreBytes`，直到撤销。更改核心不能在压缩前再累积一整份预算；通过显式加载已持有的选中章节也会占用预算。较早的授权没有记录费用，无法区分其来自急切授予还是显式加载，因此会将新的急切授权推迟到撤销之后。
 
 ### 事件
 
@@ -96,14 +98,16 @@ export function placeTools(ctx: Context) {
 - [`src/tree.ts`](src/tree.ts) 根据上下文索引快照和工具注册表构建树，并完成来源放置与分组。 已记录的工具来源优先于冲突的放置提示；来源未知时可以指定。策展文件夹与文件路径相同时，同一地址也包含该文件未分组的章节。
 - [`src/paths.ts`](src/paths.ts) 编码并拆分路径；[`src/render.ts`](src/render.ts) 渲染浏览和加载结果；[`src/messages.ts`](src/messages.ts) 构造目录、授权和激活消息。
 - [`src/projection.ts`](src/projection.ts) 是 Session 投影，从日志推导已加载章节、激活和已发布目录。 只有章节不再有保留的授权时，压缩才会将其列为已丢弃。服务将已记录的候选项与 Session 当前表面相交，因此任何表面替换都允许重新加载已移除的章节，并撤销已移除的工具激活。
-- [`src/index.ts`](src/index.ts) 是服务：准入策略、pre-step 目录钩子、可撤销来源、浏览与加载。
+- [`src/index.ts`](src/index.ts) 是服务：准入策略、pre-step 目录钩子、可撤销来源、浏览与加载。准入策略按智能体记录哪些已注册工具没有作为候选到达它，树会排除这些工具。
 - [`src/tools.ts`](src/tools.ts) 注册两个模型工具。
 
 工具准入从请求中移除工具并为其余工具排序。它按配置顺序保留 `baseTools`，因此重新加载的提供方不会移动其工具，再按激活顺序保留投影报告为活跃的每个工具。激活顺序由已记录的激活消息推导，因此声明可以由会话日志重建。模型仍然调用的隐藏工具在分发时以未知工具失败。一步的准入发生在该步领取收件箱之后、已领取消息写入日志之前，因此投影还会跟踪持久的收件箱拼接：激活从入队的那一刻起算，经过领取，直到已记录的消息接手。这使工具无需修改 agent loop 即可在下一次请求中可调用。
 
 策展者管理的工具追加在已激活工具之后，因此获得角色会保留原有声明前缀。重新发布的目录从已丢弃列表中排除当前激活的工具，即使这些工具是从原分组中单独重新加载的。
 
-每一步之前，服务渲染目录，当其摘要与投影中的不同时追加一条目录消息。压缩移除了先前的目录后，新目录会说明它替换任何早先的列表。
+一次加载按 `maxLoadBytes` 规划其章节，并计入每个授权的框架：能放下时以完整框架放入整个章节，然后以仍留有文本空间的最详细框架放入一个被截断的章节。渲染后的消息会再次按预算检查，因此快照之后变大的文件不能让加载超出预算。
+
+每一步之前，服务渲染目录，当其摘要与投影中的不同时追加一条目录消息。摘要覆盖非空的来源文件夹及其下的策展分组，连同它们的摘要。压缩移除了先前的目录后，新目录会说明它替换任何早先的列表。
 
 <a id="model-experience"></a>
 ## 模型体验
@@ -112,11 +116,11 @@ export function placeTools(ctx: Context) {
 
 #### 模型看到的内容
 
-两个工具 schema：`context_browse` 和 `context_load`，描述见 [`src/tools.ts`](src/tools.ts)。`context_browse` 返回由路径、标题和摘要组成的行，列表被截断时还返回继续用的 offset。`context_load` 返回哪些路径已授权、已激活、已加载、已处于活跃、缺失或因大小被省略。不在 `baseTools` 中且未被激活的工具不会出现在请求里。
+两个工具 schema：`context_browse` 和 `context_load`，描述见 [`src/tools.ts`](src/tools.ts)。`context_browse` 返回由路径、标题和摘要组成的行，列表被截断时还返回继续用的 offset。`context_load` 返回哪些路径已授权、已激活、已加载、已处于活跃、缺失或因大小被省略。自身条件排除该智能体的工具不在树中，因此加载它会把路径报告为缺失。不在 `baseTools` 中且未被激活的工具不会出现在请求里。
 
 #### Token 影响
 
-两个 schema 带来固定成本。其他所有工具 schema 在加载前都被移除，这就是节省之处。一次浏览最多增加 `maxBrowseBytes`；一次加载增加最多 `maxLoadBytes` 的章节文本和一行激活消息。
+两个 schema 带来固定成本。其他所有工具 schema 在加载前都被移除，这就是节省之处。一次浏览最多增加 `maxBrowseBytes`；一次加载增加最多 `maxLoadBytes` 的授权消息和一行激活消息。
 
 #### KV 缓存影响
 
@@ -126,25 +130,25 @@ export function placeTools(ctx: Context) {
 
 #### 模型看到的内容
 
-一条用户消息 `<context_tree>`，包含根节点及其计数，在第一个模型步骤之前追加，压缩后再次追加。其文本取决于指令文件、文档和已注册工具。
+一条用户消息 `<context_tree>`，每个非空来源文件夹一行，其下缩进列出每个策展分组一行，在第一个模型步骤之前追加，压缩后再次追加。其文本取决于指令文件、文档、已注册工具和策展分组。
 
 #### Token 影响
 
-受 `maxBrowseBytes` 限制。
+固定框架、最多六行文件夹、受 `maxDroppedBytes` 限制的已丢弃列表，以及受 `maxBrowseBytes` 限制的策展分组行；超出该上限的分组在一行中计数。
 
 #### KV 缓存影响
 
-仅追加。只有树的摘要发生变化，或压缩移除了先前的目录时才会再次追加。
+仅追加。只有摘要发生变化（某个来源文件夹或策展分组出现、消失或改变其摘要），或压缩移除了先前的目录时才会再次追加。
 
 ### 已加载章节与激活
 
 #### 模型看到的内容
 
-`<context-grant path=… section=… hash=…>` 消息保存已加载的章节文本。`<context-activation>` 消息列出现在可调用的工具及其来源节点。压缩后，一个有界的存根“Revoked context (reload if needed):”列出被撤销的内容。
+`<context-grant path=… section=… hash=…>` 消息保存已加载的章节文本。加载预算放不下该框架时，消息先去掉 `section` 和 `hash`，再去掉 `path`，截断处以 `[cut]` 代替完整说明。若对话中较早的副本已与文件不符，该章节的授权带有 `replaces="<旧摘要>"`，并以一行说明较早的副本已过期开头。`<context-activation>` 消息列出现在可调用的工具及其来源节点。压缩后，一个有界的存根“Revoked context (reload if needed):”列出被撤销的内容。
 
 #### Token 影响
 
-每次加载最多 `maxLoadBytes` 的章节文本，保留到压缩为止，之后由不超过压缩存根上限的存根取代。
+每次加载最多 `maxLoadBytes` 的授权消息（包括框架），保留到压缩为止，之后由不超过压缩存根上限的存根取代。
 
 #### KV 缓存影响
 
@@ -157,6 +161,8 @@ export function placeTools(ctx: Context) {
 - **技能不在树中**——`skill` 仍是基础工具。
 - **压缩请求**——执行压缩的请求仍声明已激活的工具；声明在下一步消失。修复需要让工具集在压缩 pre-step 之后解析。
 - **后续压缩**——第二次压缩会总结第一个检查点，因此更早的撤销存根被并入摘要。
+- **过期副本**——编辑后再次加载的章节会把较早的副本留在对话中直到压缩；新授权标记它已过期，且每个章节只有最新的急切授权占用 `coreBytes`。新文本放不进核心预算的已编辑核心章节不会再次授予，其较早的副本在压缩或显式加载之前保持未标记。
+- **步骤中注册的工具**——树按智能体最近一次步骤解析过滤工具，因此在此之后注册的工具会一直列出，直到下一步解析其条件。
 - **重复授权**——完整授权已排队或已被领取但尚未写入日志的章节视为已加载，因此在这段时间内第二次加载不会再授权一次。
 - **子智能体**——子智能体只从基础工具开始；不继承激活。
 - **刷新成本**——上下文索引每一步都会重新 stat 指令和文档文件。
