@@ -8,6 +8,7 @@ import { appendPluginRecord, pluginRecordOf } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { deadline, MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
+import { isToolCallSettleEvent } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import { sameChangeRequestUrl } from './commands.ts'
 import { BINDING_RECORD, forgeChangeRequestsProjection } from './projection.ts'
 import { observeReferences } from './reference-lookup.ts'
@@ -192,7 +193,7 @@ export class ForgeSessionService extends Service {
 
   /** Discover change requests for this result's pushes and refresh watchers after binding changes. */
   private react(session: Session, event: SessionEvent): void {
-    if (event.type !== 'tool/result' && pluginRecordOf(event)?.type !== BINDING_RECORD) return
+    if (!isToolCallSettleEvent(event) && pluginRecordOf(event)?.type !== BINDING_RECORD) return
     const state = this.state(session)
     for (const push of state.pushes) {
       if (push.seq === event.seq) void this.discover(session, push.remote, push.branch)

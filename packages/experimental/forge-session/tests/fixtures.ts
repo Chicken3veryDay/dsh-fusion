@@ -1,4 +1,5 @@
 import { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import ForgeService, { changeRequestKey } from '@deepseek-ai/dsh-experimental-forge'
 import type {
   ChangeRequestKey, ChangeRequestRef, ChangeRequestSnapshot, ForgeActionFailure, ForgeFailure, ForgeProvider, ForgeReadiness,
@@ -183,6 +184,27 @@ export function shellTurn(session: Session, calls: readonly ShellCall[]): void {
     }, { surfaceOp: 'append' })
   }
   session.append('step/end', { turn, step })
+  session.append('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
+/**
+ * Append one completed turn in which a single `run_code` program runs `calls`, logged as nested dispatches.
+ * @param session - live Session receiving the events.
+ * @param calls - shell calls with their rendered results.
+ */
+export function programTurn(session: Session, calls: readonly ShellCall[]): void {
+  const turn = (turns.get(session) ?? 0) + 1
+  turns.set(session, turn)
+  const step = 1
+  const program = ToolCallId(`program-${turn}`)
+  session.append('turn/start', { turn })
+  session.append('tool/call', { turn, step, callId: program, name: 'run_code', arguments: '{}' })
+  for (const call of calls) {
+    const ids = { rootCallId: program, parentCallId: program, subCallId: ToolCallId(call.callId), name: call.tool ?? 'bash', arguments: { command: call.command } }
+    session.append('tool/ptc-dispatch-start', ids)
+    session.append('tool/ptc-dispatch', { ...ids, isError: call.isError ?? false, content: [{ type: 'text', text: call.output }] })
+  }
+  session.append('tool/result', { turn, step, message: createToolResultMessage({ callId: program, content: [], isError: false }) }, { surfaceOp: 'append' })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
 

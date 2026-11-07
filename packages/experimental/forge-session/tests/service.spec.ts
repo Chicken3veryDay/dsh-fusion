@@ -7,7 +7,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import ForgeSessionService from '../src/index.ts'
 import type { Config, SessionChangeRequest, SessionChangeRequestsListener } from '../src/index.ts'
-import { bench, demo, FakeProvider, pull, pullUrl, pushOutput, shellTurn, snapshot } from './fixtures.ts'
+import { bench, demo, FakeProvider, programTurn, pull, pullUrl, pushOutput, shellTurn, snapshot } from './fixtures.ts'
 import type { Bench } from './fixtures.ts'
 
 const contexts: Context[] = []
@@ -116,6 +116,15 @@ describe('forgeSession discovery', () => {
 
     await vi.waitFor(() => { expect(records(session)).toEqual([{ action: 'discover', url: pullUrl(7) }]) })
     expect(provider.lookups.map(lookup => [lookup.repository, lookup.branch])).toEqual([[demo, 'feat']])
+    expect(ctx.forgeSession.changeRequests(session)).toEqual([{ url: pullUrl(7), origin: 'discovered', ref: pull(7), update: null }])
+  })
+
+  it('records change requests found for a branch a run_code program pushed', async () => {
+    const { ctx, provider, session } = await open()
+    provider.heads.set('feat', [pull(7)])
+    programTurn(session, [{ callId: 'program:ptc:1', command: 'git push -u origin feat', output: pushOutput('feat') }])
+
+    await vi.waitFor(() => { expect(records(session)).toEqual([{ action: 'discover', url: pullUrl(7) }]) })
     expect(ctx.forgeSession.changeRequests(session)).toEqual([{ url: pullUrl(7), origin: 'discovered', ref: pull(7), update: null }])
   })
 

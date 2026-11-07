@@ -2,7 +2,8 @@
 
 import { z } from 'zod'
 import { pluginRecordOf, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionEventMap } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { effectiveToolCall, effectiveToolResult, type EffectiveToolCall, type EffectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { changeRequestUrls, commandEvidence, commandOf, ownChangeRequestUrls, pushedBranches, sameChangeRequestUrl } from './commands.ts'
@@ -48,7 +49,8 @@ const stateSchema: z.ZodType<ForgeChangeRequestsState> = z.object({
 }).strict()
 
 /**
- * The `forgeChangeRequests` unit. A `bash` or `pwsh` call whose command is
+ * The `forgeChangeRequests` unit. A `bash` or `pwsh` call, model-issued or
+ * nested in a `run_code` program, whose command is
  * `gh pr create`, `gh pr view`, `gh pr edit`, `gh pr checkout`, or
  * `git push` stays pending until its first result. A successful result binds
  * every pull request URL a `gh pr create` result prints; for the other `gh pr`
@@ -62,7 +64,7 @@ const stateSchema: z.ZodType<ForgeChangeRequestsState> = z.object({
  */
 export const forgeChangeRequestsProjection = {
   key: 'forgeChangeRequests',
-  stateVersion: 3,
+  stateVersion: 4,
   stateSchema,
   init: () => EMPTY,
   apply,
@@ -72,9 +74,11 @@ export const forgeChangeRequestsProjection = {
 function apply(state: ForgeChangeRequestsState, event: SessionEvent): ForgeChangeRequestsState {
   switch (event.type) {
     case 'tool/call':
-      return applyCall(state, event.data)
+    case 'tool/ptc-dispatch-start':
+      return applyCall(state, effectiveToolCall(event))
     case 'tool/result':
-      return applyResult(state, event.data, event.seq)
+    case 'tool/ptc-dispatch':
+      return applyResult(state, effectiveToolResult(event), event.seq)
     case 'turn/end':
       return state.pending.length === 0 ? state : { ...state, pending: EMPTY.pending }
     // Every other event type, including plugin records, which sit outside SessionEventMap.
@@ -83,7 +87,7 @@ function apply(state: ForgeChangeRequestsState, event: SessionEvent): ForgeChang
   }
 }
 
-function applyCall(state: ForgeChangeRequestsState, call: SessionEventMap['tool/call']): ForgeChangeRequestsState {
+function applyCall(state: ForgeChangeRequestsState, call: EffectiveToolCall): ForgeChangeRequestsState {
   if (!SHELL_TOOLS.has(call.name)) return state
   const command = commandOf(call.arguments)
   const evidence = command === undefined ? undefined : commandEvidence(command)
@@ -91,13 +95,13 @@ function applyCall(state: ForgeChangeRequestsState, call: SessionEventMap['tool/
   return { ...state, pending: [...state.pending, { callId: call.callId, ...evidence }] }
 }
 
-function applyResult(state: ForgeChangeRequestsState, result: SessionEventMap['tool/result'], seq: SessionSeq): ForgeChangeRequestsState {
-  const callId = result.message.toolCallId
+function applyResult(state: ForgeChangeRequestsState, result: EffectiveToolResult, seq: SessionSeq): ForgeChangeRequestsState {
+  const callId = result.callId
   const pending = state.pending.find(entry => entry.callId === callId)
   if (pending === undefined) return state
   const rest = state.pending.filter(entry => entry !== pending)
-  if (result.message.isError === true) return { ...state, pending: rest }
-  const text = result.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+  if (result.isError) return { ...state, pending: rest }
+  const text = result.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
   const printed = pending.urls === 'created' ? changeRequestUrls(text) : ownChangeRequestUrls(text)
   return {
     pending: rest,
