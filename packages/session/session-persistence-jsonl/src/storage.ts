@@ -159,8 +159,8 @@ export class JsonlSessionHandle implements SessionHandle {
   private closing: Promise<void> | undefined
   private closeJoin: Promise<void> | undefined
   private observedLength = 0
-  /** Marks the async call stack of a store-flush callback that is awaiting this handle's flush. */
-  private readonly storeFlushScope = new AsyncLocalStorage<true>()
+  /** Marks async work started by a pending store flush; the token goes stale when that flush settles. */
+  private readonly storeFlushScope = new AsyncLocalStorage<{ pending: boolean }>()
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
   private batchTimer: ReturnType<typeof setTimeout> | undefined
@@ -290,11 +290,19 @@ export class JsonlSessionHandle implements SessionHandle {
   }
 
   /**
-   * Flush on behalf of a `session/flush` listener. A close issued from inside this
-   * call's async stack is refused instead of joined, since it would await this flush.
+   * Flush on behalf of a `session/flush` listener. A close issued from async work this
+   * call started, while this flush is still pending, is refused instead of joined, since it
+   * may be awaited by this flush. Once the flush settles that work joins close normally.
    * @returns the same settlement as {@link flush}.
    */
-  flushForStore(): Promise<void> { return this.storeFlushScope.run(true, () => this.flush()) }
+  async flushForStore(): Promise<void> {
+    const token = { pending: true }
+    try {
+      await this.storeFlushScope.run(token, () => this.flush())
+    } finally {
+      token.pending = false
+    }
+  }
 
   /** Current flush generation, captured before a store flush begins. */
   get durabilityGeneration(): number { return this.flushGeneration }
@@ -335,10 +343,11 @@ export class JsonlSessionHandle implements SessionHandle {
    * close that lands while a store flush for this Session is in flight. That
    * close waits for the flush through the mutation chain and then closes; a
    * reserved writer is fenced synchronously and a recorded failure is surfaced.
-   * The one exception is a close issued from inside the store-flush callback's
-   * own call stack ({@link flushForStore}): waiting would wait for itself, so
-   * that caller alone receives a rejection while the close still proceeds,
-   * fenced and joined like any other, for every other caller.
+   * The one exception is a close issued from async work started by a store flush
+   * ({@link flushForStore}) while that flush is still pending: waiting could wait
+   * for itself, so that caller alone receives a rejection while the close still
+   * proceeds, fenced and joined like any other, for every other caller. After the
+   * flush settles, the same work joins the shared close result.
    * A write handle first drains its routed live buffer through the still-open
    * storage. Retained close joins its exact event-listener removal after lease
    * release; a drain, lease or remover failure rejects and retains uncertain
@@ -348,7 +357,7 @@ export class JsonlSessionHandle implements SessionHandle {
    */
   close(): Promise<void> {
     const joined = this.joinClose()
-    if (this.storeFlushScope.getStore() !== true) return joined
+    if (this.storeFlushScope.getStore()?.pending !== true) return joined
     void joined.catch((_error: unknown) => {
       // The reentrant caller receives only the refusal; the real close result is
       // reported to every caller outside the callback and recorded as uncertainty.
