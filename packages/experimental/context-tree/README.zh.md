@@ -87,7 +87,7 @@ export function placeTools(ctx: Context) {
 
 ### 事件
 
-本包不新增事件类型。它使用现有的 `user/message` 事件和三种来源类型：`context-tree-catalog`（已发布的树）、`context-grant`（已加载的章节文本）和 `context-activation`（已可调用的工具）。`context-grant` 和 `context-activation` 被注册为可撤销的压缩来源。pre-step 发布器与 `system-prompt/request-context` 共用这些消息：请求阶段压缩后，在发送前恢复缺失的目录与急切核心消息。请求阶段的钩子把已接受的待提交消息中的急切授权计入 `coreBytes` 并视为已持有，因此两个钩子不会在一次请求中授予两份预算。若本步骤的待提交消息已带有目录，则不再追加第二份目录；此后的压缩只是把条目移入已丢弃列表，压缩留在历史中的存根会在该请求中指明它们。本次请求重新授予的章节不会出现在已丢弃列表中。循环在派生请求前把所有新增消息提交到 Session 日志。
+本包不新增事件类型。它使用现有的 `user/message` 事件和三种来源类型：`context-tree-catalog`（已发布的树）、`context-grant`（已加载的章节文本）和 `context-activation`（已可调用的工具）。`context-grant` 和 `context-activation` 被注册为可撤销的压缩来源。pre-step 发布器与 `system-prompt/request-context` 共用这些消息：请求阶段压缩后，在发送前恢复缺失的目录与急切核心消息。请求阶段的钩子把已接受的待提交消息中的急切授权计入 `coreBytes` 并视为已持有，因此两个钩子不会在一次请求中授予两份预算。若本步骤的待提交消息已带有目录，则不再追加第二份目录；此后的压缩只是把条目移入已丢弃列表，压缩留在历史中的存根会在该请求中指明它们。被压缩移除的核心章节仍会在该请求中于 `coreBytes` 内重新授予。本次请求重新授予的章节不会出现在已丢弃列表中。循环在派生请求前把所有新增消息提交到 Session 日志。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现

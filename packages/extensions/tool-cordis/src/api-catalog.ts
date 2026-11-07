@@ -885,17 +885,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'isRunning(ownerId: SessionId): boolean',
         description: 'Whether a run is active for a map owner.',
         parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
-        returns: 'true while a run holds or is acquiring the role.',
+        returns: 'true from route selection until the run released the role and settled.',
       },
       {
         signature: 'failureOf(ownerId: SessionId): ContextMapError | undefined',
         description: 'The failure that kept the last start from running, such as no cheap route.',
         parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
-        returns: 'the failure, or undefined after a successful start or before any trigger.',
+        returns: 'the failure, or undefined after a successful route selection, before any trigger, or once the owner is gone.',
       },
       {
         signature: 'async idle(ownerId: SessionId): Promise<void>',
-        description: 'Wait for the active run of an owner, if any, to settle.',
+        description: 'Wait until an owner has no evaluation or run in progress.',
         parameters: [{ name: 'ownerId', description: 'the map owner\'s Session id.' }],
       },
     ],
@@ -978,10 +978,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async claim( caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal, ): Promise<MapSnapshot & { readonly observedIndexDigest: string }>',
-        description: 'Take the curator role for an agent. The previous holder, live or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool calls it.',
-        parameters: [{ name: 'caller', description: 'the exact live agent; the holder, or the map owner naming another holder.' }, { name: 'request', description: 'target map, holder, and route.' }, { name: 'signal', description: 'cancellation.' }],
+        description: 'Take the curator role for an agent. Unless `expectedHolder` is given, the previous holder, live or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool calls it. The signal and the expected holder are checked after the index read, immediately before the commit, so a canceled or outdated claim never replaces a newer holder or counts as an attempt.',
+        parameters: [{ name: 'caller', description: 'the exact live agent; the holder, or the map owner naming another holder.' }, { name: 'request', description: 'target map, holder, route, work, and the holder the caller expects to replace.' }, { name: 'signal', description: 'cancellation.' }],
         returns: 'the committed snapshot and the observed index digest; claiming does not mark it curated.',
-        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.'],
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder, `CONTEXT_MAP_CONFLICT` when the current holder is not `expectedHolder`; the signal\'s reason when it was aborted.'],
       },
       {
         signature: 'async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>',
@@ -6775,7 +6775,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ClaimRequest',
-    declaration: 'export interface ClaimRequest extends MapTarget {\n    readonly holderId?: SessionId;\n    readonly route?: MapRoute;\n    readonly work?: string;\n}',
+    declaration: 'export interface ClaimRequest extends MapTarget {\n    readonly holderId?: SessionId;\n    readonly route?: MapRoute;\n    readonly work?: string;\n    readonly expectedHolder?: SessionId | null;\n}',
   },
   {
     name: 'ClientArtifactBaseline',

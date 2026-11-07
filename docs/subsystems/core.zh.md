@@ -903,19 +903,19 @@ Background default curator; mount `DefaultContextCurator` beside `ContextMapServ
 /**
  * Whether a run is active for a map owner.
  * @param ownerId - the map owner's Session id.
- * @returns true while a run holds or is acquiring the role.
+ * @returns true from route selection until the run released the role and settled.
  */
 isRunning(ownerId: SessionId): boolean
 
 /**
  * The failure that kept the last start from running, such as no cheap route.
  * @param ownerId - the map owner's Session id.
- * @returns the failure, or undefined after a successful start or before any trigger.
+ * @returns the failure, or undefined after a successful route selection, before any trigger, or once the owner is gone.
  */
 failureOf(ownerId: SessionId): ContextMapError | undefined
 
 /**
- * Wait for the active run of an owner, if any, to settle.
+ * Wait until an owner has no evaluation or run in progress.
  * @param ownerId - the map owner's Session id.
  */
 async idle(ownerId: SessionId): Promise<void>
@@ -1028,13 +1028,16 @@ snapshotOf(owner: Agent): MapSnapshot
 async view(caller: Agent, target: MapTarget & { readonly pendingAfter?: MapPendingId readonly groupAfter?: MapGroupId | '' readonly groupId?: MapGroupId readonly noteAfter?: MapNoteId | '' } = {}, signal?: AbortSignal): Promise<MapView>
 
 /**
- * Take the curator role for an agent. The previous holder, live or not, is replaced and the
- * handoff is logged. This is a plugin-level operation: no model tool calls it.
+ * Take the curator role for an agent. Unless `expectedHolder` is given, the previous holder, live
+ * or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool
+ * calls it. The signal and the expected holder are checked after the index read, immediately
+ * before the commit, so a canceled or outdated claim never replaces a newer holder or counts as an attempt.
  * @param caller - the exact live agent; the holder, or the map owner naming another holder.
- * @param request - target map, holder, and route.
+ * @param request - target map, holder, route, work, and the holder the caller expects to replace.
  * @param signal - cancellation.
  * @returns the committed snapshot and the observed index digest; claiming does not mark it curated.
- * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder,
+ * `CONTEXT_MAP_CONFLICT` when the current holder is not `expectedHolder`; the signal's reason when it was aborted.
  */
 async claim( caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal, ): Promise<MapSnapshot & { readonly observedIndexDigest: string }>
 

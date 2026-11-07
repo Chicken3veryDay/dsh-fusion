@@ -144,6 +144,8 @@ export interface ClaimRequest extends MapTarget {
   readonly route?: MapRoute
   /** Signature of the {@link CurationWork} this claim serves; logged so retries of the same work can be counted. */
   readonly work?: string
+  /** Holder the claim may replace (`null` for an unclaimed map); omitted replaces any holder. Not logged. */
+  readonly expectedHolder?: SessionId | null
 }
 
 const groupIdOf = (): MapGroupId => brandString<MapGroupId>(`grp_${randomUUID().slice(0, 8)}`)
@@ -162,9 +164,11 @@ export class ContextMapService extends Service {
   private readonly config: ResolvedConfig
   private projection!: ProjectionHandle<ContextMapProjectionState>
   private readonly watchers = new Set<(change: MapChange) => void>()
-  /** Section hashes the index had at each owner's last read, for the stale flag the tree shows. */
+  /**
+   * Section hashes the index had at each live owner's last read, for the stale flag the tree shows.
+   * This and the refusal counters below belong to the owner's lifetime and are dropped when it is disposed.
+   */
   private readonly hashes = new Map<SessionId, ReadonlyMap<ContextSectionId, string>>()
-  private readonly announced = new Map<SessionId, string>()
   /** Notes refused for lack of room per owner, and how many of them a finished role hold had seen. */
   private readonly spaceRefusals = new Map<SessionId, number>()
   private readonly spaceSeen = new Map<SessionId, number>()
@@ -206,8 +210,8 @@ export class ContextMapService extends Service {
     })
     this.ctx.on('agent/disposed', ({ agent }) => {
       const owners = [...this.heldOwners.get(agent.id) ?? []]
-      for (const held of this.heldOwners.values()) held.delete(agent.id)
       this.heldOwners.delete(agent.id)
+      this.forgetOwner(agent.id)
       for (const ownerId of owners) {
         this.notify({ kind: 'holder-gone', ownerSessionId: ownerId, holderId: agent.id })
         void this.releaseGone(ownerId, agent.id).catch((error: unknown) => {
@@ -345,13 +349,16 @@ export class ContextMapService extends Service {
   }
 
   /**
-   * Take the curator role for an agent. The previous holder, live or not, is replaced and the
-   * handoff is logged. This is a plugin-level operation: no model tool calls it.
+   * Take the curator role for an agent. Unless `expectedHolder` is given, the previous holder, live
+   * or not, is replaced and the handoff is logged. This is a plugin-level operation: no model tool
+   * calls it. The signal and the expected holder are checked after the index read, immediately
+   * before the commit, so a canceled or outdated claim never replaces a newer holder or counts as an attempt.
    * @param caller - the exact live agent; the holder, or the map owner naming another holder.
-   * @param request - target map, holder, and route.
+   * @param request - target map, holder, route, work, and the holder the caller expects to replace.
    * @param signal - cancellation.
    * @returns the committed snapshot and the observed index digest; claiming does not mark it curated.
-   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder.
+   * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder,
+   * `CONTEXT_MAP_CONFLICT` when the current holder is not `expectedHolder`; the signal's reason when it was aborted.
    */
   async claim(
     caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal,
@@ -363,8 +370,12 @@ export class ContextMapService extends Service {
       throw new ContextMapError('Only the map owner may give the curator role to another agent', 'CONTEXT_MAP_UNAUTHORIZED')
     }
     const facts = await this.facts(owner, signal)
+    signal?.throwIfAborted()
     this.live(caller)
     const current = this.snapshotOf(owner)
+    if (request.expectedHolder !== undefined && current.curatorId !== request.expectedHolder) {
+      throw new ContextMapError(`the curator role is held by ${current.curatorId ?? 'nobody'}, not the expected holder`, 'CONTEXT_MAP_CONFLICT')
+    }
     this.spaceAtClaim.set(owner.id, this.spaceRefusals.get(owner.id) ?? 0)
     const committed = await this.commit(owner, caller.id, {
       kind: 'claim', target: holderId, ...request.work === undefined ? {} : { work: request.work },
@@ -373,7 +384,6 @@ export class ContextMapService extends Service {
       curatorId: holderId,
       route: request.route ?? null,
     })
-    this.announced.delete(owner.id)
     return { ...committed, observedIndexDigest: facts.digest }
   }
 
@@ -830,7 +840,10 @@ export class ContextMapService extends Service {
       signal,
     )
     const sections = new Map(snapshot.sections.map(section => [section.id, section]))
-    this.hashes.set(owner.id, new Map(snapshot.sections.map(section => [section.id, section.hash])))
+    // A read that finishes after its owner was disposed must not recreate the owner's cache.
+    if (this.ctx.agents.get(owner.id) === owner) {
+      this.hashes.set(owner.id, new Map(snapshot.sections.map(section => [section.id, section.hash])))
+    }
     return { sections, digest: digestOf(snapshot.sections) }
   }
 
@@ -870,11 +883,25 @@ export class ContextMapService extends Service {
     return { reasons, signature, attempts: attempts?.work === signature ? attempts.count : 0 }
   }
 
+  /**
+   * Announce waiting work at every owner step that has some. Announcements are not remembered: the
+   * curator decides what an announcement means, so a watcher that missed one or failed before its
+   * claim sees the work again at the next step.
+   */
   private async observe(agent: Agent, signal: AbortSignal): Promise<void> {
-    const work = this.workOf(agent, await this.facts(agent, signal))
-    if (work === null || this.announced.get(agent.id) === work.signature) return
-    this.announced.set(agent.id, work.signature)
+    if (this.workOf(agent, await this.facts(agent, signal)) === null) return
     this.notify({ kind: 'work-waiting', ownerSessionId: agent.id })
+  }
+
+  /** Drop everything kept in memory for an owner whose agent was disposed; its map stays in its Session. */
+  private forgetOwner(ownerId: SessionId): void {
+    this.hashes.delete(ownerId)
+    this.spaceRefusals.delete(ownerId)
+    this.spaceSeen.delete(ownerId)
+    this.spaceAtClaim.delete(ownerId)
+    for (const [holder, owners] of this.heldOwners) {
+      if (owners.delete(ownerId) && owners.size === 0) this.heldOwners.delete(holder)
+    }
   }
 
   private async releaseGone(ownerId: SessionId, holderId: SessionId): Promise<void> {
