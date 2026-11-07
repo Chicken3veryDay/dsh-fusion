@@ -1371,8 +1371,9 @@ Serializes attempt admission, retains uncertain resources, and waits for produce
 /** Prepare or return the exact live attempt; recovered attempts cannot replay effects.
  * @param caller - Exact registered owner or current coordinator.
  * @param request - Stable operation and attempt ids, CAS, and explicit placement.
- * @returns The single resource handle retained for this preparation. Cancelled preparation bounds its settlement write
- * by settlementTimeoutMs; a stop that already reported pending durability is not awaited again.
+ * @returns The single resource handle retained for this preparation. Once preparation is aborted (by `request.signal`,
+ * owner disposal or teardown) or fails, the promise settles within settlementTimeoutMs; the attempt still reaches its
+ * terminal or uncertain durable state afterwards, and an expired wait rejects with `TICKET_SETTLEMENT_PENDING`.
  */
 prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>
 ```

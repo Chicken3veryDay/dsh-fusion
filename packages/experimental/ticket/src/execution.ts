@@ -192,7 +192,7 @@ export class TicketExecutionService extends Service {
       const deadline = this.deadline('Ticket execution teardown timed out')
       for (const run of runs) this.apply(run, { type: 'teardown' }, reason)
       const drain = (async () => {
-        await Promise.allSettled(runs.flatMap(run => run.work === undefined ? [] : [run.work]))
+        await Promise.allSettled(runs.map(run => run.work))
         const results = await Promise.allSettled(runs.map(async (run) => {
           if (run.state.kind === 'stopping') await run.stop
           if (run.state.kind === 'handed') {
@@ -817,7 +817,8 @@ export class TicketExecutionService extends Service {
   /** The rejection of a preparation whose callers' bound passed before it finished. The step still running holds the
    * reservation, and nothing the caller can retry would finish it sooner. */
   private unfinished(run: AttemptRun): AggregateError {
-    const cause = run.failure ?? run.abortReason ?? new TicketError('Ticket execution preparation was stopped', 'TICKET_ATTEMPT_STATE')
+    // The bound is armed only by an abort or a failure, which set one of these before it can expire.
+    const cause = run.failure ?? run.abortReason
     const state = run.state
     const step = state.kind === 'handed'
       ? `ended ${state.outcome}; the settlement ledger is still writing its record and keeps its work scopes reserved until that write completes`
@@ -825,7 +826,7 @@ export class TicketExecutionService extends Service {
     const pending = new TicketError(`Ticket attempt "${run.attemptId}" ${step}`, 'TICKET_SETTLEMENT_PENDING', {
       cause: new Error('Ticket preparation did not finish within settlementTimeoutMs'),
     })
-    return new AggregateError([cause, pending], 'Ticket preparation was stopped and did not finish within settlementTimeoutMs; '
+    return new AggregateError([cause, pending].filter(item => item !== undefined), 'Ticket preparation was stopped and did not finish within settlementTimeoutMs; '
       + 'Ticket completes its remaining write without a retry')
   }
 

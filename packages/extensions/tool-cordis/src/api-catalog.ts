@@ -4414,7 +4414,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'prepare(caller: Agent, request: PrepareTicketExecutionRequest): Promise<TicketExecutionHandle>',
         description: 'Prepare or return the exact live attempt; recovered attempts cannot replay effects.',
         parameters: [{ name: 'caller', description: 'Exact registered owner or current coordinator.' }, { name: 'request', description: 'Stable operation and attempt ids, CAS, and explicit placement.' }],
-        returns: 'The single resource handle retained for this preparation. Cancelled preparation bounds its settlement write by settlementTimeoutMs; a stop that already reported pending durability is not awaited again.',
+        returns: 'The single resource handle retained for this preparation. Once preparation is aborted (by `request.signal`, owner disposal or teardown) or fails, the promise settles within settlementTimeoutMs; the attempt still reaches its terminal or uncertain durable state afterwards, and an expired wait rejects with `TICKET_SETTLEMENT_PENDING`.',
       },
     ],
   },
