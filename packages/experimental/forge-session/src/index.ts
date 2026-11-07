@@ -158,7 +158,7 @@ export class ForgeSessionService extends Service {
     this.home.on('session/event', (session: Session, event: SessionEvent) => {
       this.react(session, event)
     })
-    observeReferences(this.home, this.discoveryTimeoutMs, (session, url) => {
+    observeReferences(this.home, this.discoveryTimeoutMs, session => this.sessionSignal(session), (session, url) => {
       if (!this.state(session).bindings.some(binding => sameChangeRequestUrl(binding.url, url))) {
         appendPluginRecord(session, BINDING_RECORD, { action: 'reference', url })
       }
@@ -235,12 +235,7 @@ export class ForgeSessionService extends Service {
   private discover(session: Session, remote: string, branch: string): Promise<void> {
     const repository = this.home.forge.repositoryFromRemote(remote)
     if (repository === undefined) return Promise.resolve()
-    let lifetime = this.sessionLifetimes.get(session)
-    if (lifetime === undefined) {
-      lifetime = new AbortController()
-      this.sessionLifetimes.set(session, lifetime)
-    }
-    const signal = AbortSignal.any([this.lifetime.signal, lifetime.signal])
+    const signal = AbortSignal.any([this.lifetime.signal, this.sessionSignal(session)])
     const task = this.lookup(session, repository, branch, signal).catch((error: unknown) => {
       if (signal.aborted) return
       this.home.logger.warn(`forge-session: change request lookup for ${branch} failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -248,6 +243,16 @@ export class ForgeSessionService extends Service {
     this.discoveries.add(task)
     void task.then(() => this.discoveries.delete(task))
     return task
+  }
+
+  /** Signal aborted when the Session closes. */
+  private sessionSignal(session: Session): AbortSignal {
+    let lifetime = this.sessionLifetimes.get(session)
+    if (lifetime === undefined) {
+      lifetime = new AbortController()
+      this.sessionLifetimes.set(session, lifetime)
+    }
+    return lifetime.signal
   }
 
   private async lookup(session: Session, repository: ForgeRepository, branch: string, signal: AbortSignal): Promise<void> {

@@ -290,7 +290,6 @@ suite('forge-session through a real cordis.yml Loader composition', () => {
     emit({ ...f.exec, name: 'pwsh' })
     const { agent: _agent, ...withoutAgent } = f.exec
     emit(withoutAgent)
-    emit({ ...f.exec, parent: f.exec.token })
     emit(f.exec, { isError: true, error: { message: 'failed' }, content: [] })
     emit({ ...f.exec, arguments: {} })
     emit(f.exec, { isError: false, value: { kind: 'background' }, content: [] })

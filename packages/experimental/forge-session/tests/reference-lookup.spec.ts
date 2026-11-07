@@ -65,7 +65,8 @@ async function fixture() {
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(ShellEnv, { dshHome: process.cwd() })
   await ctx.plugin(LookupShell)
-  const { agent } = await ctx.agents.create({ sessionId: SessionId('reference-observer') })
+  const handle = await ctx.agents.create({ sessionId: SessionId('reference-observer') })
+  const { agent } = handle
   const controller = new AbortController()
   const exec: ToolExecution = {
     name: 'bash', agent,
@@ -83,7 +84,7 @@ async function fixture() {
   const execute = vi.spyOn(ctx.shell, 'execute')
   const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
   const emit = (call: ToolExecution = exec, outcome: ToolExecutionResult = result) => { ctx.emit('tools/result', call, outcome) }
-  return { ...b, agent, exec, result, controller, records, execute, warn, emit }
+  return { ...b, agent, exec, result, controller, records, execute, warn, emit, close: () => handle.dispose() }
 }
 
 describe('PR reference lookup', () => {
@@ -169,12 +170,32 @@ describe('PR reference lookup', () => {
     expect(f.warn).not.toHaveBeenCalled()
   })
 
-  it('skips unsupported, unsuccessful, already identified, nested, or cancelled calls', async () => {
+  it.each(['records', 'cancels'] as const)('%s a run_code nested lookup after its program returns, until the Session closes', async (outcome) => {
+    const f = await fixture()
+    const pending = Promise.withResolvers<ShellExecution>()
+    const started = Promise.withResolvers<ShellExecSpec>()
+    releases.push(() => { pending.resolve(execution(async () => output())) })
+    f.execute.mockImplementation((spec) => { started.resolve(spec); return pending.promise })
+    // A nested call's signal is its program's run signal, which aborts when the program returns.
+    f.emit({ ...f.exec, parent: f.exec.token })
+    const spec = await started.promise
+    f.controller.abort()
+    expect(spec.signal?.aborted).toBe(false)
+    if (outcome === 'cancels') {
+      await f.close()
+      expect(spec.signal?.aborted).toBe(true)
+    }
+    pending.resolve(execution(async () => output()))
+    await f.service.dispose()
+    expect(f.records()).toEqual(outcome === 'records' ? [{ action: 'reference', url: pullUrl(9) }] : [])
+    expect(f.warn).not.toHaveBeenCalled()
+  })
+
+  it('skips unsupported, unsuccessful, already identified, or cancelled calls', async () => {
     const f = await fixture()
     f.emit({ ...f.exec, name: 'pwsh' })
     const { agent: _agent, ...withoutAgent } = f.exec
     f.emit(withoutAgent)
-    f.emit({ ...f.exec, parent: f.exec.token })
     f.emit(f.exec, { isError: true, error: { message: 'failed' }, content: [] })
     f.emit({ ...f.exec, arguments: {} })
     f.emit(f.exec, { isError: false, value: { kind: 'background' }, content: [] })
