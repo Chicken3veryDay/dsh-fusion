@@ -84,6 +84,30 @@ async function assembleFor(ctx: Context, agent: Agent) {
   return ctx.systemPrompt.assemble({ agent, scope: agent, toolSet })
 }
 
+/**
+ * Run `read` inside an `agent/pre-step` proposal, where a pending selection is model-visible. The signal aborts
+ * after the read, so the proposal is rejected for commit and nothing is appended.
+ */
+async function inProposal<T>(ctx: Context, agent: Agent, read: () => Promise<T>): Promise<T> {
+  const abort = new AbortController()
+  let result: { value: T } | undefined
+  await agentEvents(ctx, agent).waterfall(
+    'agent/pre-step',
+    { modelSelection: TEST_MODEL_SELECTION, messages: [], turn: 1, step: 1, signal: abort.signal },
+    async () => {
+      result = { value: await read() }
+      abort.abort()
+      return { kind: 'enter' as const, messages: [] }
+    },
+  )
+  if (result === undefined) throw new Error('the pre-step proposal did not run')
+  return result.value
+}
+
+function assembleProposed(ctx: Context, agent: Agent) {
+  return inProposal(ctx, agent, () => assembleFor(ctx, agent))
+}
+
 function foldPlanMode(events: readonly SessionEvent[], end = events.length): boolean {
   let state: PlanUnitState = planProjectionDefinition.init()
   let index = 0
@@ -797,7 +821,10 @@ describe('exit_plan_mode', () => {
 
   async function callExit(ctx: Context, agent: Agent | undefined, plan = '# The plan\n\ndo things') {
     const signal = new AbortController().signal
-    const toolSet = agent === undefined ? undefined : await ctx.tools.resolve({ agent, modelSelection: TEST_MODEL_SELECTION, signal })
+    // The step's tool set is resolved in its pre-step proposal, where a pending selection is model-visible.
+    const toolSet = agent === undefined
+      ? undefined
+      : await inProposal(ctx, agent, () => ctx.tools.resolve({ agent, modelSelection: TEST_MODEL_SELECTION, signal }))
     return executeToolFixture(ctx, {
       ...toolSet === undefined ? {} : { toolSet },
       callId: ToolCallId(`call-exit-${++callCounter}`),
@@ -860,10 +887,25 @@ describe('exit_plan_mode', () => {
     const agent = await agentWithSession(ctx)
     openTurn(agent.session)
     ctx.planMode.set(agent, true)
-    expect((await assembleFor(ctx, agent)).tools.map(tool => tool.name)).toContain(EXIT_PLAN_MODE)
+    expect((await assembleProposed(ctx, agent)).tools.map(tool => tool.name)).toContain(EXIT_PLAN_MODE)
     const result = await callExit(ctx, agent)
     expect(result.isError).toBe(true)
     expect(result.content).toEqual([{ type: 'text', text: 'Error: exit_plan_mode is only available in plan mode' }])
+  })
+
+  it('shows a pending selection only inside the pre-step proposal', async () => {
+    const ctx = await setup()
+    const agent = await agentWithSession(ctx)
+    openTurn(agent.session)
+    ctx.planMode.set(agent, true)
+    const outside = await assembleFor(ctx, agent)
+    expect(outside.tools.map(tool => tool.name)).not.toContain(EXIT_PLAN_MODE)
+    expect(outside.sections.find(section => section.name === 'plan:policy')?.text).toBe('')
+    const proposed = await assembleProposed(ctx, agent)
+    expect(proposed.tools.map(tool => tool.name)).toContain(EXIT_PLAN_MODE)
+    expect(proposed.sections.find(section => section.name === 'plan:policy')?.text).toBe(PLAN_CONFIG.section)
+    expect(ctx.planMode.get(agent)).toEqual({ active: false, pending: true })
+    expect(agent.session.snapshotEvents().some(event => event.type === 'plan/mode')).toBe(false)
   })
 
   it('rejects an empty or heading-less plan before asking the reviewer', async () => {
@@ -996,7 +1038,7 @@ describe('exit_plan_mode', () => {
     // the accepted boundary then commits the matching durable fold. The tool
     // stays declared because the Session has entered plan mode.
     expect(foldPlanMode(agent.session.snapshotEvents())).toBe(true)
-    const assembly = await assembleFor(ctx, agent)
+    const assembly = await assembleProposed(ctx, agent)
     expect(assembly.tools.some(tool => tool.name === EXIT_PLAN_MODE)).toBe(true)
     expect(assembly.sections.find(section => section.name === 'plan:policy')?.text).toBe('')
     await boundary(ctx, agent, 'step-start')

@@ -9,8 +9,10 @@
  * The `plan` projection folds the session log, so resume and fork restore the
  * state. User selections remain pending until the next accepted in-turn
  * pre-step. The service includes the selected state in the proposed step
- * assembly, then appends `plan/mode` from `agent/pre-step` only when the step
- * is accepted. Same-step request retries reuse their assembly.
+ * assembly only while that pre-step proposes, then appends `plan/mode` from
+ * `agent/pre-step` only when the step is accepted. Any later assembly, such as
+ * a same-step request retry's reselection, sees the logged state alone, so a
+ * selection made after the pre-step waits for the next one.
  *
  * The exit tool is disclosed progressively: it is admitted from the first step
  * whose selected state is active and stays admitted for the rest of the
@@ -187,6 +189,9 @@ export class PlanModeController extends Service {
    */
   private readonly pendingIntents = new WeakMap<Session, { active: boolean; narrate: boolean }>()
 
+  /** Sessions inside an `agent/pre-step` proposal, the only window where a pending selection is model-visible. */
+  private readonly proposing = new WeakSet<Session>()
+
   constructor(ctx: Context, config: PlanModeConfig = { section: '' }) {
     super(ctx, 'planMode')
     this.section = resolveConfig(config).section
@@ -212,7 +217,13 @@ export class PlanModeController extends Service {
       { agent, signal },
       next,
     ): Promise<PreStepDecision> => {
-      const decision = await next()
+      let decision: PreStepDecision
+      this.proposing.add(agent.session)
+      try {
+        decision = await next()
+      } finally {
+        this.proposing.delete(agent.session)
+      }
       const pending = this.pendingIntents.get(agent.session)
       if (decision.kind === 'reject' || signal.aborted || pending === undefined) return decision
       const narration = this.narration(agent.session, pending.active)
@@ -379,9 +390,12 @@ export class PlanModeController extends Service {
     return this.planState(session).active
   }
 
-  /** The state a proposed step presents: a pending selection, else the logged state. */
+  /**
+   * The state a request presents. A pending selection is visible only while the pre-step proposes, because
+   * only an accepted pre-step logs it; every later assembly presents the logged state.
+   */
   private selectedActive(session: Session): boolean {
-    return this.pendingIntents.get(session)?.active ?? this.loggedActive(session)
+    return (this.proposing.has(session) ? this.pendingIntents.get(session)?.active : undefined) ?? this.loggedActive(session)
   }
 
   private hasOpenTurn(session: Session): boolean {
