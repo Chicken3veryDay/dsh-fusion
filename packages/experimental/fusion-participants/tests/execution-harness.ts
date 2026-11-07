@@ -54,7 +54,12 @@ export async function fixture(options: { open?: boolean; configure?: (options: E
         // Deliberately ignore cancellation requests: only the final fence authorizes this fake body.
         const signal = new AbortController().signal
         let finalFence: (() => Error | undefined) | undefined
-        const pipeline = new ToolExecutionPipeline(ctx, { reject: () => control.policy ? finalFence?.() : new Error('policy revoked') })
+        // `reject` runs before policy; `has` is the pipeline's last synchronous check before the body, so it consumes the fence.
+        const pipeline = new ToolExecutionPipeline(ctx, {
+          reject: () => control.policy ? undefined : new Error('policy revoked'),
+          has: (definition, scope, toolSet) => ctx.tools.isExecutable(definition, scope, toolSet) && control.policy
+            && finalFence?.() === undefined,
+        })
         const tools = await ctx.tools.resolve({ agent, signal, modelSelection: { provider: 'omniroute-openai', model: 'fake' } })
         const prepared = await pipeline.prepare({ name: 'authority_effect', arguments: {}, agent, toolSet: tools,
           callId: ToolCallId('authority-effect'), signal })

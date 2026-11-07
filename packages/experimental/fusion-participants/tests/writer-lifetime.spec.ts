@@ -67,7 +67,11 @@ for (const mode of ['live', 'close', 'replace', 'in-flight', 'settlement-flush',
       return next()
     })
     const pipeline = new ToolExecutionPipeline(ctx, {
-      reject() { checks++; const refusal = pin.checkDispatch(); return refusal === undefined ? undefined : new Error(`writer lifetime: ${refusal.reason}`) },
+      // The pipeline's last synchronous check before the body; the writer pin must still be current there.
+      has(definition, scope, toolSet) {
+        checks++
+        return ctx.tools.isExecutable(definition, scope, toolSet) && pin.checkDispatch() === undefined
+      },
     })
     const cancel = new AbortController()
     const tools = await ctx.tools.resolve({ agent, signal: cancel.signal, modelSelection: { provider: 'omniroute-openai', model: 'fake' } })
