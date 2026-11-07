@@ -15,7 +15,7 @@ import { TicketError, type AssignTicketRequest, type CreateTicketRequest, type E
 import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 import { acceptedMessage } from './accepted-message.ts'
 import { ticketParticipants, workstreamProjectionDefinition } from './projection.ts'
-import type { WorkstreamProjectionState } from './projection.ts'
+import type { OpenedWorkstreamProjectionState, WorkstreamProjectionState } from './projection.ts'
 import type { AddWorkstreamMemberRequest, Config, SendWorkstreamMessageRequest, WorkstreamMember, WorkstreamMessage,
   WorkstreamOperationId, WorkstreamSnapshot } from './types.ts'
 
@@ -392,13 +392,9 @@ export class WorkstreamService extends Service {
       if (request.targetId === owner.id) owner.steer(createUserMessage({ content, source }))
       else await steerHostSubagentPrompt(this.ctx.subagents, owner, request.targetId, content, source,
         AbortSignal.any([request.signal, this.lifetime.signal]))
-      return await this.enqueue(owner.id, () => {
-        const current = this.state(owner).messages.find(candidate => candidate.operationId === message.operationId)
-        if (current === undefined) throw new WorkstreamError('Message disappeared during delivery', 'WORKSTREAM_UNKNOWN')
-        // Another reconciliation may have recorded acceptance while this delivery ran.
-        if (current.delivery.phase !== 'intent') return this.durable(owner, current)
-        return this.reconcileMessage(owner, this.state(owner), current, request.signal)
-      })
+      // Message records are never removed, and a retry joins this delivery until it settles, so `message` is still the
+      // intent record when the queue reaches this step.
+      return await this.enqueue(owner.id, () => this.reconcileMessage(owner, this.state(owner), message, request.signal))
     } catch (error: unknown) {
       throw new WorkstreamError('Message delivery remains uncertain; retry the same operation to inspect inbox evidence',
         'WORKSTREAM_UNKNOWN', { cause: error })
@@ -473,11 +469,11 @@ export class WorkstreamService extends Service {
     const result = (timedOut: boolean): WorkstreamWaitResult =>
       ({ timedOut, revision: this.state(owner).revision, cursor: owner.session.seq })
     if (snapshot.revision !== request.afterRevision) return result(false)
-    const state = this.projection.stateOf(owner.session)
-    const from = request.afterCursor ?? (state.snapshotSeq ?? -1) + 1
+    const state = this.opened(owner)
+    const from = request.afterCursor ?? state.snapshotSeq + 1
     const concerned = (snapshotNow: WorkstreamSnapshot): boolean =>
       caller.id === snapshotNow.ownerSessionId || caller.id === snapshotNow.coordinatorId
-    const seen = Math.max(state.snapshotSeq ?? -1, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
+    const seen = Math.max(state.snapshotSeq, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
     if (seen >= from) return result(false)
     return new Promise((resolve, reject) => {
       const cleanup = (): void => { clearTimeout(timer); stop(); signal.removeEventListener('abort', abort) }
@@ -494,7 +490,6 @@ export class WorkstreamService extends Service {
       })
       const timer = setTimeout(() => { cleanup(); resolve(result(true)) }, request.timeoutMs)
       signal.addEventListener('abort', abort, { once: true })
-      if (signal.aborted) abort()
     })
   }
 
@@ -532,8 +527,8 @@ export class WorkstreamService extends Service {
     await this.track(this.ctx.subagents.drainChildren(begun.owner, [targetId]))
     return this.enqueue(rootSessionId, async () => {
       const snapshot = this.state(begun.owner)
-      const current = snapshot.members.find(candidate => candidate.id === targetId)
-      if (current === undefined) throw new WorkstreamError('Member disappeared while stopping', 'WORKSTREAM_UNKNOWN')
+      // Members stay in the snapshot after their first commit: only the queued step that adds a member can remove its record.
+      const current = snapshot.members.find(candidate => candidate.id === targetId) as WorkstreamMember
       if (current.phase === 'stopped') return this.durable(begun.owner, current)
       return this.saveMember(begun.owner, snapshot, { ...current, phase: 'stopped', diagnostic: null })
     })
@@ -690,11 +685,11 @@ export class WorkstreamService extends Service {
   private text(value: string, name: string): void {
     if (value.trim().length === 0) throw new WorkstreamError(`${name} must not be empty`, 'WORKSTREAM_INVALID_INPUT')
   }
-  private state(owner: Agent): WorkstreamSnapshot {
-    const state = this.projection.stateOf(owner.session).snapshot
-    if (state === null) throw new WorkstreamError('Workstream is absent', 'WORKSTREAM_NOT_FOUND')
-    return state
+  private opened(owner: Agent): OpenedWorkstreamProjectionState {
+    // Callers hold a membership or run inside an operation on an open Workstream, and an opened Workstream never reverts.
+    return this.projection.stateOf(owner.session) as OpenedWorkstreamProjectionState
   }
+  private state(owner: Agent): WorkstreamSnapshot { return this.opened(owner).snapshot }
   private fit(snapshot: WorkstreamSnapshot): void {
     if (bytes(snapshot) > this.config.maxSnapshotBytes) throw new
     WorkstreamError('Complete Workstream state exceeds maxSnapshotBytes', 'WORKSTREAM_LIMIT')
@@ -745,7 +740,7 @@ export class WorkstreamService extends Service {
     const members = snapshot.members.filter(member => member.role === 'member' && member.phase === 'active'
       && this.ctx.agents.get(member.id) === undefined)
     if (members.length === 0) return
-    const signal = factorySignal === undefined ? this.lifetime.signal : AbortSignal.any([factorySignal, this.lifetime.signal])
+    const signal = AbortSignal.any([this.lifetime.signal, factorySignal].filter(candidate => candidate !== undefined))
     const found = await Promise.all(members.map(async (member) => {
       try {
         const turn = unfinishedTurn((await this.readChild(member.id, signal)).events)
