@@ -1783,6 +1783,8 @@ function renderLifecycle(): string {
     '',
     'The returned `agent/pre-step` decision is authoritative; listeners wrapping `next()` preserve downstream messages and `startsRequestSeries` unless replacement is intentional. Steering and injected context pass through the same waterfall after a later claim operation takes their next-step batch.',
     '',
+    'A wake commits `agent/status` running only inside an admitted initiator boundary. Once host unload closes initiator admission, a wake starts no driver: the input stays queued, the Agent stays idle, and unload waits on no turn.',
+    '',
     'SDK users that need replayable transcript data should consume `session/event`; `agent/*` is the live coordination API for queue/status, prompt interception, request construction, steering, continuation, and errors.',
     '',
     ...maintenanceFooter(maintenance),

@@ -115,6 +115,8 @@ interface Agent {
    * cancel leaves it parked. A wake submitted while already idle always opens
    * its turn boundary, even when its message is cleared before the driver
    * claims ([driver wake convergence](../../agent-loop/src/agent.ts)).
+   * Once the initiator scope closes for host unload, a wake starts no driver:
+   * the input stays queued, the Agent stays idle, and unload waits on no turn.
    * @param message - identified content and the source that supplied it.
    * @param target - the preferred next-turn or next-step inbox boundary.
    * @param wakeup - whether delivery may wake the driver.

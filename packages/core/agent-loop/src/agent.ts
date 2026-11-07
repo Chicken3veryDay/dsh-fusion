@@ -262,16 +262,30 @@ export class ReactLoopAgent implements Agent {
       }
       return
     }
-    const driver = Promise.withResolvers<void>()
-    this.activityDone = driver.promise
-    this.setPhase({
-      kind: 'running',
-      abort: new AbortController(),
-      turn: this.phase.lastTurn,
-      step: 0,
-      wakeRequested: false,
-    })
-    this.loopCtx.agents.withInitiator(this, () => this.kick()).then(driver.resolve, driver.reject)
+    const { lastTurn } = this.phase
+    try {
+      // The running phase commits only inside an admitted boundary, so every
+      // running phase has a driver whose finally returns it to idle.
+      void this.loopCtx.agents.withInitiator(this, () => {
+        const driver = Promise.withResolvers<void>()
+        this.activityDone = driver.promise
+        this.setPhase({
+          kind: 'running',
+          abort: new AbortController(),
+          turn: lastTurn,
+          step: 0,
+          wakeRequested: false,
+        })
+        this.kick().then(driver.resolve, driver.reject)
+        return driver.promise
+      })
+    } catch (error: unknown) {
+      // Admission is the only synchronous throw: the operation's status
+      // dispatch contains listener failures and kick() is async. A closing
+      // initiator scope (host unload) refuses the wake; the input stays queued
+      // under the disposal inbox policy and the Agent stays idle.
+      this.loopCtx.logger.warn(`agent "${this.id}": wake refused, queued input stays pending: ${String(error)}`)
+    }
   }
 
   /**
