@@ -910,7 +910,9 @@ async execute(input: ToolBatchInput): Promise<ToolBatchResult>
  * do not apply. The call still passes the shared pipeline: the registration must be live and
  * visible to the agent under its restrictions and must be unconditional, and pre-execute policy,
  * guards, cancellation, the execute and post-execute wrappers, and result normalization run as for
- * any call. No `tool/call` or `tool/result` Session event is committed.
+ * any call. The approval service and the `tools/*` pipeline listeners are those of the invoking
+ * context, so a host component in an isolated realm is decided by that realm's approval. No
+ * `tool/call` or `tool/result` Session event is committed.
  * @param input - the retained registration, its arguments, correlation id, cancellation, and agent.
  * @returns the settled result; a registration that is gone, restricted away, or conditional fails as `UNKNOWN_TOOL`.
  * @throws {ToolBatchExecutionError} when the pipeline fails internally after draining.

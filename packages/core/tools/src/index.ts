@@ -129,7 +129,6 @@ export class ToolsService extends Service {
   private readonly guards = new ScopedLayers(() => new GuardLayer(), () => {})
   private readonly admission = new ScopedLayers(() => new AdmissionLayer(), () => { this.ctx.emit('tools/change') })
   /** Pipeline for {@link invoke}, created on first use because it reads this service from the context. */
-  private invocationPipeline: ToolExecutionPipeline | undefined
 
   constructor(ctx: Context) {
     super(ctx, 'tools')
@@ -544,7 +543,9 @@ export class ToolsService extends Service {
    * do not apply. The call still passes the shared pipeline: the registration must be live and
    * visible to the agent under its restrictions and must be unconditional, and pre-execute policy,
    * guards, cancellation, the execute and post-execute wrappers, and result normalization run as for
-   * any call. No `tool/call` or `tool/result` Session event is committed.
+   * any call. The approval service and the `tools/*` pipeline listeners are those of the invoking
+   * context, so a host component in an isolated realm is decided by that realm's approval. No
+   * `tool/call` or `tool/result` Session event is committed.
    * @param input - the retained registration, its arguments, correlation id, cancellation, and agent.
    * @returns the settled result; a registration that is gone, restricted away, or conditional fails as `UNKNOWN_TOOL`.
    * @throws {ToolBatchExecutionError} when the pipeline fails internally after draining.
@@ -552,11 +553,13 @@ export class ToolsService extends Service {
   async invoke(input: ToolInvocation): Promise<ToolExecutionResult> {
     const { registration, agent, signal, callId } = input
     const toolSet = this.invocationSelection(registration)
-    this.invocationPipeline ??= new ToolExecutionPipeline(this.ctx)
+    // Each call builds its pipeline from the invoking context, so approval and pipeline listeners
+    // resolve in the caller's realm; nothing per-caller outlives the call.
+    const pipeline = new ToolExecutionPipeline(this.ctx)
     const batch = await executeToolBatch({
       calls: [{ type: 'tool-call', id: callId, name: registration.definition.name, arguments: JSON.stringify(input.arguments) }],
       signal, toolSet, ...agent === undefined ? {} : { agent },
-    }, this.invocationPipeline, () => 1)
+    }, pipeline, () => 1)
     const settled = batch.results[0]
     /* v8 ignore next -- executeToolBatch settles exactly one result per call */
     if (settled === undefined) throw new Error('tool invocation settled no result')
