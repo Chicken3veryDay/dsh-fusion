@@ -5501,10 +5501,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the explicit processed receipt.',
       },
       {
-        signature: 'async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>',
-        description: 'Observe any durable root event, including Ticket progress, without polling.',
-        parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }, { name: 'request', description: 'last Workstream revision, finite timeout, and caller cancellation.' }],
-        returns: 'a revision change, another durable event, or timeout; abort and shutdown reject.',
+        signature: 'cursor(caller: Agent, rootSessionId: SessionId): number',
+        description: 'Read the wait cursor of one Workstream: the root Session position that `waitForChange` compares later events with.',
+        parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }],
+        returns: 'the position after the last root event committed so far.',
+      },
+      {
+        signature: 'async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; afterCursor?: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>',
+        description: 'Observe Workstream changes and the root Ticket events that concern the caller, without polling. The owner and the sitting coordinator are concerned by every root Ticket; another member by the Tickets that name it as coordinator or Assignment owner. Other root events, such as the owner\'s own turns, never end the wait.',
+        parameters: [{ name: 'caller', description: 'exact live member.' }, { name: 'rootSessionId', description: 'explicit Workstream root.' }, { name: 'request', description: 'last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation. Without `afterCursor`, every concerning event committed after `afterRevision` counts.' }],
+        returns: 'at once when the revision differs from `afterRevision` or a concerning event is at or after the cursor; otherwise at the next concerning event or the timeout. Abort and shutdown reject.',
       },
       {
         signature: 'interrupt(caller: Agent, rootSessionId: SessionId, targetId: SessionId): void',

@@ -1828,13 +1828,24 @@ async sendMessage(caller: Agent, rootSessionId: SessionId, request: SendWorkstre
  */
 async acknowledge(caller: Agent, rootSessionId: SessionId, operationId: WorkstreamOperationId): Promise<WorkstreamMessage>
 
-/** Observe any durable root event, including Ticket progress, without polling.
+/** Read the wait cursor of one Workstream: the root Session position that `waitForChange` compares later events with.
  * @param caller - exact live member.
  * @param rootSessionId - explicit Workstream root.
- * @param request - last Workstream revision, finite timeout, and caller cancellation.
- * @returns a revision change, another durable event, or timeout; abort and shutdown reject.
+ * @returns the position after the last root event committed so far.
  */
-async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>
+cursor(caller: Agent, rootSessionId: SessionId): number
+
+/** Observe Workstream changes and the root Ticket events that concern the caller, without polling.
+ * The owner and the sitting coordinator are concerned by every root Ticket; another member by the Tickets that name it as
+ * coordinator or Assignment owner. Other root events, such as the owner's own turns, never end the wait.
+ * @param caller - exact live member.
+ * @param rootSessionId - explicit Workstream root.
+ * @param request - last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation.
+ * Without `afterCursor`, every concerning event committed after `afterRevision` counts.
+ * @returns at once when the revision differs from `afterRevision` or a concerning event is at or after the cursor;
+ * otherwise at the next concerning event or the timeout. Abort and shutdown reject.
+ */
+async waitForChange( caller: Agent, rootSessionId: SessionId, request: { afterRevision: number; afterCursor?: number; timeoutMs: number; signal: AbortSignal }, ): Promise<WorkstreamWaitResult>
 
 /** Request cancellation of one member's current turn; pending inbox remains owned by Subagent.
  * @param caller - current coordinator or immutable owner.
