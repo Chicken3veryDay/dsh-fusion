@@ -14,17 +14,19 @@ Status: implemented
 
 事件只是唤醒，从不是证明。每次事件之后，观察者都会读取 `cgroup.events`：
 
-- 只有在已知 launcher 位于 scope 内（launch 请求已被消费即可证明）时，`populated 0` 才结束等待。最后一个成员退出时内核会清除该标志，这与 systemd 结束 scope 所用的转换相同。请求被消费之前，同样的读数并非最终结论：空的 cgroup 可能是 scope 的初始状态、仅 freezer 的变化（`frozen` 变化也会触发 `cgroup.events` 通知），或 systemd 在委派 scope 中 fork 的 setup helper 在 launcher 附加之前退出。这些情形与文件缺失一样交给 `systemctl`。
+- 只有在已知 launcher 位于 scope 内（launch 请求已被消费即可证明）时，`populated 0` 才结束等待。观察者先检查请求，再读取文件：launcher 只在进入 scope 之后才消费请求，因此在观察到消费之后的读数描述的是进入之后的范围；而在进入之前读取的数据，之后可能紧跟进入与消费，才轮到检查。最后一个成员退出时内核会清除该标志，这与 systemd 结束 scope 所用的转换相同。请求被消费之前，同样的读数并非最终结论：空的 cgroup 可能是 scope 的初始状态、仅 freezer 的变化（`frozen` 变化也会触发 `cgroup.events` 通知），或 systemd 在委派 scope 中 fork 的 setup helper 在 launcher 附加之前退出。这些情形与文件缺失一样交给 `systemctl`。
 - `populated 1` 继续等待且不产生查询；睡眠以相同间隔重新开始，不再翻倍。
-- 文件缺失或无法解析时，退回一次 `systemctl show`，由它照旧裁决。
+- 文件缺失、无法读取或无法解析时，退回一次 `systemctl show`，由它照旧裁决。
 
 轮询仍以现有间隔与监听并行，因此漏掉或合并的事件不会比以前花费更多。附加监听后会读取一次，以覆盖最近一次查询与监听之间的窗口：标志已为 `populated 0` 时，观察者转而询问 `systemctl`，而不是结束等待，因为尚无成员的 active scope 并不证明范围为空。
 
-cgroup 唤醒从不确认 `signal()`：事件待处理时到来的信号仍会立即得到一次 `systemctl` 查询，事件则保留到下一次睡眠。终止（请求终止后 `TasksCurrent 0` 时执行 `systemctl stop`）以及终端 scope 路径不变。监听器在观察结束或失败时、`cleanup()` 时和 `terminateForHostExit()` 时关闭。因失败的观察而释放的监听器，可由重试的范围等待重新附加；静默或已降级的监听器保持原状。调用方中止不会取消共享观察，因此监听器会一直存在到范围为空。
+cgroup 唤醒从不确认 `signal()`：事件待处理时到来的信号仍会立即得到一次 `systemctl` 查询，事件则保留到下一次睡眠。终止（请求终止后 `TasksCurrent 0` 时执行 `systemctl stop`）以及终端 scope 路径不变。监听器在观察结束或失败时、`cleanup()` 时和 `terminateForHostExit()` 时关闭。因失败的观察而释放的监听器，可由重试的范围等待重新附加；静默或已降级的监听器保持原状；`cleanup()` 或 `terminateForHostExit()` 之后，任何等待都不会再附加监听器。调用方中止不会取消共享观察，因此监听器会一直存在到范围为空。
 
 建立规则已更正。已归档的决策把已加载的 `inactive` 或 `failed` unit 视为范围为空的证明。真实的 systemd 与此相反：`StartTransientUnit` 创建 scope 之后、启动任务运行之前，`systemctl show` 报告 `LoadState=loaded ActiveState=inactive TasksCurrent=[not set]`（systemd 259 上 12 次启动中有 5 次），随后 launcher 进入 scope 并运行目标。读到该状态的范围等待会提前结束、锁定 `stopped`，使目标脱离 `terminate()`、SIGKILL 升级、释放与主机退出的控制。现在，建立尚未确定时，已加载但未启动的 unit 与不存在的 unit 同样对待：launcher 仍在运行且请求未被消费时继续等待，launcher 在未消费请求的情况下退出时结束。unit 已启动（`inactive` 或 `failed` 之外的任何状态）或请求已被消费，则建立 scope，此后 `inactive` 或 `failed` 照旧证明范围为空。
 
-没有统一层级的主机（cgroup v1 或 hybrid，以缺少 `cgroup.controllers` 判断）以及在监听开始前已被回收的 scope 静默使用轮询。其他故障，如 `EACCES`、inotify 耗尽、监听器 `error` 或无法解析的文件，每个 owner 只向 `reportDegraded` 报告一次；运行时把第一次记为 `warn`，之后记为 `debug`。此后由轮询单独观察。
+查询响应只与查询发出之前观察到的请求证据相结合。请求仍存在时发出的查询，manager 可能返回启动前的状态（已加载的 `inactive` 或 `failed`、`not-found`，或 unit 缺失错误），而该响应到达 owner 时 launcher 已消费请求并启动目标。依据这次较晚的消费确定建立、再把旧响应当作已退出的 unit，会结束等待、锁定 `stopped`，并让终止、升级与主机退出清理在目标运行期间全部失效。因此 owner 在发出每次查询时记录请求是否仍未被消费；如果响应在途期间请求被消费，就丢弃该响应并重新查询。同一规则也适用于 `TasksCurrent 0` 终止检查：只有在查询之前已被消费的请求才算作已进入。
+
+没有统一层级的主机（cgroup v1 或 hybrid，以缺少 `cgroup.controllers` 判断）以及在监听开始前已被回收的 scope 静默使用轮询。其他故障，如 `EACCES`、inotify 耗尽、监听器 `error`、无法读取或无法解析的文件，每个 owner 只向 `reportDegraded` 报告一次；运行时把第一次记为 `warn`，之后记为 `debug`。该故障会在此 owner 余下的生命周期内关闭监听，此后由轮询单独观察。
 
 从直接子进程退出到 `waitForExit()` 结束的延迟，每行 10 次运行的中位数，主机处于负载下，后代进程存活：
 

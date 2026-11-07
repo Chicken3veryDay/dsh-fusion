@@ -1618,4 +1618,77 @@ describe('Linux scope range exit by cgroup events', () => {
     await expect(scope.owner.waitForExit()).rejects.toThrow('duplicate ControlGroup')
     scope.owner.cleanup?.()
   })
+
+  it('does not settle on an empty read taken before the launcher consumed its request', async () => {
+    let reads = 0
+    const request: { path?: string } = {}
+    const query = vi.fn(async () => groupUnit())
+    const scope = watchedScope(query, {
+      readFile: () => {
+        reads += 1
+        if (reads === 1) return 'populated 1\nfrozen 0\n'
+        // The read precedes entry; the launcher enters and consumes before entry is checked.
+        if (reads === 2 && request.path !== undefined) consumeLinuxLaunchRequest(request.path)
+        return 'populated 0\nfrozen 0\n'
+      },
+    }, cgroupTree(), false)
+    request.path = scope.requestPath
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    expect(scope.watchers).toHaveLength(1)
+    scope.watchers[0]?.emit('change')
+    const state = await Promise.race([
+      waiting.then(() => 'empty'), scope.sleeper.reached(2).then(() => 'waiting'),
+    ])
+    expect({ state, queries: query.mock.calls.length }).toEqual({ state: 'waiting', queries: 2 })
+    scope.watchers[0]?.emit('change')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(2)
+    scope.owner.cleanup?.()
+  })
+})
+
+describe('Linux scope responses that straddle request consumption', () => {
+  it.each([
+    { name: 'loaded/failed', stale: unitState('loaded', 'failed') },
+    { name: 'nonzero missing-unit', stale: missingUnit() },
+  ])('queries again instead of settling on a stale $name response', async ({ stale }) => {
+    const held = Promise.withResolvers<ReturnType<typeof missingUnit>>()
+    const sleeper = idleSleeper()
+    const query = vi.fn()
+      .mockImplementationOnce(() => held.promise)
+      .mockResolvedValue(activeUnit())
+    const { result, requestPath } = launch(query, { sleep: sleeper.sleep })
+    const waiting = result.owner.waitForExit()
+    consumeLinuxLaunchRequest(requestPath)
+    held.resolve(stale)
+    const state = await Promise.race([waiting.then(() => 'empty'), sleeper.reached(1).then(() => 'waiting')])
+    expect({ state, queries: query.mock.calls.length }).toEqual({ state: 'waiting', queries: 2 })
+    query.mockResolvedValue(unitState('loaded', 'inactive'))
+    sleeper.elapse()
+    await waiting
+    result.owner.cleanup?.()
+  })
+
+  it('does not release an empty range from a task count queried before the request was consumed', async () => {
+    const held = Promise.withResolvers<ReturnType<typeof activeUnitWithTasks>>()
+    const sleeper = idleSleeper()
+    const spawnSync = recordingSystemctl()
+    const query = vi.fn()
+      .mockImplementationOnce(() => held.promise)
+      .mockResolvedValue(activeUnitWithTasks('1'))
+    const { result, requestPath } = launch(query, { sleep: sleeper.sleep, spawnSync: spawnSync as never })
+    result.owner.signal('SIGTERM')
+    const waiting = result.owner.waitForExit()
+    consumeLinuxLaunchRequest(requestPath)
+    held.resolve(activeUnitWithTasks('0'))
+    const state = await Promise.race([waiting.then(() => 'empty'), sleeper.reached(1).then(() => 'waiting')])
+    expect({ state, queries: query.mock.calls.length }).toEqual({ state: 'waiting', queries: 2 })
+    expect(spawnSync.mock.calls.map(call => call[1]?.[1])).toEqual(['kill'])
+    query.mockResolvedValue(activeUnitWithTasks('0'))
+    sleeper.elapse()
+    await waiting
+    expect(spawnSync.mock.calls.map(call => call[1]?.[1])).toEqual(['kill', 'stop'])
+    result.owner.cleanup?.()
+  })
 })

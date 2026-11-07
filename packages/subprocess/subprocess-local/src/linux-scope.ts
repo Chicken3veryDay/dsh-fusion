@@ -385,10 +385,14 @@ class SystemdScopeOwner implements BoundProcessOwner {
     }
   }
 
-  private observeRequestConsumption(): void {
-    if (this.establishment === 'pending' && !existsSync(this.startup.files.requestPath)) {
-      this.establishment = 'established'
-    }
+  /**
+   * Promote establishment once the launcher has consumed its launch request.
+   * @returns whether the request was still unconsumed at this observation.
+   */
+  private observeRequestConsumption(): boolean {
+    const unconsumed = existsSync(this.startup.files.requestPath)
+    if (!unconsumed) this.establishment = 'established'
+    return unconsumed
   }
 
   /**
@@ -400,12 +404,14 @@ class SystemdScopeOwner implements BoundProcessOwner {
     return !existsSync(this.startup.files.requestPath)
   }
 
+  /**
+   * Decide a query that found no running unit. A pending establishment here means the request was
+   * unconsumed both when the query was issued and after its response arrived, so a departed launcher
+   * never placed a payload.
+   */
   private absentUnit(): boolean {
-    this.observeRequestConsumption()
     if (this.establishment === 'established') return false
-    if (!this.direct.running() && existsSync(this.startup.files.requestPath)) {
-      return false
-    }
+    if (!this.direct.running()) return false
     if (this.killFailure !== undefined) throw this.killFailure
     return true
   }
@@ -415,12 +421,13 @@ class SystemdScopeOwner implements BoundProcessOwner {
    * than a launch still placing its payload. systemd ends a scope only on the
    * populated-to-empty transition, so a payload killed before it entered the
    * cgroup leaves the unit active forever. A departed client cannot add another
-   * payload; a consumed request proves the payload already entered the scope,
-   * even while its direct-process exit notification is pending.
+   * payload; a request consumed before the query was issued proves the payload
+   * had already entered the scope, even while its direct-process exit
+   * notification is pending.
    */
-  private emptyRange(tasksCurrent: number | undefined): boolean {
+  private emptyRange(tasksCurrent: number | undefined, requestUnconsumed: boolean): boolean {
     return this.terminationRequested && tasksCurrent === 0
-      && (!this.direct.running() || !existsSync(this.startup.files.requestPath))
+      && (!this.direct.running() || !requestUnconsumed)
   }
 
   /** Release a leftover empty scope so the transient unit is collected and cannot accumulate. */
@@ -480,7 +487,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
   }
 
   private async rangeActive(): Promise<boolean> {
-    this.observeRequestConsumption()
+    const requestUnconsumed = this.observeRequestConsumption()
     const generation = this.wakeGeneration
     const directRunning = this.direct.running()
     const result = await this.query(this.systemctl, [
@@ -494,6 +501,9 @@ class SystemdScopeOwner implements BoundProcessOwner {
     ])
     // A signal invalidates state queried before its delivery and direct fallback.
     if (generation !== this.wakeGeneration) return true
+    // A response issued before the launcher consumed its request can describe the scope before entry
+    // while the launch has since placed its payload; only a query issued after consumption decides.
+    if (requestUnconsumed && this.payloadEntered()) return this.rangeActive()
     const output = `${result.stdout}\n${result.stderr}`
     if (result.status === 0) {
       const { loadState, activeState, tasksCurrent, controlGroup } = this.parseUnitState(result.stdout)
@@ -513,7 +523,7 @@ class SystemdScopeOwner implements BoundProcessOwner {
       if (!['active', 'activating', 'reloading', 'deactivating'].includes(activeState)) {
         throw new Error(`systemctl returned unknown ActiveState for ${this.unit}: ${JSON.stringify(activeState)}`)
       }
-      if (this.emptyRange(tasksCurrent)) {
+      if (this.emptyRange(tasksCurrent, requestUnconsumed)) {
         this.releaseEmptyRange()
         return false
       }
@@ -595,10 +605,12 @@ class SystemdScopeOwner implements BoundProcessOwner {
           const signalled = generation !== this.wakeGeneration
           generation = this.wakeGeneration
           if (woke === 'wake' && !signalled && this.cgroup.consumeEvent()) {
+            // The launcher consumes its request only after entering the scope, so entry observed before
+            // the read makes a following empty read proof that every member left.
+            const entered = this.payloadEntered()
             const population = this.cgroup.population()
             if (population === 'populated') continue
-            // Kernel emptiness settles the range only once the launcher is known to be inside the scope.
-            if (population === 'empty' && this.payloadEntered()) break
+            if (population === 'empty' && entered) break
           } else if (this.establishment === 'established') {
             // Keep establishment responsive, then reduce systemctl process churn
             // while systemd remains the authoritative owner of an active range.
