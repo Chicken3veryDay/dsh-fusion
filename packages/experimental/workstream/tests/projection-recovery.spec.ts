@@ -59,8 +59,7 @@ async function setup() {
 
 /** Fold the complete log with the definition alone: the reference every recovery path must match. */
 function fullFold(session: Session) {
-  return session.snapshotEvents().reduce(workstreamProjectionDefinition.apply,
-    workstreamProjectionDefinition.init(session.header, SessionLogOffset(0)))
+  return session.snapshotEvents().reduce(workstreamProjectionDefinition.apply, workstreamProjectionDefinition.init(session.header))
 }
 
 describe('Workstream projection recovery', () => {
