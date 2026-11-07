@@ -190,6 +190,15 @@ interface Governance {
   readonly commands: readonly TicketCommandAuthority[]
 }
 
+function attemptReceipts(attempt: TicketAttemptSnapshot, request: UpdateTicketAttemptRequest | SettleTicketAttemptRequest) {
+  return {
+    updatedAt: Date.now(),
+    ...request.workspaceReceipt === undefined ? {} : { workspaceReceipt: request.workspaceReceipt },
+    ...request.runtimeReceipt === undefined ? {} : { runtimeReceipt: request.runtimeReceipt },
+    diagnostics: [...attempt.diagnostics, ...request.diagnostics ?? []],
+  }
+}
+
 function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
@@ -948,10 +957,7 @@ export class TicketService extends Service {
   async updateAttempt(session: Session, request: UpdateTicketAttemptRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
     return await this.attemptOperation(session, request, 'update', ticket => this.changeAttempt(ticket, request, attempt => ({
-      ...attempt, status: request.status, updatedAt: Date.now(),
-      ...request.workspaceReceipt === undefined ? {} : { workspaceReceipt: request.workspaceReceipt },
-      ...request.runtimeReceipt === undefined ? {} : { runtimeReceipt: request.runtimeReceipt },
-      diagnostics: [...attempt.diagnostics, ...request.diagnostics ?? []],
+      ...attempt, status: request.status, ...attemptReceipts(attempt, request),
     })))
   }
 
@@ -963,10 +969,7 @@ export class TicketService extends Service {
   async settleAttempt(session: Session, request: SettleTicketAttemptRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
     return await this.attemptOperation(session, request, 'settle', ticket => this.changeAttempt(ticket, request, attempt => ({
-      ...attempt, status: 'settled', outcome: request.outcome, updatedAt: Date.now(),
-      ...request.workspaceReceipt === undefined ? {} : { workspaceReceipt: request.workspaceReceipt },
-      ...request.runtimeReceipt === undefined ? {} : { runtimeReceipt: request.runtimeReceipt },
-      diagnostics: [...attempt.diagnostics, ...request.diagnostics ?? []],
+      ...attempt, status: 'settled', outcome: request.outcome, ...attemptReceipts(attempt, request),
     })))
   }
 

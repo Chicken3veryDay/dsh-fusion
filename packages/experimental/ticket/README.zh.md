@@ -45,6 +45,8 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 <a id="understand-the-implementation"></a>
 ## 实现原理
 
+当前 Assignment 和报告解析器扩展其历史字段定义；尝试更新和结算共用回执合并逻辑。Ticket 工具共用 JSON 渲染，并将成对的分配命令绑定到调用 Agent。
+
 包由三个层次组成：
 
 - [`src/types.ts`](src/types.ts) 负责品牌化 id、JSON 兼容快照、请求值、浏览器投影类型和持久化事件声明。
