@@ -107,6 +107,8 @@ Curator-managed tools append after already activated tools, so gaining the role 
 
 A load plans its sections against `maxLoadBytes` with each grant's frame counted: whole sections with the full frame while they fit, then one cut section with the most detailed frame that leaves room for text. The rendered messages are checked against the budget again, so a file that grew after the snapshot cannot push a load past it.
 
+Compaction revokes grants, activations, and the catalog only when its replacement message commits. A log-only summary without its replacement preserves the visible sections and tool declarations, including after restart; dropped-section bookkeeping changes with the replacement.
+
 Before each step the service renders the catalog and, when its digest differs from the projected one, appends a catalog message. The digest covers the non-empty origin folders and the curated groups under them, with their summaries. After compaction removed the earlier catalog, the new one says it replaces any earlier listing.
 
 <a id="model-experience"></a>
