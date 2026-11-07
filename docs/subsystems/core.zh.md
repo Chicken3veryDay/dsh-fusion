@@ -2156,6 +2156,36 @@ Types: [Scoped](scope.zh.md)
 
 Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 
+<a id="agentstep-accepted--serial"></a>
+
+#### `agent/step-accepted` — serial
+
+Commit plugin state for an accepted step, once before `step/start` and request preparation. Rejected and empty no-request proposals do not dispatch this event; same-step retries do not repeat it. Listeners may append to the accepted message array, but must not remove or replace messages. Added messages follow the loop's ordinary delivery guarantees. A thrown error fails the step; prior listener effects remain committed.
+
+```ts cordis-catalog
+/**
+ * Commit plugin state for an accepted step, once before `step/start`
+ * and request preparation. Rejected and empty no-request proposals do
+ * not dispatch this event; same-step retries do not repeat it. Listeners
+ * may append to the accepted message array, but must not remove or replace
+ * messages. Added messages follow the loop's ordinary delivery guarantees.
+ * A thrown error fails the step; prior listener effects remain committed.
+ * @param payload.agent - the agent entering the step.
+ * @param payload.messages - accepted messages; listeners may append narration in place.
+ * @param payload.turn - the open turn number.
+ * @param payload.step - the accepted step number.
+ * @param payload.signal - the current turn's cancellation signal.
+ * @param payload.modelSelection - captured step selection, retained across retries.
+ * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.
+ * @mode serial
+ */
+'agent/step-accepted'(this: Scoped<Agent>, payload: { agent: Agent; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal; modelSelection: Readonly<ModelSelection> }): void | Promise<void>
+```
+
+Types: [Scoped](scope.zh.md) · [UserMessage](session.zh.md)
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
+
 <a id="agentturn-stopping--serial"></a>
 
 #### `agent/turn-stopping` — serial

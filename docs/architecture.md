@@ -89,6 +89,7 @@ turn/start
   -> agent/pre-step; at fallback: admit tools, assemble prompt + tool schemas, project runtime context
                                      reject | enter(messages, startsRequestSeries?)
      reject, or a first enter rewritten empty -> close the turn with no step
+     agent/step-accepted
      step/start
      agent/request -> prepareCall (cancellation commits neither system nor users)
      collect pending context; reconcile system/message using the prepared call capability
@@ -109,7 +110,7 @@ turn/start
 turn/end
 ```
 
-`turn/*`, `step/*`, `system/message`, `user/message`, `assistant/message`, `assistant/attempt`, and `tool/*` are durable session events; the rest are live extension points across three domains. `agent/assistant-stream` publishes process-local start, transient chunk, and end frames. The loop commits the complete compact stream as one message or log-only attempt before a committed end frame, and the Web Session-follow adapter is the live event's only remote consumer. `agent/pre-step`, `agent/request`, `llm/stream`, and the three `tools/*` events are waterfalls, whose listeners must call `next()`; `agent/turn-stopping` is serial and has no `next()`.
+`turn/*`, `step/*`, `system/message`, `user/message`, `assistant/message`, `assistant/attempt`, and `tool/*` are durable session events; the rest are live extension points across three domains. `agent/assistant-stream` publishes process-local start, transient chunk, and end frames. The loop commits the complete compact stream as one message or log-only attempt before a committed end frame, and the Web Session-follow adapter is the live event's only remote consumer. `agent/pre-step`, `agent/request`, `llm/stream`, and the three `tools/*` events are waterfalls, whose listeners must call `next()`; `agent/step-accepted` and `agent/turn-stopping` are serial without `next()`.
 
 Factory setup follows SessionStore entry and `session/created`, preceding `agent/created`; closing events commit before removal.
 

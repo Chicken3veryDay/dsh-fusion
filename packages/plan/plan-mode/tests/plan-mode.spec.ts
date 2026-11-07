@@ -150,6 +150,9 @@ async function boundary(ctx: Context, agent: Agent & { session: Session }, type:
     () => Promise.resolve({ kind: 'enter' as const, messages: [message] }),
   )
   if (decision.kind === 'enter') {
+    await events.serial('agent/step-accepted', {
+      messages: decision.messages, turn: 1, step: 1, signal, modelSelection: TEST_MODEL_SELECTION,
+    })
     for (const message of decision.messages.slice(1)) {
       agent.session.append('user/message', message, { surfaceOp: 'append' })
     }

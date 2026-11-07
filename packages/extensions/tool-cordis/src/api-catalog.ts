@@ -5690,6 +5690,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'payload', description: '.status - the status just entered (the transition\'s destination). Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
   },
   {
+    name: 'agent/step-accepted',
+    mode: 'serial',
+    signature: '\'agent/step-accepted\'(this: Scoped<Agent>, payload: { agent: Agent; messages: UserMessage[]; turn: number; step: number; signal: AbortSignal; modelSelection: Readonly<ModelSelection> }): void | Promise<void>',
+    summary: 'Commit plugin state for an accepted step, once before `step/start` and request preparation.',
+    description: 'Commit plugin state for an accepted step, once before `step/start` and request preparation. Rejected and empty no-request proposals do not dispatch this event; same-step retries do not repeat it. Listeners may append to the accepted message array, but must not remove or replace messages. Added messages follow the loop\'s ordinary delivery guarantees. A thrown error fails the step; prior listener effects remain committed.',
+    parameters: [{ name: 'payload', description: '.modelSelection - captured step selection, retained across retries. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
+  },
+  {
     name: 'agent/turn-stopping',
     mode: 'serial',
     signature: '\'agent/turn-stopping\'(this: Scoped<Agent>, payload: { agent: Agent; turn: number; signal: AbortSignal }): Promise<void> | void',

@@ -1530,3 +1530,85 @@ describe('disposal and cancellation during pre-step assembly', () => {
     expect(adapter.requests).toHaveLength(0)
   })
 })
+
+describe('accepted-step extension', () => {
+  it.each(['reject', 'empty', 'cancel'] as const)('does not commit acceptance for a %s proposal', async (outcome) => {
+    const adapter = new MockAdapter([])
+    const ctx = await harness(adapter)
+    try {
+      const agent = await ctx.agentLoop.create(SessionId(`accept-${outcome}`), { provider: 'mock', model: 'mock' })
+      const accepted: number[] = []
+      ctx.on('agent/step-accepted', ({ step }) => { accepted.push(step) })
+      ctx.on('agent/pre-step', async (_payload, next) => {
+        const decision = await next()
+        if (outcome === 'cancel') agent.cancel({ kind: 'user' })
+        return outcome === 'reject' ? { kind: 'reject' } : { ...decision, kind: 'enter', messages: [] }
+      })
+      send(agent, 'go')
+      await agent.whenIdle()
+      expect(accepted).toEqual([])
+      expect(adapter.requests).toHaveLength(0)
+      expect(agent.session.snapshotEvents().filter(event => event.type === 'step/start')).toEqual([])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('commits once before step start and carries serial narration through a same-step retry', async () => {
+    const adapter = new MockAdapter([
+      () => { throw new LlmError('retry me', 'RETRY') },
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter)
+    try {
+      const agent = await ctx.agentLoop.create(SessionId('accept-retry'), { provider: 'mock', model: 'mock' })
+      const accepted: number[] = []
+      agent.ctx.on('agent/step-accepted', async ({ agent: subject, messages, turn, step, modelSelection, signal }) => {
+        await Promise.resolve()
+        expect(subject).toBe(agent)
+        expect(turn).toBe(1)
+        expect(modelSelection).toMatchObject({ provider: 'mock', model: 'mock' })
+        expect(signal.aborted).toBe(false)
+        expect(subject.session.snapshotEvents().some(event => event.type === 'step/start')).toBe(false)
+        accepted.push(step)
+        messages.push(createUserMessage({ content: [{ type: 'text', text: 'accepted notice' }], source: { kind: 'test' } }))
+      })
+      ctx.on('agent/step-accepted', ({ messages }) => {
+        expect(messages.at(-1)?.content).toEqual([{ type: 'text', text: 'accepted notice' }])
+      })
+      ctx.on('agent/request-error', async () => ({ kind: 'retry' }))
+      send(agent, 'go')
+      await agent.whenIdle()
+      expect(accepted).toEqual([1])
+      expect(adapter.requests).toHaveLength(2)
+      for (const request of adapter.requests) {
+        expect(request.messages.flatMap(message => message.content)).toContainEqual({ type: 'text', text: 'accepted notice' })
+      }
+      expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message'
+        && inboxText(event.data) === 'accepted notice')).toHaveLength(1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('records accepted narration when a later acceptance listener throws', async () => {
+    const adapter = new MockAdapter([])
+    const ctx = await harness(adapter)
+    try {
+      const agent = await ctx.agentLoop.create(SessionId('accept-throw'), { provider: 'mock', model: 'mock' })
+      ctx.on('agent/step-accepted', ({ messages }) => {
+        messages.push(createUserMessage({ content: [{ type: 'text', text: 'committed notice' }], source: { kind: 'test' } }))
+      })
+      ctx.on('agent/step-accepted', () => { throw new Error('acceptance failed') })
+      send(agent, 'go')
+      await agent.whenIdle()
+      expect(adapter.requests).toHaveLength(0)
+      const log = agent.session.snapshotEvents()
+      expect(log.filter(event => event.type === 'user/message').map(event => inboxText(event.data)))
+        .toEqual(['go', 'committed notice'])
+      expect(log.find(event => event.type === 'turn/end')?.data.reason.kind).toBe('error')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+})

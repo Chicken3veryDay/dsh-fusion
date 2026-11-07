@@ -10,7 +10,7 @@
  * state. User selections remain pending until the next accepted in-turn
  * pre-step. The service includes the selected state in the proposed step
  * assembly only while that pre-step proposes, then appends `plan/mode` from
- * `agent/pre-step` only when the step is accepted. Any later assembly, such as
+ * `agent/step-accepted` only when the step is accepted. Any later assembly, such as
  * a same-step request retry's reselection, sees the logged state alone, so a
  * selection made after the pre-step waits for the next one. A selection made
  * after the proposal assembled but before the pre-step accepted is appended by
@@ -213,33 +213,27 @@ export class PlanModeController extends Service {
     })
     this.planProjectionHandle = await ctx.sessionProjections.register(planProjectionDefinition)
     let disposed = false
-    // Pre-step is outside Session.append publication, so it can append the
-    // log-only mode event inside an open turn without re-entering the session.
-    // A failed append remains pending for a later accepted in-turn pre-step,
-    // and policy cannot block the step.
-    ctx.on('agent/pre-step', async (
-      { agent, signal },
-      next,
-    ): Promise<PreStepDecision> => {
-      let decision: PreStepDecision
+    ctx.on('agent/pre-step', async ({ agent }, next): Promise<PreStepDecision> => {
       this.proposing.add(agent.session)
       try {
-        decision = await next()
+        return await next()
       } finally {
         this.proposing.delete(agent.session)
       }
+    })
+    // Acceptance is outside Session.append publication, so the mode append cannot re-enter it.
+    // Failed appends stay pending; request reselection reads the logged mode alone.
+    ctx.on('agent/step-accepted', ({ agent, signal, messages }) => {
       const pending = this.pendingIntents.get(agent.session)
-      if (decision.kind === 'reject' || signal.aborted || pending === undefined) return decision
+      if (signal.aborted || pending === undefined) return
       const narration = this.narration(agent.session, pending.active)
       try {
         this.onBoundary(agent.session)
       } catch (error) {
         ctx.logger.warn('dsh-plan-mode: failed to append selected plan mode at step start: %o', error)
-        return decision
+        return
       }
-      return !pending.narrate || narration === undefined
-        ? decision
-        : { ...decision, messages: [...decision.messages, narration] }
+      if (pending.narrate && narration !== undefined) messages.push(narration)
     })
     ctx.effect(() => () => { disposed = true }, 'dsh-plan-mode: close service lifetime')
 

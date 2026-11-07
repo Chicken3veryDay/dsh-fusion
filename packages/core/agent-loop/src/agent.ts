@@ -576,6 +576,16 @@ export class ReactLoopAgent implements Agent {
             return false
           }
           signal.throwIfAborted()
+          try {
+            await this.dispatch.serial('agent/step-accepted', {
+              messages: decision.messages, turn, step, signal, modelSelection: decision.selection,
+            })
+          } finally {
+            for (const message of decision.messages) {
+              if (message.source.kind !== 'runtime-context') uncommitted.set(message.id, message)
+            }
+          }
+          signal.throwIfAborted()
           this.session.append('step/start', { turn, step })
           phase.step = step
           const toolRecovery = new ToolCallRecovery()
