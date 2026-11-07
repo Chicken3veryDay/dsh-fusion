@@ -1,6 +1,7 @@
 /** Provider failure transitions with memory storage and fake leases; no kernel lock exists in this suite. */
 import { Context } from '@deepseek-ai/cordis'
 import Sessions, { SessionLogOffset } from '@deepseek-ai/dsh-session'
+import type { WriterLifetimeReservation } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { afterEach, expect, it, vi } from 'vitest'
 import { JsonlBackendTracker, JsonlSessionHandle } from '../src/storage.ts'
@@ -361,3 +362,71 @@ it('preserves setup and lifecycle-listener rollback causes without releasing ano
   expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(true)
   expect(f.tracker.openHandles.has(f.writer)).toBe(true)
 })
+
+for (const fault of ['registration', 'fenced', 'fenced-cleanup'] as const) {
+  it(`refuses reservation reentry through ${fault} setup rollback exactly once`, async () => {
+    const f = await fixture()
+    let nested: WriterLifetimeReservation | undefined
+    let cleanupCalls = 0
+    let routeRemovals = 0
+    const events = f.ctx.events
+    const unregister = events['unregister']
+    Object.defineProperty(events, 'unregister', {
+      configurable: true,
+      value: (...args: Parameters<typeof unregister>) => {
+        if (args[0] === 'session/event') routeRemovals++
+        return unregister.apply(events, args)
+      },
+    })
+    let close: Promise<void> | undefined
+    const setupFailure = new Error('registration interrupted')
+    const cleanupFailure = new Error('rollback cleanup interrupted')
+    const removeObserver = f.ctx.on('internal/listener', (name) => {
+      if (name === 'internal/plugin') return () => {
+        cleanupCalls++
+        nested = f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity)
+        if (fault === 'fenced-cleanup') throw cleanupFailure
+      }
+      if (name !== 'internal/status') return
+      if (fault === 'registration') throw setupFailure
+      close = f.writer.close()
+      // Observe the rejection immediately; the test joins the original close below.
+      void close.catch((_error: unknown) => { /* The cleanup-failure row expects this rejection. */ })
+    })
+    try {
+      if (fault === 'registration') {
+        expect(() => f.reserve()).toThrow(setupFailure)
+      } else if (fault === 'fenced-cleanup') {
+        expect(() => f.reserve()).toThrow('reservation rollback failed')
+      } else {
+        expect(f.tracker.reserveSessionWriter(f.ctx, f.session, f.ctx.sessionPersistence.identity))
+          .toMatchObject({ kind: 'refused', reason: 'fenced' })
+      }
+      expect(nested).toEqual({ kind: 'refused', reason: fault === 'registration' ? 'fenced' : 'missing-writer' })
+      expect(cleanupCalls).toBe(1)
+      expect(routeRemovals).toBe(1)
+      expect(f.writer.hasReservations).toBe(false)
+      expect(f.tracker['retainedRoutes'].has(f.writer)).toBe(false)
+      removeObserver()
+      if (fault === 'fenced-cleanup') {
+        await expect(close).rejects.toMatchObject({
+          message: 'reservation rollback failed',
+          errors: [expect.objectContaining({ errors: [cleanupFailure] })],
+        })
+        expect(f.writer.lifetimeUncertain).toBe(true)
+      } else if (fault === 'fenced') {
+        await close
+      } else {
+        // A clean rollback must permit a fresh reservation and preserve single routing.
+        const retry = f.reserve()
+        f.session.append('turn/start', { turn: 1 })
+        expect(await retry.release()).toMatchObject({ kind: 'durable' })
+        expect((await f.writer.read()).events).toHaveLength(1)
+        await f.writer.close()
+      }
+    } finally {
+      removeObserver()
+      Object.defineProperty(events, 'unregister', { configurable: true, value: unregister })
+    }
+  })
+}

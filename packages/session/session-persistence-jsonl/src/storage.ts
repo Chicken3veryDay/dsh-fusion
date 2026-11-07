@@ -579,6 +579,8 @@ export class JsonlBackendTracker {
   private active = false
   private readonly bindings = new Map<JsonlSessionHandle, Session>()
   private readonly flushReceipts = new Map<JsonlSessionHandle, number>()
+  /** Reject synchronous reservation reentry through setup and its rollback callbacks. */
+  private readonly reservationSetups = new Set<JsonlSessionHandle>()
   private readonly retainedRoutes = new Map<JsonlSessionHandle, {
     dispose: () => void | Promise<void>
     remove: () => Promise<void>
@@ -731,7 +733,7 @@ export class JsonlBackendTracker {
     const providerLive = (): boolean => [...ancestors].every(([fiber, uid]) =>
       uid !== null && fiber.uid === uid && fiber.state === FiberState.ACTIVE)
       && ctx.get('sessionPersistence')?.identity === provider
-    if (!providerLive()) return { kind: 'refused', reason: 'fenced' }
+    if (!providerLive() || this.reservationSetups.has(writer)) return { kind: 'refused', reason: 'fenced' }
     const abort = new AbortController()
     const done = Promise.withResolvers<void>()
     let phase: 'active' | 'releasing' | 'released' | 'uncertain' = 'active'
@@ -804,63 +806,68 @@ export class JsonlBackendTracker {
         throw failure
       }
     }
+    this.reservationSetups.add(writer)
     try {
-      unpin = writer.retain({ fence, done: done.promise })
-      // Transfer the actual listener into the writer's ordered root effect. Its close
-      // fences admission before waiting for pins; terminal facts still use this route.
-      if (!this.retainedRoutes.has(writer)) {
-        let removeListener!: () => void
-        let removal: Promise<void> | undefined
-        const remove = (): Promise<void> => removal ??= Promise.resolve().then(removeListener)
-        detachRoute = () => { removeListener() }
-        newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
-          removeListener = ctx.root.on('session/event', (exact: Session, event) => {
-            if (exact !== session || this.writers.get(session.id) !== writer) return
-            writer.enqueueLive(event, (error) => {
-              writer.retainFailure(error)
-              ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
+      try {
+        unpin = writer.retain({ fence, done: done.promise })
+        // Transfer the actual listener into the writer's ordered root effect. Its close
+        // fences admission before waiting for pins; terminal facts still use this route.
+        if (!this.retainedRoutes.has(writer)) {
+          let removeListener!: () => void
+          let removal: Promise<void> | undefined
+          const remove = (): Promise<void> => removal ??= Promise.resolve().then(removeListener)
+          detachRoute = () => { removeListener() }
+          newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
+            removeListener = ctx.root.on('session/event', (exact: Session, event) => {
+              if (exact !== session || this.writers.get(session.id) !== writer) return
+              writer.enqueueLive(event, (error) => {
+                writer.retainFailure(error)
+                ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
+              })
             })
-          })
-          // The exact function `on` returned: yielding it moves its ownership into this effect.
-          yield removeListener
-          // Setup rollback must never close a writer belonging to an earlier pin.
-          yield async () => {
-            if (!routeArmed || writer.closeRequestedState) return
-            const withdrawal = ctx.sessions.withdrawalOf(session)
-            if (withdrawal !== undefined) {
-              try {
-                await withdrawal
-              } catch (withdrawalFailure: unknown) {
-                // The Session may still publish: keep the open writer and its lease, and report it.
-                const failure = new Error(`session "${session.id}": retained writer kept open because Session withdrawal failed`, { cause: withdrawalFailure })
-                writer.retainFailure(failure)
-                throw failure
+            // The exact function `on` returned: yielding it moves its ownership into this effect.
+            yield removeListener
+            // Setup rollback must never close a writer belonging to an earlier pin.
+            yield async () => {
+              if (!routeArmed || writer.closeRequestedState) return
+              const withdrawal = ctx.sessions.withdrawalOf(session)
+              if (withdrawal !== undefined) {
+                try {
+                  await withdrawal
+                } catch (withdrawalFailure: unknown) {
+                  // The Session may still publish: keep the open writer and its lease, and report it.
+                  const failure = new Error(`session "${session.id}": retained writer kept open because Session withdrawal failed`, { cause: withdrawalFailure })
+                  writer.retainFailure(failure)
+                  throw failure
+                }
               }
+              await writer.close()
             }
-            await writer.close()
-          }
-        }.bind(this), 'retained JSONL writer and event route')
-        this.retainedRoutes.set(writer, { dispose: newRoute, remove })
+          }.bind(this), 'retained JSONL writer and event route')
+          this.retainedRoutes.set(writer, { dispose: newRoute, remove })
+        }
+        // Withdrawal fences dispatch the moment it begins. This stop is not a producer join:
+        // routing and ownership stay with the pin until its release or the writer's close.
+        if (sessions.acceptsWithdrawal(session)) {
+          removers.push(sessions.registerWithdrawal(session, () => { fence(); return Promise.resolve() }))
+        }
+        removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
+        removers.push(ctx.root.on('internal/status', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
+        removers.push(ctx.root.on('session/disposed', (exact) => { if (exact === session) fence() }))
+      } catch (error: unknown) {
+        try { rollback() } catch (rollbackError: unknown) {
+          throw new AggregateError([error, rollbackError], 'reservation setup and rollback failed')
+        }
+        throw error
       }
-      // Withdrawal fences dispatch the moment it begins. This stop is not a producer join:
-      // routing and ownership stay with the pin until its release or the writer's close.
-      if (sessions.acceptsWithdrawal(session)) {
-        removers.push(sessions.registerWithdrawal(session, () => { fence(); return Promise.resolve() }))
-      }
-      removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
-      removers.push(ctx.root.on('internal/status', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
-      removers.push(ctx.root.on('session/disposed', (exact) => { if (exact === session) fence() }))
       // Listener registration may synchronously reenter host lifecycle code.
       if (!current() || abort.signal.aborted) {
         rollback()
         return { kind: 'refused', reason: 'fenced' }
       }
       routeArmed = true
-    } catch (error: unknown) {
-      try { rollback() } catch (rollbackError: unknown) {
-        throw new AggregateError([error, rollbackError], 'reservation setup and rollback failed')
-      }
-      throw error
+    } finally {
+      this.reservationSetups.delete(writer)
     }
     const releasePin = unpin
     const reservation: SessionWriterReservation = {
