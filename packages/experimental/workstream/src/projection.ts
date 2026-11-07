@@ -33,22 +33,57 @@ const snapshotSchema: z.ZodType<WorkstreamSnapshot> = z.object({
   }).strict()),
 }).strict()
 
-const stateSchema = z.object({ ownerSessionId: sessionId, snapshot: snapshotSchema.nullable() }).strict()
+const seq = z.number().int().nonnegative()
+const stateSchema = z.object({
+  ownerSessionId: sessionId,
+  snapshot: snapshotSchema.nullable(),
+  /** Seq of the event that committed `snapshot`. */
+  snapshotSeq: seq.nullable(),
+  /** Seq of the latest root Ticket event since the Workstream opened. */
+  ticketSeq: seq.nullable(),
+  /** Seq of the latest such Ticket event naming each Session as coordinator or Assignment owner. */
+  participantTicketSeqs: z.record(z.string(), seq),
+}).strict()
 
 /** Private checkpoint state; consumers read through WorkstreamService. */
 export type WorkstreamProjectionState = z.infer<typeof stateSchema>
 
-/** Workstream events are selected by immutable root id; inherited records are ignored. */
+/** The fields of a root `ticket/state` event that decide which Workstream callers it concerns; both versions carry them. */
+const ticketParticipantsSchema = z.object({
+  sessionId: sessionId,
+  ticket: z.object({ coordinatorId: sessionId, assignments: z.array(z.object({ ownerId: sessionId }).loose()) }).loose(),
+}).loose()
+
+/** Sessions a root Ticket event concerns: its coordinator and every Assignment owner it retains.
+ * @param data - `ticket/state` event data.
+ * @returns the Ticket's Session id, and the participant ids without duplicates.
+ */
+export function ticketParticipants(data: unknown): { readonly sessionId: SessionId; readonly participants: readonly SessionId[] } {
+  const { sessionId: owner, ticket } = ticketParticipantsSchema.parse(data)
+  const participants = new Set([ticket.coordinatorId, ...ticket.assignments.map(assignment => assignment.ownerId)])
+  return { sessionId: owner, participants: [...participants] }
+}
+
+/** Workstream events are selected by immutable root id; inherited records are ignored. Root Ticket events committed after
+ * the Workstream opened record only their seq, which `waitForChange` compares with a caller's cursor. */
 export const workstreamProjectionDefinition = {
-  key: 'workstream', stateVersion: 1, stateSchema,
-  init: header => ({ ownerSessionId: header.id, snapshot: null }),
+  key: 'workstream', stateVersion: 2, stateSchema,
+  init: header => ({ ownerSessionId: header.id, snapshot: null, snapshotSeq: null, ticketSeq: null, participantTicketSeqs: {} }),
   apply: (state, event) => {
+    if (event.type === 'ticket/state') {
+      if (state.snapshot === null) return state
+      const { sessionId: owner, participants } = ticketParticipants(event.data)
+      if (owner !== state.ownerSessionId) return state
+      const participantTicketSeqs = { ...state.participantTicketSeqs }
+      for (const id of participants) participantTicketSeqs[id] = event.seq
+      return { ...state, ticketSeq: event.seq, participantTicketSeqs }
+    }
     if (event.type !== 'workstream/state' || event.data.snapshot.ownerSessionId !== state.ownerSessionId) return state
     const data = z.object({ version: z.literal(1), snapshot: snapshotSchema }).strict().parse(event.data)
     if (data.snapshot.revision !== (state.snapshot?.revision ?? 0) + 1) throw new Error('Workstream revision is not contiguous')
     if (state.snapshot !== null && data.snapshot.operationId !== state.snapshot.operationId) throw new
     Error('Workstream creation identity changed')
-    return { ownerSessionId: state.ownerSessionId, snapshot: data.snapshot }
+    return { ...state, snapshot: data.snapshot, snapshotSeq: event.seq }
   },
   wire: { viewSchema: snapshotSchema.nullable(), view: state => state.snapshot },
 } satisfies ProjectionDefinition<'workstream', WorkstreamProjectionState>

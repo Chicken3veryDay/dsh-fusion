@@ -14,7 +14,7 @@ import { foldSubagentDescriptor, SubagentError } from '@deepseek-ai/dsh-subagent
 import { TicketError, type AssignTicketRequest, type CreateTicketRequest, type EndTicketRequest, type TicketId, type TicketView } from '@deepseek-ai/dsh-experimental-ticket'
 import { WorkstreamError, WorkstreamPartialHandoffError } from './error.ts'
 import { acceptedMessage } from './accepted-message.ts'
-import { workstreamProjectionDefinition } from './projection.ts'
+import { ticketParticipants, workstreamProjectionDefinition } from './projection.ts'
 import type { WorkstreamProjectionState } from './projection.ts'
 import type { AddWorkstreamMemberRequest, Config, SendWorkstreamMessageRequest, WorkstreamMember, WorkstreamMessage,
   WorkstreamOperationId, WorkstreamSnapshot } from './types.ts'
@@ -433,28 +433,56 @@ export class WorkstreamService extends Service {
     })
   }
 
-  /** Observe any durable root event, including Ticket progress, without polling.
+  /** Read the wait cursor of one Workstream: the root Session position that `waitForChange` compares later events with.
    * @param caller - exact live member.
    * @param rootSessionId - explicit Workstream root.
-   * @param request - last Workstream revision, finite timeout, and caller cancellation.
-   * @returns a revision change, another durable event, or timeout; abort and shutdown reject.
+   * @returns the position after the last root event committed so far.
+   */
+  cursor(caller: Agent, rootSessionId: SessionId): number {
+    return this.requireMembership(caller, rootSessionId).owner.session.seq
+  }
+
+  /** Observe Workstream changes and the root Ticket events that concern the caller, without polling.
+   * The owner and the sitting coordinator are concerned by every root Ticket; another member by the Tickets that name it as
+   * coordinator or Assignment owner. Other root events, such as the owner's own turns, never end the wait.
+   * @param caller - exact live member.
+   * @param rootSessionId - explicit Workstream root.
+   * @param request - last read Workstream revision, optional cursor from `cursor`, finite timeout, and caller cancellation.
+   * Without `afterCursor`, every concerning event committed after `afterRevision` counts.
+   * @returns at once when the revision differs from `afterRevision` or a concerning event is at or after the cursor;
+   * otherwise at the next concerning event or the timeout. Abort and shutdown reject.
    */
   async waitForChange(
     caller: Agent, rootSessionId: SessionId,
-    request: { afterRevision: number; timeoutMs: number; signal: AbortSignal },
+    request: { afterRevision: number; afterCursor?: number; timeoutMs: number; signal: AbortSignal },
   ): Promise<WorkstreamWaitResult> {
     const { owner, snapshot } = this.requireMembership(caller, rootSessionId)
     if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1 || request.timeoutMs > this.config.maxWaitMs)
       throw new WorkstreamError('timeoutMs must be positive and at most maxWaitMs', 'WORKSTREAM_INVALID_INPUT')
+    if (request.afterCursor !== undefined && (!Number.isSafeInteger(request.afterCursor) || request.afterCursor < 0
+      || request.afterCursor > owner.session.seq))
+      throw new WorkstreamError('afterCursor must be a cursor read from this Workstream', 'WORKSTREAM_INVALID_INPUT')
     if (snapshot.revision !== request.afterRevision) return { timedOut: false, revision: snapshot.revision }
+    const state = this.projection.stateOf(owner.session)
+    const from = request.afterCursor ?? (state.snapshotSeq ?? -1) + 1
+    const concerned = (snapshotNow: WorkstreamSnapshot): boolean =>
+      caller.id === snapshotNow.ownerSessionId || caller.id === snapshotNow.coordinatorId
+    const seen = Math.max(state.snapshotSeq ?? -1, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
+    if (seen >= from) return { timedOut: false, revision: snapshot.revision }
     const signal = AbortSignal.any([request.signal, this.lifetime.signal])
     signal.throwIfAborted()
     return new Promise((resolve, reject) => {
       const cleanup = (): void => { clearTimeout(timer); stop(); signal.removeEventListener('abort', abort) }
       const abort = (): void => { cleanup(); reject(signal.reason instanceof Error ? signal.reason : new
       WorkstreamError('Workstream wait was cancelled', 'WORKSTREAM_DISPOSED')) }
-      const stop = this.ctx.on('session/event', (session) => {
+      const stop = this.ctx.on('session/event', (session, event) => {
         if (session !== owner.session) return
+        if (event.type === 'workstream/state') {
+          if (event.data.snapshot.ownerSessionId !== owner.id) return
+        } else if (event.type === 'ticket/state') {
+          const ticket = ticketParticipants(event.data)
+          if (ticket.sessionId !== owner.id || (!concerned(this.state(owner)) && !ticket.participants.includes(caller.id))) return
+        } else return
         cleanup(); resolve({ timedOut: false, revision: this.state(owner).revision })
       })
       const timer = setTimeout(() => { cleanup(); resolve({ timedOut: true, revision: this.state(owner).revision }) }, request.timeoutMs)

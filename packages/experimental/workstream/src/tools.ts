@@ -46,10 +46,15 @@ export class WorkstreamTools extends Service {
         WorkstreamOperationId(args.operation_id), title: args.title })),
     }))
     register(defineTool({
-      name: 'workstream_get', description: 'Read members, coordinator and durable message receipts for one Workstream.',
+      name: 'workstream_get', description:
+        'Read members, coordinator and durable message receipts for one Workstream, with the cursor workstream_wait continues from.',
       parameters: { root_session_id: root }, output,
-      execute: (args, exec) => Promise.resolve(z.json().parse(this.ctx.workstreams.get(caller(exec.agent),
-        SessionId(args.root_session_id)))),
+      execute: (args, exec) => {
+        const agent = caller(exec.agent)
+        const rootSessionId = SessionId(args.root_session_id)
+        return Promise.resolve(z.json().parse({ ...this.ctx.workstreams.get(agent, rootSessionId),
+          cursor: this.ctx.workstreams.cursor(agent, rootSessionId) }))
+      },
     }))
     register(defineTool({
       name: 'workstream_list', description: 'List your live Workstream memberships.', parameters: {}, output,
@@ -96,12 +101,17 @@ export class WorkstreamTools extends Service {
     }))
     register(defineTool({
       name: 'workstream_wait', description:
-        'Wait for a durable Workstream or Ticket event with cancellation and a finite timeout. Unrelated Ticket work may continue.',
+        'Wait until the Workstream changes or a Ticket that concerns you changes (every Ticket for the owner and coordinator; '
+        + 'otherwise Tickets naming you as coordinator or assignee), with cancellation and a finite timeout. Returns at once when '
+        + 'such a change was committed after your read, including your own; other activity never ends the wait. '
+        + 'After it returns, read again and wait with the new revision and cursor.',
       parameters: { root_session_id: root, after_revision: { type: 'integer', required: true, description:
-        'Last Workstream revision.' }, timeout_ms: { type: 'integer', required: true, description:
-        'Positive timeout bounded by maxWaitMs.' } }, output,
+        'Workstream revision from your last workstream_get.' }, after_cursor: { type: 'integer', description:
+        'Cursor from the same workstream_get. Omit it to count every change committed after that revision.' },
+      timeout_ms: { type: 'integer', required: true, description: 'Positive timeout bounded by maxWaitMs.' } }, output,
       execute: async (args, exec) => z.json().parse(await this.ctx.workstreams.waitForChange(caller(exec.agent),
-        SessionId(args.root_session_id), { afterRevision: args.after_revision, timeoutMs: args.timeout_ms, signal: exec.signal })),
+        SessionId(args.root_session_id), { afterRevision: args.after_revision, ...args.after_cursor === undefined ? {} : {
+          afterCursor: args.after_cursor }, timeoutMs: args.timeout_ms, signal: exec.signal })),
     }))
     register(defineTool({
       name: 'workstream_interrupt', description: 'Interrupt a member current turn while retaining its pending inbox.',

@@ -258,13 +258,18 @@ describe('durable Workstream authority and delivery', () => {
     await ctx.workstreams.createTicket(owner, owner.id, { subject: 'Unrelated progress', description: '' })
     await expect(waiting).resolves.toEqual({ timedOut: false, revision })
     await expect(ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, timeoutMs: 1, signal,
-    })).resolves.toEqual({ timedOut: true, revision })
+    })).resolves.toEqual({ timedOut: false, revision })
+    await expect(ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, afterCursor:
+      ctx.workstreams.cursor(owner, owner.id), timeoutMs: 1, signal })).resolves.toEqual({ timedOut: true, revision })
     const abort = new AbortController()
-    const cancelled = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, timeoutMs: 1_000, signal: abort.signal })
+    const cursor = ctx.workstreams.cursor(owner, owner.id)
+    const cancelled = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, afterCursor: cursor, timeoutMs: 1_000,
+      signal: abort.signal })
     const cancellation = expect(cancelled).rejects.toThrow('cancel wait')
     abort.abort(new Error('cancel wait'))
     await cancellation
-    const disposed = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, timeoutMs: 1_000, signal })
+    const disposed = ctx.workstreams.waitForChange(owner, owner.id, { afterRevision: revision, afterCursor: cursor, timeoutMs: 1_000,
+      signal })
     const rejection = expect(disposed).rejects.toMatchObject({ code: 'WORKSTREAM_DISPOSED' })
     await fiber.dispose()
     await rejection
