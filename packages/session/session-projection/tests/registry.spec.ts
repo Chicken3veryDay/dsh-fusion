@@ -629,6 +629,31 @@ describe('SessionProjectionRegistry drive', () => {
     expect(checkpoint['test/count']).toEqual({ ver: 1, seq: 4, val: 5 })
   })
 
+  it('restore discards a version-matching row its state schema rejects and refolds that key from the full log', async () => {
+    const { ctx } = await harness()
+    await ctx.sessionProjections.register(marksUnit())
+    await ctx.sessionProjections.register(countUnit())
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+    const full: SessionEvent[] = [
+      { type: 'test/mark', seq: SessionSeq(0), time: 0, data: { marks: ['logged'] } },
+      { type: 'turn/start', seq: SessionSeq(1), time: 1, data: { turn: 1 } },
+    ]
+    const rejected = {
+      'test/marks': { ver: 1, seq: SessionSeq(0), val: { marks: 'not an array' } },
+      'test/count': { ver: 1, seq: SessionSeq(0), val: 1 },
+    }
+    // A suffix-only read cannot refold the discarded key, so it asks for a full re-read.
+    expect(() => ctx.sessionProjections.restore(rejected, full.slice(1), SessionLogOffset(1), RESTORE_HEADER, SessionLogOffset(0)))
+      .toThrow(/schema-rejected.*re-read from seq 0/)
+    const { snapshot, checkpoint } = ctx.sessionProjections.restore(
+      rejected, full, SessionLogOffset(0), RESTORE_HEADER, SessionLogOffset(0))
+    const replayed = ctx.sessionProjections.restore({}, full, SessionLogOffset(0), RESTORE_HEADER, SessionLogOffset(0))
+    expect(snapshot).toEqual(replayed.snapshot)
+    expect(snapshot.values['test/marks']).toEqual({ marks: ['logged'] })
+    expect(checkpoint).toEqual(replayed.checkpoint)
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"test\/marks": discarded the checkpoint row .* state schema rejects/))
+  })
+
   it('restore over a suffix folds only past each row watermark and serves an exact empty-tail cut', async () => {
     const { ctx } = await harness()
     await ctx.sessionProjections.register(marksUnit())

@@ -132,7 +132,7 @@ Session 摘要包含每个已注册客户端视图，但排除 `SessionProjectio
 
 ### 驱动与检查点流程
 
-一个已提交事件按注册顺序驱动每个已注册单元，跳过对该 Session 已失败的单元；原始 view 通过 `Object.is` 判定为变化的客户端可见单元会以经 schema 校验的视图与致因 seq 通知变更流。live drive 保留前后两个原始 view；snapshot 与冷读仍是彼此独立的完整读取。`checkpoint(session)` 为持久缓存返回每个单元一份独立的 `(key → {ver, seq, val})` 行；`restoreFloor` 把尾部读取锚定在最低可用水位之前一个事件处，使缩短的日志可被检出；`restore` 把持久行在存储后缀上重新折叠，丢弃任何 `ver` 不匹配或声称越过存储末尾的行。
+一个已提交事件按注册顺序驱动每个已注册单元，跳过对该 Session 已失败的单元；原始 view 通过 `Object.is` 判定为变化的客户端可见单元会以经 schema 校验的视图与致因 seq 通知变更流。live drive 保留前后两个原始 view；snapshot 与冷读仍是彼此独立的完整读取。`checkpoint(session)` 为持久缓存返回每个单元一份独立的 `(key → {ver, seq, val})` 行；`restoreFloor` 把尾部读取锚定在最低可用水位之前一个事件处，使缩短的日志可被检出；`restore` 把持久行在存储后缀上重新折叠，丢弃任何 `ver` 不匹配、`val` 被该单元 `stateSchema` 拒绝（记录为警告）或声称越过存储末尾的行。被丢弃的行在完整日志上从 `init` 重新折叠其单元；仅含后缀的读取则抛出错误，须从 seq 0 重新读取。
 
 </details>
 

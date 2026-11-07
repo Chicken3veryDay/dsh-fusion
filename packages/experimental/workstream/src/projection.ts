@@ -36,13 +36,16 @@ const snapshotSchema: z.ZodType<WorkstreamSnapshot> = z.object({
 const seq = z.number().int().nonnegative()
 const stateFields = {
   ownerSessionId: sessionId,
-  /** Seq of the latest root Ticket event since the Workstream opened naming each Session as coordinator or Assignment owner. */
-  participantTicketSeqs: z.record(z.string(), seq),
+  /** `[Session id, seq]` of the latest root Ticket event since the Workstream opened naming that Session as coordinator or
+   * Assignment owner, one pair per Session. Pairs rather than an object keyed by id, so every admitted Session id, including
+   * `__proto__`, keeps its position through the fold and the JSON checkpoint. */
+  participantTicketSeqs: z.array(z.tuple([sessionId, seq]))
+    .refine(pairs => new Set(pairs.map(([id]) => id)).size === pairs.length, 'each Ticket participant has one position'),
 } as const
 
 /** Before the Workstream opens: no event position is recorded, because `apply` ignores root Ticket events until a snapshot exists. */
 const unopenedStateSchema = z.object({ ...stateFields, snapshot: z.null(), snapshotSeq: z.null(), ticketSeq: z.null() }).strict()
-  .refine(state => Object.keys(state.participantTicketSeqs).length === 0, 'an unopened Workstream records no Ticket participants')
+  .refine(state => state.participantTicketSeqs.length === 0, 'an unopened Workstream records no Ticket participants')
 
 /** After it opens: the committing event's seq is always present, and the Ticket positions agree with each other.
  * Every root Ticket event sets `ticketSeq` and the position of at least its coordinator, so no participant is ahead of
@@ -55,7 +58,7 @@ const openedStateSchema = z.object({
   /** Seq of the latest root Ticket event since the Workstream opened. */
   ticketSeq: seq.nullable(),
 }).strict().refine((state) => {
-  const positions = Object.values(state.participantTicketSeqs)
+  const positions = state.participantTicketSeqs.map(([, position]) => position)
   return (positions.length === 0 ? null : Math.max(...positions)) === state.ticketSeq
 }, 'Ticket positions must agree with the latest root Ticket event')
 
@@ -89,15 +92,18 @@ export function ticketParticipants(data: unknown): { readonly sessionId: Session
 /** Workstream events are selected by immutable root id; inherited records are ignored. Root Ticket events committed after
  * the Workstream opened record only their seq, which `waitForChange` compares with a caller's cursor. */
 export const workstreamProjectionDefinition = {
-  key: 'workstream', stateVersion: 2, stateSchema,
-  init: header => ({ ownerSessionId: header.id, snapshot: null, snapshotSeq: null, ticketSeq: null, participantTicketSeqs: {} }),
+  key: 'workstream', stateVersion: 3, stateSchema,
+  init: header => ({ ownerSessionId: header.id, snapshot: null, snapshotSeq: null, ticketSeq: null, participantTicketSeqs: [] }),
   apply: (state, event) => {
     if (event.type === 'ticket/state') {
       if (state.snapshot === null) return state
       const { sessionId: owner, participants } = ticketParticipants(event.data)
       if (owner !== state.ownerSessionId) return state
-      const participantTicketSeqs = { ...state.participantTicketSeqs }
-      for (const id of participants) participantTicketSeqs[id] = event.seq
+      const concerned = new Set(participants)
+      const participantTicketSeqs: [SessionId, number][] = [
+        ...state.participantTicketSeqs.filter(([id]) => !concerned.has(id)),
+        ...participants.map((id): [SessionId, number] => [id, event.seq]),
+      ]
       return { ...state, ticketSeq: event.seq, participantTicketSeqs }
     }
     if (event.type !== 'workstream/state' || event.data.snapshot.ownerSessionId !== state.ownerSessionId) return state

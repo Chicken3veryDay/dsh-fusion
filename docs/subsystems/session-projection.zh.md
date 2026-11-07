@@ -441,8 +441,9 @@ viewCheckpoint( checkpoint: ProjectionCheckpoint, keys?: ProjectionKeySelection,
  * `baseSeq`; the floor's one-below anchor makes the supplied end honest,
  * so a shrunk log is detected here. A row is usable iff its
  * `ver` matches the live unit's `stateVersion`, it does not predate `baseSeq`
- * (`seq >= baseSeq - 1`), and it does not claim events past the
- * supplied end (`seq <= endSeq`); an unusable row is discarded
+ * (`seq >= baseSeq - 1`), it does not claim events past the
+ * supplied end (`seq <= endSeq`), and the unit's `stateSchema` accepts its
+ * `val` (a rejected `val` is logged as a warning); an unusable row is discarded
  * and its key refolds from `init` — which is only sound over the full
  * log, so a discarded row with `baseSeq > 0` throws (the caller re-reads
  * from seq 0, e.g. after a crash-repair truncation shrank the log below

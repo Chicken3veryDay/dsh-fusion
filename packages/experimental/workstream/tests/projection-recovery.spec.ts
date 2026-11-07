@@ -77,29 +77,35 @@ describe('Workstream projection recovery', () => {
     expect(workstreamProjectionDefinition.wire.view(state)).toBe(state.snapshot)
   })
 
-  it('discards a stateVersion 1 checkpoint and refolds the full log, recording the event positions', async () => {
+  it('discards stateVersion 1 and 2 checkpoints and refolds the full log, recording the event positions', async () => {
     const { ctx, owner, memberId } = await setup()
     const events = owner.session.snapshotEvents()
     const reference = fullFold(owner.session)
     expect(reference.snapshotSeq).toBe(events.findLast(event => event.type === 'workstream/state')!.seq)
     expect(reference.ticketSeq).toBe(events.findLast(event => event.type === 'ticket/state')!.seq)
-    expect(reference.participantTicketSeqs[memberId]).toBe(reference.ticketSeq)
+    expect(reference.participantTicketSeqs.find(([id]) => id === memberId)?.[1]).toBe(reference.ticketSeq)
     // Only Ticket events after the Workstream opened are recorded; the pre-open Ticket is not.
     const opened = events.find(event => event.type === 'workstream/state')!.seq
-    expect(Object.values(reference.participantTicketSeqs).every(seq => seq > opened)).toBe(true)
+    expect(reference.participantTicketSeqs.every(([, seq]) => seq > opened)).toBe(true)
     expect(ctx.workstreams.cursor(owner, owner.id)).toBe(owner.session.seq)
 
     const lastSeq = SessionSeq(events.at(-1)!.seq)
     const v1 = { workstream: { ver: 1, seq: lastSeq, val: { ownerSessionId: owner.id, snapshot: reference.snapshot } } }
     expect(ctx.sessionProjections.restoreFloor(v1)).toBe(SessionLogOffset(0))
     const restored = ctx.sessionProjections.restore(v1, events, SessionLogOffset(0), owner.session.header, SessionLogOffset(0))
-    expect(restored.checkpoint['workstream']).toEqual({ ver: 2, seq: lastSeq, val: reference })
+    expect(restored.checkpoint['workstream']).toEqual({ ver: 3, seq: lastSeq, val: reference })
+    // A stateVersion 2 row kept participant positions in an object keyed by Session id; it is discarded the same way.
+    const v2 = { workstream: { ver: 2, seq: lastSeq, val: { ...reference,
+      participantTicketSeqs: Object.fromEntries(reference.participantTicketSeqs) } } }
+    expect(ctx.sessionProjections.restoreFloor(v2)).toBe(SessionLogOffset(0))
+    expect(ctx.sessionProjections.restore(v2, events, SessionLogOffset(0), owner.session.header, SessionLogOffset(0))
+      .checkpoint['workstream']).toEqual({ ver: 3, seq: lastSeq, val: reference })
     // A version 1 row never seeds a suffix read: the caller must re-read from seq 0.
     expect(() => ctx.sessionProjections.restore(v1, events.slice(1), SessionLogOffset(1), owner.session.header,
       SessionLogOffset(0))).toThrow(/re-read from seq 0/)
   })
 
-  it('restores a stateVersion 2 checkpoint and replays its suffix to the same state as a full replay', async () => {
+  it('restores a stateVersion 3 checkpoint and replays its suffix to the same state as a full replay', async () => {
     const { ctx, owner } = await setup()
     const events = owner.session.snapshotEvents()
     const reference = fullFold(owner.session)

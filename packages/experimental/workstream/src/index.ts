@@ -473,7 +473,9 @@ export class WorkstreamService extends Service {
     const from = request.afterCursor ?? state.snapshotSeq + 1
     const concerned = (snapshotNow: WorkstreamSnapshot): boolean =>
       caller.id === snapshotNow.ownerSessionId || caller.id === snapshotNow.coordinatorId
-    const seen = Math.max(state.snapshotSeq, (concerned(snapshot) ? state.ticketSeq : state.participantTicketSeqs[caller.id]) ?? -1)
+    const seen = Math.max(state.snapshotSeq, (concerned(snapshot)
+      ? state.ticketSeq
+      : state.participantTicketSeqs.find(([id]) => id === caller.id)?.[1]) ?? -1)
     if (seen >= from) return result(false)
     return new Promise((resolve, reject) => {
       const cleanup = (): void => { clearTimeout(timer); stop(); signal.removeEventListener('abort', abort) }

@@ -235,7 +235,10 @@ export class SessionProjectionUnitError extends Error {
 /** Type-erased unit view the drive machinery works with (the registration contract already proved the typed form). */
 interface ErasedDefinition {
   key: string
-  stateSchema: { parse(value: unknown): unknown }
+  stateSchema: {
+    parse(value: unknown): unknown
+    safeParse(value: unknown): { success: true; data: unknown } | { success: false; error: { message: string } }
+  }
   init(header: SessionHeader, inheritedEventCount: SessionLogOffset): unknown
   apply(state: unknown, event: SessionEvent): unknown
   wire: {
@@ -677,8 +680,9 @@ export class SessionProjectionRegistry extends Service {
    * `baseSeq`; the floor's one-below anchor makes the supplied end honest,
    * so a shrunk log is detected here. A row is usable iff its
    * `ver` matches the live unit's `stateVersion`, it does not predate `baseSeq`
-   * (`seq >= baseSeq - 1`), and it does not claim events past the
-   * supplied end (`seq <= endSeq`); an unusable row is discarded
+   * (`seq >= baseSeq - 1`), it does not claim events past the
+   * supplied end (`seq <= endSeq`), and the unit's `stateSchema` accepts its
+   * `val` (a rejected `val` is logged as a warning); an unusable row is discarded
    * and its key refolds from `init` — which is only sound over the full
    * log, so a discarded row with `baseSeq > 0` throws (the caller re-reads
    * from seq 0, e.g. after a crash-repair truncation shrank the log below
@@ -707,20 +711,20 @@ export class SessionProjectionRegistry extends Service {
     for (const registration of this.registrations.values()) {
       const def = registration.def
       const row = checkpoint[def.key]
-      const usable = row !== undefined
-        && row.ver === def.stateVersion
-        && row.seq >= beforeBase
-        && row.seq <= endSeq
-      if (!usable && baseSeq > 0) {
+      let seed: { state: unknown; seq: SessionSeqCursor } | undefined
+      if (row !== undefined && row.ver === def.stateVersion && row.seq >= beforeBase && row.seq <= endSeq) {
+        const parsed = def.stateSchema.safeParse(row.val)
+        if (parsed.success) seed = { state: parsed.data, seq: row.seq }
+        else this.ctx.logger.warn(`session projection ${JSON.stringify(def.key)}: discarded the checkpoint row of Session ${JSON.stringify(header.id)} that its state schema rejects; refolding from the log: ${parsed.error.message}`)
+      }
+      if (seed === undefined && baseSeq > 0) {
         throw new Error(
           `session projection ${JSON.stringify(def.key)} cannot restore from seq ${baseSeq}: `
-          + 'its checkpoint row is missing, version-mismatched, or beyond the supplied log end; re-read from seq 0',
+          + 'its checkpoint row is missing, version-mismatched, schema-rejected, or beyond the supplied log end; re-read from seq 0',
         )
       }
-      let state = usable
-        ? def.stateSchema.parse(row.val)
-        : def.init(header, inheritedEventCount)
-      const from = usable ? row.seq : beforeBase
+      let state = seed === undefined ? def.init(header, inheritedEventCount) : seed.state
+      const from = seed === undefined ? beforeBase : seed.seq
       const startIndex = from - baseSeq + 1
       for (let index = startIndex; index < events.length; index++) {
         const event = events[index]
