@@ -189,6 +189,8 @@ export default class FusionParticipants extends Service {
       caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
       void owner.enroll(provider, () => {
         caller.fiber.assertActive()
+        // A reloading fiber keeps its uid, so assertActive alone admits work during UNLOADING.
+        if (caller.fiber.state === FiberState.UNLOADING) throw new ExecutionBlockedError('not-live')
       }).then(completion.resolve, completion.reject)
       return completion.promise
     } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
