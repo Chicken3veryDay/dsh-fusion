@@ -37,7 +37,9 @@ kind: "package-reference"
 
 下列支持范围是桌面已有、无需图形界面即可执行的原生命令。`/permission <preset>` 使用这条原生调用路径；Desktop 的 `/model` 选择器使用独立的模型选择 API。
 
-`session/query` 是高层 SDK `run()` 发送字符串和内容块数组时使用的协议入口。普通输入保留内容块，使用既有的提示词队列。完整 SDK 识别裸 `/compact`、带非空 preset 的 `/permission <preset>`、`/plan [off|message]` 和 `/goal [objective|clear|edit objective|pause|resume]`，这些命令按官方定义 ID 识别。裸 `/permission` 或 `/权限`、`/compact extra` 以及 `/model` 等其余输入仍是普通提示词。命令缺失时也保留提示词路径；选中的 handler 失败后绝不回退。未知 preset 是原生命令错误。随已识别命令提交的编码图片块经过原生附件接纳。`session/prompt` 保留为低层排队输入入口，不经过原生 slash command 路由。
+在路由斜杠输入前，`queryCommandDefinitions` 中的所有显式条目必须存在于接收 Agent 的命令注册表中。定义缺失或被遮蔽，或配置了条目但缺少命令服务时，请求会在入队或推理前失败。请加载命令插件或从覆盖文件中移除不可用定义；普通非斜杠提示词仍可使用。
+
+`session/query` 是高层 SDK `run()` 发送字符串和内容块数组时使用的协议入口。普通输入保留内容块，使用既有的提示词队列。完整 SDK 识别裸 `/compact`、带非空 preset 的 `/permission <preset>`、`/plan [off|message]` 和 `/goal [objective|clear|edit objective|pause|resume]`，这些命令按官方定义 ID 识别。裸 `/permission` 或 `/权限`、`/compact extra` 以及 `/model` 等其余输入仍是普通提示词。内置命令缺失时也保留提示词路径；选中的 handler 失败后绝不回退。未知 preset 是原生命令错误。随已识别命令提交的编码图片块经过原生附件接纳。`session/prompt` 保留为低层排队输入入口，不经过原生 slash command 路由。
 
 Host 与桌面适配器共用 `dsh-commands/builtin` 的定义身份及中英文别名解析。`/压缩`、`/权限`、`/计划` 和 `/目标` 跟随重命名后的官方定义，执行使用当前注册名。精确名称优先，但无关的同名定义不是 SDK 内置命令，仍作为普通提示词。其他内置能力仍不属于 SDK 命令集合。
 
@@ -64,7 +66,7 @@ Host 与桌面适配器共用 `dsh-commands/builtin` 的定义身份及中英文
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `maxTokensAsSuccess` | `false` | 把 max-token 轮次或 subagent 终止报告为成功的 SDK 结果 |
-| `queryCommandDefinitions` | `[]` | `session.query` 显式允许的额外命令定义 id；重命名仍按身份匹配，无关的同名定义仍作为提示 |
+| `queryCommandDefinitions` | `[]` | `session.query` 显式允许的额外命令定义 id；重命名仍按身份匹配；定义缺失或被遮蔽时拒绝斜杠查询 |
 
 profile 组合拥有每个根 agent 的工具。`input`、`output` 与 `exit` 是仅供测试的运行时传输钩子；生产环境使用进程 stdio 与 `process.exit`。生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sdk-jsonrpc-server)是每个受支持字段的穷尽式真源。
 

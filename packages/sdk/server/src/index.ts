@@ -25,7 +25,7 @@ export const inject = ['agents', 'workingDirectory']
 export interface JsonRpcConfig {
   /** Report max-token turn/subagent termination as a successful SDK result. */
   maxTokensAsSuccess?: boolean
-  /** Exact additional command definition ids admitted by session.query; absent keeps stock routing. */
+  /** Exact additional command definition ids admitted by session.query; absent keeps stock routing. Missing ids reject slash queries. */
   queryCommandDefinitions?: string[]
   /** Transport input override; production uses `process.stdin`. */
   input?: Readable

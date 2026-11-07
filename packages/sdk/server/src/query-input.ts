@@ -6,10 +6,11 @@ import { builtinCommandName, resolveCommand } from '@deepseek-ai/dsh-commands/bu
 /**
  * Recognize compact, explicit permission changes, plan, and goal by their definition identities.
  * Canonical and Chinese aliases follow the effective registered name; unrelated exact names remain prompts.
- * Explicit additional definition ids admit their registered exact names. Other text remains a prompt.
+ * Explicit additional definition ids must be registered before slash input can be routed. Other text remains a prompt.
  * @param text - original input; the caller preserves it on the ordinary-prompt path.
  * @param commands - exact receiving Agent's current command descriptors.
  * @param additionalDefinitions - deployment opt-in by exact definition identity, never a display-name allowlist.
+ * @throws if any configured additional definition is unregistered when routing slash input.
  * @returns the supported command line using its registered name and a native-compatible separator, otherwise undefined.
  */
 export function queryCommand(
@@ -17,6 +18,10 @@ export function queryCommand(
 ): string | undefined {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/')) return undefined
+  const missing = additionalDefinitions.find(id => !commands.some(command => command.definitionId === id))
+  if (missing !== undefined) {
+    throw new Error(`SDK query command definition ${missing} is not registered on this Agent; load its plugin or remove it from queryCommandDefinitions`)
+  }
   const separator = trimmed.search(/\s/u)
   const name = separator === -1 ? trimmed.slice(1) : trimmed.slice(1, separator)
   const descriptor = resolveCommand(name, commands)

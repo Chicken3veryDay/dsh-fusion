@@ -37,7 +37,7 @@ class TextModel extends LlmAdapter {
   }
 }
 
-async function setup(registry = true, peer?: JsonRpcTransportPeer) {
+async function setup(registry = true, peer?: JsonRpcTransportPeer, queryCommandDefinitions?: readonly CommandDefinitionId[]) {
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
   await mountAgentLoopTestDependencies(ctx, { workingDirectory: true })
@@ -48,7 +48,7 @@ async function setup(registry = true, peer?: JsonRpcTransportPeer) {
     request: async () => { throw new Error('Unexpected runtime request') },
     notify: () => {},
   }
-  const server = new HarnessSdkJsonRpcServer(ctx, transport)
+  const server = new HarnessSdkJsonRpcServer(ctx, transport, queryCommandDefinitions === undefined ? {} : { queryCommandDefinitions })
   onTestFinished(async () => { await server.shutdown() })
   const initialize = () => server.initialize({ cwd: process.cwd(), provider: 'mock', model: 'mock' })
   const register = (handler: CommandDefinition['handler']) => {
@@ -92,6 +92,17 @@ describe('SDK command dispatch', () => {
       { commandId: execution.commandId, name: 'compact', args: '', source: { kind: 'user' } },
       { commandId: execution.commandId, kind, text: 'native outcome' },
     ])
+  })
+
+  it.each([true, false])('rejects an unavailable opted-in command without enqueueing input (registry: %s)', async (registry) => {
+    const definition = CommandDefinitionId('fixture/missing-preflight')
+    const h = await setup(registry, undefined, [definition])
+    await h.initialize()
+    await expect(h.server.handleRequest('session/query', {
+      sessionId: 'missing-command', contentBlocks: [{ type: 'text', text: '/fusion_preflight top' }],
+    })).rejects.toThrow(registry ? 'fixture/missing-preflight' : 'commands service')
+    const agent = h.ctx.agents.get(SessionId('missing-command'))
+    expect(agent?.session.snapshotEvents() ?? []).toEqual([])
   })
 
   it('rejects malformed content before creating a Session', async () => {
