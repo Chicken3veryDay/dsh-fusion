@@ -451,6 +451,18 @@ export interface ToolExecutionFailure {
   readonly concludesTurn?: never
 }
 
+/** Carries a failed delegated tool result through the tool body's exception path. */
+export class ToolResultError extends Error {
+  /**
+   * Preserve the delegated failure's identity, content, and attachment references.
+   * @param result - canonical failure returned by the delegated invocation.
+   */
+  constructor(readonly result: ToolExecutionFailure) {
+    super(result.error.message)
+    this.name = 'ToolResultError'
+  }
+}
+
 /** The discriminated, execution-local outcome of one tool call. */
 export type ToolExecutionResult = ToolExecutionSuccess | ToolExecutionFailure
 

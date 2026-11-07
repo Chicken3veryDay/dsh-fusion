@@ -113,6 +113,8 @@ Agent 步骤的并发上限使用 [agent-loop 配置](../agent-loop/README.zh.md
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+委托其他已注册工具的工具体可将失败结果包装为 `ToolResultError` 抛出，通过正常失败流程保留结构化错误详情和呈现内容。
+
 <details>
 <summary>实现细节——点击展开</summary>
 
