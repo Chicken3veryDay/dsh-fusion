@@ -7,9 +7,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import { materializeProfilePatch } from '@deepseek-ai/dsh-session-snapshot'
+import { COVERAGE_TEST_TIMEOUT_ENV, coverageTestTimeoutOptions } from '../../../../scripts/coverage-partitions.ts'
 
 const repo = fileURLToPath(new URL('../../../../', import.meta.url))
 const fixture = join(repo, 'packages/experimental/fusion-participants/tests/fixtures/retained-cleanup')
+// Ten sequential built-CLI processes: a shared-host lane's raised budget must reach this case, never less than one minute.
+const caseTimeout = Math.max(60_000, coverageTestTimeoutOptions(process.env[COVERAGE_TEST_TIMEOUT_ENV]).testTimeout ?? 0)
 
 it('exits the writer before matching built recovery and refuses a separately held participant', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'retained-profile-process-'))
@@ -137,4 +140,4 @@ it('exits the writer before matching built recovery and refuses a separately hel
     }
     await rm(cwd, { recursive: true, force: true })
   }
-}, 60000)
+}, caseTimeout)
