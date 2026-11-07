@@ -205,7 +205,19 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           // The owner steps while no curator is loaded, then the curator comes back.
           await h.curatorFiber?.dispose()
           await preStep(w.ctx, owner)
-          h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
+          faults.failModel = 0
+          faults.failRoute = 0
+          {
+            const before = claimsFor(owner)
+            h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
+            await quiesce(w, [owner])
+            // With no further owner step, the loading curator itself must pick up waiting work.
+            const waiting = await map().curationWork(owner)
+            const holder = map().curatorOf(owner)
+            if (waiting !== null && waiting.attempts < MAX_ATTEMPTS && (holder === null || w.ctx.agents.get(holder) === undefined)) {
+              expect(claimsFor(owner), `work ${waiting.reasons.join(',')} waits after the curator loaded`).toBeGreaterThan(before)
+            }
+          }
           break
         case 'map-reload':
           await h.curatorFiber?.dispose()

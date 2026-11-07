@@ -154,6 +154,10 @@ export class DefaultContextCurator extends Service {
       }
       while (this.tasks.size > 0) await Promise.all(this.tasks)
     }, 'contextCurator.runs()')
+    // Work accepted before this curator loaded waits in the Session logs of live roots.
+    for (const agent of this.ctx.agents.list()) {
+      if (agent.session.header.parentSession === undefined) this.trigger(agent, true)
+    }
   }
 
   /**
