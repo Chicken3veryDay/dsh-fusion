@@ -93,9 +93,13 @@ const todo = projections.todo()
 
 定义同步安装，句柄交付保持异步。注册错误使返回值拒绝。当前宏任务及其微任务结束前没有调用方观察该拒绝时，registry 将其记录为错误，而不留下未处理的拒绝，插件保持激活；发生键冲突后，其按键读取返回另一注册方的状态；owner 已不在加载或激活状态的拒绝会被丢弃。新插件在提供读取操作前等待注册完成。同步 `try/catch` 无法捕获异步注册错误。
 
+### 单元失败
+
+单元的 `init` 或 `apply` 对某个 Session 抛出时，只有该单元在该 Session 上失败。registry 丢弃该单元在该 Session 的状态，只记录一次错误日志，并记录一个 `SessionProjectionUnitError`，其中带有 `key`、`sessionId`、`phase`（`init` 或 `apply`）、`seq`（`init` 时为 `-1`），抛出值作为 `cause`。该 key 的句柄读取与已弃用的按键读取抛出此错误。被选中的客户端可见单元失败时，`snapshot(session, keys)` 抛出该错误，因此返回的 snapshot 始终是完整切面；失败的 host-only 单元与未被选中的单元不影响它。`cachedSnapshot` 与 `checkpoint` 省略该 key，因此不会有检查点行保存跳过了事件的状态。其他单元保持主动驱动与变更通知，其他 Session 不受影响。单元是确定性的，所以 registry 不会重新折叠失败的单元。该 key 的替换注册（例如修复后重新加载插件）从 `init` 重新折叠该 Session；失败注册的已保留句柄仍保持失败。
+
 ### 持久检查点
 
-系统通过 `checkpoint(session)` 为每个单元的状态创建检查点，client-visible 与 host-only 一视同仁；同级包 [session-projection-cache](../session-projection-cache/README.zh.md) 持久化这些检查点，使冷读跳过全量日志加载。检查点水位使用 `SessionSeqCursor`（空日志为 `-1`），回放起点使用 `SessionLogOffset`；`restoreFloor` 与 `restore` 实现读取流程，且不会混淆已有事件与日志间隙。
+系统通过 `checkpoint(session)` 为每个单元的状态创建检查点，client-visible 与 host-only 一视同仁，但对该 Session 已失败的单元除外；同级包 [session-projection-cache](../session-projection-cache/README.zh.md) 持久化这些检查点，使冷读跳过全量日志加载。检查点水位使用 `SessionSeqCursor`（空日志为 `-1`），回放起点使用 `SessionLogOffset`；`restoreFloor` 与 `restore` 实现读取流程，且不会混淆已有事件与日志间隙。
 
 ### Session 摘要
 
@@ -128,7 +132,7 @@ Session 摘要包含每个已注册客户端视图，但排除 `SessionProjectio
 
 ### 驱动与检查点流程
 
-一个已提交事件按注册顺序驱动每个已注册单元；原始 view 通过 `Object.is` 判定为变化的客户端可见单元会以经 schema 校验的视图与致因 seq 通知变更流。live drive 保留前后两个原始 view；snapshot 与冷读仍是彼此独立的完整读取。`checkpoint(session)` 为持久缓存返回每个单元一份独立的 `(key → {ver, seq, val})` 行；`restoreFloor` 把尾部读取锚定在最低可用水位之前一个事件处，使缩短的日志可被检出；`restore` 把持久行在存储后缀上重新折叠，丢弃任何 `ver` 不匹配或声称越过存储末尾的行。
+一个已提交事件按注册顺序驱动每个已注册单元，跳过对该 Session 已失败的单元；原始 view 通过 `Object.is` 判定为变化的客户端可见单元会以经 schema 校验的视图与致因 seq 通知变更流。live drive 保留前后两个原始 view；snapshot 与冷读仍是彼此独立的完整读取。`checkpoint(session)` 为持久缓存返回每个单元一份独立的 `(key → {ver, seq, val})` 行；`restoreFloor` 把尾部读取锚定在最低可用水位之前一个事件处，使缩短的日志可被检出；`restore` 把持久行在存储后缀上重新折叠，丢弃任何 `ver` 不匹配或声称越过存储末尾的行。
 
 </details>
 
@@ -167,6 +171,7 @@ Session 摘要包含每个已注册客户端视图，但排除 `SessionProjectio
 - **单元表是进程级的，因此 key 是否存在不能当作逐会话的能力信号**——任何 agent preset 注册的 key 都会出现在每个会话的快照里；客户端必须读值，不能把 key 缺席当作功能缺席。
 - **主动驱动逐事件触达每个单元**——按构造开销很低（全量值规则与 state/view 引用闸门），但若出现热点路径，可加按单元的事件类型预过滤。
 - **注册表 cell 只活在内存里**——重启后首次触达时靠折叠日志重建；挂载了 `dsh-session-projection-cache` 的组合改由持久行播种该折叠。
+- **只有 `init` 与 `apply` 的失败按单元隔离**——主动驱动期间，抛出的 `wire.view`、未通过 `viewSchema` 的 view 或抛出的变更监听器，仍会中止该事件剩余单元的驱动。`restore` 与 `hydrate` 一起折叠所有单元，并在第一个失败单元处抛出，因此在修复该单元前，含失败单元的 Session 无法冷读或 hydrate。
 - **单元同步纪律只有部分可机械把关**——`wire.viewSchema.parse` 能拒绝返回 Promise 的 view，但阻塞的 `apply`、或读取撕裂的非会话状态的 `apply`，只能靠评审把关。
 
 <a id="dev-note"></a>

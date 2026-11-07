@@ -93,9 +93,13 @@ The first legacy `stateOf(session, key)` read of each key logs one `ctx.logger.w
 
 Definitions install synchronously, and handle delivery remains asynchronous. Registration errors reject the returned value. When no caller observes a rejection before the current macrotask and its microtasks finish, the registry logs it as an error instead of leaving an unhandled rejection, and the plugin stays active; after a key conflict, its keyed reads return the other registrant's state; a rejection whose owner is no longer loading or active is dropped. New plugins await registration before exposing readers. Synchronous `try/catch` cannot catch asynchronous registration errors.
 
+### Unit failures
+
+A unit whose `init` or `apply` throws for a Session fails only for that unit and Session. The registry discards the unit's state for that Session, logs the failure once, and records a `SessionProjectionUnitError` with `key`, `sessionId`, `phase` (`init` or `apply`), `seq` (`-1` for `init`), and the thrown value as `cause`. Handle reads and the deprecated keyed read of that key throw this error. `snapshot(session, keys)` throws it when a selected client-visible unit failed, so a returned snapshot is always a complete cut; failed host-only and unselected units do not affect it. `cachedSnapshot` and `checkpoint` omit the key, so no checkpoint row stores state that skipped an event. Every other unit keeps its eager drive and change notifications, and other Sessions are unaffected. Units are deterministic, so the registry does not refold a failed unit. A replacement registration of the key, such as a plugin reload after a fix, folds the Session again from `init`; retained handles of the failed registration keep the failure.
+
 ### Persisted checkpoints
 
-Every unit's state is checkpointed — client-visible and host-only alike — through `checkpoint(session)`, and the sibling [session-projection-cache](../session-projection-cache/README.md) persists those checkpoints so cold reads skip full log loads. Checkpoint watermarks use `SessionSeqCursor` (`-1` for an empty log), while replay starts use `SessionLogOffset`; `restoreFloor` and `restore` implement the read recipe without conflating an existing event with a log gap.
+Every unit's state is checkpointed — client-visible and host-only alike, except a unit that failed for the Session — through `checkpoint(session)`, and the sibling [session-projection-cache](../session-projection-cache/README.md) persists those checkpoints so cold reads skip full log loads. Checkpoint watermarks use `SessionSeqCursor` (`-1` for an empty log), while replay starts use `SessionLogOffset`; `restoreFloor` and `restore` implement the read recipe without conflating an existing event with a log gap.
 
 ### Session summaries
 
@@ -128,7 +132,7 @@ The package is the Service Definition and drive role of a capability seam: the f
 
 ### Drive and checkpoint flow
 
-One committed event drives every registered unit in registration order; a client-visible unit whose raw view changes by `Object.is` notifies the change feed with its schema-validated view and the causing seq. The live drive retains its previous and current raw views; snapshots and cold reads remain complete independent reads. `checkpoint(session)` returns one detached `(key → {ver, seq, val})` row per unit for the persisted cache; `restoreFloor` anchors a tail read one event below the lowest usable watermark so a shrunk log is detected, and `restore` refolds persisted rows over a stored suffix, discarding any row whose `ver` does not match or that claims events past the stored end.
+One committed event drives every registered unit in registration order, skipping a unit that failed for the Session; a client-visible unit whose raw view changes by `Object.is` notifies the change feed with its schema-validated view and the causing seq. The live drive retains its previous and current raw views; snapshots and cold reads remain complete independent reads. `checkpoint(session)` returns one detached `(key → {ver, seq, val})` row per unit for the persisted cache; `restoreFloor` anchors a tail read one event below the lowest usable watermark so a shrunk log is detected, and `restore` refolds persisted rows over a stored suffix, discarding any row whose `ver` does not match or that claims events past the stored end.
 
 </details>
 
@@ -167,6 +171,7 @@ These limits define where the projection registry needs care at scale. They are 
 - **The unit table is process-wide, so key presence is not a per-session capability signal** — a key registered by any agent preset appears in every session's snapshot; a client must read the value rather than treat an absent key as absence of the feature.
 - **Eager drive touches every unit per event** — cheap by construction (whole-value rule and state/view reference gates), but a hot path would justify per-unit event-type prefilters.
 - **Registry cells live in memory only** — a restart rebuilds by folding the log on first touch; compositions that mount `dsh-session-projection-cache` seed that fold from persisted rows instead.
+- **Only `init` and `apply` failures are contained per unit** — during eager drive, a throwing `wire.view`, a view that fails its `viewSchema`, or a throwing change listener still stops the remaining units for that event. `restore` and `hydrate` fold every unit together and throw on the first failing unit, so a Session with a failing unit cannot be cold-read or hydrated until the unit is fixed.
 - **Synchronous unit discipline is only partially mechanical** — `wire.viewSchema.parse` rejects a Promise-returning view, but an `apply` that blocks or reads torn non-session state is a review concern.
 
 <a id="dev-note"></a>
