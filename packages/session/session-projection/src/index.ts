@@ -24,6 +24,7 @@ import type {
   Session,
   SessionEvent,
   SessionHeader,
+  SessionId,
   SessionSeqCursor,
 } from '@deepseek-ai/dsh-session'
 
@@ -54,6 +55,7 @@ export interface ProjectionHandle<S> {
    * Session events with this handle's original unit. Do not mutate the live value.
    * @param session - Session whose committed events are folded.
    * @returns the projection state at the Session's current cursor.
+   * @throws {SessionProjectionUnitError} when this unit's fold failed for the Session.
    */
   stateOf(session: Session): S
   /**
@@ -195,6 +197,41 @@ export interface ProjectionCheckpointRow {
 /** Checkpoint rows keyed by projection key (one session's persisted cache value). */
 export type ProjectionCheckpoint = Record<string, ProjectionCheckpointRow>
 
+/** The unit function that threw while folding one Session: `init` or `apply`. */
+export type SessionProjectionUnitPhase = 'init' | 'apply'
+
+/**
+ * One registered unit's fold threw for one Session. The registry records the
+ * failure for that unit and Session, logs it once, and discards the unit's
+ * state there: reads of the key throw this error, eager drive and
+ * change notification skip the unit for that Session, and checkpoints omit its
+ * row. Other units and other Sessions are unaffected. The failure lasts as long
+ * as the registration; a replacement registration of the key (for example a
+ * plugin reload) folds the Session again from `init`.
+ */
+export class SessionProjectionUnitError extends Error {
+  override readonly name = 'SessionProjectionUnitError'
+
+  /**
+   * @param key - projection key of the failed unit.
+   * @param sessionId - Session whose fold failed.
+   * @param phase - unit function that threw.
+   * @param seq - seq of the event being applied; `-1` when `init` threw.
+   * @param cause - the value the unit threw.
+   */
+  constructor(
+    readonly key: string,
+    readonly sessionId: SessionId,
+    readonly phase: SessionProjectionUnitPhase,
+    readonly seq: SessionSeqCursor,
+    cause: unknown,
+  ) {
+    const at = phase === 'init' ? 'init' : `apply at seq ${String(seq)}`
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    super(`session projection ${JSON.stringify(key)} failed for Session "${sessionId}" in ${at}: ${reason}`, { cause })
+  }
+}
+
 /** Type-erased unit view the drive machinery works with (the registration contract already proved the typed form). */
 interface ErasedDefinition {
   key: string
@@ -233,6 +270,8 @@ interface UnitCell {
 interface Registration {
   readonly def: ErasedDefinition
   readonly cells: WeakMap<Session, UnitCell>
+  /** Sessions whose fold of this unit threw; such a Session has no cell. */
+  readonly failures: WeakMap<Session, SessionProjectionUnitError>
   /** Live registrants sharing this unit; the last one out removes the key. */
   refs: number
 }
@@ -255,6 +294,9 @@ function cursorBefore(offset: SessionLogOffset): SessionSeqCursor {
  * Registrants sharing a key share one unit and are counted. The last release
  * removes the unit from live drives, checkpoints, and client snapshots; retained
  * handles still fold new events on demand using the original unit.
+ * A unit whose `init` or `apply` throws for a Session fails only for that unit
+ * and Session ({@link SessionProjectionUnitError}); every other unit keeps its
+ * eager drive.
  */
 export class SessionProjectionRegistry extends Service {
   private readonly registrations = new Map<string, Registration>()
@@ -273,12 +315,8 @@ export class SessionProjectionRegistry extends Service {
     ctx.on('session/created', (session: Session) => {
       if (session.seq !== 0) return
       for (const registration of this.registrations.values()) {
-        if (registration.cells.has(session)) continue
-        registration.cells.set(session, {
-          state: registration.def.init(session.header, session.inheritedEventCount),
-          observedSeq: -1,
-          views: [undefined, undefined],
-        })
+        if (registration.cells.has(session) || registration.failures.has(session)) continue
+        this.cellOrFailure(registration, session)
       }
     })
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
@@ -382,7 +420,7 @@ export class SessionProjectionRegistry extends Service {
       const key = erased.key
       const existing = this.registrations.get(key)
       if (existing === undefined) {
-        registration = { def: erased, cells: new WeakMap(), refs: 1 }
+        registration = { def: erased, cells: new WeakMap(), failures: new WeakMap(), refs: 1 }
         this.registrations.set(key, registration)
         this.summaryKeySet = undefined
       } else {
@@ -427,6 +465,7 @@ export class SessionProjectionRegistry extends Service {
    * @param session - Session whose committed events are folded.
    * @param key - key of the registered projection.
    * @returns the current state, or `undefined` when the unit is not registered.
+   * @throws {SessionProjectionUnitError} when this key's fold failed for the Session.
    * @deprecated Use an awaited registration's `handle.stateOf(session)` or the owning domain service.
    */
   stateOf(session: Session, key: string): unknown {
@@ -461,9 +500,14 @@ export class SessionProjectionRegistry extends Service {
    * the watermark cache (missing cells fold lazily over the in-memory log).
    * Fully synchronous — every value and `asOfSeq` reflect the same log
    * position. Each value passes its unit's `viewSchema` before leaving.
+   * A snapshot is complete or absent: when a selected client-visible unit has
+   * failed for the Session it throws that unit's error (the first in
+   * registration order) instead of omitting the key. Failed host-only or
+   * unselected units do not affect it.
    * @param session - the session whose projection values are read.
    * @param keys - optional client-visible outputs; state materialization remains complete.
    * @returns the snapshot; `values` is empty when no selected client-visible unit is registered.
+   * @throws {SessionProjectionUnitError} when a selected client-visible unit failed for the Session.
    */
   snapshot(
     session: Session,
@@ -484,7 +528,7 @@ export class SessionProjectionRegistry extends Service {
   /**
    * Read only already-materialized client-visible cells without folding history.
    * Values may trail the live Session and are therefore hints, not a complete
-   * baseline. Missing cells are omitted.
+   * baseline. Missing cells, including those of units failed for the Session, are omitted.
    * @param session - attached Session whose cached cells are inspected.
    * @param keys - optional wire keys to view.
    * @returns the lowest common cached cut, or `undefined` when no wire cell exists.
@@ -543,14 +587,16 @@ export class SessionProjectionRegistry extends Service {
    * cell reference: the watermark cache is this registry's authoritative
    * mutable state, and a caller reaching the live reference could corrupt
    * every subsequent snapshot and frame through it (plain JSON by the unit
-   * contract, so the clone is total).
+   * contract, so the clone is total). A unit failed for the Session has no
+   * trusted state and gets no row, so a later restore refolds that key.
    * @param session - the session whose unit states are checkpointed.
-   * @returns one row per registered key.
+   * @returns one row per registered key that has not failed for the Session.
    */
   checkpoint(session: Session): ProjectionCheckpoint {
     const rows: ProjectionCheckpoint = {}
     for (const registration of this.registrations.values()) {
-      const cell = this.cellFor(registration, session)
+      const cell = this.cellOrFailure(registration, session)
+      if (cell instanceof SessionProjectionUnitError) continue
       rows[registration.def.key] = {
         ver: registration.def.stateVersion,
         seq: cell.observedSeq,
@@ -739,6 +785,7 @@ export class SessionProjectionRegistry extends Service {
       if (row === undefined) continue
       const current = registration.cells.get(session)
       if (current !== undefined && current.observedSeq > row.seq) continue
+      registration.failures.delete(session)
       registration.cells.set(session, {
         state: row.val,
         observedSeq: row.seq,
@@ -748,9 +795,9 @@ export class SessionProjectionRegistry extends Service {
     return restored.snapshot
   }
 
-  /** Materialize every registered unit cell at the Session's current cursor. */
+  /** Materialize every registered unit cell at the Session's current cursor; failed units stay recorded. */
   private materializeCells(session: Session): void {
-    for (const registration of this.registrations.values()) this.cellFor(registration, session)
+    for (const registration of this.registrations.values()) this.cellOrFailure(registration, session)
   }
 
   /** Fold one unit from init over `events`, producing a cell watermarked at the last folded event. */
@@ -760,25 +807,67 @@ export class SessionProjectionRegistry extends Service {
     inheritedEventCount: SessionLogOffset,
     events: readonly SessionEvent[],
   ): UnitCell {
-    let state = def.init(header, inheritedEventCount)
-    for (const event of events) state = def.apply(state, event)
+    let state: unknown
+    try {
+      state = def.init(header, inheritedEventCount)
+    } catch (cause) {
+      throw new SessionProjectionUnitError(def.key, header.id, 'init', -1, cause)
+    }
+    for (const event of events) state = this.applyUnit(def, header.id, state, event)
     return { state, observedSeq: (events.at(-1)?.seq ?? -1), views: [undefined, undefined] }
   }
 
-  /** Read (or lazily build, folding the full in-memory log) one unit's cell. */
+  /** Apply one event, attributing a throw to the unit and Session. */
+  private applyUnit(def: ErasedDefinition, sessionId: SessionId, state: unknown, event: SessionEvent): unknown {
+    try {
+      return def.apply(state, event)
+    } catch (cause) {
+      throw new SessionProjectionUnitError(def.key, sessionId, 'apply', event.seq, cause)
+    }
+  }
+
+  /**
+   * Record one unit's failure for one Session: discard its cell and log once.
+   * Later reads and drives find the record and neither refold nor log again.
+   */
+  private recordFailure(registration: Registration, session: Session, error: SessionProjectionUnitError): void {
+    registration.cells.delete(session)
+    registration.failures.set(session, error)
+    this.ctx.logger.error(`${error.message}. Reads of this projection key throw for this Session, it gets no checkpoint row, and other projection keys keep updating; reload the plugin that registers ${JSON.stringify(error.key)} after fixing the unit.`)
+  }
+
+  /** Read one unit's cell, throwing its recorded failure for the Session. */
   private cellFor(registration: Registration, session: Session): UnitCell {
+    const cell = this.cellOrFailure(registration, session)
+    if (cell instanceof SessionProjectionUnitError) throw cell
+    return cell
+  }
+
+  /**
+   * Read (or lazily build, folding the full in-memory log) one unit's cell, or
+   * return the unit's failure for the Session. A throwing unit is recorded here.
+   */
+  private cellOrFailure(registration: Registration, session: Session): UnitCell | SessionProjectionUnitError {
+    const failure = registration.failures.get(session)
+    if (failure !== undefined) return failure
     let cell = registration.cells.get(session)
-    if (cell === undefined) {
-      cell = this.buildCell(
-        registration.def,
-        session.header,
-        session.inheritedEventCount,
-        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-        session.snapshotEvents(),
-      )
-      registration.cells.set(session, cell)
-    } else {
-      this.advanceCell(registration.def, cell, session, cursorBefore(session.seq))
+    try {
+      if (cell === undefined) {
+        cell = this.buildCell(
+          registration.def,
+          session.header,
+          session.inheritedEventCount,
+          // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+          session.snapshotEvents(),
+        )
+        registration.cells.set(session, cell)
+      } else {
+        this.advanceCell(registration.def, cell, session, cursorBefore(session.seq))
+      }
+    } catch (error) {
+      if (!(error instanceof SessionProjectionUnitError)) throw error
+      this.recordFailure(registration, session, error)
+      return error
     }
     return cell
   }
@@ -797,7 +886,7 @@ export class SessionProjectionRegistry extends Service {
       if (event === undefined || event.seq !== seq) {
         throw new Error(`session projection ${JSON.stringify(def.key)} cannot advance across missing seq ${String(seq)}`)
       }
-      const next = def.apply(cell.state, event)
+      const next = this.applyUnit(def, session.id, cell.state, event)
       if (!Object.is(next, cell.state)) {
         cell.views[0] = cell.views[1]
         cell.views[1] = undefined
@@ -807,32 +896,43 @@ export class SessionProjectionRegistry extends Service {
     }
   }
 
-  /** Eager drive: pass one committed event through every unit; notify on changed raw view references. */
+  /**
+   * Eager drive: pass one committed event through every unit; notify on changed raw view references.
+   * A unit that throws is recorded as failed for the Session and skipped; later units still run.
+   */
   private drive(session: Session, event: SessionEvent): void {
     for (const registration of this.registrations.values()) {
+      if (registration.failures.has(session)) continue
       let cell = registration.cells.get(session)
       if (cell !== undefined && cell.observedSeq >= event.seq) continue
-      if (cell === undefined) {
-        // Late build mid-stream: fold history before this event (seq = log
-        // index, so the prefix slice is exact), then take the normal gate.
-        cell = this.buildCell(
-          registration.def,
-          session.header,
-          session.inheritedEventCount,
-          // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-          session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(event.seq)),
-        )
-        registration.cells.set(session, cell)
-      } else {
-        this.advanceCell(
-          registration.def,
-          cell,
-          session,
-          event.seq === 0 ? -1 : SessionSeq(event.seq - 1),
-        )
+      let next: unknown
+      try {
+        if (cell === undefined) {
+          // Late build mid-stream: fold history before this event (seq = log
+          // index, so the prefix slice is exact), then take the normal gate.
+          cell = this.buildCell(
+            registration.def,
+            session.header,
+            session.inheritedEventCount,
+            // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+            session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(event.seq)),
+          )
+          registration.cells.set(session, cell)
+        } else {
+          this.advanceCell(
+            registration.def,
+            cell,
+            session,
+            event.seq === 0 ? -1 : SessionSeq(event.seq - 1),
+          )
+        }
+        next = this.applyUnit(registration.def, session.id, cell.state, event)
+      } catch (error) {
+        if (!(error instanceof SessionProjectionUnitError)) throw error
+        this.recordFailure(registration, session, error)
+        continue
       }
       const previousState = cell.state
-      const next = registration.def.apply(previousState, event)
       const changed = !Object.is(next, previousState)
       cell.state = next
       cell.observedSeq = event.seq

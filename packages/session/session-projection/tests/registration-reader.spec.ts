@@ -1,7 +1,7 @@
 /** Retained readers follow Session events independently of registry participation. */
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import SessionProjectionRegistry, { SessionProjectionUnitError } from '@deepseek-ai/dsh-session-projection'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
@@ -117,7 +117,15 @@ describe('retained projection readers', () => {
     } catch (error) {
       caught = error
     }
-    expect(caught).toBe(failure)
+    expect(caught).toBeInstanceOf(SessionProjectionUnitError)
+    expect(caught).toMatchObject({ key: 'test/bound-failure', sessionId: session.id, phase: 'init', cause: failure })
+    let again: unknown
+    try {
+      broken.stateOf(session)
+    } catch (error) {
+      again = error
+    }
+    expect(again).toBe(caught)
   })
 
   it('preserves undefined state without substituting a value', async () => {
