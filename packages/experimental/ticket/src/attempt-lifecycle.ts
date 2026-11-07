@@ -46,13 +46,14 @@ export type AttemptEvent =
   | { readonly type: 'producers-settled'; readonly outcome: AttemptOutcome }
   | { readonly type: 'cleanup-failed'; readonly outcome: AttemptOutcome }
   | { readonly type: 'stop-failed' }
+  | { readonly type: 'cancel-failed' }
   | { readonly type: 'reconciled' }
 
 /** Event names in specification order. */
 export const attemptEventTypes = [
   'caller-abort', 'owner-disposed', 'teardown', 'admitted', 'admission-unflushed', 'admission-refused', 'retry',
   'worktree-start', 'activation-start', 'effect-established', 'effect-refused', 'effect-failed', 'stage-failed', 'publish', 'settle',
-  'dispose', 'producers-settled', 'cleanup-failed', 'stop-failed', 'reconciled',
+  'dispose', 'producers-settled', 'cleanup-failed', 'stop-failed', 'cancel-failed', 'reconciled',
 ] as const satisfies readonly AttemptEvent['type'][]
 
 /** State names in specification order. */
@@ -124,7 +125,9 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
     case 'running':
       switch (event.type) {
         case 'caller-abort':
-        case 'retry': return state
+        case 'retry':
+        // A producer that refused one cancellation request keeps running; only its own settlement signal ends it.
+        case 'cancel-failed': return state
         case 'owner-disposed':
         case 'teardown':
         case 'dispose': return { kind: 'stopping', cancel: true }
@@ -135,7 +138,9 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
       switch (event.type) {
         case 'caller-abort':
         case 'retry':
-        case 'settle': return state
+        case 'settle':
+        // The current stop fails; it alone knows whether a result was captured, so it chooses `stop-failed` or `cleanup-failed`.
+        case 'cancel-failed': return state
         case 'owner-disposed':
         case 'teardown':
         case 'dispose': return stopPhase('stopping', true, state.captured)
@@ -150,7 +155,8 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
       switch (event.type) {
         case 'caller-abort':
         case 'retry':
-        case 'owner-disposed': return state
+        case 'owner-disposed':
+        case 'cancel-failed': return state
         case 'teardown':
         case 'dispose': return stopPhase('stopping', true, state.captured)
         case 'settle': return stopPhase('stopping', state.cancel, state.captured)
@@ -174,14 +180,17 @@ export function transitionAttempt(state: AttemptState, event: AttemptEvent): Att
         case 'teardown':
         case 'retry':
         case 'settle':
-        case 'dispose': return state
+        case 'dispose':
+        // A cancellation request sent before the hand-off may fail after it; the producers' outcome is already known.
+        case 'cancel-failed': return state
         default: return reject(state, event)
       }
     case 'released':
       switch (event.type) {
         case 'caller-abort':
         case 'owner-disposed':
-        case 'teardown': return state
+        case 'teardown':
+        case 'cancel-failed': return state
         default: return reject(state, event)
       }
     default: return assertNever(state)
@@ -232,6 +241,8 @@ function transitionPreparation(state: PreparationState, event: AttemptEvent): At
     case 'producers-settled':
     case 'cleanup-failed':
     case 'stop-failed':
+    // No producer handle exists before publication, apart from an activation whose release the stop observes.
+    case 'cancel-failed':
     case 'reconciled': return reject(state, event)
     default: return assertNever(event)
   }

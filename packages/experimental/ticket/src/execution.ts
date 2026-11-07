@@ -79,8 +79,10 @@ export interface TicketExecutionHandle {
 /** One Ticket Job producer. Once Ticket started the producer, only the producer's own `done` settles `done`; Ticket settles
  * it itself only when it never started the producer. */
 interface Producer {
-  /** Deliver one cancellation request; a throwing producer cancel propagates. */
-  cancel(): void
+  /** Deliver one cancellation request; a throwing producer cancel propagates.
+   * @param reason - Text forwarded to the producer's cancel hook.
+   */
+  cancel(reason: string): void
   readonly done: Promise<JobOutcome>
   finished: boolean
 }
@@ -145,9 +147,12 @@ export class TicketExecutionService extends Service {
   /** Execution reservations: one live run per root, Ticket and assignment, from creation until it is handed or released. */
   private readonly runs = new Map<string, AttemptRun>()
   private closing = false
+  /** Captured at construction: a run of a torn-down generation still reports through it. */
+  private readonly logger: Context['logger']
 
   constructor(ctx: Context, private readonly config: TicketExecutionConfig) {
     super(ctx, 'ticketExecution')
+    this.logger = ctx.logger
     if (!Number.isSafeInteger(config.settlementTimeoutMs) || config.settlementTimeoutMs <= 0) {
       throw new TicketError('Ticket execution settlementTimeoutMs must be a positive safe integer', 'TICKET_INVALID_INPUT')
     }
@@ -322,7 +327,7 @@ export class TicketExecutionService extends Service {
     const retained = run.retained
     if (retained === undefined || run.joined !== undefined) return
     run.joined = true
-    const { logger } = this.ctx
+    const { logger } = this
     const { attemptId } = run
     const activation = run.activation
     const joins: Promise<unknown>[] = [...run.producers.values()].map(producer => producer.done)
@@ -586,14 +591,14 @@ export class TicketExecutionService extends Service {
       run.jobs.push(id)
       const entry: Producer = {
         finished: false,
-        cancel: () => {
+        cancel: (reason) => {
           if (entry.finished) return
           // A terminal or removed registry record says nothing about the producer, so the request then goes to it directly.
           const record = this.ctx.jobs.list(run.caller.id).find(job => job.id === id)
-          if (record?.status === 'running' || record?.status === 'stopping') this.ctx.jobs.kill(id, run.caller.id, 'Ticket execution released')
+          if (record?.status === 'running' || record?.status === 'stopping') this.ctx.jobs.kill(id, run.caller.id, reason)
           else {
             producer.cancelled = true
-            producer.hooks?.cancel('Ticket execution released')
+            producer.hooks?.cancel(reason)
           }
         },
         done: done.promise.then((result) => { entry.finished = true; return result }, (): JobOutcome => {
@@ -639,7 +644,10 @@ export class TicketExecutionService extends Service {
         }
       }
       if (signal !== undefined) {
-        const cancel = () => this.ctx.jobs.kill(id, run.caller.id, 'Ticket execution caller cancelled')
+        // An AbortSignal listener has no caller to receive a throw, so a refused request becomes the attempt's `cancel-failed`.
+        const cancel = () => {
+          try { entry.cancel('Ticket execution caller cancelled') } catch (error: unknown) { this.cancelFailed(run, error) }
+        }
         const cleanup = () => { signal.removeEventListener('abort', cancel); run.listeners.delete(cleanup) }
         run.listeners.add(cleanup)
         if (signal.aborted) cancel()
@@ -652,16 +660,28 @@ export class TicketExecutionService extends Service {
     return operation
   }
 
-  /** A cancellation request that throws is a failed cancel: it fails the current stop, never settles a producer. */
+  /** A cancellation request that throws is a failed cancel, which never settles a producer. The attempt consumes it as
+   * `cancel-failed`: inside a stop it fails that stop; otherwise the producer may keep running, and only its own settlement
+   * signal, which `settle()`, `dispose()` and the retained reservation await, ends it. */
   private cancelFailed(run: AttemptRun, error: unknown): void {
-    run.stopFailure?.reject(asError(error, 'Ticket producer cancellation failed'))
+    const failure = new TicketError(`A producer of Ticket attempt "${run.attemptId}" refused a cancellation request`,
+      'TICKET_ATTEMPT_STATE', { cause: error })
+    const next = this.apply(run, { type: 'cancel-failed' })
+    if (next.kind === 'stopping') {
+      run.stopFailure?.reject(failure)
+      return
+    }
+    const disposition = isTerminal(next) ? 'the attempt had already ended, so its outcome stands'
+      : 'the producer may still be running, so the attempt keeps its reservation until the producer settles; dispose() on its '
+        + 'execution handle requests cancellation again'
+    this.logger.warn(`${failure.message}; ${disposition}: ${String(error)}`)
   }
 
   /** Send one cancellation request to every unfinished producer. */
   private cancelProducers(run: AttemptRun): void {
     for (const producer of run.producers.values()) {
       if (producer.finished) continue
-      try { producer.cancel() } catch (error: unknown) { this.cancelFailed(run, error) }
+      try { producer.cancel('Ticket execution released') } catch (error: unknown) { this.cancelFailed(run, error) }
     }
     // The stop's observation reads the activation's release verdict from the same memoized disposal.
     if (run.activation !== undefined) void run.activation.dispose().catch(() => {})
@@ -736,7 +756,7 @@ export class TicketExecutionService extends Service {
     if (recorder === undefined) return Promise.reject(new TicketError('Ticket attempt has no admission to record', 'TICKET_RECOVERY_FAILED'))
     const write = recorder.update(stage, { status: 'unknown', diagnostics: [uncertaintyDiagnostic(stage, captured)] }).then(() => {})
     run.recordings.set(stage, write)
-    const { logger } = this.ctx
+    const { logger } = this
     void write.then(() => { run.recordings.delete(stage) }, (error: unknown) => {
       run.recordings.delete(stage)
       logger.warn(`Ticket attempt "${run.attemptId}" is unknown in memory, but recording it failed; the reservation is retained: ${String(error)}`)
