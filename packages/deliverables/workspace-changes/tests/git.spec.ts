@@ -1,5 +1,5 @@
 /** Git command bounds, snapshot recovery, and diff failure reporting. */
-import { chmod, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -60,6 +60,17 @@ describe('GitRunner', () => {
 })
 
 describe('snapshots and diffs', () => {
+  // Windows symlink creation requires a host privilege this fixture does not request.
+  it.skipIf(process.platform === 'win32')('propagates an unreadable index copy and removes its private scratch index', async () => {
+    const cwd = await scratchDir('dsh-git-index-copy-', cleanups)
+    const scratch = await scratchDir('dsh-git-index-scratch-', cleanups)
+    await symlink('index', join(cwd, 'index'))
+    const { git: runnerGit } = await runner()
+    const workspace = { root: cwd, gitDir: cwd, scratch, env: {}, excludes: [] }
+    await expect(snapshotTree(runnerGit, workspace, signal)).rejects.toMatchObject({ code: 'ELOOP' })
+    expect(await readdir(scratch)).toEqual([])
+  })
+
   it('snapshots a repository whose index holds unmerged entries without touching that index', async () => {
     const cwd = await scratchDir('dsh-git-conflict-', cleanups)
     git(cwd, 'init', '-q', '-b', 'main')
