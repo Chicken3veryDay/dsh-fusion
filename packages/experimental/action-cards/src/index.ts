@@ -36,6 +36,9 @@ const FINAL_PHASES: readonly string[] = ['dismissed', ...DERIVED_PHASES]
 const SKILL_TOOL = 'skill'
 const skillArguments = z.object({ name: z.string() })
 
+/** Guidance an accepted call returns, in its rendered result and in the value a `run_code` program receives. */
+const CARD_NOTICE = 'Card shown below your answer. Do not restate it.'
+
 const STATUS_PREAMBLE = 'Latest status of action cards from user actions and background work. '
   + 'These are status facts, not a request to start or retry work. Use these receipts instead of the earlier proposal when describing progress.'
 const STATUS_CLOSING = 'Continue with the user’s current request.'
@@ -202,10 +205,11 @@ export class ActionCards extends TypertRemoteService {
         schema: {
           type: 'object', additionalProperties: false,
           properties: {
-            action: { type: 'string', required: true }, title: { type: 'string', required: true }, invitation: { type: 'string', required: true },
+            action: { type: 'string', required: true }, title: { type: 'string', required: true },
+            notice: { type: 'string', required: true }, invitation: { type: 'string', required: true },
           },
         },
-        render: (_args, value) => [{ type: 'text', text: `Card shown below your answer. Do not restate it. ${value.invitation}` }],
+        render: (_args, value) => [{ type: 'text', text: `${value.notice} ${value.invitation}` }],
       },
       execute: (args, exec) => Promise.resolve(this.propose(args, exec)),
     }), { when: ({ agent }) => this.declares(agent) })
@@ -415,7 +419,7 @@ export class ActionCards extends TypertRemoteService {
   private propose(
     args: { readonly action: string; readonly title: string; readonly brief: string; readonly details: ActionCardFields },
     exec: ToolRunContext,
-  ): { action: string; title: string; invitation: string } {
+  ): { action: string; title: string; notice: string; invitation: string } {
     const agent = exec.agent
     // Only a live root can act on a card, so a subagent's card could never be used. A call from the root's
     // `run_code` program is logged as a nested dispatch, which the projection admits like a direct call.
@@ -440,7 +444,7 @@ export class ActionCards extends TypertRemoteService {
       throw new ActionCardError('One card per turn; the earlier card stands.', 'ACTION_CARD_LIMIT')
     }
     this.accepted.set(agent, { turn, callId: exec.callId })
-    return { action: args.action, title: args.title.trim(), invitation: kind.invitation }
+    return { action: args.action, title: args.title.trim(), notice: CARD_NOTICE, invitation: kind.invitation }
   }
 
   private isStopping(): boolean {

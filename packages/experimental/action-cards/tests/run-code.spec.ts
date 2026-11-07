@@ -54,4 +54,9 @@ it('turns a propose_action call made from run_code into a card after a skill loa
   expect(JSON.stringify(card.data.content)).toContain(INVITATION)
   const callId = card.data.subCallId
   expect(ctx.actionCards.view(agent.session).proposals).toEqual({ [callId]: { callId, turn: 1, ...proposal } })
+  // The program returned the value propose_action resolved to, so the model reads the same guidance a direct call renders.
+  const program = events.find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'card')
+  if (program?.type !== 'tool/result') throw new Error('expected the run_code result')
+  expect(JSON.stringify(program.data.message.content)).toContain('Card shown below your answer. Do not restate it.')
+  expect(JSON.stringify(program.data.message.content)).toContain(INVITATION)
 })
