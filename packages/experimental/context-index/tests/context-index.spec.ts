@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,17 +6,21 @@ import { Context } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
-import { FsError, type FsDirEntry, type FsTarget } from '@deepseek-ai/dsh-fs'
+import { FsError, FsVersion, type FsDirEntry, type FsInfo, type FsTarget } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ContextIndexService, { ContextIndexError, ContextSectionIdOf, type Config, type ContextSectionId } from '../src/index.ts'
 import { ConfigSchema, resolveConfig } from '../src/config.ts'
 import { contentHash } from '../src/ids.ts'
+import { LISTING_SETTLE_MS } from '../src/sources.ts'
 
 /** Local filesystem with call recording, failure injection, and a barrier on reads. */
 class ProbeFileSystem extends LocalFileSystem {
   readCalls: string[] = []
+  listCalls: string[] = []
   readSignals: AbortSignal[] = []
+  /** Directories, by path suffix, whose version `stat` reports as this fixed value. */
+  pinned = new Map<string, FsVersion>()
   failRead = new Set<string>()
   failList = new Set<string>()
   gate: Promise<void> | undefined
@@ -33,7 +37,14 @@ class ProbeFileSystem extends LocalFileSystem {
     return super.readBytes(target, signal, maxBytes)
   }
 
+  override async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
+    const info = await super.stat(target, signal)
+    const pinned = [...this.pinned].find(([suffix]) => target.displayPath.endsWith(suffix))?.[1]
+    return info === undefined || pinned === undefined ? info : { ...info, version: pinned }
+  }
+
   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
+    this.listCalls.push(target.displayPath)
     for (const suffix of this.failList) {
       if (target.displayPath.endsWith(suffix)) throw new FsError('injected list failure', 'FS_PERMISSION_DENIED')
     }
@@ -369,6 +380,107 @@ describe('diagnostics', () => {
       ['limit-exceeded', `${DOCS}/sub/deeper`],
       ['limit-exceeded', `${DOCS}/big.md`],
     ])
+  })
+})
+
+describe('documentation listings across refreshes', () => {
+  /** A documentation tree whose directories were last changed a minute ago, so any later change gives them a new version. */
+  async function tree(): Promise<World> {
+    const w = await world()
+    write(join(w.project, DOCS, 'a', 'one.md'), '# One\n')
+    write(join(w.project, DOCS, 'b', 'two.md'), '# Two\n')
+    const past = new Date(Date.now() - 60_000)
+    for (const directory of ['a', 'b', '']) utimesSync(join(w.project, DOCS, directory), past, past)
+    await w.index.snapshot(scopeOf(w))
+    w.fs.listCalls = []
+    return w
+  }
+  const paths = async (w: World): Promise<string[]> => (await w.index.snapshot(scopeOf(w))).sources.map(source => source.path)
+
+  it('lists no unchanged directory again and still sees an edited file', async () => {
+    const w = await tree()
+    write(join(w.project, DOCS, 'a', 'one.md'), '# One\n\nEdited.\n')
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sections.find(section => section.path === `${DOCS}/a/one.md`)?.hash).toBe(contentHash('# One\n\nEdited.\n'))
+    expect(w.fs.listCalls).toEqual([])
+  })
+
+  it('lists only the directory whose entries changed for an added, renamed, or deleted file', async () => {
+    const w = await tree()
+    write(join(w.project, DOCS, 'a', 'three.md'), '# Three\n')
+    expect(await paths(w)).toEqual([`${DOCS}/a/one.md`, `${DOCS}/a/three.md`, `${DOCS}/b/two.md`])
+    expect(w.fs.listCalls.map(path => path.slice(w.project.length + 1))).toEqual([`${DOCS}/a`])
+    w.fs.listCalls = []
+    renameSync(join(w.project, DOCS, 'b', 'two.md'), join(w.project, DOCS, 'b', 'deux.md'))
+    expect(await paths(w)).toEqual([`${DOCS}/a/one.md`, `${DOCS}/a/three.md`, `${DOCS}/b/deux.md`])
+    expect(w.fs.listCalls.map(path => path.slice(w.project.length + 1))).toEqual([`${DOCS}/b`])
+    rmSync(join(w.project, DOCS, 'a', 'three.md'))
+    rmSync(join(w.project, DOCS, 'b'), { recursive: true })
+    expect(await paths(w)).toEqual([`${DOCS}/a/one.md`])
+  })
+
+  it('lists a directory once more after its version held for the settle interval, so an entry that kept the version appears', async () => {
+    const w = await world()
+    write(join(w.project, DOCS, 'one.md'), '# One\n')
+    // A coarse timestamp leaves the version unchanged when an entry is added in the same step.
+    w.fs.pinned.set(`/${DOCS}`, FsVersion('pinned-docs-version'))
+    const now = performance.now.bind(performance)
+    let elapsed = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now() + elapsed)
+    await w.index.snapshot(scopeOf(w))
+    write(join(w.project, DOCS, 'two.md'), '# Two\n')
+    w.fs.listCalls = []
+    expect(await paths(w), 'inside the interval the listing is reused').toEqual([`${DOCS}/one.md`])
+    expect(w.fs.listCalls).toEqual([])
+    elapsed += LISTING_SETTLE_MS
+    expect(await paths(w), 'after the interval the directory is listed once more').toEqual([`${DOCS}/one.md`, `${DOCS}/two.md`])
+    expect(w.fs.listCalls).toHaveLength(1)
+    elapsed += 10 * LISTING_SETTLE_MS
+    await w.index.snapshot(scopeOf(w))
+    expect(w.fs.listCalls, 'a settled listing is trusted while the version holds').toHaveLength(1)
+  })
+})
+
+describe('latest refresh and last reads', () => {
+  it('reports the latest committed refresh of a directory without refreshing', async () => {
+    const w = await world()
+    write(join(w.project, 'AGENTS.md'), '# A\nx\n')
+    write(join(w.project, 'pkg', 'AGENTS.md'), '# P\n')
+    expect(w.index.latest(scopeOf(w))).toBeUndefined()
+    expect(w.index.refreshes()).toBe(0)
+    const first = await w.index.snapshot(scopeOf(w))
+    expect(w.index.latest(scopeOf(w))).toEqual({ snapshot: first, refresh: 1 })
+    await w.index.snapshot(scopeOf(w, 'pkg'))
+    await w.index.snapshot(scopeOf(w))
+    expect(w.index.refreshes()).toBe(3)
+    const reads = w.fs.readCalls.length
+    write(join(w.project, 'AGENTS.md'), '# A\nchanged\n')
+    expect(w.index.latest(scopeOf(w))).toEqual({ snapshot: first, refresh: 3 })
+    expect(w.fs.readCalls).toHaveLength(reads)
+    expect(() => w.index.latest({ workingDirectory: 'relative' })).toThrow(ContextIndexError)
+  })
+
+  it('remembers the hash each section was last read as until the section is gone', async () => {
+    const w = await world({ maxIndexedDirectories: 1 })
+    write(join(w.project, 'AGENTS.md'), '# A\nx\n')
+    write(join(w.project, DOCS, 'guide.md'), '# Guide\nread me\n')
+    const sections = (await w.index.snapshot(scopeOf(w))).sections
+    const guide = sections.find(section => section.path === `${DOCS}/guide.md`)!
+    expect(w.index.lastRead(scopeOf(w)).size).toBe(0)
+    await w.index.read(scopeOf(w), [guide.id])
+    write(join(w.project, DOCS, 'guide.md'), '# Guide\nedited\n')
+    const edited = (await w.index.snapshot(scopeOf(w))).sections.find(section => section.id === guide.id)!
+    expect(edited.hash).not.toBe(guide.hash)
+    expect([...w.index.lastRead(scopeOf(w))], 'the text read before the edit').toEqual([[guide.id, guide.hash]])
+    await w.index.read(scopeOf(w), [guide.id])
+    expect(w.index.lastRead(scopeOf(w)).get(guide.id)).toBe(edited.hash)
+    rmSync(join(w.project, DOCS, 'guide.md'))
+    await w.index.snapshot(scopeOf(w))
+    expect(w.index.lastRead(scopeOf(w)).size, 'a deleted section has no last read').toBe(0)
+    await w.index.read(scopeOf(w), [sections[0]!.id])
+    write(join(w.project, 'pkg', 'AGENTS.md'), '# P\n')
+    await w.index.snapshot(scopeOf(w, 'pkg'))
+    expect(w.index.lastRead(scopeOf(w)).size, 'an evicted directory keeps no reads').toBe(0)
   })
 })
 

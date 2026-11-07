@@ -1056,6 +1056,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   MissionId: 'packages/experimental/ticket/README.md',
   MissionView: 'packages/experimental/ticket/README.md',
   ContextIndexScope: 'packages/experimental/context-index/README.md',
+  ContextIndexRefresh: 'packages/experimental/context-index/README.md',
   ContextIndexSnapshot: 'packages/experimental/context-index/README.md',
   ContextReadBudget: 'packages/experimental/context-index/README.md',
   ContextReadResult: 'packages/experimental/context-index/README.md',

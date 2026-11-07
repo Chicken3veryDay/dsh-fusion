@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The context index splits the user-global and project instruction files and the Markdown under the documentation roots of a working directory into sections. Each section has a stable id, a content hash, a byte size, and a path and heading anchor. The service registers `ctx.contextIndex` and offers `snapshot` (metadata only), `read` (bounded bodies), and `renderCatalog` (a bounded listing). It makes no model calls, registers no tools, and needs no configuration.
+The context index splits the user-global and project instruction files and the Markdown under the documentation roots of a working directory into sections. Each section has a stable id, a content hash, a byte size, and a path and heading anchor. The service registers `ctx.contextIndex` and offers `snapshot` (metadata only), `read` (bounded bodies), `renderCatalog` (a bounded listing), and `latest`, `refreshes`, and `lastRead`, which report earlier refreshes and reads without touching the filesystem. It makes no model calls, registers no tools, and needs no configuration.
 
 ## Table of Contents
 
@@ -61,7 +61,9 @@ The `hash` of a section (and of a source) is a `sha256:` digest of its exact tex
 
 ### Refresh
 
-Every `snapshot` or `read` call revalidates the index; nothing runs in the background. It re-discovers files and compares each file's filesystem version and size with the cached record. An unchanged file is not read again. A changed file is read and hashed, and when its hash equals the cached hash only the version is updated. Calls that arrive during a refresh of the same working directory share it, so a shared refresh may report state observed slightly before the later call began. A call that is cancelled stops waiting at once; the shared refresh stops when no caller is left, and a cancelled refresh changes nothing. Disposing the service aborts running refreshes, rejects them and later calls with `CONTEXT_INDEX_DISPOSED`, and clears the cache.
+Every `snapshot` or `read` call revalidates the index; nothing runs in the background. It re-discovers files and compares each file's filesystem version and size with the cached record. A documentation directory whose own version is unchanged is not listed again; its kept listing is reused and each of its documentation files is still statted, so an edit is seen at once and an added, renamed, or deleted entry, which changes the directory's version, makes only that directory listed again. Because filesystem timestamps are coarse, an entry added in the same timestamp step as a listing can leave the directory's version unchanged, so a listing is reused without listing again only within 2 seconds of being taken or once a second listing confirmed the version held for 2 seconds. An unchanged file is not read again. A changed file is read and hashed, and when its hash equals the cached hash only the version is updated. Calls that arrive during a refresh of the same working directory share it, so a shared refresh may report state observed slightly before the later call began. A call that is cancelled stops waiting at once; the shared refresh stops when no caller is left, and a cancelled refresh changes nothing. Disposing the service aborts running refreshes, rejects them and later calls with `CONTEXT_INDEX_DISPOSED`, and clears the cache.
+
+`latest(scope)` returns the snapshot the latest refresh of a working directory committed, with that refresh's ordinal, and `refreshes()` returns the latest ordinal across all directories; a caller that notes `refreshes()` and later finds a higher `latest` ordinal can reuse that refresh instead of starting another. `lastRead(scope)` maps each section to the hash of the text its latest `read` returned, whoever read it; it forgets sections that left the index and directories that were evicted.
 
 ### Reads and catalogs
 
@@ -119,7 +121,8 @@ The package does not change the request prefix, so it has no effect; the catalog
 ## Known Limitations and Deferred Work
 
 - Nothing consumes the index yet. Session logging of what a consumer injects, a durable project map, and a model-facing load tool belong to later packages.
-- Each call re-lists the documentation roots and re-stats every candidate. A consumer that calls on every model step pays that cost each time; the package has no minimum refresh interval.
+- Each call re-stats every documentation directory and candidate file; only unchanged directory listings are reused. A consumer that calls on every model step pays that cost each time; the package has no minimum refresh interval.
+- A symlinked entry whose target changes type (a file becoming a directory) without the link or its directory changing keeps its kept listing type until that directory changes.
 - Only ATX headings split sections. Setext headings (underlined with `===` or `---`) and HTML headings stay in the text of the section above.
 - Documentation roots are relative to the working directory, not the project root, and the index follows `ctx.fs` directory entries only; it ignores `.gitignore`.
 - A file that becomes unreadable is dropped from the index instead of keeping its last content, so consumers see its ids disappear.

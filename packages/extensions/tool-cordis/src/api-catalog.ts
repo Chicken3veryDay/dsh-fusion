@@ -920,6 +920,26 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for an invalid budget or scope.'],
       },
       {
+        signature: 'latest(scope: ContextIndexScope): ContextIndexRefresh | undefined',
+        description: 'The state the latest refresh of a working directory committed, without refreshing.',
+        parameters: [{ name: 'scope', description: 'the working directory.' }],
+        returns: 'the snapshot and the ordinal of the refresh that committed it, or undefined when the directory has not been indexed or was evicted.',
+        throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.'],
+      },
+      {
+        signature: 'refreshes(): number',
+        description: 'How many refreshes have committed, across every working directory. A caller that notes this number and later finds a latest refresh above it knows that refresh committed in between.',
+        parameters: [],
+        returns: 'the ordinal of the latest committed refresh; 0 before the first.',
+      },
+      {
+        signature: 'lastRead(scope: ContextIndexScope): ReadonlyMap<ContextSectionId, string>',
+        description: 'The hash of the text each section\'s latest `read` in a working directory returned, whoever read it. A section whose current hash differs was last read as other text.',
+        parameters: [{ name: 'scope', description: 'the working directory.' }],
+        returns: 'a detached map; empty when no section was read or the directory was evicted.',
+        throws: ['{@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.'],
+      },
+      {
         signature: 'renderCatalog(sections: readonly ContextSectionMeta[], budget: ContextCatalogBudget = {}): ContextCatalog',
         description: 'Render a compact listing of sections within a byte budget.',
         parameters: [{ name: 'sections', description: 'sections in listing order, usually from {@link snapshot}.' }, { name: 'budget', description: 'byte bound, lowered to the configured `maxCatalogBytes`.' }],
@@ -999,10 +1019,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }>',
-        description: 'Record a short fact for the curator to verify and file. Any member of the lineage may; the working agent\'s context carries only this call and its one-line answer.',
+        description: 'Record a short fact for the curator to verify and file. Any member of the lineage may, except a holder other than the owner and the agents that holder started: a pending note is work for the curator, so a curator run that filed one would start its own next run. The working agent\'s context carries only this call and its one-line answer.',
         parameters: [{ name: 'caller', description: 'the exact live agent.' }, { name: 'request', description: 'the text and optional citations.' }, { name: 'signal', description: 'cancellation.' }],
         returns: 'the pending note id and how many notes now wait.',
-        throws: ['{@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait.'],
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait, `CONTEXT_MAP_UNAUTHORIZED` when the caller is, or descends from, a holder other than the owner.'],
       },
       {
         signature: 'setGroup(caller: Agent, request: SetGroupRequest, signal?: AbortSignal): Promise<MapSnapshot>',
@@ -6999,6 +7019,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ContextGrantedSection {\n    readonly path: string;\n    readonly anchor: string;\n    readonly bytes: number;\n    readonly truncated: boolean;\n}',
   },
   {
+    name: 'ContextIndexRefresh',
+    declaration: 'export interface ContextIndexRefresh {\n    readonly snapshot: ContextIndexSnapshot;\n    readonly refresh: number;\n}',
+  },
+  {
     name: 'ContextIndexScope',
     declaration: 'export interface ContextIndexScope {\n    readonly workingDirectory: string;\n}',
   },
@@ -8284,7 +8308,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MapChange',
-    declaration: 'export interface MapChange {\n    readonly kind: \'committed\' | \'work-waiting\' | \'note-filed\' | \'holder-gone\';\n    readonly ownerSessionId: SessionId;\n    readonly holderId?: SessionId;\n}',
+    declaration: 'export interface MapChange {\n    readonly kind: \'committed\' | \'work-waiting\' | \'note-filed\' | \'holder-gone\';\n    readonly ownerSessionId: SessionId;\n    readonly op?: MapOpKind;\n    readonly holderId?: SessionId;\n    readonly work?: CurationWork;\n}',
   },
   {
     name: 'MapCite',
@@ -8317,6 +8341,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'MapNoteView',
     declaration: 'export interface MapNoteView extends MapNote {\n    readonly stale: boolean;\n}',
+  },
+  {
+    name: 'MapOpKind',
+    declaration: 'export type MapOpKind = \'claim\' | \'release\' | \'index-ack\' | \'group-set\' | \'group-merge\' | \'group-retire\' | \'note-add\' | \'note-verify\' | \'note-retire\' | \'note-pending\' | \'note-file\' | \'pending-drop\' | \'core-set\';',
   },
   {
     name: 'MapPendingId',

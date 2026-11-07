@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { FsDirEntry, FsTarget, FsVersion } from '@deepseek-ai/dsh-fs'
+import type { FsDirEntry, FsInfo, FsTarget } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ContextIndexService, { type Config } from '../src/index.ts'
@@ -19,9 +19,9 @@ class CountingFileSystem extends LocalFileSystem {
     return super.resolve(path, options)
   }
 
-  override stat(target: FsTarget, signal?: AbortSignal): Promise<{ version: FsVersion; type: 'file' | 'directory' | 'other'; size: number | undefined } | undefined> {
+  override stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
     this.counts.stat++
-    return super.stat(target, signal) as never
+    return super.stat(target, signal)
   }
 
   override listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
@@ -101,6 +101,7 @@ describe('restat cost per request', () => {
     expect(w.fs.counts.readBytes, 'unchanged files are not read again').toBe(0)
     // The cost of one unchanged refresh: one listDir per documentation directory (each of which
     // stats every entry inside fs-local), plus one resolve and one stat per instruction candidate.
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- asymmetric matchers are typed any.
     expect(w.fs.counts, 'an unchanged refresh should not re-list every directory').toEqual({ resolve: expect.any(Number), stat: expect.any(Number), listDir: 0, readBytes: 0 })
   })
 })

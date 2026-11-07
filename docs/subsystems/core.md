@@ -946,6 +946,31 @@ async snapshot(scope: ContextIndexScope, signal?: AbortSignal): Promise<ContextI
 async read( scope: ContextIndexScope, ids: readonly ContextSectionId[], budget: ContextReadBudget = {}, signal?: AbortSignal, ): Promise<ContextReadResult>
 
 /**
+ * The state the latest refresh of a working directory committed, without refreshing.
+ * @param scope - the working directory.
+ * @returns the snapshot and the ordinal of the refresh that committed it, or undefined when the
+ * directory has not been indexed or was evicted.
+ * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.
+ */
+latest(scope: ContextIndexScope): ContextIndexRefresh | undefined
+
+/**
+ * How many refreshes have committed, across every working directory. A caller that notes this
+ * number and later finds a {@link latest} refresh above it knows that refresh committed in between.
+ * @returns the ordinal of the latest committed refresh; 0 before the first.
+ */
+refreshes(): number
+
+/**
+ * The hash of the text each section's latest `read` in a working directory returned, whoever read
+ * it. A section whose current hash differs was last read as other text.
+ * @param scope - the working directory.
+ * @returns a detached map; empty when no section was read or the directory was evicted.
+ * @throws {@link ContextIndexError} `CONTEXT_INDEX_INVALID_INPUT` for a relative directory, `CONTEXT_INDEX_DISPOSED` after disposal.
+ */
+lastRead(scope: ContextIndexScope): ReadonlyMap<ContextSectionId, string>
+
+/**
  * Render a compact listing of sections within a byte budget.
  * @param sections - sections in listing order, usually from {@link snapshot}.
  * @param budget - byte bound, lowered to the configured `maxCatalogBytes`.
@@ -1051,13 +1076,16 @@ async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>
 async acknowledgeIndex(caller: Agent, request: MapTarget & { readonly indexDigest: string }): Promise<MapSnapshot>
 
 /**
- * Record a short fact for the curator to verify and file. Any member of the lineage may; the
- * working agent's context carries only this call and its one-line answer.
+ * Record a short fact for the curator to verify and file. Any member of the lineage may, except a
+ * holder other than the owner and the agents that holder started: a pending note is work for the
+ * curator, so a curator run that filed one would start its own next run. The working agent's
+ * context carries only this call and its one-line answer.
  * @param caller - the exact live agent.
  * @param request - the text and optional citations.
  * @param signal - cancellation.
  * @returns the pending note id and how many notes now wait.
- * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_LIMIT` when `maxPendingNotes` notes already wait,
+ * `CONTEXT_MAP_UNAUTHORIZED` when the caller is, or descends from, a holder other than the owner.
  */
 async note(caller: Agent, request: NoteRequest, signal?: AbortSignal): Promise<{ id: MapPendingId; pending: number }>
 

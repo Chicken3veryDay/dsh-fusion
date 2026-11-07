@@ -84,6 +84,7 @@ it('a curator run that records a context_note of its own does not start an unbou
   const runs = claims(w)
   const pending = w.ctx.contextMap.snapshotOf(w.owner).pending.length
   expect({ runs, pending }, 'each run files a note that starts the next run; only the script length ended it')
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- asymmetric matchers are typed any.
     .toEqual({ runs: expect.toSatisfy((count: number) => count <= 2), pending: expect.any(Number) })
 })
 

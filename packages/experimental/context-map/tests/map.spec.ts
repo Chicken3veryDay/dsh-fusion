@@ -338,6 +338,41 @@ describe('tools', () => {
     expect(tooLong.isError).toBe(true)
   })
 
+  it('refuses a context_note from a holder other than the owner and from its children, without announcing it', async () => {
+    const { w, map } = await setup()
+    const curator = await w.ctx.agents.create({
+      sessionId: SessionId('child-curator'),
+      parentAgent: w.owner,
+      meta: { parentSession: w.owner.id, origin: 'subagent' },
+      agentOptions: { provider: 'mock', model: 'big' },
+    })
+    const helper = await w.ctx.agents.create({
+      sessionId: SessionId('curator-helper'),
+      parentAgent: curator.agent,
+      meta: { parentSession: curator.agent.id, origin: 'subagent' },
+      agentOptions: { provider: 'mock', model: 'big' },
+    })
+    await map.claim(w.owner, { holderId: curator.agent.id })
+    const changes: string[] = []
+    const unwatch = map.watch((change) => { changes.push(change.kind) })
+    try {
+      for (const agent of [curator.agent, helper.agent]) {
+        const result = await call(w, agent, 'context_note', { text: 'A fact the curator found.' })
+        expect(result.isError).toBe(true)
+        expect(textOf(result)).toContain('map_note add')
+      }
+      await expect(map.note(curator.agent, { text: 'Direct.' })).rejects.toMatchObject({ code: 'CONTEXT_MAP_UNAUTHORIZED' })
+      expect(changes, 'a refused self-note is not news for the curator').toEqual([])
+      expect(map.snapshotOf(w.owner).pending).toEqual([])
+      const owned = await call(w, w.owner, 'context_note', { text: 'The owner still files notes.' })
+      expect(owned.isError).toBe(false)
+    } finally {
+      unwatch()
+      await helper.dispose()
+      await curator.dispose()
+    }
+  })
+
   it('lets a child file a note into its parent\'s map', async () => {
     const { w, map } = await setup()
     const child = (await w.ctx.agents.create({
