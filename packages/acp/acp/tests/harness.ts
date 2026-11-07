@@ -23,7 +23,11 @@ import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, St
 import { type GenerateOptions, LlmAdapter, ReasoningEffortId, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import NodeRuntime from '@deepseek-ai/dsh-ptc-runtime-node'
+import Sandbox from '@deepseek-ai/dsh-sandbox-local'
+import SandboxPolicy from '@deepseek-ai/dsh-sandbox-policy'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import Subprocess from '@deepseek-ai/dsh-subprocess-local'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import * as AcpPlugin from '../src/index.ts'
 import type { AcpConfig } from '../src/index.ts'
@@ -225,12 +229,23 @@ export async function makeBridgeHarness(options: {
   imageCapable?: boolean
   attachments?: boolean
   persistenceRoot?: string
+  /** Run tools through the Node PTC `run_code` executor over the local process runtime, at this standing sandbox mode. */
+  ptc?: { sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
 } = {}): Promise<BridgeHarness> {
   const adapter = new MockAdapter(options.script ?? [], options.imageCapable === true)
   const ctx = new Context()
   const ownsPersistenceRoot = options.persistenceRoot === undefined
   const persistenceRoot = options.persistenceRoot ?? await mkdtemp(join(tmpdir(), 'dsh-acp-test-'))
-  await mountAgentLoopTestDependencies(ctx, { systemPrompt: { personaPrefix: options.persona ?? '' } })
+  await mountAgentLoopTestDependencies(ctx, {
+    systemPrompt: { personaPrefix: options.persona ?? '' },
+    ...options.ptc !== undefined ? { workingDirectory: true, tools: { mode: 'ptc' as const } } : {},
+  })
+  if (options.ptc !== undefined) {
+    await ctx.plugin(Subprocess)
+    await ctx.plugin(Sandbox, {})
+    await ctx.plugin(SandboxPolicy, { mode: options.ptc.sandboxMode ?? 'danger-full-access' })
+    await ctx.plugin(NodeRuntime)
+  }
   await ctx.plugin(JsonlSessionPersistence, { root: persistenceRoot, compression: 'none' })
   await ctx.plugin(TokenMeter)
   if (options.attachments !== false) await ctx.plugin(MemoryAttachmentStore)
