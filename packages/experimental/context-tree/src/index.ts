@@ -134,7 +134,7 @@ export class ContextTreeService extends Service {
       const activated = [...activeToolNames(this.stateFor(agent))]
         .filter(name => candidates.has(name) && !this.baseTools.has(name) && !managed.includes(name))
       const admitted = [...base, ...activated, ...managed]
-      this.reportUnloadable(agent, [...candidates.keys()].filter(name => !admitted.includes(name)))
+      this.reportUnloadable(agent, [...candidates.keys()].filter(name => !admitted.includes(name) && !this.isManaged(name)))
       return orderedAdmission(admitted)
     })
     this.ctx.on('agent/pre-step', async ({ agent, signal, step }, next): Promise<PreStepDecision> => {
@@ -562,8 +562,8 @@ export class ContextTreeService extends Service {
 
   /**
    * Grants for core sections neither the conversation nor `pending` holds with their current text,
-   * within `coreBytes`. The newest eager grant of each section charges the budget until revocation,
-   * and selected sections held only through explicit loads charge their size. A section whose file
+   * within `coreBytes`. The newest grant of each section charges the budget until revocation: an
+   * eager grant what it recorded, and an explicit load of a selected current section its size. A section whose file
    * changed is granted again marked as replacing the earlier copy, whose charge it takes over.
    */
   private async pendingCore(
@@ -580,14 +580,14 @@ export class ContextTreeService extends Service {
     const heldGrants = [...state.grants, ...[...state.claimed, ...state.inbox].flatMap(entry => entry.grants)]
     // Earlier writers did not distinguish explicit loads from eager grants.
     if (heldGrants.some(grant => grant.coreBytes === null)) return none
-    const eager = new Map<string, { hash: string; bytes: number }>()
-    for (const grant of heldGrants) {
-      if (grant.coreBytes !== null && grant.coreBytes > 0) eager.set(grant.key, { hash: grant.hash, bytes: grant.coreBytes })
-    }
-    let charged = [...eager.values()].reduce((sum, grant) => sum + grant.bytes, 0)
+    // The newest grant of a section sets its charge: an eager one charges what it recorded, and a
+    // newer explicit load releases the charge of the eager copy it follows.
+    const eagerCharge = (id: string): number => newest.get(id)?.coreBytes ?? 0
+    let charged = [...newest.keys()].reduce((sum, id) => sum + eagerCharge(id), 0)
     for (const id of wanted) {
       const leaf = leaves.get(id)
-      const heldExplicitly = leaf !== undefined && held.get(id) === leaf.section.hash && eager.get(id)?.hash !== leaf.section.hash
+      const heldExplicitly = leaf !== undefined && held.get(id) === leaf.section.hash
+        && !(eagerCharge(id) > 0 && newest.get(id)?.hash === leaf.section.hash)
       if (heldExplicitly) charged += leaf.section.bytes
     }
     let room = this.config.coreBytes - charged
@@ -595,7 +595,7 @@ export class ContextTreeService extends Service {
     const missing = wanted.filter((id) => {
       const leaf = leaves.get(id)
       if (leaf === undefined || held.get(id) === leaf.section.hash) return false
-      const release = eager.get(id)?.bytes ?? 0
+      const release = eagerCharge(id)
       if (leaf.section.bytes > room + release) return false
       room += release - leaf.section.bytes
       released += release

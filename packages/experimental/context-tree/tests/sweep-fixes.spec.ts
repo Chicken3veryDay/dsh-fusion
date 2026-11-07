@@ -209,6 +209,27 @@ describe('loads bounded with their frames', () => {
     expect(outcome.result.omittedSections).toHaveLength(2)
   })
 
+  it('keeps the full frame at the exact frame-and-text size and drops to a shorter frame one byte below', async () => {
+    const probe = await world()
+    const first = (await sectionsOf(probe)).find(section => section.kind === 'project-instructions')!
+    const path = (await probe.tree.browse(probe.agent, { path: 'Instructions/Project/AGENTS.md' })).nodes[0]!.path
+    const exact = grantOverhead({ path, anchor: first.anchor, hash: first.hash }, false, 'full') + first.bytes
+    const load = async (maxLoadBytes: number) => {
+      const w = await world({ maxLoadBytes })
+      const outcome = await w.tree.load(w.agent, { paths: ['Instructions/Project/AGENTS.md'] })
+      expect(outcome.contexts.reduce((sum, message) => sum + Buffer.byteLength(textOf(message)), 0)).toBeLessThanOrEqual(maxLoadBytes)
+      return outcome
+    }
+    const whole = await load(exact)
+    expect(whole.result.granted).toMatchObject([{ path, truncated: false }])
+    expect(whole.result.omittedSections).toHaveLength(1)
+    expect(textOf(whole.contexts[0]!)).toContain(`hash="${first.hash}"`)
+    const compact = await load(exact - 1)
+    expect(compact.result.granted).toMatchObject([{ path, truncated: false }])
+    expect(compact.result.omittedSections).toHaveLength(1)
+    expect(textOf(compact.contexts[0]!)).toMatch(/^<context-grant path="[^"]+">\n/)
+  })
+
   it('grants nothing when the cut ends inside the first character', async () => {
     const bare = grantOverhead({ path: '', anchor: '', hash: '' }, true, 'bare')
     const w = await world({ maxLoadBytes: bare + 1 }, { agentsFile: '界界界界\n' })
@@ -266,6 +287,20 @@ describe('hidden tools without the tree tools', () => {
     ])
   })
 
+  it('leaves role-managed tools out of the report', async () => {
+    const w = await world({}, { tools: false })
+    w.ctx.tools.register(probeTool('map_view'))
+    w.tree.registerManagedTools(['map_view'], () => false)
+    await declared(w)
+    expect(w.errors).toEqual([expect.stringContaining('context tree hides deploy_run, deploy_status from agent')])
+
+    const quiet = await world({ baseTools: ['read', 'deploy_run', 'deploy_status'] }, { tools: false })
+    quiet.ctx.tools.register(probeTool('map_view'))
+    quiet.tree.registerManagedTools(['map_view'], () => false)
+    await declared(quiet)
+    expect(quiet.errors).toEqual([])
+  })
+
   it('stays quiet when the tree tools are registered', async () => {
     const w = await world()
     await declared(w)
@@ -291,5 +326,25 @@ describe('eager core after an edit', () => {
     expect(regrant[0]!.source).toMatchObject({ key: sections[0]!.id, supersedes: sections[0]!.hash })
     expect(textOf(regrant[0]!)).toContain('Version two.')
     expect(grants(await preStep(w, 4))).toEqual([])
+  })
+
+  it('charges a section once when an explicit load follows its eager grant after an edit', async () => {
+    const file = (version: string) => `# Safety\n\nVersion ${version}. ${'Rule. '.repeat(300)}\n\n## Style\n\n${'Short. '.repeat(150)}\n`
+    const w = await world({ coreBytes: 3200 }, { agentsFile: file('one') })
+    const [safety, style] = (await sectionsOf(w)).filter(section => section.kind === 'project-instructions')
+    w.tree.registerEagerCore(() => [safety!.id])
+    const grants = (messages: UserMessage[]) => messages.filter(message => message.source.kind === 'context-grant')
+    expect(grants(await preStep(w, 2))).toHaveLength(1)
+
+    write(join(w.project, 'AGENTS.md'), file('two'))
+    const reload = await w.tree.load(w.agent, { paths: [safety!.id] })
+    expect(reload.contexts[0]!.source).toMatchObject({ supersedes: safety!.hash, coreBytes: 0 })
+    for (const message of reload.contexts) w.session.append('user/message', message, { surfaceOp: 'append' })
+    expect(grants(await preStep(w, 3)), 'the explicit load holds the current text').toEqual([])
+
+    // Style fits beside one charge for Safety, not beside two.
+    expect(2 * safety!.bytes + style!.bytes).toBeGreaterThan(3200)
+    w.tree.registerEagerCore(() => [style!.id])
+    expect(grants(await preStep(w, 4)).map(message => message.source.kind === 'context-grant' ? message.source.key : '')).toEqual([style!.id])
   })
 })

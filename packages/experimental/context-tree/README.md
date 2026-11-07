@@ -85,7 +85,7 @@ Every field has a default.
 | `maxDroppedBytes` | 1024 | bytes of the revoked-section list a republished catalog keeps across later compactions |
 | `coreBytes` | 4096 | section bytes an eager core provider may grant at the start of a conversation |
 
-An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse keeps its full path in the result and clips only the displayed header when needed to fit `maxBrowseBytes`. A partial section grant can be loaded again; only complete grants suppress duplicate loads. Eager grants record their byte charge in the Session source. The newest held eager grant of each section, including earlier selections and queued or claimed grants, consumes `coreBytes` until revocation. Changing the core cannot accumulate another full budget before compaction; selected sections already held through explicit loads also consume the budget. Earlier grants without a recorded charge defer new eager grants until revocation, because their eager or explicit origin is unknown.
+An unusable value fails at load with `CONTEXT_TREE_INVALID_CONFIG`. A browse keeps its full path in the result and clips only the displayed header when needed to fit `maxBrowseBytes`. A partial section grant can be loaded again; only complete grants suppress duplicate loads. Eager grants record their byte charge in the Session source. The newest held grant of each section, including earlier selections and queued or claimed grants, sets its charge against `coreBytes` until revocation: an eager grant charges what it recorded, and an explicit load of a selected section charges that section's size. Changing the core cannot accumulate another full budget before compaction. Earlier grants without a recorded charge defer new eager grants until revocation, because their eager or explicit origin is unknown.
 
 ### Events
 
@@ -160,7 +160,7 @@ Append-only growth until compaction, which replaces earlier request tokens as it
 - **Skills are not in the tree** — `skill` stays a base tool.
 - **Compaction request** — the request that compacts still declares activated tools; declarations drop on the next step. Fixing it needs the tool set to resolve after the compaction pre-step.
 - **Later compactions** — a second compaction summarizes the first checkpoint, so earlier revocation stubs fold into the summary.
-- **Out-of-date copies** — a section loaded again after an edit leaves its earlier copy in the conversation until compaction; the new grant marks it out of date, and only the newest eager grant of a section charges `coreBytes`. An edited core section whose new text does not fit the core budget is not granted again, and its earlier copy stays unmarked until compaction or an explicit load.
+- **Out-of-date copies** — a section loaded again after an edit leaves its earlier copy in the conversation until compaction; the new grant marks it out of date, and only the newest grant of a section charges `coreBytes`. An edited core section whose new text does not fit the core budget is not granted again, and its earlier copy stays unmarked until compaction or an explicit load.
 - **Tools registered within a step** — the tree filters tools by the agent's newest step resolution, so a tool registered after it is listed until the next step resolves its condition.
 - **Duplicate grants** — a section whose complete grant is queued or claimed but not yet logged counts as loaded, so a second load in that window is not granted twice.
 - **Subagents** — a subagent starts with the base tools; activations are not inherited.
