@@ -1623,14 +1623,14 @@
   en: 22139f50e79b8ef4
   zh: 507ecd7ea8cc5d04
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone:
-  en: 88c4aa3aa3196df6
-  zh: added16d3128f82d
+  en: c8d331d8e7fea2e0
+  zh: 16bcd35798fa49b6
 /session-persistence-event-catalog/resolved-persistence-types/missionmilestone~2:
   en: f93e2223c296924d
   zh: bd1df4a53540c07d
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot:
-  en: 4c069eb62ea10397
-  zh: 1c6c8ddbc5affbe5
+  en: e31af52bed2f9bcb
+  zh: 3244656b168eafa6
 /session-persistence-event-catalog/resolved-persistence-types/missionplansnapshot~2:
   en: 22f0e54758741f5c
   zh: 3a1db959f9f95f38
@@ -1770,8 +1770,8 @@
   en: 4eb789c8098c06e4
   zh: ba976f0ae9b2fa33
 /session-persistence-event-catalog/resolved-persistence-types/ticketattemptsnapshot:
-  en: e4fea85adb64fc2c
-  zh: 50a0e04688346df9
+  en: 1bf94a9c7902444f
+  zh: e4a5b196d959adf1
 /session-persistence-event-catalog/resolved-persistence-types/ticketattemptsnapshot~2:
   en: e02bb15dd531c7e4
   zh: fbff38ba482dc260
@@ -1791,17 +1791,17 @@
   en: 5cdfb01371c84407
   zh: c95f0e849891e358
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatecontent:
-  en: 23a86fc3cadd1d6f
-  zh: f613629422a5e447
+  en: e786de9acaf24c23
+  zh: fe0d61dbda8871ad
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatesnapshot:
-  en: b685a1592fafbe5f
-  zh: bcddba34d3171ad9
+  en: 76e7f144f5731436
+  zh: 6c12e9b3ed41f3fe
 /session-persistence-event-catalog/resolved-persistence-types/ticketcandidatesnapshot~2:
   en: 70347af3f452d930
   zh: 3b56c4325a52e4db
 /session-persistence-event-catalog/resolved-persistence-types/ticketchecksnapshot:
-  en: 2ab5e093b6b38608
-  zh: 7f83b11e4fd9e877
+  en: 090325190efacc6c
+  zh: fe4c27700f31c5ef
 /session-persistence-event-catalog/resolved-persistence-types/ticketchecksnapshot~2:
   en: 9238e788d5792ad5
   zh: d9977cac3b8cf05a
@@ -1809,8 +1809,8 @@
   en: 04c04e9a884514cf
   zh: 55918d2dfea02731
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot:
-  en: cd0dbb6afe63bef2
-  zh: b35aa03b73f96653
+  en: abf78288e73b4772
+  zh: 2398d5d236eab897
 /session-persistence-event-catalog/resolved-persistence-types/ticketoperationsnapshot~2:
   en: 691ae9c84b94a01a
   zh: 0775dd515d2c008c
@@ -1836,11 +1836,11 @@
   en: 793651710d77210a
   zh: 9013fd8c3b3ece2a
 /session-persistence-event-catalog/resolved-persistence-types/ticketruntimereceipt:
-  en: 86bea3261e1427dd
-  zh: cb48a7b2b186a19f
+  en: 2dba8fb386d8bbd9
+  zh: d96586e078da7f1f
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshot:
-  en: 6f6e4a0c56507ab6
-  zh: aff0bdae58ce781f
+  en: 21cefccffa88b6e6
+  zh: 2623d485933512f6
 /session-persistence-event-catalog/resolved-persistence-types/ticketsnapshotv1:
   en: 7d1c17d31d97c885
   zh: 1752c602792e4105
@@ -1854,8 +1854,8 @@
   en: 67bb2d87aa3839ef
   zh: 7b0e3937442cb9ce
 /session-persistence-event-catalog/resolved-persistence-types/ticketworkspacereceipt:
-  en: 4f0e38797de9786c
-  zh: 6f2dac2ded0bcebb
+  en: 24afb4ca7bb603cb
+  zh: 77dd4e8aea368bbf
 /session-persistence-event-catalog/resolved-persistence-types/todoitem:
   en: ee24f9407df530ac
   zh: 310bedf3ac730d77
@@ -2283,14 +2283,14 @@
   en: 201534f235a32769
   zh: 4b785ede6ab2403c
 /session-persistence-event-catalog/resolved-persistence-types/kind-artifact:
-  en: 972dcd4461cbd821
-  zh: 3149a5de30109789
+  en: 5727ef2d71fccecf
+  zh: fd9be723f10a5718
 /session-persistence-event-catalog/resolved-persistence-types/kind-blocked:
   en: 66dc1ef779f439e9
   zh: a532f8f5d45ca42e
 /session-persistence-event-catalog/resolved-persistence-types/kind-commit:
-  en: 5fbce95e50ccbc4a
-  zh: 121573a7330bf920
+  en: ae8f38f61aecd027
+  zh: 38844182d692ef45
 /session-persistence-event-catalog/resolved-persistence-types/kind-completed:
   en: 9affe5d5dac75c57
   zh: 8db62dcb41e804c8
@@ -2673,8 +2673,8 @@
   en: fca2f6101b952069
   zh: 7491ee7f778a22f4
 /session-persistence-event-catalog/resolved-persistence-types/model-provider-settings:
-  en: 4a78a6c5917f298f
-  zh: 538d8e9aca191f47
+  en: c73750479d30d21b
+  zh: 522d65a255d2b55c
 /session-persistence-event-catalog/resolved-persistence-types/op-snapshot-version:
   en: d38591665cbf3803
   zh: f33bc8adef2f36f3
