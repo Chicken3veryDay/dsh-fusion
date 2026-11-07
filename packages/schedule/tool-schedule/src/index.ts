@@ -359,8 +359,8 @@ function registerScheduleTools(ctx: Context): void {
   ctx.systemPrompt.section({
     name: 'tool:schedule',
     order: ctx.systemPrompt.getSectionOrder('TOOL_SCHEDULE'),
-    text: ({ scope }) => ctx.tools.get('schedule_create', scope) !== undefined
-      || ctx.tools.get('schedule_edit', scope) !== undefined
+    text: ({ scope, toolSet }) => ctx.tools.get('schedule_create', scope, toolSet) !== undefined
+      || ctx.tools.get('schedule_edit', scope, toolSet) !== undefined
       ? MANAGEMENT_AUTHORIZATION
       : '',
   })

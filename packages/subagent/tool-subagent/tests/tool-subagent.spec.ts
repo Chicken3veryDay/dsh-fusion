@@ -373,6 +373,31 @@ describe('dsh-tool-subagent', () => {
     expect(ctx.tools.schemas().some(schema => schema.name === 'subagent')).toBe(false)
   })
 
+  it('names only the delegation tools the step selection declares', async () => {
+    const ctx = await projectedContext()
+    await mountWorkingDirectoryFixture(ctx)
+    await ctx.plugin(SubagentRuntime)
+    await ctx.plugin(tool, { provider: 'fork', toolName: 'subagent_fork' })
+    await ctx.plugin(tool, { provider: 'spawn' })
+    await mock.mountScriptedProvider(ctx, { name: 'fork', inheritsParentContext: true })
+    await mock.mountScriptedProvider(ctx, { name: 'spawn' })
+    const hidden = new Set(['subagent'])
+    ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => !hidden.has(name)))
+    const agent = { id: SessionId('guidance-selection') } as Agent
+    const guidance = async () => {
+      const toolSet = await ctx.tools.resolve({ agent, modelSelection: { provider: 'p', model: 'm' }, signal: new AbortController().signal })
+      try {
+        const assembly = await ctx.systemPrompt.assemble({ scope: agent, toolSet })
+        return assembly.sections.map(section => section.text).filter(text => text.startsWith('Start independent delegations'))
+      } finally { toolSet.dispose() }
+    }
+    expect(await guidance()).toEqual([
+      'Start independent delegations with `subagent_fork` together in one assistant message and continue useful work while they run. When only waiting for their results remains, end your turn instead of sleeping or polling; the next result starts a new turn.',
+    ])
+    hidden.add('subagent_fork')
+    expect(await guidance()).toEqual([])
+  })
+
   it('shares delegation guidance across visible tools as providers and plugin fibers change', async () => {
     const ctx = await projectedContext()
     await mountWorkingDirectoryFixture(ctx)

@@ -133,6 +133,22 @@ describe('Schedule model tools', () => {
     expect(renderPrompt(await test.ctx.systemPrompt.assemble({ scope: unrelated }))).not.toContain(AUTHORIZATION)
   })
 
+  it('renders guidance only when the step selection declares a management tool', async () => {
+    const test = await setup()
+    const keep = new Set(['schedule_list'])
+    const dispose = test.ctx.tools.registerAdmissionPolicy(({ candidates }) => [...candidates.keys()].filter(name => keep.has(name)))
+    const guidance = async () => {
+      const toolSet = await test.ctx.tools.resolve({ agent: test.agent, modelSelection: { provider: 'p', model: 'm' }, signal: new AbortController().signal })
+      try {
+        return renderPrompt(await test.ctx.systemPrompt.assemble({ scope: test.agent, toolSet })).includes(AUTHORIZATION)
+      } finally { toolSet.dispose() }
+    }
+    expect(await guidance()).toBe(false)
+    keep.add('schedule_edit')
+    expect(await guidance()).toBe(true)
+    dispose()
+  })
+
   it('removes tools and guidance while Schedule is unavailable and restores both with the service', async () => {
     const test = await setup()
     expect(renderPrompt(await test.ctx.systemPrompt.assemble({ scope: test.agent }))).toContain(AUTHORIZATION)

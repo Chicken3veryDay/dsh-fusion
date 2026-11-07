@@ -365,7 +365,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     text: (context) => {
       if (mounted === undefined) return ''
       const visible = [...delegationTools]
-        .filter(tool => ctx.tools.get(tool.name, context.scope) === tool)
+        .filter(tool => ctx.tools.get(tool.name, context.scope, context.toolSet) === tool)
         .map(tool => tool.name)
         .sort()
       if (visible[0] !== toolName) return ''
