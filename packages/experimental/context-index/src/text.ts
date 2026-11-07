@@ -38,7 +38,7 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   const bytes = Buffer.from(text, 'utf8')
   let end = maxBytes
   // A continuation byte (10xxxxxx) at the cut means the cut is inside a character.
-  while (end > 0 && ((bytes[end] ?? 0) & 0xC0) === 0x80) end--
+  while (end > 0 && (bytes.readUInt8(end) & 0xC0) === 0x80) end--
   return bytes.subarray(0, end).toString('utf8')
 }
 
@@ -93,7 +93,8 @@ function paragraphBlocks(text: string): string[] {
     if (blank) sawBlank = true
     current += line
   }
-  if (current.length > 0) blocks.push(current)
+  // `splitOversized` only reaches here with text above the bound, so the last block is never empty.
+  blocks.push(current)
   return blocks
 }
 

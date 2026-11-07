@@ -243,8 +243,8 @@ export class ContextIndexService extends Service {
     diagnostics: ContextDiagnostic[],
     signal: AbortSignal | undefined,
   ): Promise<ReadonlyMap<ContextSectionId, FreshSection>> {
-    const record = state.records.get(recordKey(meta.kind, meta.path))
-    if (record === undefined) return new Map()
+    // Every section of a committed state comes from one of its records.
+    const record = state.records.get(recordKey(meta.kind, meta.path)) as SourceRecord
     const outcome = await this.guard(signal, abort => (
       readSource(this.ctx.fs, record.target, record.path, undefined, this.config.maxSourceBytes, abort)
     ))
@@ -281,12 +281,7 @@ export class ContextIndexService extends Service {
     this.assertLive()
     signal?.throwIfAborted()
     const abort = signal === undefined ? this.lifetime.signal : AbortSignal.any([signal, this.lifetime.signal])
-    try {
-      return await this.track(work(abort))
-    } catch (error: unknown) {
-      if (abort.aborted) throw abort.reason
-      throw error
-    }
+    return this.track(work(abort))
   }
 
   private refresh(scope: ContextIndexScope, signal: AbortSignal | undefined): Promise<IndexState> {
@@ -321,7 +316,8 @@ export class ContextIndexService extends Service {
       const onAbort = (): void => {
         flight.waiters--
         if (flight.waiters === 0) {
-          if (this.flights.get(directory) === flight) this.flights.delete(directory)
+          // A flight with a waiting caller is still pending, so it is still the directory's flight.
+          this.flights.delete(directory)
           flight.controller.abort(signal?.reason)
         }
         rejectJoin(asError(signal?.reason))
@@ -446,11 +442,10 @@ export class ContextIndexService extends Service {
       const present = new Set(snapshot.sections.map(section => section.id))
       for (const id of served.keys()) if (!present.has(id)) served.delete(id)
     }
-    while (this.states.size > this.config.maxIndexedDirectories) {
-      const oldest = this.states.keys().next()
-      if (oldest.done === true) break
-      this.states.delete(oldest.value)
-      this.served.delete(oldest.value)
+    for (const oldest of this.states.keys()) {
+      if (this.states.size <= this.config.maxIndexedDirectories) break
+      this.states.delete(oldest)
+      this.served.delete(oldest)
     }
     return state
   }

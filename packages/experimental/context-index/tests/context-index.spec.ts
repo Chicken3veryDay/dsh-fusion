@@ -23,6 +23,14 @@ class ProbeFileSystem extends LocalFileSystem {
   pinned = new Map<string, FsVersion>()
   failRead = new Set<string>()
   failList = new Set<string>()
+  /** Failures, by path suffix, that `stat` throws as given (an Error, an FsError, or any other value). */
+  failStat = new Map<string, unknown>()
+  /** FsError codes, by path suffix, that `readBytes` throws after its gate. */
+  failReadWith = new Map<string, 'FS_TOO_LARGE' | 'FS_NOT_TEXT'>()
+  /** Whether `stat` leaves out the byte size, as a backend that cannot report it does. */
+  hideSize = false
+  /** Whether `listDir` returns entries in reverse name order. */
+  reverseList = false
   gate: Promise<void> | undefined
   entered: (() => void) | undefined
 
@@ -34,11 +42,18 @@ class ProbeFileSystem extends LocalFileSystem {
     for (const suffix of this.failRead) {
       if (target.displayPath.endsWith(suffix)) throw new FsError('injected read failure', 'FS_IO_ERROR')
     }
+    for (const [suffix, code] of this.failReadWith) {
+      if (target.displayPath.endsWith(suffix)) throw new FsError('injected read failure', code)
+    }
     return super.readBytes(target, signal, maxBytes)
   }
 
   override async stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined> {
-    const info = await super.stat(target, signal)
+    for (const [suffix, failure] of this.failStat) {
+      if (target.displayPath.endsWith(suffix)) throw failure
+    }
+    const found = await super.stat(target, signal)
+    const info = this.hideSize && found !== undefined ? { version: found.version, type: found.type } : found
     const pinned = [...this.pinned].find(([suffix]) => target.displayPath.endsWith(suffix))?.[1]
     return info === undefined || pinned === undefined ? info : { ...info, version: pinned }
   }
@@ -48,7 +63,8 @@ class ProbeFileSystem extends LocalFileSystem {
     for (const suffix of this.failList) {
       if (target.displayPath.endsWith(suffix)) throw new FsError('injected list failure', 'FS_PERMISSION_DENIED')
     }
-    return super.listDir(target, signal)
+    const entries = await super.listDir(target, signal)
+    return this.reverseList ? entries.toReversed() : entries
   }
 
   readsOf(suffix: string): number {
@@ -438,6 +454,23 @@ describe('documentation listings across refreshes', () => {
     elapsed += 10 * LISTING_SETTLE_MS
     await w.index.snapshot(scopeOf(w))
     expect(w.fs.listCalls, 'a settled listing is trusted while the version holds').toHaveLength(1)
+  })
+
+  it('reports a kept-listing directory or file that can no longer be inspected and skips its documents', async () => {
+    const w = await tree()
+    w.fs.failStat.set(`${DOCS}/a`, new FsError('denied', 'FS_PERMISSION_DENIED'))
+    let snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/b/two.md`])
+    expect(snapshot.diagnostics.map(d => [d.code, d.path, d.message])).toEqual([
+      ['directory-unreadable', `${DOCS}/a`, 'cannot inspect directory: FS_PERMISSION_DENIED: denied'],
+    ])
+    w.fs.failStat.clear()
+    w.fs.failStat.set(`${DOCS}/b/two.md`, new Error('disk on fire'))
+    snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/a/one.md`])
+    expect(snapshot.diagnostics.map(d => [d.code, d.path, d.message])).toEqual([
+      ['unreadable', `${DOCS}/b/two.md`, 'cannot inspect file: disk on fire'],
+    ])
   })
 })
 
@@ -901,5 +934,191 @@ describe('Loader composition', () => {
     expect(catalog.text.split('\n')[1]).toMatch(/^sec_[0-9a-f]{16} 16B AGENTS\.md#Rules$/)
     const body = await ctx.contextIndex.read(scope, [snapshot.sections[0]?.id as ContextSectionId])
     expect(body.sections[0]?.text).toBe('# Rules\nbe kind\n')
+  })
+})
+
+describe('discovery failures and limits', () => {
+  const diagnosticsOf = (snapshot: { diagnostics: readonly { code: string; path: string; message: string }[] }): string[][] => (
+    snapshot.diagnostics.map(d => [d.code, d.path, d.message])
+  )
+
+  it('treats a file the filesystem reports as missing or below a non-directory as absent', async () => {
+    const w = await world()
+    for (const name of ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md']) write(join(w.project, name), '# T\n')
+    w.fs.failStat.set(`${w.project}/AGENTS.md`, new FsError('gone', 'FS_NOT_FOUND'))
+    w.fs.failStat.set(`${w.project}/CLAUDE.md`, new FsError('parent is a file', 'FS_NOT_DIRECTORY'))
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual(['AGENTS.local.md'])
+    expect(snapshot.diagnostics).toEqual([])
+  })
+
+  it('reports why an instruction file cannot be inspected, keeping the message short', async () => {
+    const w = await world()
+    for (const name of ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']) write(join(w.project, name), '# T\n')
+    w.fs.failStat.set(`${w.project}/AGENTS.md`, new FsError('no access', 'FS_PERMISSION_DENIED'))
+    w.fs.failStat.set(`${w.project}/CLAUDE.md`, new Error('disk on fire'))
+    w.fs.failStat.set(`${w.project}/AGENTS.local.md`, 'plain string failure')
+    w.fs.failStat.set(`${w.project}/CLAUDE.local.md`, new Error('x'.repeat(300)))
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources).toEqual([])
+    expect(diagnosticsOf(snapshot)).toEqual([
+      ['unreadable', 'AGENTS.md', 'cannot inspect file: FS_PERMISSION_DENIED: no access'],
+      ['unreadable', 'CLAUDE.md', 'cannot inspect file: disk on fire'],
+      ['unreadable', 'AGENTS.local.md', 'cannot inspect file: plain string failure'],
+      ['unreadable', 'CLAUDE.local.md', `cannot inspect file: ${'x'.repeat(197)}...`],
+    ])
+  })
+
+  it('takes the working directory as the project root when no marker is found, and reports a marker it could not probe', async () => {
+    const w = await world({ projectRootMarkers: ['.marker'] })
+    write(join(w.project, 'AGENTS.md'), '# Project\n')
+    write(join(w.project, 'pkg', 'AGENTS.md'), '# Pkg\n')
+    w.fs.failStat.set(`${w.project}/pkg/.marker`, new FsError('denied', 'FS_PERMISSION_DENIED'))
+    const snapshot = await w.index.snapshot(scopeOf(w, 'pkg'))
+    expect(snapshot.sources.map(source => [source.path, source.kind])).toEqual([['AGENTS.md', 'project-instructions']])
+    expect(snapshot.sections[0]?.headingPath).toEqual(['Pkg'])
+    expect(diagnosticsOf(snapshot)).toEqual([
+      ['unreadable', `${w.project}/pkg/.marker`, 'project root marker probe failed: FS_PERMISSION_DENIED: denied'],
+    ])
+  })
+
+  it('lists documentation in name order whatever order the filesystem returns', async () => {
+    const w = await world()
+    for (const name of ['b', 'c', 'a', 'd']) write(join(w.project, DOCS, `${name}.md`), `# ${name}\n`)
+    w.fs.reverseList = true
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/a.md`, `${DOCS}/b.md`, `${DOCS}/c.md`, `${DOCS}/d.md`])
+  })
+
+  it('stops walking once the documentation file limit is reached, including the remaining directories', async () => {
+    const w = await world({ maxDocFiles: 1 })
+    for (const directory of ['a', 'b', 'c']) write(join(w.project, DOCS, directory, 'x.md'), '# X\n')
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual([`${DOCS}/a/x.md`])
+    expect(snapshot.diagnostics.map(d => [d.code, d.path])).toEqual([['limit-exceeded', `${DOCS}/b`]])
+  })
+
+  it('reports a documentation root that cannot be inspected and still indexes the other root', async () => {
+    const w = await world()
+    write(join(w.project, DOCS, 'one.md'), '# One\n')
+    write(join(w.project, 'doc', 'two.md'), '# Two\n')
+    w.fs.failStat.set(`${w.project}/${DOCS}`, new FsError('denied', 'FS_PERMISSION_DENIED'))
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual(['doc/two.md'])
+    expect(diagnosticsOf(snapshot)).toEqual([
+      ['directory-unreadable', DOCS, 'cannot inspect documentation root: FS_PERMISSION_DENIED: denied'],
+    ])
+  })
+
+  it('maps filesystem size and text rejections of a read to their diagnostics', async () => {
+    const w = await world()
+    write(join(w.project, 'AGENTS.md'), '# Big\n')
+    write(join(w.project, 'CLAUDE.md'), '# Binary\n')
+    w.fs.failReadWith.set(`${w.project}/AGENTS.md`, 'FS_TOO_LARGE')
+    w.fs.failReadWith.set(`${w.project}/CLAUDE.md`, 'FS_NOT_TEXT')
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources).toEqual([])
+    expect(diagnosticsOf(snapshot)).toEqual([
+      ['too-large', 'AGENTS.md', 'file is larger than maxSourceBytes (1048576)'],
+      ['not-utf8', 'CLAUDE.md', 'file is not UTF-8 text'],
+    ])
+  })
+
+  it('applies the total source budget to files whose size the filesystem did not report', async () => {
+    const w = await world({ maxTotalSourceBytes: 40 })
+    write(join(w.project, 'AGENTS.md'), '# A\n123456789\n')
+    write(join(w.project, 'CLAUDE.md'), `# Big\n${'x'.repeat(60)}\n`)
+    w.fs.hideSize = true
+    const snapshot = await w.index.snapshot(scopeOf(w))
+    expect(snapshot.sources.map(source => source.path)).toEqual(['AGENTS.md'])
+    expect(diagnosticsOf(snapshot)).toEqual([
+      ['limit-exceeded', 'CLAUDE.md', 'total source size would exceed maxTotalSourceBytes (40)'],
+    ])
+  })
+
+  it('rejects a working directory that cannot be inspected with the cause in the message', async () => {
+    const w = await world()
+    w.fs.failStat.set(w.project, new FsError('denied', 'FS_PERMISSION_DENIED'))
+    await expect(w.index.snapshot(scopeOf(w))).rejects.toMatchObject({
+      code: 'CONTEXT_INDEX_INVALID_INPUT',
+      message: `workingDirectory "${w.project}" cannot be inspected: denied`,
+    })
+    w.fs.failStat.set(w.project, 'plain string failure')
+    await expect(w.index.snapshot(scopeOf(w))).rejects.toMatchObject({
+      code: 'CONTEXT_INDEX_INVALID_INPUT',
+      message: `workingDirectory "${w.project}" cannot be inspected: plain string failure`,
+    })
+  })
+})
+
+describe('read racing a change to its files', () => {
+  async function pendingRead(w: World, id: ContextSectionId, change: () => void | Promise<void>, signal?: AbortSignal): Promise<Awaited<ReturnType<ContextIndexService['read']>>> {
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    w.fs.entered = () => { entered.resolve(undefined) }
+    w.fs.gate = release.promise
+    const pending = w.index.read(scopeOf(w), [id], {}, signal)
+    await entered.promise
+    await change()
+    release.resolve(undefined)
+    return pending
+  }
+
+  async function indexed(config: Config = {}): Promise<{ w: World; id: ContextSectionId }> {
+    const w = await world(config)
+    write(join(w.project, 'AGENTS.md'), '# Rules\nold\n')
+    return { w, id: (await w.index.snapshot(scopeOf(w))).sections[0]!.id }
+  }
+
+  it('reports an id missing when the file no longer has that section', async () => {
+    const { w, id } = await indexed()
+    const result = await pendingRead(w, id, () => { write(join(w.project, 'AGENTS.md'), '# Other\nnew\n') })
+    expect(result.sections).toEqual([])
+    expect(result.missing).toEqual([id])
+    expect(result.diagnostics).toEqual([])
+  })
+
+  it('reports the diagnostic and a missing id when the file becomes unreadable after the refresh', async () => {
+    const { w, id } = await indexed()
+    const result = await pendingRead(w, id, () => { w.fs.failRead.add('AGENTS.md') })
+    expect(result.sections).toEqual([])
+    expect(result.missing).toEqual([id])
+    expect(result.diagnostics.map(d => [d.code, d.path])).toEqual([['unreadable', 'AGENTS.md']])
+  })
+
+  it('rejects a body read with the reason its caller aborted with', async () => {
+    const { w, id } = await indexed()
+    const controller = new AbortController()
+    const reason = new Error('left')
+    await expect(pendingRead(w, id, () => { controller.abort(reason) }, controller.signal)).rejects.toBe(reason)
+  })
+
+  it('rejects a caller aborted with a non-Error reason with an Error carrying it', async () => {
+    const { w } = await indexed()
+    write(join(w.project, 'AGENTS.md'), '# Rules\nchanged so the refresh reads the file\n')
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    w.fs.entered = () => { entered.resolve(undefined) }
+    w.fs.gate = release.promise
+    const controller = new AbortController()
+    const pending = w.index.snapshot(scopeOf(w), controller.signal)
+    await entered.promise
+    controller.abort('stop now')
+    const error: unknown = await pending.catch((caught: unknown) => caught)
+    release.resolve(undefined)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('stop now')
+  })
+
+  it('keeps no last-read hash for a directory evicted while its read was in flight', async () => {
+    const { w, id } = await indexed({ maxIndexedDirectories: 1 })
+    const other = join(w.root, 'other')
+    mkdirSync(join(other, '.git'), { recursive: true })
+    const result = await pendingRead(w, id, async () => {
+      // The other directory has no files to read, so the gated read does not block its refresh.
+      await w.index.snapshot({ workingDirectory: other })
+    })
+    expect(result.sections.map(body => body.id)).toEqual([id])
+    expect(w.index.lastRead(scopeOf(w)).size).toBe(0)
   })
 })

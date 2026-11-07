@@ -23,6 +23,10 @@ function meta(overrides: Omit<Partial<ContextSectionMeta>, 'id'> & { id: string;
 }
 
 describe('sectionize', () => {
+  it('returns no sections for empty text', () => {
+    expect(sectionize('', 8192)).toEqual([])
+  })
+
   it('splits by heading hierarchy and keeps the heading path of nested headings', () => {
     const text = '# Title\nintro\n\n## A\nbody a\n\n### A1\ndeep\n\n## B\nbody b\n'
     const sections = sectionize(text, 8192)

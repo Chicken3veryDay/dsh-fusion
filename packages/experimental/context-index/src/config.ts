@@ -131,5 +131,5 @@ export function resolveConfig(config: Config): ResolvedConfig {
  * @returns the path with `/` separators.
  */
 export function toPosix(path: string): string {
-  return sep === '/' ? path : path.split(sep).join('/')
+  return path.split(sep).join('/')
 }

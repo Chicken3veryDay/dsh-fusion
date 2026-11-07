@@ -137,9 +137,7 @@ function ancestorChain(root: string, cwd: string): string[] {
   let current = cwd
   while (current !== root) {
     chain.push(current)
-    const parent = dirname(current)
-    if (parent === current) break
-    current = parent
+    current = dirname(current)
   }
   chain.push(root)
   return chain.reverse()
@@ -209,7 +207,7 @@ async function discoverDocs(
       diagnostics.push({ code: 'directory-unreadable', path: display, message: `cannot list directory: ${describe(error)}` })
       return undefined
     }
-    const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    const sorted = entries.toSorted((a, b) => (a.name < b.name ? -1 : 1))
     listings.set(directory.targetKey, {
       version,
       entries: sorted.map(({ name, type, target }) => ({ name, type, target })),
