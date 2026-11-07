@@ -154,8 +154,9 @@ describe('dsh-agent-loop-testkit', () => {
       time: 1,
       data: { target: 'next-turn', start: 99, inserted: [] },
     }])
-    expect(() => ctx.sessionProjections.checkpoint(invalid).inbox?.val)
-      .toThrow(/invalid persisted inbox splice/)
+    // A failed fold is contained to its unit and Session: the checkpoint omits that row so a later restore refolds it.
+    expect(ctx.sessionProjections.checkpoint(invalid)).not.toHaveProperty('inbox')
+    expect(ctx.sessionProjections.checkpoint(agent.session)).toHaveProperty('inbox')
     expect(harness.claim(agent, 'next-turn', 3)).toEqual([step, turn])
     expect(claimed).toEqual([
       { id: step.id, turn: 3 },

@@ -1,19 +1,14 @@
 /**
  * Issue #4573: a profile install of this package sits beside the dsh
  * installation and installs its own copy of `@deepseek-ai/dsh-scope`, so two
- * scope module instances coexist in one host process. `dsh-scope` mints its
- * scope-tag symbol per module instance, so the copy's `createScope` writes a
- * tag every host registry ignores: each Agent's MCP tools register in the
- * global tool layer, the first Agent succeeds, and every later Agent's tool
- * synchronization collides.
+ * scope module instances coexist in one host process. `dsh-scope` tags scopes
+ * with a `Symbol.for` key shared across module copies, so the copy's
+ * `createScope` writes a tag every host registry reads.
  *
- * The first case reproduces that install layout and pins the failure. The
- * second pins the shipped layout the peer declaration produces: one instance,
- * two Agents, each with its own browser client.
- *
- * The first case is a characterization of the duplicated package, not a
- * behavior to preserve. Delete it once `dsh-scope` stops depending on module
- * identity (for example a `Symbol.for` tag shared across copies).
+ * The first case reproduces that install layout and pins that each Agent's
+ * MCP tools stay in its own scope, so a second Agent starts. The second pins
+ * the shipped layout the peer declaration produces: one instance, two Agents,
+ * each with its own browser client.
  *
  * Run: `pnpm vitest run packages/experimental/browser-use-runtime/tests/host-runtime-duplication.spec.ts`
  */
@@ -63,7 +58,7 @@ it('rejects a missing working-directory provider before mounting browser resourc
   expect(ctx.get('browserUse')).toBeUndefined()
 })
 
-it('reproduces the second-Agent failure a profile install causes', async () => {
+it('keeps each Agent tool scoped when a profile install duplicates the scope package', async () => {
   const { ctx, root } = await load()
   // What npm installs beside the installation: one second copy of both packages
   // in the profile, so the copy's client resolves the copy's scope module.
@@ -78,9 +73,9 @@ it('reproduces the second-Agent failure a profile install causes', async () => {
   }, { prepend: true })
 
   await ctx.agents.create({ sessionId: SessionId('first'), meta: { cwd: root } })
-  expect(toolNames(ctx)).toContain(TOOL)
-  await expect(ctx.agents.create({ sessionId: SessionId('second'), meta: { cwd: root } }))
-    .rejects.toThrow('mcp-client(browser-fixture): initial connection or tool synchronization failed')
+  expect(toolNames(ctx)).not.toContain(TOOL)
+  await expect(ctx.agents.create({ sessionId: SessionId('second'), meta: { cwd: root } })).resolves.toBeDefined()
+  expect(toolNames(ctx)).not.toContain(TOOL)
 })
 
 it('keeps every Agent browser tool in that Agent scope under the shipped layout', async () => {

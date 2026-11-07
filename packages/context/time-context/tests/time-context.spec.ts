@@ -576,7 +576,8 @@ describe('real agent-loop request history', () => {
 
     expect(contextTexts(agent.session)).toHaveLength(0)
     expect(adapter.requests).toHaveLength(0)
-    expect(agent.session.snapshotEvents().some(event => event.type === 'step/start')).toBe(false)
+    // A throwing pre-step listener still opens the step that commits the already claimed input; a cancel claims nothing.
+    expect(agent.session.snapshotEvents().some(event => event.type === 'step/start')).toBe(mode === 'throws')
     await ctx.fiber.dispose()
   })
 
