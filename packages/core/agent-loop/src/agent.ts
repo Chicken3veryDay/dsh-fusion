@@ -442,7 +442,7 @@ export class ReactLoopAgent implements Agent {
 
   /** Capture identities, rendered context hashes, and section revisions without retaining a mutable registry view. */
   private requestInputs(
-    toolSet: ResolvedToolSet, assembly: PromptAssembly, revisions: ReadonlyArray<readonly [string, string]>,
+    toolSet: ResolvedToolSet, assembly: PromptAssembly, revisions: readonly (readonly [name: string, revision: string])[],
     definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
     executor = this.loopCtx.tools.selectExecutor(this),
   ): RequestInputs {

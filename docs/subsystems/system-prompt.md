@@ -77,6 +77,14 @@ interface PromptSection {
    * More than one effective complete section makes assembly fail.
    */
   readonly complete?: boolean
+  /**
+   * The state `text` renders from, as an opaque string. Request-time admission
+   * reads it again through {@link SystemPrompt.sectionRevisions} without
+   * rerunning `text`, and the agent loop reassembles a step whose value changed
+   * since its accepted assembly. Omit it for text that changes only with tools,
+   * runtime context, or registration.
+   */
+  readonly revision?: (context: AssembleContext) => string
 }
 ```
 
@@ -209,6 +217,15 @@ async requestContext(context: AssembleContext = {}, pending: readonly UserMessag
  * @returns the accepted assembly with current runtime-context provider text.
  */
 refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly
+
+/**
+ * Read the current revision of every effective section that declares one,
+ * without rendering section text. Call it in the same synchronous step that
+ * starts {@link assemble} to capture the revisions that assembly renders.
+ * @param context - the same scope and plugin-defined assembly fields as the assembly.
+ * @returns one `[name, revision]` entry per revisioned section, in section order.
+ */
+sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
 
 /**
  * Assemble global and scoped providers, detach tool parameters, apply

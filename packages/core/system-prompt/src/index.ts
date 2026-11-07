@@ -660,7 +660,7 @@ export class SystemPrompt extends Service {
    * @param context - the same scope and plugin-defined assembly fields as the assembly.
    * @returns one `[name, revision]` entry per revisioned section, in section order.
    */
-  sectionRevisions(context: AssembleContext = {}): ReadonlyArray<readonly [string, string]> {
+  sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[] {
     return [...this.layers.merge(context.scope, layer => layer.sections).values()]
       .sort(comparePromptSections)
       .flatMap(section => section.revision === undefined ? [] : [[section.name, section.revision(context)] as const])
