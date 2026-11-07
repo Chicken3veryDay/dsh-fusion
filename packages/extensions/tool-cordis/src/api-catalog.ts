@@ -1961,7 +1961,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'registerExecutionHost(task: PreparedParticipants, provider: ExecutionHostProvider): Promise<TaskExecutionHost>',
-        description: 'Enroll one trusted held host on this exact prepared task. The declaring fiber and its ancestors join the task admission lifetime; their teardown closes task admission immediately and joins cleanup before releasing dependencies. No provider, capability or callback is transported through model tools or SDK requests.',
+        description: 'Enroll one trusted held host on this exact prepared task. The declaring fiber owns withdrawal; its teardown fences admission immediately and joins cleanup before releasing dependencies. No provider, capability or callback is transported through model tools or SDK requests.',
         parameters: [{ name: 'task', description: 'exact live object returned by this service, never a roster or snapshot copy.' }, { name: 'provider', description: 'one exact provider identity per task incarnation and declaring fiber.' }],
         returns: 'memoized enrollment after exact retained writer reservations; replacement refuses.',
       },
