@@ -112,6 +112,7 @@ it('an ordinary caller joining a forced reread keeps expected failures in projec
     const forced = manager.refreshProjections(root, true)
     const rejected = expect(forced).rejects.toMatchObject({ code: 'gateway/internal' })
     const ordinary = manager.refreshProjections(root)
+    expect(manager.refreshProjections(root)).toBe(ordinary)
     const ordinarySettled = expect(ordinary).resolves.toBeUndefined()
     response.resolve({ ok: false, error: new RemoteError('gateway/internal', 'offline', {}) })
     await rejected

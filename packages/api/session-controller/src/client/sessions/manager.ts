@@ -73,6 +73,11 @@ export interface SessionProjectionSnapshot {
 interface ProjectionInflight {
   readonly promise: Promise<void>
   readonly controller: AbortController
+  /**
+   * The one completion every non-forced caller shares: `promise` itself for a non-forced read,
+   * or, created on first join, a forced read's `promise` that settles without its Remote failure.
+   */
+  joined: Promise<void> | undefined
 }
 
 type ProjectionLoad = Omit<SessionProjectionSnapshot, 'values'>
@@ -358,9 +363,10 @@ export class SessionManager {
   refreshProjections(sessionId: SessionId, force = false): Promise<void> {
     const existing = this.projectionInflight.get(sessionId)
     if (existing !== undefined && !force) {
-      return existing.promise.catch((error: unknown) => {
+      existing.joined ??= existing.promise.catch((error: unknown) => {
         if (!isRemoteFailure(error)) throw error
       })
+      return existing.joined
     }
     if (force) existing?.controller.abort()
     if (!force && this.projectionLoads.get(sessionId)?.state === 'ready') return Promise.resolve()
@@ -417,7 +423,7 @@ export class SessionManager {
         }
       }
     })()
-    this.projectionInflight.set(sessionId, { promise: operation, controller })
+    this.projectionInflight.set(sessionId, { promise: operation, controller, joined: force ? undefined : operation })
     return operation
   }
 
