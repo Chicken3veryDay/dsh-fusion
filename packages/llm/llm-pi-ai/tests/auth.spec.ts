@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
-import { authContextFrom, credentialStoreFrom, recordKeyFor } from '../src/auth.ts'
+import { authContextFrom, credentialStoreFrom, installationDeviceId, recordKeyFor } from '../src/auth.ts'
 
 const home = vi.hoisted(() => ({ unavailable: false }))
 
@@ -195,6 +195,78 @@ describe('pi-ai credential store over harness records', () => {
     // …while a write that cannot land must refuse rather than report success.
     await expect(store.modify('My_Proxy', () => Promise.resolve({ type: 'api_key', key: 'k' })))
       .rejects.toThrow(/cannot address a stored credential record/)
+  })
+})
+
+describe('installation device id', () => {
+  const INSTALLATION = credentialKey('llm-pi-ai', 'installation-id')
+
+  it('creates one UUID on first use and returns the same one afterwards', async () => {
+    const ctx = await stored()
+
+    const first = await installationDeviceId(ctx)
+    const second = await installationDeviceId(ctx)
+
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(second).toBe(first)
+    await expect(ctx.credentials.readRecord(INSTALLATION)).resolves.toEqual({
+      kind: 'grant',
+      payload: { deviceId: first },
+    })
+  })
+
+  it('differs between installations', async () => {
+    expect(await installationDeviceId(await stored())).not.toBe(await installationDeviceId(await stored()))
+  })
+
+  it('settles concurrent first uses on a single id', async () => {
+    const ctx = await stored()
+
+    const ids = await Promise.all([installationDeviceId(ctx), installationDeviceId(ctx), installationDeviceId(ctx)])
+
+    expect(new Set(ids).size).toBe(1)
+  })
+
+  it('keeps the record out of the provider store', async () => {
+    const ctx = await stored()
+    const store = credentialStoreFrom(ctx)
+    await installationDeviceId(ctx)
+    await store.modify('openai-codex', () =>
+      Promise.resolve({ type: 'oauth', access: 'at', refresh: 'rt', expires: 1 }))
+
+    await expect(store.list()).resolves.toEqual([{ providerId: 'openai-codex', type: 'oauth' }])
+    await expect(store.read('installation-id')).resolves.toBeUndefined()
+    await expect(store.delete('installation-id')).resolves.toBeUndefined()
+    await expect(store.modify('installation-id', () => Promise.resolve({ type: 'api_key', key: 'k' })))
+      .rejects.toThrow(/cannot address a stored credential record/)
+    await expect(ctx.credentials.readRecord(INSTALLATION)).resolves.toMatchObject({ kind: 'grant' })
+  })
+
+  it('refuses to replace a record that is not a device id', async () => {
+    const ctx = await stored()
+    for (const record of [
+      { kind: 'api-key', key: 'k' },
+      { kind: 'grant', payload: null },
+      { kind: 'grant', payload: { deviceId: 'not-a-uuid' } },
+    ] as const) {
+      await ctx.credentials.deleteRecord(INSTALLATION)
+      await ctx.credentials.modifyRecord(INSTALLATION, () => Promise.resolve(record))
+
+      await expect(installationDeviceId(ctx)).rejects.toMatchObject({ code: 'INVALID_INSTALLATION_ID' })
+      await expect(ctx.credentials.readRecord(INSTALLATION)).resolves.toEqual(record)
+    }
+  })
+
+  it('normalizes an uppercase stored id', async () => {
+    const ctx = await stored()
+    await ctx.credentials.modifyRecord(INSTALLATION, () =>
+      Promise.resolve({ kind: 'grant', payload: { deviceId: '8F3B2C1D-0000-4000-8000-000000000001' } }))
+
+    await expect(installationDeviceId(ctx)).resolves.toBe('8f3b2c1d-0000-4000-8000-000000000001')
+  })
+
+  it('needs a credentials service', async () => {
+    await expect(installationDeviceId(new Context())).rejects.toMatchObject({ code: 'NO_CREDENTIAL_STORE' })
   })
 })
 

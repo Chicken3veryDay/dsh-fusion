@@ -8,6 +8,7 @@
  * @module dsh-llm-pi-ai/auth
  */
 
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
@@ -35,6 +36,71 @@ export const RECORD_SCOPE = 'llm-pi-ai'
  */
 export function recordKeyFor(providerId: string): CredentialKey {
   return credentialKey(RECORD_SCOPE, providerId)
+}
+
+/** The id segment of the record holding this installation's device id. */
+const INSTALLATION_ID = 'installation-id'
+
+/**
+ * The record holding this installation's device id. It sits under the adapter's
+ * own scope but is not a provider's credential, so {@link credentialStoreFrom}
+ * hides it from listings and treats the id as one no provider route can use.
+ */
+const INSTALLATION_KEY = credentialKey(RECORD_SCOPE, INSTALLATION_ID)
+
+/**
+ * Whether a provider id can address a stored provider credential.
+ * @param providerId - pi-ai's provider id or a route key.
+ * @returns true for a record-grammar id other than the installation record's.
+ */
+function addressesCredential(providerId: string): boolean {
+  return isCredentialKeySegment(providerId) && providerId !== INSTALLATION_ID
+}
+
+/** The shape of a UUID, which is what pi-ai's Sign in with ChatGPT accepts as a device id. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The device id carried by a stored installation record.
+ * @param record - the stored record.
+ * @returns the id, or undefined when the record is not a grant holding a UUID `deviceId`.
+ */
+function deviceIdOf(record: CredentialRecord | undefined): string | undefined {
+  if (record?.kind !== 'grant' || typeof record.payload !== 'object' || record.payload === null) return undefined
+  const { deviceId } = record.payload as { deviceId?: unknown }
+  return typeof deviceId === 'string' && UUID_PATTERN.test(deviceId) ? deviceId : undefined
+}
+
+/**
+ * This installation's stable device id, created on first use.
+ *
+ * Some provider sign-ins (OpenAI's Sign in with ChatGPT) identify the
+ * installation to the vendor and need the same value on every later sign-in. The
+ * id is a random UUID the harness generates itself and keeps in the credential
+ * store beside the grants it identifies the installation for, so it follows the
+ * same storage, permissions, and cross-process exclusion. Creation runs inside
+ * `modifyRecord`, so two processes signing in at once settle on one id.
+ * @param ctx - the plugin context carrying `ctx.credentials`.
+ * @returns the stored UUID, lowercase.
+ * @throws {LlmError} code `NO_CREDENTIAL_STORE` when no credentials service is
+ *   mounted, or `INVALID_INSTALLATION_ID` when a record already at the address
+ *   is not a device id; it is not replaced, because a new id would silently
+ *   change the identity the vendor knows this installation by.
+ */
+export async function installationDeviceId(ctx: Context): Promise<string> {
+  const stored = await writableStore(ctx).modifyRecord(INSTALLATION_KEY, (current) => {
+    if (current !== undefined) return Promise.resolve(undefined)
+    return Promise.resolve({ kind: 'grant', payload: { deviceId: randomUUID() } })
+  })
+  const deviceId = deviceIdOf(stored)
+  if (deviceId === undefined) {
+    throw new LlmError(
+      `llm-pi-ai: the credential record "${INSTALLATION_KEY}" exists but does not hold an installation device id;`
+      + ' remove it to let the harness create a new one',
+      'INVALID_INSTALLATION_ID',
+    )
+  }
+  return deviceId.toLowerCase()
 }
 
 /**
@@ -143,7 +209,7 @@ export function credentialStoreFrom(ctx: Context): CredentialStore {
     async read(providerId) {
       const credentials = ctx.get('credentials')
       if (credentials === undefined) return undefined
-      if (!isCredentialKeySegment(providerId)) return undefined
+      if (!addressesCredential(providerId)) return undefined
       return toPiCredential(await credentials.readRecord(recordKeyFor(providerId)))
     },
     async list(): Promise<readonly CredentialInfo[]> {
@@ -152,7 +218,7 @@ export function credentialStoreFrom(ctx: Context): CredentialStore {
       for (const entry of stored) {
         // Records another plugin owns are not this collection's to report:
         // their payloads are written in a format pi-ai never agreed to.
-        if (credentialKeyScope(entry.key) !== RECORD_SCOPE) continue
+        if (credentialKeyScope(entry.key) !== RECORD_SCOPE || entry.key === INSTALLATION_KEY) continue
         mine.push({
           providerId: credentialKeyId(entry.key),
           type: entry.kind === 'api-key' ? 'api_key' : 'oauth',
@@ -161,10 +227,10 @@ export function credentialStoreFrom(ctx: Context): CredentialStore {
       return mine
     },
     async modify(providerId, mutate) {
-      if (!isCredentialKeySegment(providerId)) {
+      if (!addressesCredential(providerId)) {
         throw new LlmError(
           `llm-pi-ai: provider id "${providerId}" cannot address a stored credential record (a record id is a`
-          + ' lowercase hyphenated identifier); authenticate this route through apiKeyEnv instead of a stored'
+          + ` lowercase hyphenated identifier other than "${INSTALLATION_ID}"); authenticate this route through apiKeyEnv instead of a stored`
           + ' credential',
           'UNSTORABLE_PROVIDER_ID',
         )
@@ -179,7 +245,7 @@ export function credentialStoreFrom(ctx: Context): CredentialStore {
     // store contract is promise-returning, and a synchronous throw would
     // escape the `ModelsError` wrapper every other storage failure gets.
     async delete(providerId) {
-      if (!isCredentialKeySegment(providerId)) return
+      if (!addressesCredential(providerId)) return
       await writableStore(ctx).deleteRecord(recordKeyFor(providerId))
     },
   }
