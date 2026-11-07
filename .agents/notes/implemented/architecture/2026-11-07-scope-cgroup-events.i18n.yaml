@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-07-scope-cgroup-events.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-07-scope-cgroup-events.md
+/agent-note-event-driven-linux-scope-quiescence:
+  en: bb1f1b4758125056
+  zh: 3551cc669fd1c860
+/agent-note-event-driven-linux-scope-quiescence/problem:
+  en: d99989a0b85f4611
+  zh: cc3f30fc99b2419b
+/agent-note-event-driven-linux-scope-quiescence/decision:
+  en: 571d0893b863ecbd
+  zh: 4aee92175e2b677f
+/agent-note-event-driven-linux-scope-quiescence/alternatives-considered:
+  en: 1abeebad1b6f39b2
+  zh: 84150e60c2afe2d2
+/agent-note-event-driven-linux-scope-quiescence/consequences:
+  en: 1b6b225540cc4108
+  zh: 79a29d879cacf57f

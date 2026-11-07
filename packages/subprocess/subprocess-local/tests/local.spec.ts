@@ -968,7 +968,12 @@ describe('LocalSubprocessRuntime', () => {
   it('probes Linux native support once, confirms the user manager and rechecks the Windows Job per spawn, and prepares storage before launch', async () => {
     const linuxLaunch = { kind: 'linux' }
     const windowsLaunch = { kind: 'windows' }
-    const launchLinuxScope = vi.fn(() => linuxLaunch)
+    const launchLinuxScope = vi.fn((
+      _spec: unknown,
+      _env: unknown,
+      _literalArgv: readonly string[],
+      _internals?: { reportDegraded?: (message: string) => void },
+    ) => linuxLaunch)
     const launchWindowsJob = vi.fn(() => windowsLaunch)
     const probeLinuxNative = vi.fn((): string[] => [])
     const confirmLinuxManager = vi.fn()
@@ -1055,6 +1060,16 @@ describe('LocalSubprocessRuntime', () => {
       expect(confirmLinuxManager).toHaveBeenCalledTimes(3)
       expect(spawnSubprocess).toHaveBeenCalledOnce()
       expect(warn).toHaveBeenCalledOnce()
+
+      // The reporter handed to scope launches warns for the first degraded cgroup watch and logs later ones at debug.
+      const debug = vi.spyOn(linuxContext.logger, 'debug').mockImplementation(() => {})
+      const reportDegraded = launchLinuxScope.mock.calls.at(-1)?.[3]?.reportDegraded
+      expect(reportDegraded).toBeDefined()
+      reportDegraded?.('first fault')
+      reportDegraded?.('second fault')
+      expect(warn).toHaveBeenCalledTimes(2)
+      expect(warn).toHaveBeenLastCalledWith('subprocess-local linux scope: first fault')
+      expect(debug).toHaveBeenCalledExactlyOnceWith('subprocess-local linux scope: second fault')
 
       const windowsContext = new Context()
       const windowsFiber = await windowsContext.plugin(IsolatedLocalSubprocessRuntime)

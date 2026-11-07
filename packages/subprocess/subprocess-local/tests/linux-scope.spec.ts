@@ -1474,6 +1474,19 @@ describe('Linux scope range exit by cgroup events', () => {
     scope.owner.cleanup?.()
   })
 
+  it('keeps polling when a degraded watch has no reporter to tell', async () => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), {
+      watchFile: () => { throw Object.assign(new Error('no inotify'), { code: 'EMFILE' }) },
+      reportDegraded: undefined,
+    })
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    scope.owner.cleanup?.()
+  })
+
   it('reports a watcher error once, closes the watcher, and keeps polling', async () => {
     const states = [groupUnit(), inactiveGroupUnit()]
     const query = vi.fn(async () => states.shift() ?? inactiveGroupUnit())
