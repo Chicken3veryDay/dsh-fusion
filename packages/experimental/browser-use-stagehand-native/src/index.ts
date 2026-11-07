@@ -97,7 +97,6 @@ function stagehandOperation(operation: InteractionOperation): { method: BrowserM
       const instruction = typeof operation.action.instruction === 'string' ? operation.action.instruction : JSON.stringify(operation.action)
       return { method: 'act', args: { ...page, instruction } }
     }
-    default: throw new Error('Stagehand provider does not support this normalized browser operation')
   }
 }
 

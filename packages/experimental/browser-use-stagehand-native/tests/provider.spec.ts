@@ -6,6 +6,7 @@ import { StagehandDrainError } from '../src/native.ts'
 import type { NativeBrowserConfig } from '../src/native.ts'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import Interaction, { type BrowserOperation, type InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import BrowserUseRegistry from '@deepseek-ai/dsh-browser-use'
 import { BrowserUseProviderName } from '@deepseek-ai/dsh-browser-use/brand'
@@ -93,6 +94,57 @@ afterEach(async () => { await ctx.fiber.dispose() })
 function execute(agent: Agent, suffix: string, args: unknown, signal = new AbortController().signal) {
   return executeToolFixture(ctx, { agent, name: `stagehand_${suffix}`, arguments: args, callId: ToolCallId(`test-${suffix}`), signal })
 }
+
+it.each<[BrowserOperation, Record<string, unknown>]>([
+  [{ domain: 'browser', method: 'tabs', operation: 'list' }, { action: 'list' }],
+  [{ domain: 'browser', method: 'tabs', operation: 'new', url: 'https://new.invalid/' }, { action: 'new', url: 'https://new.invalid/' }],
+  [{ domain: 'browser', method: 'navigate', tabId: 'tab-1', url: 'https://target.invalid/' }, { pageId: 'tab-1', url: 'https://target.invalid/' }],
+  [{ domain: 'browser', method: 'observe' }, { instruction: 'Inspect the current page.' }],
+  [{ domain: 'browser', method: 'observe', tabId: 'tab-1', instruction: 'Find the heading' }, { pageId: 'tab-1', instruction: 'Find the heading' }],
+  [{ domain: 'browser', method: 'extract', instruction: 'Read the heading' }, { instruction: 'Read the heading' }],
+  [{ domain: 'browser', method: 'extract', instruction: 'Read the heading', schema: { type: 'object' } }, { instruction: 'Read the heading', schema: { type: 'object' } }],
+  [{ domain: 'browser', method: 'act', action: { kind: 'click', instruction: 'Click the heading' } }, { instruction: 'Click the heading' }],
+  [{ domain: 'browser', method: 'act', action: { kind: 'press_key', key: 'Enter' } }, { instruction: '{"kind":"press_key","key":"Enter"}' }],
+  [{ domain: 'browser', method: 'screenshot', tabId: 'tab-1' }, { pageId: 'tab-1', fullPage: false }],
+])('routes normalized %j through its guarded raw tool with %j', async (operation, expected) => {
+  await ctx.plugin(Interaction)
+  await ctx.plugin(Provider, { model: nativeModel, mode: 'launch' })
+  const calls: unknown[] = []
+  ctx.on('tools/pre-execute', async (exec) => {
+    calls.push({ name: exec.name, args: exec.arguments })
+    return { kind: 'deny', reason: 'Fixture policy denied browser input' }
+  })
+  const result = await ctx.interaction.run(first, 'browser', operation, new AbortController().signal)
+  expect(calls).toEqual([{ name: `stagehand_${operation.method}`, args: expected }])
+  expect(result).toMatchObject({ isError: true, content: [{ type: 'text' }] })
+  expect(JSON.stringify(result)).toContain('Fixture policy denied browser input')
+  expect(fixture.browsers).toEqual([])
+})
+
+it.each<[InteractionOperation, string]>([
+  [{ domain: 'desktop', method: 'observe' }, 'received a desktop operation'],
+  [{ domain: 'browser', method: 'act', action: null }, 'must be an object'],
+  [{ domain: 'browser', method: 'act', action: [] }, 'must be an object'],
+  [{ domain: 'browser', method: 'act', action: 'click' }, 'must be an object'],
+  [{ domain: 'browser', method: 'act', action: {} }, 'kind is not supported'],
+  [{ domain: 'browser', method: 'act', action: { kind: 'unsupported' } }, 'kind is not supported'],
+])('refuses normalized %j before browser acquisition', async (operation, message) => {
+  await ctx.plugin(Interaction)
+  await ctx.plugin(Provider, { model: nativeModel, mode: 'launch' })
+  await expect(ctx.interaction.run(first, 'browser', operation, new AbortController().signal)).rejects.toThrow(message)
+  expect(fixture.browsers).toEqual([])
+})
+
+it('refuses normalized calls after the tool contribution unloads', async () => {
+  await ctx.plugin(Interaction)
+  await ctx.plugin(Provider, { model: nativeModel, mode: 'launch' })
+  const tools = [...ctx.registry.values()].find(runtime => runtime.name === 'browser-use-stagehand-native-tools')
+  expect(tools).toBeDefined()
+  for (const fiber of tools!.fibers) await fiber.dispose()
+  await expect(ctx.interaction.run(first, 'browser', { domain: 'browser', method: 'observe' }, new AbortController().signal))
+    .rejects.toThrow('Stagehand tool observe is unavailable')
+  expect(fixture.browsers).toEqual([])
+})
 
 it('lazily launches distinct browsers and preserves each Session tab state', async () => {
   const provider = ctx.plugin(Provider, { model: nativeModel, mode: 'launch', executablePath: '/fixture/chromium', headless: false })

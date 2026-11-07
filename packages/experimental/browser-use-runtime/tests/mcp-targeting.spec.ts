@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness, provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
 import BrowserUse from '@deepseek-ai/dsh-browser-use'
-import Interaction, { type BrowserOperation } from '@deepseek-ai/dsh-interaction'
+import Interaction, { type BrowserOperation, type InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { LlmAdapter, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -43,7 +43,7 @@ lines.on('line', line => {
 const PLAYWRIGHT_TOOLS = ['browser_tabs', 'browser_navigate', 'browser_snapshot', 'browser_take_screenshot', 'browser_click', 'browser_press_key']
 
 interface Harness {
-  run(operation: BrowserOperation): Promise<unknown>
+  run(operation: InteractionOperation): Promise<unknown>
   calls(): Promise<Array<{ name: string; args: Record<string, unknown> }>>
 }
 
@@ -93,6 +93,12 @@ describe('explicit tab targeting on a current-tab provider', () => {
     expect(await harness.calls()).toEqual([{ name: 'browser_navigate', args: { url: 'https://a.invalid/' } }])
   })
 
+  it('rejects a desktop operation without calling the browser server', async () => {
+    const harness = await start(PLAYWRIGHT_TOOLS)
+    await expect(harness.run({ domain: 'desktop', method: 'observe' })).rejects.toThrow('received a desktop operation')
+    expect(await harness.calls()).toEqual([])
+  })
+
   it.each(['abc', '-1', '1.5', ''])('rejects the invalid tab id %j before any provider call', async (tabId) => {
     const harness = await start(PLAYWRIGHT_TOOLS)
     await expect(harness.run({ domain: 'browser', method: 'navigate', tabId, url: 'https://a.invalid/' })).rejects.toThrow('non-negative integer')
@@ -140,5 +146,7 @@ describe('explicit tab targeting on a current-tab provider', () => {
     expect(ctx.interaction.describe('browser')?.methods).toEqual(['navigate', 'observe'])
     expect(ctx.interaction.available(agent, 'browser', 'tabs')).toBe(false)
     expect(ctx.interaction.available(agent, 'browser', 'navigate')).toBe(true)
+    await harness.create(SessionId('mcp-methods-second'), { provider: 'idle', model: 'fixture' })
+    expect(ctx.interaction.describe('browser')?.methods).toEqual(['navigate', 'observe'])
   })
 })
