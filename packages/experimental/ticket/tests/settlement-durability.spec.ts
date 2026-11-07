@@ -16,8 +16,9 @@ async function heldFlush(suffix: string) {
   vi.spyOn(ctx.sessions, 'flush').mockImplementation(async (session) => {
     entered.resolve(undefined)
     if (held) await release.promise
-    await flush(session)
+    const result = await flush(session)
     if (!held) flushed.resolve(undefined)
+    return result
   })
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   const stopped = (promise: Promise<void>) => promise.then(() => 'settled', code)
