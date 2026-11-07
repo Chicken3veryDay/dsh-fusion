@@ -82,6 +82,14 @@ export interface PromptSection {
    * More than one effective complete section makes assembly fail.
    */
   readonly complete?: boolean
+  /**
+   * The state `text` renders from, as an opaque string. Request-time admission
+   * reads it again through {@link SystemPrompt.sectionRevisions} without
+   * rerunning `text`, and the agent loop reassembles a step whose value changed
+   * since its accepted assembly. Omit it for text that changes only with tools,
+   * runtime context, or registration.
+   */
+  readonly revision?: (context: AssembleContext) => string
 }
 
 /** Dynamic model context materialized as a durable user-role snapshot. */
@@ -643,6 +651,19 @@ export class SystemPrompt extends Service {
       contexts.splice(index < 0 ? contexts.length : index, 0, resolveContext(provider, context))
     }
     return { ...assembly, contexts }
+  }
+
+  /**
+   * Read the current revision of every effective section that declares one,
+   * without rendering section text. Call it in the same synchronous step that
+   * starts {@link assemble} to capture the revisions that assembly renders.
+   * @param context - the same scope and plugin-defined assembly fields as the assembly.
+   * @returns one `[name, revision]` entry per revisioned section, in section order.
+   */
+  sectionRevisions(context: AssembleContext = {}): ReadonlyArray<readonly [string, string]> {
+    return [...this.layers.merge(context.scope, layer => layer.sections).values()]
+      .sort(comparePromptSections)
+      .flatMap(section => section.revision === undefined ? [] : [[section.name, section.revision(context)] as const])
   }
 
   /**

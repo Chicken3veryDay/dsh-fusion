@@ -12,7 +12,9 @@
  * assembly only while that pre-step proposes, then appends `plan/mode` from
  * `agent/pre-step` only when the step is accepted. Any later assembly, such as
  * a same-step request retry's reselection, sees the logged state alone, so a
- * selection made after the pre-step waits for the next one.
+ * selection made after the pre-step waits for the next one. A selection made
+ * after the proposal assembled but before the pre-step accepted is appended by
+ * that pre-step; the section revision changes, so the loop reassembles the step.
  *
  * The exit tool is disclosed progressively: it is admitted from the first step
  * whose selected state is active and stays admitted for the rest of the
@@ -206,6 +208,8 @@ export class PlanModeController extends Service {
         if (context.agent === undefined) return ''
         return this.selectedActive(context.agent.session) ? this.section : ''
       },
+      // A selection committed after the proposal assembled changes this value, so the request reassembles.
+      revision: context => context.agent === undefined ? '' : String(this.selectedActive(context.agent.session)),
     })
     this.planProjectionHandle = await ctx.sessionProjections.register(planProjectionDefinition)
     let disposed = false

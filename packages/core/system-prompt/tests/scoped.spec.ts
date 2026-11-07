@@ -225,6 +225,26 @@ describe('scoped assemble dispatch', () => {
     }
   })
 
+  it('reads section revisions through the same scoped sections as assembly without rendering text', async () => {
+    const ctx = await mount()
+    try {
+      const scope = await mintScope(ctx, 'revisions')
+      let state = 'before'
+      const text = vi.fn(() => `rendered ${state}`)
+      ctx.systemPrompt.section({ name: 'policy', order: 20, text: 'global', revision: () => 'global' })
+      ctx.systemPrompt.section({ name: 'static', order: 0, text: 'static' })
+      scope.ctx.systemPrompt.section({ name: 'policy', order: 20, text, revision: () => state })
+      scope.ctx.systemPrompt.section({ name: 'early', order: 10, text: 'early', revision: () => 'fixed' })
+      const context = { scope: scopeKeyOf(scope) }
+      expect(ctx.systemPrompt.sectionRevisions(context)).toEqual([['early', 'fixed'], ['policy', 'before']])
+      state = 'after'
+      expect(ctx.systemPrompt.sectionRevisions(context)).toEqual([['early', 'fixed'], ['policy', 'after']])
+      expect(text).not.toHaveBeenCalled()
+      expect(ctx.systemPrompt.sectionRevisions()).toEqual([['policy', 'global']])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
 
   it('an agent.ctx assemble listener shapes only its own scope\'s assemblies', async () => {
     const ctx = await mount()

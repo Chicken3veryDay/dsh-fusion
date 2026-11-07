@@ -67,6 +67,8 @@ interface RequestInputs {
   readonly executor: ToolExecutor
   readonly ordered: boolean
   readonly contexts: readonly string[]
+  /** Section revisions read in the same synchronous step that started the assembly. */
+  readonly sections: readonly string[]
 }
 
 /** Loop-owned nodes committed in this attempt but not yet sent to a model. */
@@ -426,20 +428,21 @@ export class ReactLoopAgent implements Agent {
     try {
       const definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet))
       const executor = this.loopCtx.tools.selectExecutor(this)
-      const assembly = await this.loopCtx.systemPrompt.assemble({
-        ...assembleContextFor(this, signal), modelSelection: selection, toolSet,
-      })
+      const context = { ...assembleContextFor(this, signal), modelSelection: selection, toolSet }
+      // Section text resolves before assembly's first await, so these revisions describe the rendered sections.
+      const revisions = this.loopCtx.systemPrompt.sectionRevisions(context)
+      const assembly = await this.loopCtx.systemPrompt.assemble(context)
       signal.throwIfAborted()
-      return { toolSet, assembly, inputs: this.requestInputs(toolSet, assembly, definitions, executor) }
+      return { toolSet, assembly, inputs: this.requestInputs(toolSet, assembly, revisions, definitions, executor) }
     } catch (error: unknown) {
       toolSet.dispose()
       throw error
     }
   }
 
-  /** Capture identities and rendered context hashes without retaining a mutable registry view. */
+  /** Capture identities, rendered context hashes, and section revisions without retaining a mutable registry view. */
   private requestInputs(
-    toolSet: ResolvedToolSet, assembly: PromptAssembly,
+    toolSet: ResolvedToolSet, assembly: PromptAssembly, revisions: ReadonlyArray<readonly [string, string]>,
     definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
     executor = this.loopCtx.tools.selectExecutor(this),
   ): RequestInputs {
@@ -447,6 +450,7 @@ export class ReactLoopAgent implements Agent {
       ...this.toolInputs(toolSet, definitions, executor),
       contexts: Object.freeze(renderContextSections(assembly).map(section =>
         createHash('sha256').update(JSON.stringify([section.name, section.text])).digest('hex'))),
+      sections: Object.freeze(revisions.map(entry => JSON.stringify(entry))),
     })
   }
 
@@ -455,7 +459,7 @@ export class ReactLoopAgent implements Agent {
     toolSet: ResolvedToolSet,
     definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
     executor = this.loopCtx.tools.selectExecutor(this),
-  ): Omit<RequestInputs, 'contexts'> {
+  ): Omit<RequestInputs, 'contexts' | 'sections'> {
     return { definitions, executor, ordered: toolSet.ordered === true }
   }
 
@@ -473,17 +477,16 @@ export class ReactLoopAgent implements Agent {
 
   /**
    * Resolve once after preparation and all pending message commits, including retries. An unchanged tuple
-   * keeps the accepted prompt and cache prefix; changed definitions, executor, or context reassemble.
+   * keeps the accepted prompt and cache prefix; changed definitions, executor, context, or section revisions reassemble.
    * Claiming listeners never rerun; a final validation bounds reconciliation without reselection.
    */
   private async reselectForRequest(decision: Extract<PreparedStep, { kind: 'enter' }>, signal: AbortSignal): Promise<void> {
     const toolSet = await this.loopCtx.tools.resolve({ agent: this, modelSelection: decision.selection, signal })
     const previous = decision.tools
     try {
-      const assembly = this.loopCtx.systemPrompt.refreshContext(previous.assembly, {
-        ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet,
-      })
-      const inputs = this.requestInputs(toolSet, assembly)
+      const context = { ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet }
+      const assembly = this.loopCtx.systemPrompt.refreshContext(previous.assembly, context)
+      const inputs = this.requestInputs(toolSet, assembly, this.loopCtx.systemPrompt.sectionRevisions(context))
       signal.throwIfAborted()
       if (this.sameRequestInputs(previous.inputs, inputs)) {
         decision.tools = { ...previous, toolSet }
@@ -503,10 +506,12 @@ export class ReactLoopAgent implements Agent {
     return this.sameToolInputs(before, after)
       && before.contexts.length === after.contexts.length
       && before.contexts.every((hash, index) => after.contexts[index] === hash)
+      && before.sections.length === after.sections.length
+      && before.sections.every((revision, index) => after.sections[index] === revision)
   }
 
   /** Compare admission identities and ordering without rereading ordinary runtime facts. */
-  private sameToolInputs(before: Omit<RequestInputs, 'contexts'>, after: Omit<RequestInputs, 'contexts'>): boolean {
+  private sameToolInputs(before: Omit<RequestInputs, 'contexts' | 'sections'>, after: Omit<RequestInputs, 'contexts' | 'sections'>): boolean {
     return before.executor === after.executor && before.ordered === after.ordered
       && before.definitions.length === after.definitions.length
       && before.definitions.every((definition, index) => after.definitions[index] === definition)

@@ -227,6 +227,35 @@ describe('plan mode through the agent loop', () => {
     ])
   })
 
+  it.each([
+    { name: 're-entry', selected: true },
+    { name: 'exit', selected: false },
+  ])('reassembles the accepted step for a $name selected after its proposal assembled', async ({ selected }) => {
+    const adapter = new MockAdapter([textResponse('Answered in the committed mode.')])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId(`it-plan-late-${String(selected)}`), { provider: 'mock', model: 'mock' })
+    // Enter once so the exit tool stays admitted and tool admission cannot reveal the mode change.
+    expect(ctx.planMode.set(agent, true)).toBe('committed')
+    if (selected) expect(ctx.planMode.set(agent, false)).toBe('committed')
+    // A legal downstream listener selects after its proposal assembled, as a UI selection at that moment would.
+    ctx.on('agent/pre-step', async ({ agent: subject }, next) => {
+      const decision = await next()
+      if (subject === agent) expect(ctx.planMode.set(agent, selected)).toBe('queued')
+      return decision
+    })
+
+    const idle = waitForIdle(ctx, agent)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'answer in the selected mode' }], source: { kind: 'user' } }))
+    await idle
+
+    expect(ctx.planMode.get(agent)).toEqual({ active: selected })
+    expect(findEvent(agent.session.snapshotEvents(), 'plan/mode', 'last').data).toEqual({ active: selected })
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]?.tools?.map(tool => tool.name)).toEqual(['exit_plan_mode', 'read', 'write'])
+    expect(requestSystem(adapter.requests[0]).includes(PLAN_CONFIG.section)).toBe(selected)
+    expect(systemText(agent)).toBe(requestSystem(adapter.requests[0]))
+  })
+
   it('a dismissed plan review ends the turn without another model request', async () => {
     const adapter = new MockAdapter([
       toolCallResponse('call-exit', 'exit_plan_mode', { plan: '# Plan\n\ndo things' }),
