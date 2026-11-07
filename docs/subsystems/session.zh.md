@@ -1170,6 +1170,13 @@ isWithdrawing(session: Session): boolean
 withdrawalOf(session: Session): Promise<void> | undefined
 
 /**
+ * Whether {@link registerWithdrawal} may register a producer on this exact Session now.
+ * @param session - exact live Session to inspect.
+ * @returns true for an opted-in entered Session whose withdrawal has not begun.
+ */
+acceptsWithdrawal(session: Session): boolean
+
+/**
  * Enter a session into the store: install the module-private
  * append publication hooks and add it to the store. Writes remain disabled
  * until {@link announce} completes successfully. Returns the DETACH

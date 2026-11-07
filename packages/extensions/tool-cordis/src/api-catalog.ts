@@ -3584,6 +3584,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the withdrawal completion, or undefined for an ordinary or already-detached Session.',
       },
       {
+        signature: 'acceptsWithdrawal(session: Session): boolean',
+        description: 'Whether registerWithdrawal may register a producer on this exact Session now.',
+        parameters: [{ name: 'session', description: 'exact live Session to inspect.' }],
+        returns: 'true for an opted-in entered Session whose withdrawal has not begun.',
+      },
+      {
         signature: 'enter(session: Session): () => void',
         description: 'Enter a session into the store: install the module-private append publication hooks and add it to the store. Writes remain disabled until announce completes successfully. Returns the DETACH disposer (hooks + store removal). Does NOT emit `session/created` — the caller yields this disposer inside its effect and THEN calls announce, so a throwing `session/created` listener rolls the attach back instead of leaking it.\n\nRe-checks the id for a duplicate: `prepare` and `enter` are public cross-package primitives and a caller may interleave arbitrary work (or another create) between them, so a stale prepared session must NOT overwrite a live store entry of the same id — its detach disposer would later delete the REAL session. The create convenience and the agent factory call the two back-to-back so they never trip this, but the public API cannot assume that.',
         parameters: [{ name: 'session', description: 'an unentered session; independent instances become store-owned.' }],

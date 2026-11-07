@@ -722,6 +722,7 @@ export class JsonlBackendTracker {
     if (sessions?.get(session.id) !== session) return { kind: 'refused', reason: 'not-live' }
     const writer = this.writers.get(session.id)
     if (writer?.lifetimeUncertain) return { kind: 'refused', reason: 'uncertain' }
+    if (sessions.isWithdrawing(session)) return { kind: 'refused', reason: 'fenced' }
     if (writer == null || !writer.lifetimeOpen || this.bindings.get(writer) !== session || !this.active) {
       return { kind: 'refused', reason: 'missing-writer' }
     }
@@ -739,7 +740,7 @@ export class JsonlBackendTracker {
     const fence = (): void => { abort.abort(new Error('writer lifetime fenced')) }
     const current = (): boolean => providerLive() && this.active && writer.lifetimeOpen
       && this.writers.get(session.id) === writer && this.bindings.get(writer) === session
-      && sessions.get(session.id) === session
+      && sessions.get(session.id) === session && !sessions.isWithdrawing(session)
     const checkDispatch = (): ReturnType<SessionWriterReservation['checkDispatch']> => {
       if (writer.lifetimeUncertain || phase === 'uncertain') return { kind: 'refused', reason: 'uncertain' }
       if (phase !== 'active' || abort.signal.aborted || !current()) {
@@ -840,6 +841,11 @@ export class JsonlBackendTracker {
           }
         }.bind(this), 'retained JSONL writer and event route')
         this.retainedRoutes.set(writer, { dispose: newRoute, remove })
+      }
+      // Withdrawal fences dispatch the moment it begins. This stop is not a producer join:
+      // routing and ownership stay with the pin until its release or the writer's close.
+      if (sessions.acceptsWithdrawal(session)) {
+        removers.push(sessions.registerWithdrawal(session, () => { fence(); return Promise.resolve() }))
       }
       removers.push(ctx.root.on('internal/plugin', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))
       removers.push(ctx.root.on('internal/status', (fiber) => { if (ancestors.has(fiber) && !providerLive()) fence() }))

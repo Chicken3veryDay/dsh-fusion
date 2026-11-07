@@ -1244,6 +1244,16 @@ export class SessionStore extends Service {
   }
 
   /**
+   * Whether {@link registerWithdrawal} may register a producer on this exact Session now.
+   * @param session - exact live Session to inspect.
+   * @returns true for an opted-in entered Session whose withdrawal has not begun.
+   */
+  acceptsWithdrawal(session: Session): boolean {
+    const entry = this.store.get(session.id)
+    return entry?.session === session && entry.withdrawal !== undefined && entry.withdrawal.completion === undefined
+  }
+
+  /**
    * Enter a session into the store: install the module-private
    * append publication hooks and add it to the store. Writes remain disabled
    * until {@link announce} completes successfully. Returns the DETACH
