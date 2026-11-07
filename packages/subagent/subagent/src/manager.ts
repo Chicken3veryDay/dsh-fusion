@@ -46,8 +46,11 @@ import type { Activation, ActivationResource, LocalActivation, RetainedRelease }
 /**
  * Per-delivery cutoff tripped by a selected drain that begins while the
  * delivery is in flight; a later delivery is ordered after the drain instead.
+ * Only a drain by the exact parent that admitted the delivery trips it.
  */
 interface DeliveryCutoff {
+  /** Exact live parent the delivery was admitted under. */
+  readonly parent: Agent
   tripped: boolean
 }
 
@@ -364,9 +367,10 @@ export class SubagentManager {
   /**
    * Release selected direct children of one exact live parent, including a
    * child whose delivery is resuming or establishing it under its ChildLock.
-   * Deliveries to a selected child that are in flight when the drain begins
-   * are refused with `ACTIVATION_CLOSING`; later deliveries are ordered after
-   * the drain. The drain waits for each selected lock tail, so work already
+   * Deliveries to a selected child that this parent admitted and that are in
+   * flight when the drain begins are refused with `ACTIVATION_CLOSING`;
+   * deliveries admitted under another parent are left alone, and later
+   * deliveries are ordered after the drain. The drain waits for each selected lock tail, so work already
    * holding the lock publishes and is released, or rolls back, first.
    * @param parent - exact live direct parent authorizing the selected release.
    * @param childIds - durable direct-child ids to release.
@@ -390,7 +394,9 @@ export class SubagentManager {
     for (const childId of ids) select(this.resident.get(childId))
 
     for (const childId of ids) {
-      for (const cutoff of this.inFlight.get(childId) ?? []) cutoff.tripped = true
+      for (const cutoff of this.inFlight.get(childId) ?? []) {
+        if (cutoff.parent === parent) cutoff.tripped = true
+      }
     }
     for (const activation of targets) void this.dispose(activation).catch(() => undefined)
     const published = await Promise.all(ids.map(childId =>
@@ -1433,7 +1439,7 @@ export class SubagentManager {
   ): Promise<MessageId> {
     this.assertAdmitting(parent)
     const releaseHold = this.holdOwnership(parent, childId)
-    const cutoff: DeliveryCutoff = { tripped: false }
+    const cutoff: DeliveryCutoff = { parent, tripped: false }
     let cutoffs = this.inFlight.get(childId)
     if (cutoffs === undefined) {
       cutoffs = new Set()
