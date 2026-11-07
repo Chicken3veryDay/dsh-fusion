@@ -38,8 +38,9 @@ async function fillMap(w: World): Promise<void> {
     while (await add('n'.repeat(length), refs(cites))) { /* fill */ }
   }
   while (await add('n', ['ref:x'])) { /* fill */ }
+  // A finished holder acknowledges before it releases: a live holder's release hands waiting work back to the default curator.
+  await map.acknowledgeIndex(holder, { rootSessionId: w.owner.id, indexDigest: claimed.observedIndexDigest })
   await map.release(holder, { rootSessionId: w.owner.id })
-  await map.acknowledgeIndex(w.owner, { rootSessionId: w.owner.id, indexDigest: claimed.observedIndexDigest })
 }
 
 async function refuseNote(w: World): Promise<ContextMapError> {
