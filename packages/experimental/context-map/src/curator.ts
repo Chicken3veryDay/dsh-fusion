@@ -334,13 +334,15 @@ export class DefaultContextCurator extends Service {
       case 'claiming':
       case 'running':
         if (event.kind === 'trigger') record.retrigger ||= event.news
-        else if (event.kind === 'started' && state.kind === 'claiming') enter({ kind: 'running', run: state.run })
+        else if (event.kind === 'started') enter({ kind: 'running', run: state.run })
         else if (event.kind === 'stop') {
           enter({ kind: 'yielding', run: state.run, reason: event.reason })
           this.abort(state.run, event.reason)
         } else {
-          enter({ kind: 'settling', run: state.run, reason: event.reason })
-          this.track(this.settle(record, state.run, event.reason))
+          // A claiming or running record receives no other event than trigger, started, stop, and ended.
+          const { reason } = event as Extract<CuratorEvent, { readonly kind: 'ended' }>
+          enter({ kind: 'settling', run: state.run, reason })
+          this.track(this.settle(record, state.run, reason))
         }
         return
       case 'yielding':

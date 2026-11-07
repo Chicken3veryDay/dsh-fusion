@@ -948,7 +948,8 @@ describe('curator seams', () => {
   it('leaves the file node alone when none of a curated group sections exist', async () => {
     const w = await world()
     w.tree.registerCuratedGroups(() => [{
-      root: 'Instructions', origin: 'project', name: 'rules', title: 'Project rules', summary: 'Use before changing code.', sections: ['sec_missing'], tools: [],
+      root: 'Instructions', origin: 'project', name: 'rules', title: 'Project rules', summary: 'Use before changing code.',
+      sections: [sectionId(0xdead)], tools: [],
     }])
     const listing = await w.tree.browse(w.agent, { path: 'Instructions/Project' })
     expect(listing.nodes.map(node => node.path)).toEqual(['Instructions/Project/AGENTS.md'])

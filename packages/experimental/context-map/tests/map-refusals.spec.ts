@@ -7,12 +7,20 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ContextSectionId } from '@deepseek-ai/dsh-experimental-context-index/types'
-import type { MapGroupId, MapNoteId, MapPendingId, MapSnapshot } from '../src/index.ts'
+import { ContextMapError, type MapGroupId, type MapNoteId, type MapPendingId, type MapSnapshot } from '../src/index.ts'
 import { disposeWorlds, preStep, world, type World } from './fixture.ts'
 
 afterEach(async () => {
   try { await disposeWorlds() } finally { vi.restoreAllMocks() }
 })
+
+/** Await a refusal and check its code and that its message names the given text. */
+async function refusedWith(operation: Promise<unknown>, code: string, text: string): Promise<void> {
+  const error = await operation.then(() => undefined, (failure: unknown) => failure)
+  expect(error).toBeInstanceOf(ContextMapError)
+  expect(error).toMatchObject({ code })
+  expect(error instanceof Error ? error.message : '').toContain(text)
+}
 
 const toolsGroup = (name: string) => ({ path: `Tools/Global/${name}`, title: name, summary: `Use for ${name}.`, tools: [`${name}_tool`] })
 
@@ -36,13 +44,9 @@ describe('claim and release', () => {
     const w = await world()
     const map = w.ctx.contextMap
     const stranger = SessionId('stranger')
-    await expect(map.claim(w.owner, { expectedHolder: stranger })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_CONFLICT', message: expect.stringContaining('held by nobody'),
-    })
+    await refusedWith(map.claim(w.owner, { expectedHolder: stranger }), 'CONTEXT_MAP_CONFLICT', 'held by nobody')
     await map.claim(w.owner)
-    await expect(map.claim(w.owner, { expectedHolder: stranger })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_CONFLICT', message: expect.stringContaining(`held by ${w.owner.id}`),
-    })
+    await refusedWith(map.claim(w.owner, { expectedHolder: stranger }), 'CONTEXT_MAP_CONFLICT', `held by ${w.owner.id}`)
     await expect(map.claim(w.owner, { expectedHolder: w.owner.id })).resolves.toMatchObject({ curatorId: w.owner.id })
   })
 
@@ -123,12 +127,8 @@ describe('group and note edits', () => {
       group: { path: 'Instructions/Project/rules', title: 'Rules', summary: 'Use for rules.', sections: await w.projectSections() },
     })
     const rulesId = rules.groups.at(-1)!.id
-    await expect(map.mergeGroups(w.owner, { expectedRevision: revision(), from: alpha, into: alpha })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_INVALID_INPUT', message: expect.stringContaining('two different groups'),
-    })
-    await expect(map.mergeGroups(w.owner, { expectedRevision: revision(), from: rulesId, into: alpha })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_INVALID_INPUT', message: expect.stringContaining('same root'),
-    })
+    await refusedWith(map.mergeGroups(w.owner, { expectedRevision: revision(), from: alpha, into: alpha }), 'CONTEXT_MAP_INVALID_INPUT', 'two different groups')
+    await refusedWith(map.mergeGroups(w.owner, { expectedRevision: revision(), from: rulesId, into: alpha }), 'CONTEXT_MAP_INVALID_INPUT', 'same root')
     for (const [group, name] of [[alpha, 'a'], [beta, 'b']] as const) {
       for (const n of [1, 2]) {
         await map.addNote(w.owner, { expectedRevision: revision(), groupId: group, text: `${name}${n} fact`, cites: [`ref:${name}${n}`] })
@@ -174,9 +174,9 @@ describe('group and note edits', () => {
     await map.release(w.owner)
     const { id } = await map.note(w.owner, { text: 'A fact.', cites: ['ref:a', 'ref:b', 'ref:c', 'ref:d'] })
     await map.claim(w.owner)
-    await expect(map.filePending(w.owner, {
+    await refusedWith(map.filePending(w.owner, {
       expectedRevision: revision(), pendingId: id, groupId: groups[0]!, cites: ['ref:e'],
-    })).rejects.toMatchObject({ code: 'CONTEXT_MAP_LIMIT', message: expect.stringContaining('at most 4 citations') })
+    }), 'CONTEXT_MAP_LIMIT', 'at most 4 citations')
     await expect(map.filePending(w.owner, { expectedRevision: revision(), pendingId: id, groupId: groups[0]! })).resolves.toBeDefined()
   })
 
@@ -206,14 +206,14 @@ describe('view bounds of a map written under a larger budget', () => {
     const w = await world()
     const core = Array.from({ length: 400 }, (_, i) => brandString<ContextSectionId>(`sec_${i.toString(16).padStart(16, '0')}`))
     replayed(w, current => ({ ...current, core }))
-    await expect(w.ctx.contextMap.view(w.owner)).rejects.toMatchObject({ code: 'CONTEXT_MAP_LIMIT', message: expect.stringContaining('metadata') })
+    await refusedWith(w.ctx.contextMap.view(w.owner), 'CONTEXT_MAP_LIMIT', 'metadata')
   })
 
   it('refuses a pending note that cannot be shown on a page', async () => {
     const w = await world()
     const big = { id: brandString<MapPendingId>('pnd_big'), text: 'x'.repeat(9000), cites: [], by: w.owner.id }
     replayed(w, current => ({ ...current, pending: [big] }))
-    await expect(w.ctx.contextMap.view(w.owner)).rejects.toMatchObject({ code: 'CONTEXT_MAP_LIMIT', message: expect.stringContaining('pending note') })
+    await refusedWith(w.ctx.contextMap.view(w.owner), 'CONTEXT_MAP_LIMIT', 'pending note')
   })
 
   it('refuses a group note that cannot be shown on a page', async () => {
@@ -222,9 +222,7 @@ describe('view bounds of a map written under a larger budget', () => {
     replayed(w, current => ({ ...current, groups: [group({ notes: [note] })] }))
     const view = await w.ctx.contextMap.view(w.owner)
     expect(view.groups[0]).toMatchObject({ id: 'grp_big', notes: [], omittedNotes: 1 })
-    await expect(w.ctx.contextMap.view(w.owner, { groupId: brandString<MapGroupId>('grp_big') })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_LIMIT', message: expect.stringContaining('group note'),
-    })
+    await refusedWith(w.ctx.contextMap.view(w.owner, { groupId: brandString<MapGroupId>('grp_big') }), 'CONTEXT_MAP_LIMIT', 'group note')
   })
 
   it('leaves a group that cannot be shown to a page that starts at it, and refuses that page', async () => {
@@ -232,9 +230,7 @@ describe('view bounds of a map written under a larger budget', () => {
     replayed(w, current => ({ ...current, groups: [group({ tools: ['x'.repeat(9000)] })] }))
     const first = await w.ctx.contextMap.view(w.owner)
     expect(first).toMatchObject({ groups: [], omittedGroups: 1, nextGroupAfter: '' })
-    await expect(w.ctx.contextMap.view(w.owner, { groupAfter: '' })).rejects.toMatchObject({
-      code: 'CONTEXT_MAP_LIMIT', message: expect.stringContaining('One group exceeds'),
-    })
+    await refusedWith(w.ctx.contextMap.view(w.owner, { groupAfter: '' }), 'CONTEXT_MAP_LIMIT', 'One group exceeds')
   })
 
   it('refuses a note continuation without the group it continues', async () => {
