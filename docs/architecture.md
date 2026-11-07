@@ -96,7 +96,8 @@ turn/start
      readmit tools; compare captured inputs -> reassemble and reconcile if changed
      log request/header, tool-registry messages, and request/context as needed
      if history changed since readmission began: validate admission once against it; fail if unstable
-     recheck admitted definitions and executor against live registrations; fail if changed
+     after the last await: recheck admitted definitions and executor against live registrations; fail if changed
+     history changed after the last check -> abandon the attempt; retry once per step, then fail
      derive and freeze model history from the log
      stream the bound prepared call -> llm/stream -> agent/assistant-stream start
        agent/assistant-stream chunk*

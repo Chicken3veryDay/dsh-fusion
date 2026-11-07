@@ -744,6 +744,7 @@ export class ReactLoopAgent implements Agent {
     signal.throwIfAborted()
 
     let firstAttempt = true
+    let restarted = false
     while (true) {
       const { config, preparedCall } = await this.prepareRequest(turn, step, decision.selection, signal)
       const requestContext = await this.loopCtx.systemPrompt.requestContext({
@@ -762,25 +763,33 @@ export class ReactLoopAgent implements Agent {
       await this.reselectForRequest(decision, signal)
       const { assembly, toolSet, inputs } = decision.tools
       this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal, unsent)
-      const request = await this.buildRequest(
-        config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, async () => {
-          if (!this.historyUnchanged(admitted)) {
-            // History committed after the checkpoint (reconciliation, tool notices, or a concurrent append
-            // during assembly) may change admission. Verify its fixed point without another resolution or
-            // assembly; an unstable selection must never reach dispatch.
-            const settled = this.historyCheckpoint()
-            await toolSet.validate()
-            if (!this.historyUnchanged(settled)) {
-              throw new ToolAdmissionError(new Error('Request context did not settle after admission; retry the turn'))
-            }
-          }
-          // Registrations can be withdrawn or replaced during any await since resolution, including
-          // assembly; the frozen declarations must still be exactly the live admitted definitions.
+      // Validation reads this history; an append after it, including one during the final await, is a change.
+      let checked = admitted
+      const request = await this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, {
+        settle: async () => {
+          if (this.historyUnchanged(checked)) return
+          // History committed after the checkpoint (reconciliation, tool notices, or a concurrent append
+          // during assembly) may change admission. Verify its fixed point once, without another resolution
+          // or assembly.
+          checked = this.historyCheckpoint()
+          await toolSet.validate()
+        },
+        verify: () => {
+          // Registrations can be withdrawn or replaced during any await since resolution; the frozen
+          // declarations must still be exactly the live admitted definitions.
           if (!this.sameToolInputs(inputs, this.toolInputs(toolSet))) {
             throw new ToolAdmissionError(new Error('Tool registrations changed after admission; retry the turn'))
           }
+          return this.historyUnchanged(checked)
         },
-      )
+      })
+      if (request === undefined) {
+        // History moved after the last admission check. Validation can only confirm a selection, so a
+        // fresh attempt resolves against the final history; a second movement fails before dispatch.
+        if (restarted) throw new ToolAdmissionError(new Error('Request context did not settle after admission; retry the turn'))
+        restarted = true
+        continue
+      }
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -956,7 +965,11 @@ export class ReactLoopAgent implements Agent {
     return { config, ...preparedCall === undefined ? {} : { preparedCall } }
   }
 
-  /** Log the resolved envelope and derive a frozen request from the admitted surface. */
+  /**
+   * Log the resolved envelope and derive a frozen request from the admitted surface. `settle` holds the
+   * attempt's last await; `verify` runs synchronously before derivation, so nothing commits between it
+   * and freezing. Returns `undefined` when `verify` reports that history moved after its last check.
+   */
   private async buildRequest(
     config: LlmCallConfig,
     preparedCall: PreparedLlmCall | undefined,
@@ -964,8 +977,8 @@ export class ReactLoopAgent implements Agent {
     position: { turn: number; step: number },
     startsRequestSeries: boolean,
     signal: AbortSignal,
-    validate: () => Promise<void>,
-  ): Promise<GenerateOptions> {
+    admission: { readonly settle: () => Promise<void>; readonly verify: () => boolean },
+  ): Promise<GenerateOptions | undefined> {
     const { session } = this
     const surfaceGeneration = session.surface.contentGeneration
     const header = canonicalHeader({
@@ -1028,8 +1041,9 @@ export class ReactLoopAgent implements Agent {
     }
     signal.throwIfAborted()
 
-    await validate()
+    await admission.settle()
     signal.throwIfAborted()
+    if (!admission.verify()) return undefined
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)

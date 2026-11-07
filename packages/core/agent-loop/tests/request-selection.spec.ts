@@ -201,3 +201,33 @@ it('adopts fresh admission when the same definition is registered again during p
   expect(h.adapter.requests[1]?.tools?.map(tool => tool.name)).toEqual(['probe'])
   expect(h.calls).toEqual(['probe'])
 })
+
+it('fails the turn when history moves after the final admission check of the step\'s fresh attempt too', async () => {
+  const h = await harness()
+  const gates = Array.from({ length: 4 }, () => ({
+    entered: Promise.withResolvers<undefined>(), release: Promise.withResolvers<undefined>(),
+  }))
+  let armed = false
+  let calls = 0
+  h.ctx.on('agent/request', (_event, next) => { armed = true; return next() })
+  h.ctx.tools.registerAdmissionPolicy(async ({ candidates }) => {
+    const gate = armed ? gates[calls++] : undefined
+    if (gate !== undefined) { gate.entered.resolve(undefined); await gate.release.promise }
+    return candidates.keys()
+  })
+  const running = send(h.agent, 'first')
+  for (const [index, gate] of gates.entries()) {
+    await gate.entered.promise
+    h.agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: `moved ${index}` }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    gate.release.resolve(undefined)
+  }
+  await running
+  expect(calls).toBe(4)
+  expect(h.adapter.requests).toEqual([])
+  expect(h.calls).toEqual([])
+  expect(h.agent.session.snapshotEvents().at(-1)).toMatchObject({
+    type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'TOOL_ADMISSION_FAILED' } } },
+  })
+})
