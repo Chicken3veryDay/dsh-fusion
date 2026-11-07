@@ -3,7 +3,7 @@
  * building, regrouping, and note verification never enter the working agent's context.
  *
  * Each live map owner has one lifecycle record whose state is one of `idle`, `announced`,
- * `claiming`, `running`, `yielding`, `settling`, or `disposed`; {@link DefaultContextCurator.transition}
+ * `withdrawing`, `claiming`, `running`, `yielding`, `settling`, or `disposed`; {@link DefaultContextCurator.transition}
  * is the only code that changes it, and the package README holds the state table. A run starts when
  * curation work waits (a changed index, a pending or stale note, or a note refused for lack of room)
  * and nothing else holds the role, at most `maxAttempts` times for the same work; a start the subagent
@@ -58,14 +58,20 @@ interface Run {
   readonly controller: AbortController
   activation: SubagentActivation | undefined
   indexDigest: string | undefined
-  /** {@link DefaultContextCurator.endedSubagents} when the activation pool refused the start for capacity. */
-  refusedAt: number | undefined
+  /**
+   * {@link DefaultContextCurator.endedSubagents} before the run asked for an activation slot; a subagent
+   * that ended after it may have freed the slot a capacity refusal reports.
+   */
+  readonly endsBefore: number
 }
 
 /** Lifecycle state of the default curator for one map owner. */
 type CuratorState =
   | { readonly kind: 'idle' }
-  | { readonly kind: 'announced' }
+  /** An evaluation decides whether waiting work starts a run; aborting `evaluation` cancels its reads. */
+  | { readonly kind: 'announced'; readonly evaluation: AbortController }
+  /** The owner or the service went away during an evaluation; it was aborted and the record waits for it to end. */
+  | { readonly kind: 'withdrawing' }
   | { readonly kind: 'claiming'; readonly run: Run }
   | { readonly kind: 'running'; readonly run: Run }
   | { readonly kind: 'yielding'; readonly run: Run; readonly reason: StopReason }
@@ -84,7 +90,7 @@ type CuratorEvent =
   | { readonly kind: 'eligible'; readonly work: string }
   /**
    * Evaluation ended the announcement: no work, a live holder, attempts used up, no cheap route, work
-   * waiting for capacity, or a failed read.
+   * waiting for capacity, a failed read, or cancellation.
    */
   | { readonly kind: 'ineligible' }
   /** The run committed its claim and started its subagent. */
@@ -108,7 +114,7 @@ interface OwnerRecord {
   failure: ContextMapError | undefined
   /** Last start failure reported to the log, so a repeated failure is reported once. */
   reported: string | undefined
-  /** Work and owner route for which no cheap route exists; nothing new starts until either changes. */
+  /** {@link routeKey} of work and owner route for which no cheap route exists; nothing new starts until either changes. */
   noRoute: string | undefined
   /** Work whose start the activation pool refused for capacity; it starts again only after a subagent ends. */
   awaitingCapacity: string | undefined
@@ -118,6 +124,15 @@ interface OwnerRecord {
 
 function assertNever(value: never): never {
   throw new Error(`unexpected curator state ${JSON.stringify(value)}`)
+}
+
+/**
+ * Key of a no-cheap-route decision: the work and every part of the owner's route that route selection
+ * compares, so a changed provider, model, or reasoning effort evaluates the route again.
+ */
+function routeKey(work: string, owner: Agent): string {
+  const route = owner.model.current()
+  return JSON.stringify([work, route?.provider ?? null, route?.model ?? null, route?.reasoningEffort ?? null])
 }
 
 /** Background default curator; mount `DefaultContextCurator` beside `ContextMapService`. */
@@ -289,19 +304,22 @@ export class DefaultContextCurator extends Service {
       case 'idle':
         if (event.kind === 'trigger' && !record.closing) {
           record.retrigger = false
-          enter({ kind: 'announced' })
-          this.track(this.evaluate(record, event.work))
+          const evaluation = new AbortController()
+          enter({ kind: 'announced', evaluation })
+          this.track(this.evaluate(record, evaluation.signal, event.work))
         } else if (event.kind === 'stop' && record.closing) {
           this.dispose(record, enter)
         }
         return
       case 'announced':
         if (event.kind === 'trigger') record.retrigger ||= event.news
-        else if (event.kind === 'stop' && record.closing) this.dispose(record, enter)
-        else if (event.kind === 'eligible') {
+        else if (event.kind === 'stop' && record.closing) {
+          enter({ kind: 'withdrawing' })
+          state.evaluation.abort(new Error(event.reason))
+        } else if (event.kind === 'eligible') {
           const run: Run = {
             childId: SessionId(randomUUID()), work: event.work, controller: new AbortController(),
-            activation: undefined, indexDigest: undefined, refusedAt: undefined,
+            activation: undefined, indexDigest: undefined, endsBefore: this.endedSubagents,
           }
           // The run reads the map itself, so news that arrived during evaluation is its work too.
           record.skipWork = undefined
@@ -313,6 +331,11 @@ export class DefaultContextCurator extends Service {
           enter({ kind: 'idle' })
           if (record.retrigger) this.transition(record, { kind: 'trigger', news: true })
         }
+        return
+      case 'withdrawing':
+        if (event.kind === 'trigger') record.retrigger ||= event.news
+        // The aborted evaluation reports its end either way; nothing it decided starts.
+        else if (event.kind === 'eligible' || event.kind === 'ineligible') this.dispose(record, enter)
         return
       case 'claiming':
       case 'running':
@@ -364,8 +387,8 @@ export class DefaultContextCurator extends Service {
     // A holder that made this run yield may since have gone; its work is picked up again.
     if (reason === 'role moved' && this.ctx.contextMap.snapshotOf(record.owner).curatorId === null) {
       this.transition(record, { kind: 'trigger', news: true })
-    } else if (reason === 'no capacity' && run.refusedAt !== this.endedSubagents) {
-      // A subagent ended after the refusal, so its slot may be free already.
+    } else if (reason === 'no capacity' && run.endsBefore !== this.endedSubagents) {
+      // A subagent ended since the run asked for a slot, possibly before the refusal was observed, so its slot may be free.
       this.transition(record, { kind: 'trigger', news: true })
     } else if (reason === 'no capacity') {
       record.awaitingCapacity = run.work
@@ -386,12 +409,11 @@ export class DefaultContextCurator extends Service {
   }
 
   /**
-   * Decide whether announced work starts a run; every outcome ends the announcement explicitly.
-   * Work an owner step found is used as found; news reads the waiting work once.
+   * Decide whether announced work starts a run; every outcome, including cancellation, ends the
+   * announcement explicitly. Work an owner step found is used as found; news reads the waiting work once.
    */
-  private async evaluate(record: OwnerRecord, announced: CurationWork | undefined): Promise<void> {
+  private async evaluate(record: OwnerRecord, signal: AbortSignal, announced: CurationWork | undefined): Promise<void> {
     const { owner } = record
-    const still = (): boolean => record.state.kind === 'announced' && !record.closing
     try {
       const holder = this.ctx.contextMap.snapshotOf(owner).curatorId
       if (holder !== null) {
@@ -402,17 +424,14 @@ export class DefaultContextCurator extends Service {
         // The recorded holder did not survive a restart; its claim no longer excludes anyone.
         await this.ctx.contextMap.release(owner, { rootSessionId: owner.id })
       }
-      const work = announced ?? await this.ctx.contextMap.curationWork(owner)
-      if (!still()) return
-      const route = owner.model.current()
-      const routeKey = `${work?.signature ?? ''}|${route?.provider ?? ''}/${route?.model ?? ''}`
+      const work = announced ?? await this.ctx.contextMap.curationWork(owner, signal)
+      signal.throwIfAborted()
       const eligible = work !== null && work.attempts < this.config.maxAttempts
-        && work.signature !== record.skipWork && routeKey !== record.noRoute && work.signature !== record.awaitingCapacity
-        && this.ctx.contextMap.snapshotOf(owner).curatorId === null
+        && work.signature !== record.skipWork && routeKey(work.signature, owner) !== record.noRoute
+        && work.signature !== record.awaitingCapacity && this.ctx.contextMap.snapshotOf(owner).curatorId === null
       this.transition(record, eligible ? { kind: 'eligible', work: work.signature } : { kind: 'ineligible' })
     } catch (error: unknown) {
-      if (!still()) return
-      this.ctx.logger.warn(`context curator: could not start for ${owner.id}: ${String(error)}`)
+      if (!signal.aborted) this.ctx.logger.warn(`context curator: could not start for ${owner.id}: ${String(error)}`)
       this.transition(record, { kind: 'ineligible' })
     }
   }
@@ -421,15 +440,14 @@ export class DefaultContextCurator extends Service {
     const { owner } = record
     const { signal } = run.controller
     try {
-      const route = owner.model.current()
-      const routeKey = `${run.work}|${route?.provider ?? ''}/${route?.model ?? ''}`
+      const key = routeKey(run.work, owner)
       let choice: Awaited<ReturnType<typeof selectCuratorRoute>>
       try {
         choice = await selectCuratorRoute(this.ctx.llm, owner, this.config, signal)
       } catch (error: unknown) {
         if (error instanceof ContextMapError && error.code === 'CONTEXT_MAP_NO_CHEAP_ROUTE') {
           record.failure = error
-          record.noRoute = routeKey
+          record.noRoute = key
         }
         throw error
       }
@@ -462,7 +480,6 @@ export class DefaultContextCurator extends Service {
       })
     } catch (error: unknown) {
       if (!signal.aborted && error instanceof SubagentError && error.code === 'ACTIVATION_LIMIT_REACHED') {
-        run.refusedAt = this.endedSubagents
         this.transition(record, { kind: 'ended', reason: 'no capacity' })
         return
       }
