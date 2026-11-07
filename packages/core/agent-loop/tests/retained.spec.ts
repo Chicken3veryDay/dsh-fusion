@@ -482,18 +482,25 @@ for (const phase of ['create', 'adopt'] as const) {
 it('allows one tool-less test turn on a retained driver and rejects overlapping or stock activation', async () => {
   const { ReactLoopAgent } = await import('../src/agent.ts')
   const { ctx, adapter } = await mount()
-  const stock = await ctx.agentLoop.create(SessionId('stock-test-activation'), { provider: 'mock', model: 'fake' })
-  if (!(stock instanceof ReactLoopAgent)) throw new Error('expected production loop')
-  await expect(stock.testOnlyTurn(message())).rejects.toThrow('unavailable')
+  const stock = await ctx.agents.create({ sessionId: SessionId('stock-test-activation'), agentOptions: options.agentOptions })
+  try {
+    if (!(stock.agent instanceof ReactLoopAgent)) throw new Error('expected production loop')
+    await expect(stock.agent.testOnlyTurn(message())).rejects.toThrow('unavailable')
+  } finally {
+    await stock.dispose()
+  }
   const retained = await ctx.agents.retain(options)
-  const handle = await retained.adopt()
-  const agent = handle.agent
-  if (!(agent instanceof ReactLoopAgent)) throw new Error('expected production loop')
-  agent.ctx.on('agent/step-accepted', async () => {
-    await expect(agent.testOnlyTurn(message())).rejects.toThrow('unavailable')
-  })
-  await agent.testOnlyTurn(message())
-  expect(adapter.requests).toHaveLength(1)
-  expect(adapter.requests[0]?.tools ?? []).toEqual([])
-  await retained.dispose()
+  try {
+    const handle = await retained.adopt()
+    const agent = handle.agent
+    if (!(agent instanceof ReactLoopAgent)) throw new Error('expected production loop')
+    agent.ctx.on('agent/step-accepted', async () => {
+      await expect(agent.testOnlyTurn(message())).rejects.toThrow('unavailable')
+    })
+    await agent.testOnlyTurn(message())
+    expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]?.tools ?? []).toEqual([])
+  } finally {
+    await retained.dispose()
+  }
 })
