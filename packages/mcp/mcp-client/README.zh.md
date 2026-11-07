@@ -98,6 +98,8 @@ kind: "package-reference"
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+两种传输的 schema 共用服务器标识、超时、启动、来源、指令大小和重连字段。
+
 <details>
 <summary>实现细节——点击展开</summary>
 
