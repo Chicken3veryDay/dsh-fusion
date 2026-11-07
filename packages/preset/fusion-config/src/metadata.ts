@@ -52,13 +52,14 @@ class MetadataFailure extends Error {
 }
 
 /**
- * Derive the provider's authoritative listing endpoint without duplicating /v1.
+ * Derive the listing endpoint relative to the transport client's configured API root.
  * @param binding - exact configured upstream.
  * @returns metadata URL on the binding's pinned origin.
  */
 export function metadataEndpoint(binding: Binding): URL {
   const base = new URL(binding.baseURL)
-  base.pathname = `${base.pathname.replace(/\/$/u, '').replace(/\/v1$/u, '')}/v1/models`
+  const path = base.pathname.replace(/\/$/u, '')
+  base.pathname = binding.transport === 'openai-responses' ? `${path}/models` : `${path.replace(/\/v1$/u, '')}/v1/models`
   return base
 }
 

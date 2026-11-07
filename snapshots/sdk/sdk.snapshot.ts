@@ -1232,7 +1232,10 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(events.filter(event => event.type === 'command/run')).toMatchObject([{ data: { name: 'fusion_preflight' } }])
         expect(events.find(event => event.type === 'command/run')?.data).not.toHaveProperty('args')
         expect(events.filter(event => event.type === 'command/done')).toMatchObject([{ data: {
-          kind: 'error', text: expect.stringContaining('No model was invoked.'),
+          kind: 'error', text: expect.stringContaining('Astra: missing-model'),
+        } }])
+        expect(events.filter(event => event.type === 'command/done')).toMatchObject([{ data: {
+          text: expect.stringContaining('No model was invoked.'),
         } }])
         expect(parent.content).not.toContain('fusion-sentinel-key')
       }
