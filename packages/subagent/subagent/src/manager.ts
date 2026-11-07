@@ -41,10 +41,18 @@ import { attachStructuredRuntime } from './structured.ts'
 import type { StructuredAttachment } from './structured.ts'
 import type { SubagentDelivery } from './control-types.ts'
 import { ActivationPool, ChildLock, activationAgent, captureLocalResult, observeLocalFailure, requireLocalActivation } from './activation.ts'
-import type { Activation, ActivationResource, LocalActivation } from './activation.ts'
+import type { Activation, ActivationResource, LocalActivation, RetainedRelease } from './activation.ts'
+
+/**
+ * Per-delivery cutoff tripped by a selected drain that begins while the
+ * delivery is in flight; a later delivery is ordered after the drain instead.
+ */
+interface DeliveryCutoff {
+  tripped: boolean
+}
 
 /** Inputs shared by model steering and human prompt delivery. */
-type ChildDeliveryOptions =
+type ChildDeliveryOptions = (
   | {
     readonly delivery: 'steer'
     /**
@@ -55,6 +63,10 @@ type ChildDeliveryOptions =
     readonly signal: AbortSignal
   }
   | { readonly delivery: 'queue'; readonly source: MessageSource; readonly signal: AbortSignal }
+) & {
+  /** Present for a delivery to an existing child; absent for a creation's initial prompt. */
+  readonly cutoff?: DeliveryCutoff
+}
 
 /** Package-private hooks supplied by the owning service. */
 interface SubagentHost {
@@ -145,6 +157,12 @@ export class SubagentManager {
    * poisoning a later same-id replacement.
    */
   private readonly closingScopes = new Map<Agent, Set<Agent>>()
+  /** Child id → cutoffs of the deliveries to it that are in flight; a selected drain trips them. */
+  private readonly inFlight = new Map<SessionId, Set<DeliveryCutoff>>()
+  /** Parent Activation → child id → in-flight operations holding that ownership edge. */
+  private readonly holds = new WeakMap<Activation, Map<SessionId, { count: number }>>()
+  /** Rejections whose Activation stayed retained; startup cleanup leaves their slot reserved. */
+  private readonly retainedFailures = new WeakSet<SubagentError>()
   private draining = false
 
   /**
@@ -251,9 +269,13 @@ export class SubagentManager {
    */
   async waitForChildren(parent: Agent): Promise<boolean> {
     let observed = false
+    // A retained Activation has no join point: its admission was rejected and
+    // only a dispose or drain retry can release it.
+    const joinable = (item: Activation): boolean => item.retained === undefined
+      && activationAgent(item) !== parent && item.ancestry.has(parent)
     while (true) {
       const pending = [...this.materializations].filter(item => item.lineage.includes(parent))
-      const children = [...this.resident.values()].filter(item => activationAgent(item) !== parent && item.ancestry.has(parent))
+      const children = [...this.resident.values()].filter(joinable)
       observed ||= children.some(item => item.kind === 'local' && item.handle.agent.status !== 'idle')
       await Promise.all(children.flatMap(item => item.kind === 'local' ? [item.handle.agent.whenIdle()] : []))
       const waits: Promise<unknown>[] = pending.map(item => item.settled)
@@ -283,8 +305,7 @@ export class SubagentManager {
       }
       // A descendant can be published while whenIdle follows another child.
       if ([...this.materializations].some(item => item.lineage.includes(parent) && !pending.includes(item))
-        || [...this.resident.values()].some(item => activationAgent(item) !== parent
-          && item.ancestry.has(parent) && !children.includes(item))) continue
+        || [...this.resident.values()].some(item => joinable(item) && !children.includes(item))) continue
       return observed
     }
   }
@@ -341,32 +362,54 @@ export class SubagentManager {
   }
 
   /**
-   * Release selected resident direct children of one exact live parent.
+   * Release selected direct children of one exact live parent, including a
+   * child whose delivery is resuming or establishing it under its ChildLock.
+   * Deliveries to a selected child that are in flight when the drain begins
+   * are refused with `ACTIVATION_CLOSING`; later deliveries are ordered after
+   * the drain. The drain waits for each selected lock tail, so work already
+   * holding the lock publishes and is released, or rolls back, first.
    * @param parent - exact live direct parent authorizing the selected release.
-   * @param childIds - durable direct-child ids to release when resident.
+   * @param childIds - durable direct-child ids to release.
    */
   async drainChildren(parent: Agent, childIds: readonly SessionId[]): Promise<void> {
     if (this.ctx.agents.get(parent.id) !== parent) {
       throw new SubagentError('selected child teardown requires the exact live parent agent', 'UNAUTHORIZED')
     }
+    const ids = [...new Set(childIds)]
     const targets: Activation[] = []
-    for (const childId of new Set(childIds)) {
-      const activation = this.resident.get(childId)
-      if (activation === undefined) continue
+    const select = (activation: Activation | undefined): void => {
+      if (activation === undefined || targets.includes(activation)) return
       if (activation.parent.id !== parent.id || !activation.ancestry.has(parent)) {
         throw new SubagentError(
-          `subagent "${childId}" is not a direct child of agent "${parent.id}"`,
+          `subagent "${activation.childId}" is not a direct child of agent "${parent.id}"`,
           'UNAUTHORIZED',
         )
       }
       targets.push(activation)
     }
+    for (const childId of ids) select(this.resident.get(childId))
 
-    for (const activation of targets) {
-      const disposal = this.dispose(activation)
-      void disposal.catch(() => undefined)
+    for (const childId of ids) {
+      for (const cutoff of this.inFlight.get(childId) ?? []) cutoff.tripped = true
     }
+    for (const activation of targets) void this.dispose(activation).catch(() => undefined)
+    const published = await Promise.all(ids.map(childId =>
+      this.locks.run(childId, () => Promise.resolve(this.resident.get(childId)))))
+    for (const activation of published) select(activation)
     await this.disposeRoots(targets, 'selected activation(s)')
+  }
+
+  /**
+   * Refuse a delivery that was in flight when a selected drain of its target began.
+   * @param childId - durable child addressed by the delivery.
+   * @param cutoff - the delivery's cutoff, absent for an initial creation prompt.
+   */
+  private assertNotCut(childId: SessionId, cutoff: DeliveryCutoff | undefined): void {
+    if (cutoff?.tripped !== true) return
+    throw new SubagentError(
+      `subagent "${childId}" was released by its parent while this message was in flight; the message was not accepted`,
+      'ACTIVATION_CLOSING',
+    )
   }
 
   /**
@@ -431,7 +474,7 @@ export class SubagentManager {
           this.assertAdmitting(parent)
           this.assertChildIdAvailable(childId)
           if (persisted !== undefined) {
-            throw new SubagentError(`subagent "${childId}" already exists`, 'DUPLICATE_CHILD')
+            throw duplicateChild(childId)
           }
         }
         const activation = await this.materialize({
@@ -469,9 +512,8 @@ export class SubagentManager {
         )
       })
       return { ...this.receipt(established), childId, messageId }
-    } catch (error: unknown) {
+    } finally {
       releaseHold()
-      throw error
     }
   }
 
@@ -508,13 +550,7 @@ export class SubagentManager {
       this.announce(activation)
       return this.receipt(activation)
     } catch (error: unknown) {
-      if (activation !== undefined) {
-        try {
-          await this.dispose(activation)
-        } catch (cleanupError: unknown) {
-          this.ctx.logger.warn(`subagent "${activation.childId}" admission rollback failed: ${failureMessage(cleanupError)}`)
-        }
-      }
+      if (activation !== undefined) await this.rollbackRejected(activation, error)
       throw error
     } finally {
       releaseHold()
@@ -632,20 +668,25 @@ export class SubagentManager {
    * @param childId - proposed durable child session id.
    */
   private assertChildIdAvailable(childId: SessionId): void {
-    if (this.resident.has(childId) || this.ctx.agents.get(childId) !== undefined || this.ctx.get('sessions')?.get(childId) !== undefined) {
-      throw new SubagentError(`subagent "${childId}" already exists`, 'DUPLICATE_CHILD')
-    }
+    if (this.childIdTaken(childId)) throw duplicateChild(childId)
+  }
+
+  /** Whether a live Activation, Agent, or Session already owns one child identity. */
+  private childIdTaken(childId: SessionId): boolean {
+    return this.resident.has(childId) || this.ctx.agents.get(childId) !== undefined
+      || this.ctx.get('sessions')?.get(childId) !== undefined
   }
 
   /**
-   * Pre-register `childId` in a continuation-managed parent's owned set so the
-   * parent cannot settle while a caller is still establishing or resuming that
-   * child. Returns a releaser for the failure path; it removes only a hold
-   * this call added, and leaves ownership in place once a live Activation for
-   * the child exists.
+   * Hold `childId` in a continuation-managed parent's owned set so the parent
+   * cannot settle while a caller is still establishing or resuming that child.
+   * Holds are counted per child, so concurrent operations each keep the edge
+   * until the last of them releases. The last release removes the edge unless
+   * a resident Activation for the child owns it; that Activation's release
+   * removes it instead.
    * @param parent - the live direct parent the operation is admitted under.
    * @param childId - the durable child the operation addresses.
-   * @returns the failure-path releaser; a no-op when nothing was added.
+   * @returns the releaser to call once when the operation ends.
    */
   private holdOwnership(parent: Agent, childId: SessionId): () => void {
     const parentActivation = this.resident.get(parent.id)
@@ -656,17 +697,39 @@ export class SubagentManager {
         'ACTIVATION_CLOSING',
       )
     }
-    if (parentActivation.ownedChildren.has(childId)) return () => {}
+    let holds = this.holds.get(parentActivation)
+    if (holds === undefined) {
+      holds = new Map()
+      this.holds.set(parentActivation, holds)
+    }
+    const held = holds
+    let hold = held.get(childId)
+    if (hold === undefined) {
+      hold = { count: 0 }
+      held.set(childId, hold)
+    }
+    const record = hold
+    record.count += 1
     parentActivation.ownedChildren.add(childId)
     return () => {
-      const live = this.resident.get(childId)
-      /* v8 ignore next 4 -- reaching this arm needs another delivery to establish the child
-       * between this operation's failure and its releaser running, which no test can schedule
-       * deterministically: the ownership edge then belongs to that live Activation, so the
-       * conservative keep leaves it for finishDisposal's releaseOwnership. */
-      if (live !== undefined && live.closing === undefined) return
-      if (parentActivation.ownedChildren.delete(childId)) this.wake(parentActivation)
+      record.count -= 1
+      if (record.count > 0) return
+      held.delete(childId)
+      if (this.resident.has(childId)) return
+      // Only releaseOwnership removes edges, and it skips held ones.
+      parentActivation.ownedChildren.delete(childId)
+      this.wake(parentActivation)
     }
+  }
+
+  /**
+   * Count the operations currently holding one parent-to-child ownership edge.
+   * @param parentActivation - the owning parent Activation.
+   * @param childId - the held child id.
+   * @returns the number of unreleased holds.
+   */
+  private holdCount(parentActivation: Activation, childId: SessionId): number {
+    return this.holds.get(parentActivation)?.get(childId)?.count ?? 0
   }
 
   /**
@@ -753,6 +816,7 @@ export class SubagentManager {
     return this.materializeTracked(
       { ...inputs, signal: AbortSignal.any([inputs.signal, controller.signal]) }, lineage, pool, releaseSlot,
     ).catch((error: unknown) => {
+      if (this.isRetainedFailure(error)) throw error
       releaseSlot()
       if (error instanceof Error && error.name === 'AbortError') this.assertAdmitting(inputs.parent)
       throw error
@@ -764,11 +828,86 @@ export class SubagentManager {
 
   /**
    * Stop and release one Activation through its memoized close transaction.
+   * A retained Activation instead retries its handle release.
    * @param activation - exact residency epoch to close.
-   * @returns the shared close transaction.
+   * @returns the shared close transaction or release retry.
    */
   private dispose(activation: Activation): Promise<void> {
+    const retained = activation.retained
+    if (retained !== undefined) return this.retryRelease(activation, retained)
     return this.close(activation, () => this.finishDisposal(activation, true))
+  }
+
+  /**
+   * Retry the handle release of a retained Activation; concurrent callers share one attempt.
+   * Success runs the deferred release; failure keeps the Activation retained.
+   */
+  private retryRelease(activation: Activation, retained: RetainedRelease): Promise<void> {
+    if (retained.retry !== undefined) return retained.retry
+    const retry = Promise.resolve().then(() => this.releaseHandle(activation)).then(() => {
+      activation.retained = undefined
+      retained.finish()
+    }, (error: unknown) => {
+      retained.retry = undefined
+      throw new SubagentError(
+        `subagent "${this.executionId(activation)}" release retry failed: ${failureMessage(error)}`,
+        'ACTIVATION_TEARDOWN_FAILED',
+        { cause: error },
+      )
+    })
+    retained.retry = retry
+    activation.closing = retry
+    return retry
+  }
+
+  /** Release the execution handle alone: the provider's proof that the execution stopped. */
+  private releaseHandle(activation: Activation): Promise<void> {
+    return activation.kind === 'local' ? activation.handle.dispose() : activation.run.dispose()
+  }
+
+  /** Name the execution a retained failure refers to; a colliding external run keeps its own id. */
+  private executionId(activation: Activation): SessionId {
+    return activation.kind === 'external' ? activation.run.id : activation.childId
+  }
+
+  /** Whether a rejection reports an Activation the manager retained after a failed release. */
+  private isRetainedFailure(error: unknown): boolean {
+    return error instanceof SubagentError && this.retainedFailures.has(error)
+  }
+
+  /**
+   * Build the admission rejection for an Activation retained after its release failed.
+   * @param activation - the retained Activation.
+   * @param admissionError - why admission was rejected.
+   * @param cleanupError - why releasing the execution failed.
+   * @returns the `ACTIVATION_TEARDOWN_FAILED` error naming the live execution.
+   */
+  private retainedFailure(activation: Activation, admissionError: unknown, cleanupError: unknown): SubagentError {
+    const failure = new SubagentError(
+      `subagent "${this.executionId(activation)}" was not admitted (${failureMessage(admissionError)}) and releasing `
+      + `its execution failed (${failureMessage(cleanupError)}); the execution may still run, and the manager retains `
+      + 'it with its capacity slot and parent ownership until a dispose or drain retry releases it',
+      'ACTIVATION_TEARDOWN_FAILED',
+      { cause: new AggregateError([admissionError, cleanupError], 'admission rejected and release failed') },
+    )
+    this.retainedFailures.add(failure)
+    return failure
+  }
+
+  /**
+   * Release a published Activation whose admission was rejected before announcement.
+   * A release that leaves the Activation retained rejects with its retained failure;
+   * other teardown failures are logged so the admission error stays authoritative.
+   * @param activation - the published, unannounced Activation.
+   * @param error - the admission failure the caller receives otherwise.
+   */
+  private async rollbackRejected(activation: Activation, error: unknown): Promise<void> {
+    try {
+      await this.dispose(activation)
+    } catch (cleanupError: unknown) {
+      if (activation.retained !== undefined) throw this.retainedFailure(activation, error, cleanupError)
+      this.ctx.logger.warn(`subagent "${activation.childId}" admission rollback failed: ${failureMessage(cleanupError)}`)
+    }
   }
 
   /** Close admission synchronously and share one release, including startup rollback. */
@@ -780,17 +919,24 @@ export class SubagentManager {
     return completion.promise
   }
 
-  /** Dispose independent roots and report every branch failure after all settle. */
+  /**
+   * Dispose independent roots and report every branch failure after all settle.
+   * A retained root's failed retry is logged instead: its rejected admission
+   * already reported the failed release, and it stays retained for the next retry.
+   */
   private async disposeRoots(
     roots: readonly Activation[],
     failureSubject: 'activation(s)' | 'scoped activation(s)' | 'selected activation(s)',
   ): Promise<void> {
     const failures = await Promise.all(roots.map(async (activation) => {
+      const retained = activation.retained !== undefined
       try {
         await this.dispose(activation)
         return undefined
       } catch (error: unknown) {
-        return error
+        if (!retained) return error
+        this.ctx.logger.warn(`subagent "${this.executionId(activation)}" remains retained: ${failureMessage(error)}`)
+        return undefined
       }
     }))
     const reasons = failures.filter(failure => failure !== undefined)
@@ -858,6 +1004,7 @@ export class SubagentManager {
     let childId = inputs.childId
     inputs.signal.throwIfAborted()
     let resource: ActivationResource
+    let collision: SubagentError | undefined
     if (inputs.kind === 'external') {
       const controller = new AbortController()
       const cancelStartup = (): void => { controller.abort(inputs.signal.reason) }
@@ -866,11 +1013,10 @@ export class SubagentManager {
         const run = await inputs.start(controller.signal)
         resource = { kind: 'external', run, controller }
         void run.result.catch(() => undefined)
-        childId = run.id
-        try { this.assertChildIdAvailable(childId) } catch (error: unknown) {
-          await run.dispose()
-          throw error
-        }
+        // A colliding run stays keyed by its pending id, so its rollback never
+        // displaces the existing owner of the id.
+        if (this.childIdTaken(run.id)) collision = duplicateChild(run.id)
+        else childId = run.id
       } finally {
         inputs.signal.removeEventListener('abort', cancelStartup)
       }
@@ -946,10 +1092,12 @@ export class SubagentManager {
       ownedChildren: new Set(),
       observer,
       announced: false,
+      retained: undefined,
     }
     void activation.result.promise.catch(() => undefined)
     this.resident.set(childId, activation)
     try {
+      if (collision !== undefined) throw collision
       this.assertAdmitting(parent)
       inputs.signal.throwIfAborted()
       if (this.ctx.agents.get(parent.id) !== parent) throw new SubagentError('subagent parent is no longer live', 'UNAUTHORIZED')
@@ -974,9 +1122,7 @@ export class SubagentManager {
       }
       observer.start(activationAgent(activation))
     } catch (error: unknown) {
-      /* v8 ignore next -- rollback failure must not mask the admission failure
-       * that prevented this operation from returning an accepted message id. */
-      await this.rollbackUnpublished(activation, error).catch(() => undefined)
+      await this.rollbackUnpublished(activation, error)
       throw error
     }
     return activation
@@ -997,18 +1143,34 @@ export class SubagentManager {
     }
   }
 
-  /** Release an Activation whose start edge was not published. */
-  private rollbackUnpublished(activation: Activation, error: unknown): Promise<void> {
-    return this.close(activation, async () => {
-      try {
-        await (activation.kind === 'local' ? activation.handle.dispose() : activation.run.dispose())
-      } finally {
-        this.resident.delete(activation.childId)
-        activation.releaseSlot()
-        this.releaseOwnership(activation.childId)
-        activation.result.reject(error)
-      }
-    })
+  /**
+   * Release an Activation whose start edge was not published. When the handle
+   * release fails, the Activation stays retained and the rejection names it.
+   */
+  private async rollbackUnpublished(activation: Activation, error: unknown): Promise<void> {
+    const finish = (): void => {
+      this.resident.delete(activation.childId)
+      activation.releaseSlot()
+      this.releaseOwnership(activation.childId)
+      activation.result.reject(error)
+    }
+    try {
+      await this.close(activation, async () => {
+        try {
+          await this.releaseHandle(activation)
+        } catch (cleanupError: unknown) {
+          activation.retained = { finish, retry: undefined }
+          throw new SubagentError(
+            `subagent "${this.executionId(activation)}" activation handle disposal failed: ${failureMessage(cleanupError)}`,
+            'ACTIVATION_TEARDOWN_FAILED',
+            { cause: cleanupError },
+          )
+        }
+        finish()
+      })
+    } catch (cleanupError: unknown) {
+      throw this.retainedFailure(activation, error, cleanupError)
+    }
   }
 
   /** Register the child in a continuation-managed parent's owned set. */
@@ -1025,9 +1187,14 @@ export class SubagentManager {
     this.wake(parentActivation)
   }
 
-  /** Remove one child from its live owner's set and let that owner re-check settlement. */
+  /**
+   * Remove one child from its live owner's set and let that owner re-check
+   * settlement. An edge still held by an in-flight delivery stays until that
+   * delivery's last hold releases.
+   */
   private releaseOwnership(childId: SessionId): void {
     for (const candidate of this.resident.values()) {
+      if (this.holdCount(candidate, childId) > 0) continue
       if (candidate.ownedChildren.delete(childId)) this.wake(candidate)
     }
   }
@@ -1129,7 +1296,11 @@ export class SubagentManager {
           externalDisposal = Promise.resolve().then(() => activation.run.dispose())
           void externalDisposal.catch(() => undefined)
         }
-        result = await activation.run.result
+        // A rejected admission has no result consumer; once its disposal fails,
+        // the execution may never settle, so the failure ends the wait.
+        result = await (externalDisposal === undefined || activation.announced
+          ? activation.run.result
+          : Promise.race([activation.run.result, externalDisposal.then(() => activation.run.result)]))
       } else {
         if (stop) {
           activation.handle.agent.cancel({ kind: 'parent' })
@@ -1169,10 +1340,12 @@ export class SubagentManager {
         { cause: error },
       ))
     }
+    let handleReleased = true
     try {
       if (activation.kind === 'local') await activation.handle.dispose()
       else await (externalDisposal ?? activation.run.dispose())
     } catch (error: unknown) {
+      handleReleased = false
       failures.push(new SubagentError(
         `subagent "${childId}" activation handle disposal failed: ${detail(error)}`,
         'ACTIVATION_TEARDOWN_FAILED',
@@ -1191,14 +1364,20 @@ export class SubagentManager {
         { cause: new AggregateError(failures) },
       )
     }
-    this.resident.delete(childId)
-    activation.releaseSlot()
-    const terminal: SubagentResult = failure === undefined ? result : { output: [], stopReason: 'error' }
-    this.notifySettlement(activation, result)
-    this.releaseOwnership(childId)
-    activation.observer.settle(terminal)
-    if (resultFailure === undefined) activation.result.resolve(result)
-    else activation.result.reject(resultFailure.error)
+    const finish = (): void => {
+      this.resident.delete(childId)
+      activation.releaseSlot()
+      const terminal: SubagentResult = failure === undefined ? result : { output: [], stopReason: 'error' }
+      this.notifySettlement(activation, result)
+      this.releaseOwnership(childId)
+      activation.observer.settle(terminal)
+      if (resultFailure === undefined) activation.result.resolve(result)
+      else activation.result.reject(resultFailure.error)
+    }
+    // A rejected admission's execution is retained until its handle release is
+    // proven; an accepted Activation reports the failure through dispose().
+    if (!handleReleased && !activation.announced) activation.retained = { finish, retry: undefined }
+    else finish()
     if (failure !== undefined) throw failure
   }
 
@@ -1254,11 +1433,20 @@ export class SubagentManager {
   ): Promise<MessageId> {
     this.assertAdmitting(parent)
     const releaseHold = this.holdOwnership(parent, childId)
+    const cutoff: DeliveryCutoff = { tripped: false }
+    let cutoffs = this.inFlight.get(childId)
+    if (cutoffs === undefined) {
+      cutoffs = new Set()
+      this.inFlight.set(childId, cutoffs)
+    }
+    const registered = cutoffs
+    registered.add(cutoff)
     try {
-      return await this.deliverFollowup(parent, childId, content, options)
-    } catch (error: unknown) {
+      return await this.deliverFollowup(parent, childId, content, { ...options, cutoff })
+    } finally {
+      registered.delete(cutoff)
+      if (registered.size === 0 && this.inFlight.get(childId) === registered) this.inFlight.delete(childId)
       releaseHold()
-      throw error
     }
   }
 
@@ -1271,6 +1459,7 @@ export class SubagentManager {
   ): Promise<MessageId> {
     while (true) {
       const live = await this.locks.run(childId, async () => {
+        this.assertNotCut(childId, options.cutoff)
         const activation = this.resident.get(childId)
         if (activation === undefined) return this.coldResume(parent, childId, content, options)
         requireLocalActivation(activation)
@@ -1396,6 +1585,7 @@ export class SubagentManager {
         signal: options.signal,
       })
     } catch (error: unknown) {
+      if (this.isRetainedFailure(error)) throw error
       options.signal.throwIfAborted()
       if (error instanceof SubagentError) throw error
       throw new SubagentError(`subagent "${childId}" is unavailable`, 'NOT_RESUMABLE', { cause: error })
@@ -1423,13 +1613,7 @@ export class SubagentManager {
       this.announce(activation)
       return messageId
     } catch (error: unknown) {
-      try {
-        await this.dispose(activation)
-      } catch (cleanupError: unknown) {
-        this.ctx.logger.warn(
-          `subagent continuation: disposal after admission or catalog append failure also failed: ${String(cleanupError)}`,
-        )
-      }
+      await this.rollbackRejected(activation, error)
       throw error
     }
   }
@@ -1446,6 +1630,7 @@ export class SubagentManager {
       : createUserMessage({ content, source: options.source })
     options.signal.throwIfAborted()
     this.assertAdmitting(parent)
+    this.assertNotCut(activation.childId, options.cutoff)
     this.authorizeLineage(parent, activation.childId, activation.parent.id)
     this.acquireOwnership(parent, activation.childId)
     try {
@@ -1501,6 +1686,11 @@ export class SubagentManager {
 }
 
 export default SubagentManager
+
+/** Build the rejection for a child identity a live Activation, Agent, or Session already owns. */
+function duplicateChild(childId: SessionId): SubagentError {
+  return new SubagentError(`subagent "${childId}" already exists`, 'DUPLICATE_CHILD')
+}
 
 /** Creation-time selection precedes the own descriptor; historical forks can select after it. */
 function hasIndependentPresetSelection(events: readonly SessionEvent[]): boolean {

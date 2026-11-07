@@ -71,6 +71,21 @@ interface ActivationBase {
    * not exist, so its teardown owes the parent no settlement account.
    */
   announced: boolean
+  /**
+   * Present while a rejected admission's release failed. The Activation stays
+   * resident with closed admission, its capacity slot, and its parent
+   * ownership; a later dispose or drain retries the handle release and runs
+   * the deferred release only after that retry succeeds.
+   */
+  retained: RetainedRelease | undefined
+}
+
+/** Deferred release of an Activation whose rejected admission could not be torn down. */
+export interface RetainedRelease {
+  /** Remove residency, return the slot, and release parent ownership once the handle released. */
+  readonly finish: () => void
+  /** The in-flight release retry shared by concurrent dispose and drain callers. */
+  retry: Promise<void> | undefined
 }
 
 /** Resources retained only for the selected execution kind. */

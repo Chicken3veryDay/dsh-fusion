@@ -43,7 +43,19 @@ export interface SubagentActivationSpec {
   readonly delivery: 'parent' | 'caller'
 }
 
-/** A managed execution; disposal addresses this exact activation, never a later resume. */
+/**
+ * A managed execution; disposal addresses this exact activation, never a later resume.
+ *
+ * A rejected start returns no activation. Before rejecting, the manager
+ * releases every execution the start created, with its capacity slot and
+ * parent ownership. When that release fails, the rejection is a
+ * `SubagentError` with code `ACTIVATION_TEARDOWN_FAILED` whose message names
+ * the execution and whose `cause` is an `AggregateError` of the admission
+ * failure and the release failure. The execution may then still run; the
+ * manager retains it with closed admission, its id, its slot, and its parent
+ * ownership until a retry by a selected drain, a descendant drain, parent
+ * disposal, or manager teardown releases it.
+ */
 export interface SubagentActivation {
   /** Stable identity of the child. */
   readonly childId: SessionId
@@ -297,7 +309,9 @@ export interface SubagentRun {
   readonly result: Promise<SubagentResult>
   /**
    * Cancel remaining work, reach child quiescence, and release resources.
-   * Idempotent.
+   * Idempotent. Resolution proves the execution stopped. After a rejection
+   * the manager treats the execution as possibly running and may call this
+   * again; a later resolution then releases what the manager retained.
    */
   dispose(): Promise<void>
 }

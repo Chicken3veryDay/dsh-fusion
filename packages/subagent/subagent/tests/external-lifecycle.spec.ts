@@ -9,6 +9,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SubagentRuntime from '../src/index.ts'
 import type { SubagentStartRequest, SubagentRun, SubagentResult } from '../src/types.ts'
 import { externalTestParent } from './external-activation-helpers.ts'
+import { managerState } from './manager-internals.ts'
 
 const complete: SubagentResult = { output: [], stopReason: 'completed' }
 
@@ -129,19 +130,36 @@ describe('external activation ownership', () => {
     await activation.dispose()
   })
 
-  it('retains the catalog failure and reports cleanup failure during admission rollback', async () => {
+  it('retains a rejected admission whose rollback fails until a drain retry releases it', async () => {
+    let releases = 0
     // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- external backends can reject without an Error.
-    const dispose = vi.fn(() => Promise.reject(null))
+    const dispose = vi.fn(() => ++releases < 3 ? Promise.reject(null) : Promise.resolve())
     const fixture = await setup(() => Promise.resolve(run('rollback-child', Promise.resolve(complete), dispose)), 'parent')
     const failure = new Error('catalog unavailable')
     const append = vi.spyOn(fixture.parent.session, 'append').mockImplementationOnce(() => { throw failure })
     const warning = vi.spyOn(fixture.ctx.logger, 'warn')
     try {
-      await expect(fixture.start()).rejects.toBe(failure)
+      const rejection = await fixture.start().then(() => undefined, (error: unknown) => error)
+      if (!(rejection instanceof Error)) throw new Error('expected the admission to reject with an Error')
+      expect(rejection).toMatchObject({ code: 'ACTIVATION_TEARDOWN_FAILED' })
+      expect(rejection.message).toMatch(/"rollback-child" was not admitted \(catalog unavailable\).*unknown teardown failure/)
+      expect(rejection.cause).toBeInstanceOf(AggregateError)
       expect(dispose).toHaveBeenCalledOnce()
-      expect(warning).toHaveBeenCalledWith(expect.stringContaining('admission rollback failed:'))
-      expect(warning).toHaveBeenCalledWith(expect.stringContaining('unknown teardown failure'))
+      expect(managerState(fixture.ctx).resident.has(SessionId('rollback-child'))).toBe(true)
+      // A retained execution is not joinable work.
       await expect(fixture.ctx.subagents.waitForChildren(fixture.parent)).resolves.toBe(false)
+
+      // A failed retry is logged and leaves the execution retained for the next one.
+      await fixture.ctx.subagents.drainDescendants([fixture.parent])
+      expect(dispose).toHaveBeenCalledTimes(2)
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('subagent "rollback-child" remains retained: '))
+      expect(managerState(fixture.ctx).resident.has(SessionId('rollback-child'))).toBe(true)
+
+      await fixture.ctx.subagents.drainDescendants([fixture.parent])
+      expect(dispose).toHaveBeenCalledTimes(3)
+      expect(managerState(fixture.ctx).resident.has(SessionId('rollback-child'))).toBe(false)
+      await fixture.ctx.subagents.drainDescendants([fixture.parent])
+      expect(dispose).toHaveBeenCalledTimes(3)
     } finally {
       append.mockRestore()
       warning.mockRestore()

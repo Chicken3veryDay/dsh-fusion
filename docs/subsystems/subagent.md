@@ -45,7 +45,19 @@ interface SubagentActivationSpec {
 ```
 
 ```ts type-equiv
-/** A managed execution; disposal addresses this exact activation, never a later resume. */
+/**
+ * A managed execution; disposal addresses this exact activation, never a later resume.
+ *
+ * A rejected start returns no activation. Before rejecting, the manager
+ * releases every execution the start created, with its capacity slot and
+ * parent ownership. When that release fails, the rejection is a
+ * `SubagentError` with code `ACTIVATION_TEARDOWN_FAILED` whose message names
+ * the execution and whose `cause` is an `AggregateError` of the admission
+ * failure and the release failure. The execution may then still run; the
+ * manager retains it with closed admission, its id, its slot, and its parent
+ * ownership until a retry by a selected drain, a descendant drain, parent
+ * disposal, or manager teardown releases it.
+ */
 interface SubagentActivation {
   /** Stable identity of the child. */
   readonly childId: SessionId
@@ -173,7 +185,7 @@ interface ContinuableCreateSpec {
 
 ## Messages and interruption
 
-sendMessage authorizes the exact live sender and permits only adjacent local agents. Running children receive steering input; absent continuable children resume from persistence. External executions reject follow-ups. Both local and external executions automatically report their final text, structured result, diagnostic, and status in the parent settlement notice. Local children can also send messages through send_message. caller delivery suppresses settlement notices. drainDescendants and drainChildren await owned work teardown for local and external activations.
+sendMessage authorizes the exact live sender and permits only adjacent local agents. Running children receive steering input; absent continuable children resume from persistence. External executions reject follow-ups. Both local and external executions automatically report their final text, structured result, diagnostic, and status in the parent settlement notice. Local children can also send messages through send_message. caller delivery suppresses settlement notices. drainDescendants and drainChildren await owned work teardown for local and external activations; drainChildren also releases a selected child that an in-flight delivery is resuming and refuses that delivery unless its message was already accepted. A rejected admission whose release fails rejects with ACTIVATION_TEARDOWN_FAILED and stays retained, with its capacity slot and parent ownership, until a drain or parent disposal retries the release successfully.
 
 ```ts type-equiv
 /** Durable attribution for one model-authored message between Agents. */
@@ -307,7 +319,9 @@ interface SubagentRun {
   readonly result: Promise<SubagentResult>
   /**
    * Cancel remaining work, reach child quiescence, and release resources.
-   * Idempotent.
+   * Idempotent. Resolution proves the execution stopped. After a rejection
+   * the manager treats the execution as possibly running and may call this
+   * again; a later resolution then releases what the manager retained.
    */
   dispose(): Promise<void>
 }
@@ -488,17 +502,25 @@ interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): vo
  * lasts until each exact parent leaves the registry; unrelated parent trees
  * remain live.
  * @param parents - exact host-owned parent Agents entering teardown.
- * @returns once every retained descendant activation released its execution handle.
+ * @returns once every descendant activation released its execution handle; a
+ *   retained execution ({@link SubagentActivation}) whose release retry failed is
+ *   logged and stays retained.
  * @throws an aggregate error after all branches settle when any failed.
  */
 async drainDescendants(parents: readonly Agent[]): Promise<void>
 
 /**
- * Release selected resident direct children of one exact live
- * parent. Other children of the same parent remain admitted and resident.
- * Absent targets and a manager-less composition are accepted no-ops.
+ * Release selected direct children of one exact live parent. Other children
+ * of the same parent remain admitted and resident. A delivery to a selected
+ * child that is in flight when the drain begins is refused with
+ * `ACTIVATION_CLOSING` unless its message was already accepted; the drain
+ * waits for work holding a selected child's lock and releases what it
+ * published. A delivery that starts after the drain began is ordered after
+ * it. A target that is neither resident nor being materialized, and a
+ * manager-less composition, are accepted no-ops. A retained target's failed
+ * release retry is logged instead of rejecting.
  * @param parent - exact live direct parent authorizing the selected release.
- * @param childIds - durable direct-child ids to release when resident.
+ * @param childIds - durable direct-child ids to release.
  * @returns once every selected activation released its execution handle.
  * @throws {SubagentError} `UNAUTHORIZED` when a resident target belongs to a
  *   different parent or the supplied parent identity is stale.

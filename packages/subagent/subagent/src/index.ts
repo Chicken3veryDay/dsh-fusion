@@ -267,6 +267,9 @@ export class SubagentRuntime extends TypertRemoteService {
    * @param spec - task, backend, and result recipient.
    * @returns identities, execution result, and exact-activation disposal. A reserved
    * childId requires a local backend and guarantees an accepted messageId.
+   * @throws {SubagentError} `ACTIVATION_TEARDOWN_FAILED` when admission was rejected and
+   *   releasing the created execution failed; the manager retains that execution until a
+   *   drain or disposal retry releases it ({@link SubagentActivation}).
    */
   async startActivation(spec: SubagentActivationSpec): Promise<SubagentActivation> {
     const provider = this.expectProvider(spec.provider)
@@ -369,7 +372,9 @@ export class SubagentRuntime extends TypertRemoteService {
    * lasts until each exact parent leaves the registry; unrelated parent trees
    * remain live.
    * @param parents - exact host-owned parent Agents entering teardown.
-   * @returns once every retained descendant activation released its execution handle.
+   * @returns once every descendant activation released its execution handle; a
+   *   retained execution ({@link SubagentActivation}) whose release retry failed is
+   *   logged and stays retained.
    * @throws an aggregate error after all branches settle when any failed.
    */
   async drainDescendants(parents: readonly Agent[]): Promise<void> {
@@ -380,11 +385,17 @@ export class SubagentRuntime extends TypertRemoteService {
   }
 
   /**
-   * Release selected resident direct children of one exact live
-   * parent. Other children of the same parent remain admitted and resident.
-   * Absent targets and a manager-less composition are accepted no-ops.
+   * Release selected direct children of one exact live parent. Other children
+   * of the same parent remain admitted and resident. A delivery to a selected
+   * child that is in flight when the drain begins is refused with
+   * `ACTIVATION_CLOSING` unless its message was already accepted; the drain
+   * waits for work holding a selected child's lock and releases what it
+   * published. A delivery that starts after the drain began is ordered after
+   * it. A target that is neither resident nor being materialized, and a
+   * manager-less composition, are accepted no-ops. A retained target's failed
+   * release retry is logged instead of rejecting.
    * @param parent - exact live direct parent authorizing the selected release.
-   * @param childIds - durable direct-child ids to release when resident.
+   * @param childIds - durable direct-child ids to release.
    * @returns once every selected activation released its execution handle.
    * @throws {SubagentError} `UNAUTHORIZED` when a resident target belongs to a
    *   different parent or the supplied parent identity is stale.

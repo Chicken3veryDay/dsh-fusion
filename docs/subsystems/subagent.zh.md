@@ -45,7 +45,19 @@ interface SubagentActivationSpec {
 ```
 
 ```ts type-equiv
-/** A managed execution; disposal addresses this exact activation, never a later resume. */
+/**
+ * A managed execution; disposal addresses this exact activation, never a later resume.
+ *
+ * A rejected start returns no activation. Before rejecting, the manager
+ * releases every execution the start created, with its capacity slot and
+ * parent ownership. When that release fails, the rejection is a
+ * `SubagentError` with code `ACTIVATION_TEARDOWN_FAILED` whose message names
+ * the execution and whose `cause` is an `AggregateError` of the admission
+ * failure and the release failure. The execution may then still run; the
+ * manager retains it with closed admission, its id, its slot, and its parent
+ * ownership until a retry by a selected drain, a descendant drain, parent
+ * disposal, or manager teardown releases it.
+ */
 interface SubagentActivation {
   /** Stable identity of the child. */
   readonly childId: SessionId
@@ -173,7 +185,7 @@ interface ContinuableCreateSpec {
 
 ## 消息与中断
 
-sendMessage 根据确切的在线发送者实例授权，仅允许相邻本地代理通信。运行中的子代理接收引导输入；不在线的可继续子代理从持久化恢复。外部执行拒绝后续消息。本地与外部执行都会通过父级结束通知自动回传最终文本、结构化结果、诊断和状态。本地子代理也可以通过 send_message 发送消息。caller 回传会抑制结束通知。drainDescendants 与 drainChildren 对本地和外部 activation 都等待所属任务清理完成。
+sendMessage 根据确切的在线发送者实例授权，仅允许相邻本地代理通信。运行中的子代理接收引导输入；不在线的可继续子代理从持久化恢复。外部执行拒绝后续消息。本地与外部执行都会通过父级结束通知自动回传最终文本、结构化结果、诊断和状态。本地子代理也可以通过 send_message 发送消息。caller 回传会抑制结束通知。drainDescendants 与 drainChildren 对本地和外部 activation 都等待所属任务清理完成；drainChildren 还会释放正被进行中投递恢复的选中子级，并拒绝该投递，除非其消息已被接受。准入被拒绝且释放失败时，以 ACTIVATION_TEARDOWN_FAILED 拒绝，执行连同其容量槽位与父级所有权被保留，直到排空或父级释放成功重试释放。
 
 ```ts type-equiv
 /** Durable attribution for one model-authored message between Agents. */
@@ -307,7 +319,9 @@ interface SubagentRun {
   readonly result: Promise<SubagentResult>
   /**
    * Cancel remaining work, reach child quiescence, and release resources.
-   * Idempotent.
+   * Idempotent. Resolution proves the execution stopped. After a rejection
+   * the manager treats the execution as possibly running and may call this
+   * again; a later resolution then releases what the manager retained.
    */
   dispose(): Promise<void>
 }
@@ -490,17 +504,25 @@ interrupt(targetSessionId: SessionId, authority: SubagentInterruptAuthority): vo
  * lasts until each exact parent leaves the registry; unrelated parent trees
  * remain live.
  * @param parents - exact host-owned parent Agents entering teardown.
- * @returns once every retained descendant activation released its execution handle.
+ * @returns once every descendant activation released its execution handle; a
+ *   retained execution ({@link SubagentActivation}) whose release retry failed is
+ *   logged and stays retained.
  * @throws an aggregate error after all branches settle when any failed.
  */
 async drainDescendants(parents: readonly Agent[]): Promise<void>
 
 /**
- * Release selected resident direct children of one exact live
- * parent. Other children of the same parent remain admitted and resident.
- * Absent targets and a manager-less composition are accepted no-ops.
+ * Release selected direct children of one exact live parent. Other children
+ * of the same parent remain admitted and resident. A delivery to a selected
+ * child that is in flight when the drain begins is refused with
+ * `ACTIVATION_CLOSING` unless its message was already accepted; the drain
+ * waits for work holding a selected child's lock and releases what it
+ * published. A delivery that starts after the drain began is ordered after
+ * it. A target that is neither resident nor being materialized, and a
+ * manager-less composition, are accepted no-ops. A retained target's failed
+ * release retry is logged instead of rejecting.
  * @param parent - exact live direct parent authorizing the selected release.
- * @param childIds - durable direct-child ids to release when resident.
+ * @param childIds - durable direct-child ids to release.
  * @returns once every selected activation released its execution handle.
  * @throws {SubagentError} `UNAUTHORIZED` when a resident target belongs to a
  *   different parent or the supplied parent identity is stale.

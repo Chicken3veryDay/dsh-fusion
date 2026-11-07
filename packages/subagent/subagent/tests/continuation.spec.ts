@@ -683,7 +683,7 @@ describe('SubagentRuntime.startActivation', () => {
     })
   })
 
-  it.each(['parent', 'caller'] as const)('releases the %s-delivery activation when its catalog append fails', async (delivery) => {
+  it.each(['parent', 'caller'] as const)('retains the %s-delivery activation whose catalog append and release fail until a retry releases it', async (delivery) => {
     const { ctx, parent } = await setup([textResponse('unused')])
     const childId = SessionId('00000000-0000-4000-8000-000000000321')
     const catalogFailure = new Error('catalog append failed')
@@ -698,7 +698,7 @@ describe('SubagentRuntime.startActivation', () => {
         if (activation === undefined) throw new Error('expected live Activation')
         const handle = requireLocalActivation(activation).handle
         const dispose = handle.dispose.bind(handle)
-        vi.spyOn(handle, 'dispose').mockImplementation(async () => {
+        vi.spyOn(handle, 'dispose').mockImplementationOnce(async () => {
           await dispose()
           throw cleanupFailure
         })
@@ -707,24 +707,27 @@ describe('SubagentRuntime.startActivation', () => {
       return appendCatalog('subagent/catalog', data as SessionEventMap['subagent/catalog'])
     }) as typeof parent.session.append)
 
-    await expect(ctx.subagents.startActivation({
+    const rejected = ctx.subagents.startActivation({
       delivery,
       ...startSpec(parent),
       childId,
-    })).rejects.toBe(catalogFailure)
+    })
+    await expect(rejected).rejects.toMatchObject({ code: 'ACTIVATION_TEARDOWN_FAILED' })
+    await expect(rejected).rejects.toThrow(/was not admitted \(catalog append failed\).*activation disposal also failed/)
 
     await vi.waitFor(() => { expect(ctx.agents.get(childId)).toBeUndefined() })
     expect(parent.session.snapshotEvents().filter(event => event.type === 'subagent/catalog')).toEqual([])
+    expect(managerState(ctx).resident.get(childId)?.retained).toBeDefined()
+    await ctx.subagents.drainChildren(parent, [childId])
+    expect(managerState(ctx).resident.has(childId)).toBe(false)
   })
 
-  it('preserves prompt admission failure when Activation disposal also fails', async () => {
+  it('reports prompt admission failure and the failed release of the retained Activation', async () => {
     const { ctx, parent } = await setup([textResponse('unused')])
     const childId = SessionId('00000000-0000-4000-8000-000000000322')
     const admissionFailure = new Error('prompt admission failed')
     const cleanupFailure = new Error('activation disposal also failed')
     const controller = new AbortController()
-    const warnings: string[] = []
-    ctx.logger.warn = (message: string) => { warnings.push(message) }
     ctx.on('subagent/start', () => {
       const activation = managerState(ctx).resident.get(childId)
       if (activation === undefined) throw new Error('expected live Activation')
@@ -737,15 +740,19 @@ describe('SubagentRuntime.startActivation', () => {
       controller.abort(admissionFailure)
     })
 
-    await expect(ctx.subagents.startActivation({
+    const rejection = await ctx.subagents.startActivation({
       delivery: 'parent',
       ...startSpec(parent, 'spawn', controller.signal),
       childId,
-    })).rejects.toBe(admissionFailure)
+    }).then(() => undefined, (error: unknown) => error)
+    expect(rejection).toMatchObject({ code: 'ACTIVATION_TEARDOWN_FAILED' })
+    expect(rejection).toHaveProperty('cause.errors', [admissionFailure, expect.objectContaining({ code: 'ACTIVATION_TEARDOWN_FAILED' })])
     await vi.waitFor(() => { expect(ctx.agents.get(childId)).toBeUndefined() })
-    expect(warnings.some(warning => warning.startsWith(
-      'subagent continuation: disposal after admission or catalog append failure also failed:',
-    ))).toBe(true)
+    // The retained Activation keeps the id reserved until a release succeeds.
+    await expect(ctx.subagents.startActivation({ delivery: 'parent', ...startSpec(parent), childId }))
+      .rejects.toMatchObject({ code: 'DUPLICATE_CHILD' })
+    await expect(ctx.subagents.drainChildren(parent, [childId])).resolves.toBeUndefined()
+    expect(managerState(ctx).resident.get(childId)?.retained).toBeDefined()
   })
 
   it('rolls an unpublished Activation back when lifecycle publication fails', async () => {

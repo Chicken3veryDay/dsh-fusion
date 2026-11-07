@@ -367,13 +367,19 @@ describe('SubagentRuntime', () => {
       throw catalogFailure
     })
 
-    await expect(start(subagents, 'catalog-failure', baseRequest({ parent }), 'parent'))
-      .rejects.toBe(catalogFailure)
+    const outcome = start(subagents, 'catalog-failure', baseRequest({ parent }), 'parent')
+    if (failsDisposal) {
+      // The failed release keeps the execution retained, and the rejection reports both failures.
+      await expect(outcome).rejects.toMatchObject({ code: 'ACTIVATION_TEARDOWN_FAILED' })
+      await expect(outcome).rejects.toThrow(/catalog unavailable.*run infrastructure failed.*dispose also failed/)
+      expect(warnings).not.toHaveBeenCalled()
+    } else {
+      await expect(outcome).rejects.toBe(catalogFailure)
+      expect(warnings).toHaveBeenCalledOnce()
+      expect(warnings.mock.calls[0]![0]).toContain('run infrastructure failed')
+    }
     expect(append).toHaveBeenCalledOnce()
     expect(dispose).toHaveBeenCalledOnce()
-    expect(warnings).toHaveBeenCalledOnce()
-    expect(warnings.mock.calls[0]![0]).toContain('run infrastructure failed')
-    if (failsDisposal) expect(warnings.mock.calls[0]![0]).toContain('dispose also failed')
   })
 
   it('emits an enriched end event and maps result rejection to error telemetry', async () => {

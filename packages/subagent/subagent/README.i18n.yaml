@@ -33,11 +33,11 @@
   en: a740e5e9bdd661d9
   zh: 712a5458fc8b3615
 /deepseek-ai-dsh-subagent/use-this-package/messaging-interrupting-and-discovering:
-  en: 050177fbbaade432
-  zh: 99f2b9f98088314d
+  en: 416521c5148115cc
+  zh: bb03dc7aad3f9dde
 /deepseek-ai-dsh-subagent/use-this-package/failure-and-recovery:
-  en: 245fb0d5c3df5ccf
-  zh: e69eed9e5070ce25
+  en: 55243ab71aa70da0
+  zh: 3b4f407e7977c679
 /deepseek-ai-dsh-subagent/understand-the-implementation:
   en: 74d91b364b23f88d
   zh: 19cc558105efe8df
@@ -48,11 +48,11 @@
   en: 410b6215e3a29221
   zh: d17d6ea102fe8f87
 /deepseek-ai-dsh-subagent/understand-the-implementation/provider-preparation-and-structured-output:
-  en: f78c5e931f3a3676
-  zh: 3c63f637dbaa8101
+  en: dcfd9d275ce13ccf
+  zh: 426234063372264c
 /deepseek-ai-dsh-subagent/understand-the-implementation/activation-settlement:
-  en: 3cac7a3d58cda7ea
-  zh: 74e3234e5101bd1d
+  en: 3a4daaf940a293df
+  zh: 617b7572dbe2a8de
 /deepseek-ai-dsh-subagent/understand-the-implementation/restoring-child-composition:
   en: d338e68edd438f57
   zh: 0496090cc567b19d
@@ -93,8 +93,8 @@
   en: 59e848fca82a46fb
   zh: fcd6a8a2bb58609f
 /deepseek-ai-dsh-subagent/known-limitations-and-deferred-work:
-  en: b663a2e94185901c
-  zh: 8d2937aa203bda59
+  en: 4b8ac14ab9a6124c
+  zh: 24acda570c45e60b
 /deepseek-ai-dsh-subagent/known-limitations-and-deferred-work/dev-note:
   en: 25cc0909348666bb
   zh: 95517f12de100049
