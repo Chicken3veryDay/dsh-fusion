@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { createUserMessage, type GenerateOptions, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type GenerateOptions, type RequestMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session } from '@deepseek-ai/dsh-session'
 import { logPath } from '../../../session/session-persistence-jsonl/src/format.ts'
 import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -28,8 +28,7 @@ afterEach(async () => {
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const textOf = (message: Message): string => typeof message.content === 'string' ? message.content
-  : message.content.map(block => block.type === 'text' ? block.text : '').join('')
+const textOf = (message: RequestMessage): string => message.content.map(block => block.type === 'text' ? block.text : '').join('')
 
 /** Answers `ok`, except that a member whose conversation contains a hanging prompt runs until it is aborted. */
 class RoleAdapter extends MockAdapter {
