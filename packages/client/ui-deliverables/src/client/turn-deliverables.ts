@@ -11,6 +11,7 @@ import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { ConversationNodeDefinition } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PresentedFile } from '@deepseek-ai/dsh-tool-present/types'
+import { effectiveToolCall, effectiveToolResult } from '@deepseek-ai/dsh-tool-executor-ptc/tool-calls'
 import { isChangesEvent } from '../changes.ts'
 import { basename, isPresentedData, isPresentedFile } from '../presented.ts'
 
@@ -50,9 +51,8 @@ interface DeliverablesState extends DeliverablesTurnData {
 }
 
 /**
- * Extract the path from a supported first-party mutation call. Session
- * `tool/call` events are root calls; PTC dispatch children do not enter this
- * Definition independently.
+ * Extract the path from a supported first-party mutation call, model-issued or
+ * nested in a `run_code` program.
  * @param name - wire tool name.
  * @param argsRaw - model-produced JSON arguments.
  * @returns the mutation path, or null when the call is not a supported mutation.
@@ -175,6 +175,8 @@ export const deliverablesDefinition: ConversationNodeDefinition<DeliverablesStat
   match: (event) => {
     if (event.type === 'turn/start') return { id: String(event.data.turn), role: 'start' }
     if (event.type === 'tool/call') return { id: String(event.data.turn), role: 'update' }
+    // Nested `run_code` calls name no Turn; they belong to the Turn of their enclosing call.
+    if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') return { located: 'turn', role: 'update' }
     if (event.type === 'deliverables/presented') return isPresentedData(event.data) ? { id: String(event.data.turn), role: 'update' } : null
     if (event.type === 'workspace/changes') return isChangesEvent(event.data) ? { id: String(event.data.turn), role: 'update' } : null
     if (event.type === 'tool/result' && isAppendSurfaceEvent(event)) {
@@ -199,20 +201,19 @@ export const deliverablesDefinition: ConversationNodeDefinition<DeliverablesStat
       if (presented.length === 0) return context.state
       return { ...context.state, presented: [...context.state.presented ?? [], ...presented] }
     }
-    if (match.event.type === 'tool/call') {
+    const call = effectiveToolCall(match.event)
+    if (call !== undefined) {
       const calls = new Map(context.state.calls)
-      calls.set(
-        String(match.event.data.callId),
-        mutationPath(match.event.data.name, match.event.data.arguments),
-      )
+      calls.set(String(call.callId), mutationPath(call.name, call.arguments))
       return { ...context.state, calls }
     }
-    if (match.event.type !== 'tool/result') return context.state
-    if (match.event.data.message.isError === true) return context.state
-    const callId = String(match.event.data.message.source.callId)
-    const argumentPath = context.state.calls.get(callId)
+    const result = effectiveToolResult(match.event)
+    /* v8 ignore next -- match admits only Turn, delivery, change, call, and settlement events, all handled above. */
+    if (result === undefined) return context.state
+    if (result.isError) return context.state
+    const argumentPath = context.state.calls.get(String(result.callId))
     if (argumentPath === null || argumentPath === undefined) return context.state
-    const path = mutationResultPath(argumentPath, match.event.data.meta)
+    const path = mutationResultPath(argumentPath, result.meta)
     return path === null
       ? context.state
       : {
