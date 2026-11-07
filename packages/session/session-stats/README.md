@@ -76,7 +76,7 @@ The unit is a pure fold over committed session events: `step/end` is the counted
 
 ### Data model
 
-The fold state holds the eight totals plus in-flight boundaries: `lastTurn` (turn of the last counted `step/end`), `openStep` (the open step's boundary facts, closed by its `assistant/message`), and `pendingCalls` (tool dispatch times by callId). The wire view is a strict subset — the eight totals — so the persisted-cache state schema extends the view schema with the boundary fields.
+The fold state holds the eight totals plus in-flight boundaries: `lastTurn` (turn of the last counted `step/end`), `openStep` (the open step's boundary facts, closed by its `assistant/message`), and `pendingCalls` (call-id/dispatch-time pairs, including prototype-named ids). State version 2 checkpoints preserve every id through JSON validation; older checkpoints are refolded from the Session log. The wire view is a strict subset — the eight totals — so the persisted-cache state schema extends the view schema with the boundary fields.
 
 ### Fold rules
 
