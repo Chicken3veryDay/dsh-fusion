@@ -63,7 +63,7 @@ export interface BindingReadiness {
   readonly binding: Binding
   readonly structural: 'ready' | 'blocked'
   readonly code: 'configured' | 'missing-provider' | 'route-mismatch' | 'unknown-capability' | 'unsupported-capability' | 'unsupported-effort'
-    | 'missing-credential' | 'credential-failed' | 'adapter-failed' | 'absent-model' | 'metadata-unknown' | 'cancelled'
+    | 'missing-model' | 'missing-credential' | 'credential-failed' | 'adapter-failed' | 'absent-model' | 'metadata-unknown' | 'cancelled'
   readonly membership?: Membership
 }
 /** Selection-wide report; runtime safety and frozen integration/benchmark evidence are downstream obligations. */
@@ -198,8 +198,18 @@ export class FusionConfig extends Service {
 
   private async inspect(selection: Selection, signal: AbortSignal): Promise<PreflightReport> {
     let agentPreset: 'ready' | 'blocked' = 'blocked'
-    try { agentPreset = (await this.ctx.agentPresets.resolve(selection.agentPreset)).broken === undefined ? 'ready' : 'blocked' }
-    catch (_error) { /* Registry diagnostics are not safe command output; the blocked preset remains visible. */ }
+    if (!signal.aborted) {
+      const cancelled = Promise.withResolvers<undefined>()
+      const abort = () => { cancelled.resolve(undefined) }
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        // The preset audit can await Loader settlement, including this plugin's own unload.
+        const preset = await Promise.race([this.ctx.agentPresets.resolve(selection.agentPreset), cancelled.promise])
+        signal.throwIfAborted()
+        if (preset !== undefined && preset.broken === undefined) agentPreset = 'ready'
+      } catch (_error) { /* Registry diagnostics are not safe command output; the blocked preset remains visible. */ }
+      finally { signal.removeEventListener('abort', abort) }
+    }
     const grouped = new Map<string, { binding: Binding; roles: string[] }>()
     for (const [role, binding] of [...Object.entries(selection.roles), ...selection.upgrades.map((binding, index): [string, Binding] => [`upgrade:${index + 1}`, binding])]) {
       const key = JSON.stringify(binding)
@@ -236,8 +246,9 @@ export class FusionConfig extends Service {
     // Anthropic dispatch only sends an effort parameter when the materialized model explicitly enables adaptive thinking.
     // A cc/ advertisement or reasoning-level map alone cannot establish that support.
     const model = profile.piProvider?.getModels().find(row => row.id === binding.wireModelId)
-    if (model === undefined || (binding.transport === 'anthropic-messages'
-      && (model.compat === undefined || !('forceAdaptiveThinking' in model.compat) || !model.compat.forceAdaptiveThinking))) {
+    if (model === undefined) return blocked('missing-model')
+    if (binding.transport === 'anthropic-messages'
+      && (model.compat === undefined || !('forceAdaptiveThinking' in model.compat) || !model.compat.forceAdaptiveThinking)) {
       return blocked('unsupported-effort')
     }
     try {

@@ -21,8 +21,22 @@
         document:
           credentialRef: FUSION_TEST_KEY
           agentPreset: fusion-inspection
-          providers: {}
-          declarations: []
+          providers:
+            omniroute-openai:
+              api: openai-responses
+              baseURL: http://127.0.0.1:20128/v1
+              apiKeyEnv: FUSION_TEST_KEY
+              transport: sse
+              models:
+                - id: cx/gpt-6-sol
+                  reasoningEfforts:
+                    high: high
+          declarations:
+            - providerId: omniroute-openai
+              wireModelId: cx/gpt-6-astra
+              tools: true
+              structuredDecisions: true
+              efforts: [high]
           bindings: []
           selections: []
           metadataLimits:

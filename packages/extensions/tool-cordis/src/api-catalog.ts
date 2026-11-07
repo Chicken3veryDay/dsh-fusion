@@ -6711,7 +6711,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'BindingReadiness',
-    declaration: 'export interface BindingReadiness {\n    readonly binding: Binding;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly code: \'configured\' | \'missing-provider\' | \'route-mismatch\' | \'unknown-capability\' | \'unsupported-capability\' | \'unsupported-effort\' | \'missing-credential\' | \'credential-failed\' | \'adapter-failed\' | \'absent-model\' | \'metadata-unknown\' | \'cancelled\';\n    readonly membership?: Membership;\n}',
+    declaration: 'export interface BindingReadiness {\n    readonly binding: Binding;\n    readonly structural: \'ready\' | \'blocked\';\n    readonly code: \'configured\' | \'missing-provider\' | \'route-mismatch\' | \'unknown-capability\' | \'unsupported-capability\' | \'unsupported-effort\' | \'missing-model\' | \'missing-credential\' | \'credential-failed\' | \'adapter-failed\' | \'absent-model\' | \'metadata-unknown\' | \'cancelled\';\n    readonly membership?: Membership;\n}',
   },
   {
     name: 'BlockTicketRequest',
