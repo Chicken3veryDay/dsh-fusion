@@ -1642,3 +1642,26 @@ describe('Session summary projection replacement', () => {
     expect(entry?.title).toBe('fresh')
   })
 })
+
+describe('control baseline fold failures', () => {
+  it('reports a Host-failed Session as a projection error and clears it on a later readable cut', async ({ mock, remote }) => {
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    manager.handleControlFrame({ type: 'baseline', value: {
+      projections: { [S1]: { asOfSeq: 2, values: { title: 'healthy' } } },
+      failed: [S2],
+    } })
+    const failed = manager.getListSnapshot().projectionsBySession
+    expect(failed[S1]).toMatchObject({ state: 'idle', error: null, values: { title: 'healthy' } })
+    expect(failed[S2]).toMatchObject({
+      state: 'error', values: {}, error: { code: 'session/projections-failed', details: { sessionId: S2 } },
+    })
+
+    manager.handleControlFrame({ type: 'baseline', value: {
+      projections: { [S2]: { asOfSeq: 3, values: { title: 'recovered' } } },
+    } })
+    expect(manager.getListSnapshot().projectionsBySession[S2]).toMatchObject({
+      state: 'idle', error: null, values: { title: 'recovered' },
+    })
+  })
+})

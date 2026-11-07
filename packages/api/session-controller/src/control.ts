@@ -2,9 +2,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Deque } from '@deepseek-ai/dsh-deque'
+import { errorChain } from '@deepseek-ai/dsh-llm'
 import type {
   Session, SessionId,
 } from '@deepseek-ai/dsh-session'
+import type { ProjectionSnapshot } from '@deepseek-ai/dsh-session-projection'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {
   SessionControlBaseline,
@@ -52,26 +54,34 @@ export class SessionControlController {
     }
   }
 
+  /**
+   * Read one cut per live Session. A Session whose snapshot throws is listed in `failed` and logged;
+   * its projection cells are Session-owned, so every other Session's cut stays exact.
+   */
   private baseline(): SessionControlBaseline {
-    const sessions = this.ctx.sessions.list()
-    return {
-      projections: this.projectionBaseline(sessions),
+    const projections = Object.create(null) as Record<SessionId, SessionProjectionBaseline>
+    const failed: SessionId[] = []
+    for (const session of this.ctx.sessions.list()) {
+      const block = this.projectionBaseline(session)
+      if (block === undefined) failed.push(session.id)
+      else projections[session.id] = block
     }
+    return failed.length === 0 ? { projections } : { projections, failed }
   }
 
-  private projectionBaseline(
-    sessions: readonly Session[],
-  ): Readonly<Record<SessionId, SessionProjectionBaseline>> {
-    const blocks = Object.create(null) as Record<SessionId, SessionProjectionBaseline>
-    for (const session of sessions) {
-      const snapshot = this.ctx.sessionProjections.snapshot(session)
-      blocks[session.id] = {
-        asOfSeq: snapshot.asOfSeq,
-        // Every projection definition validates its value before snapshot publication.
-        values: snapshot.values as SessionProjectionValues,
-      }
+  private projectionBaseline(session: Session): SessionProjectionBaseline | undefined {
+    let snapshot: ProjectionSnapshot
+    try {
+      snapshot = this.ctx.sessionProjections.snapshot(session)
+    } catch (error) {
+      this.ctx.logger.error(`session-controller: projections of Session "${session.id}" failed to fold and are omitted from the control baseline; other Sessions are unaffected: ${errorChain(error)}`)
+      return undefined
     }
-    return blocks
+    return {
+      asOfSeq: snapshot.asOfSeq,
+      // Every projection definition validates its value before snapshot publication.
+      values: snapshot.values as SessionProjectionValues,
+    }
   }
 
   private broadcast(frame: SessionControlFrame): void {

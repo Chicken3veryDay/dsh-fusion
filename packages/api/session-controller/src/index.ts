@@ -631,7 +631,8 @@ export class SessionController extends TypertRemoteService {
         case 'baseline': {
           const projections = Object.fromEntries(Object.entries(frame.value.projections)
             .filter(([sessionId]) => this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId as SessionId })))
-          yield { type: 'baseline', value: { ...frame.value, projections } }
+          const failed = frame.value.failed?.filter(sessionId => this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId })) ?? []
+          yield { type: 'baseline', value: failed.length === 0 ? { projections } : { projections, failed } }
           break
         }
         case 'projection':

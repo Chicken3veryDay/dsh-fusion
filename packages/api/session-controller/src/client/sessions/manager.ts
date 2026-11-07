@@ -681,12 +681,25 @@ export class SessionManager {
     this.notifier.markDirty()
   }
 
+  /**
+   * Seed every readable Session and mark each Host-reported fold failure as a projection load
+   * error. A readable cut clears an earlier control-reported failure for its Session.
+   */
   private replaceControlBaseline(baseline: SessionControlBaseline): void {
-
     for (const [sessionId, block] of Object.entries(baseline.projections)) {
       const store = this.projectionStore(sessionId as SessionId)
       const asOfSeq = sessionSeqCursor(block.asOfSeq)
       store.seed({ ...block, asOfSeq })
+      if (this.projectionLoads.get(sessionId as SessionId)?.error?.code === 'session/projections-failed') {
+        this.projectionLoads.delete(sessionId as SessionId)
+      }
+    }
+    for (const sessionId of baseline.failed ?? []) {
+      this.projectionStore(sessionId)
+      this.projectionLoads.set(sessionId, {
+        state: 'error',
+        error: new RemoteError('session/projections-failed', `The Host could not read projections of Session ${sessionId}`, { sessionId }),
+      })
     }
     this.notifier.markDirty()
   }

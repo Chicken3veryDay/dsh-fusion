@@ -18,9 +18,10 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { remoteMethods, type PeerId, type PeerScope, type Principal, type RemoteInvocation } from '@deepseek-ai/dsh-typert-protocol'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import type SessionController from '../src/index.ts'
 import { ApiSessionList } from '../src/list.ts'
-import type { SessionControlFrame, SessionRequestId, SessionSearchValue } from '../src/types.ts'
+import type { SessionControlBaseline, SessionControlFrame, SessionRequestId, SessionSearchValue } from '../src/types.ts'
 import { createSessionTestController } from './test-remote.ts'
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
@@ -247,6 +248,33 @@ describe('Session Controller access', () => {
     expect(await projected(guest)).toBe(SHARED)
     abort.abort()
     await Promise.all([guest.return?.(), owner.return?.()])
+  })
+
+  it('reports a fold-failed Session in session/control baselines only to callers the Session admits', async () => {
+    const { ctx, hidden, as } = await harness()
+    guestPolicy(ctx, LIST_CALLS, READS_SHARED)
+    vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    await ctx.sessionProjections.register({
+      key: 'test/private-fold-failure', stateVersion: 1, stateSchema: z.number(),
+      init: (header) => {
+        if (header.id === hidden.session.id) throw new Error('private fold failure')
+        return 0
+      },
+      apply: (state: number) => state,
+    })
+    const baseline = async (principal: Principal): Promise<SessionControlBaseline> => {
+      const iterator = as(principal, 'control').sessionController.control(new AbortController().signal)[Symbol.asyncIterator]()
+      const next = await iterator.next()
+      await iterator.return?.()
+      if (next.done === true || next.value.type !== 'baseline') throw new Error('control stream opened without a baseline')
+      return next.value.value
+    }
+    const guest = await baseline(GUEST)
+    expect(Object.keys(guest.projections)).toEqual([SHARED])
+    expect(guest).not.toHaveProperty('failed')
+    const owner = await baseline(OWNER)
+    expect(Object.keys(owner.projections)).toEqual([SHARED])
+    expect(owner.failed).toEqual([PRIVATE])
   })
 
   it('records a non-owner caller on the prompt source and leaves owner sources unchanged', async () => {

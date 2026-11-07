@@ -190,6 +190,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly existingCwd?: string
     }
     'session/projections-unavailable': Record<string, never>
+    /** The Host could not fold this Session's projections; other Sessions are unaffected. */
+    'session/projections-failed': { readonly sessionId: SessionId }
     'session/writer-held': { readonly sessionId: SessionId }
     'session/agent-busy': { readonly reason: string }
     'session/invalid-time-zone': { readonly value: string }
@@ -566,7 +568,14 @@ export type SessionFollowFrame =
 
 /** Complete live control baseline emitted once per control stream generation. */
 export interface SessionControlBaseline {
+  /** One exact projection cut per live Session whose projections were readable. */
   readonly projections: Readonly<Record<SessionId, SessionProjectionBaseline>>
+  /**
+   * Live Sessions whose projections failed to fold at this cut; omitted when every Session was readable.
+   * Each is absent from `projections`; the Host logs the cause, and the Client reports
+   * `session/projections-failed` for it.
+   */
+  readonly failed?: readonly SessionId[]
 }
 
 /** One finished projection value and its durable watermark. */
