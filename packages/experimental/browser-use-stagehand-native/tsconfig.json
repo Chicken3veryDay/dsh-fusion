@@ -8,6 +8,7 @@
     { "path": "../../browser-use/browser-use" },
     { "path": "../../core/agent" },
     { "path": "../../core/tools" },
+    { "path": "../../llm/llm" },
     { "path": "../../core/system-prompt" },
     { "path": "../../mcp/mcp-client" },
     { "path": "../../subprocess/subprocess" },
