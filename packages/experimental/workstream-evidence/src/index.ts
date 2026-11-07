@@ -50,7 +50,7 @@ const defaults: Required<Config> = {
 
 function normalizedArtifactId(value: string): ArtifactIdBrand {
   try { return WorkstreamEvidenceArtifactId(value) } catch (error) {
-    throw new WorkstreamEvidenceError(`Invalid artifact id: ${error instanceof Error ? error.message : String(error)}`,
+    throw new WorkstreamEvidenceError(`Invalid artifact id: ${(error as Error).message}`,
       'WORKSTREAM_EVIDENCE_INVALID_INPUT', { cause: error })
   }
 }

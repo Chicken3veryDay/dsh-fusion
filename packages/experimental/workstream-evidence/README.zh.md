@@ -28,7 +28,7 @@ Workstream Evidence 为一个 Workstream 保存具名证据产物的不可变、
 
 服务提供 `publish`、`get`、`list`、`read`、`readText`、`prepareContext` 和 `aggregateChangeRequests`。
 
-`publish` 把内容保存为 Attachment 文件，并把版本追加到根 Session。新产物的 `expectedVersion` 为 1，已有产物则为下一个版本号；其他值返回 `WORKSTREAM_EVIDENCE_STALE_VERSION`。内容可以是字符串或 `Uint8Array`；`publish` 在入口处一次性复制这些字节，并用该副本完成大小检查、摘要计算、排队等待和 Attachment 保存，因此调用方之后可以复用自己的缓冲区。产物 id 长 1–200 个字符，且不含 `/`、`\` 或 `..`。操作 id 长 1–200 个字符。使用相同 `operationId`、产物 id、期望版本和内容重试，会先刷新根 Session，再返回已存储的版本，因此首次尝试在追加后写入失败时，不会在未持久化的情况下被报告为已发布（存储故障持续时重试会被拒绝）；任何差异都返回 `WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`。版本从不被编辑或删除。保存的 `name` 是 Attachment 存储返回的规范文件名，可能与请求的 `name` 不同（例如 `notes/spec.md` 保存为 `spec.md`）。排队的发布开始时以及 Attachment 保存之后都会再次检查成员资格，因此正在停止的成员无法追加版本。
+`publish` 把内容保存为 Attachment 文件，并把版本追加到根 Session。新产物的 `expectedVersion` 为 1，已有产物则为下一个版本号；其他值返回 `WORKSTREAM_EVIDENCE_STALE_VERSION`。内容可以是字符串或 `Uint8Array`；`publish` 在入口处一次性复制这些字节，并用该副本完成大小检查、摘要计算、排队等待和 Attachment 保存，因此调用方之后可以复用自己的缓冲区。产物 id 长 1–200 个字符，且不含 `/`、`\` 或 `..`。操作 id 长 1–200 个字符。两个构造函数都会去除首尾空白，拒绝空结果，并在去除空白前检查长度上限。使用相同 `operationId`、产物 id、期望版本和内容重试，会先刷新根 Session，再返回已存储的版本，因此首次尝试在追加后写入失败时，不会在未持久化的情况下被报告为已发布（存储故障持续时重试会被拒绝）；任何差异都返回 `WORKSTREAM_EVIDENCE_PAYLOAD_MISMATCH`。版本从不被编辑或删除。保存的 `name` 是 Attachment 存储返回的规范文件名，可能与请求的 `name` 不同（例如 `notes/spec.md` 保存为 `spec.md`）。排队的发布开始时以及 Attachment 保存之后都会再次检查成员资格，因此正在停止的成员无法追加版本。
 
 `get` 返回某个版本的元数据；省略 `version` 时返回最新版本。`list` 返回每个产物及其完整版本历史。`read` 以流方式读取 Attachment，并对照记录校验字节长度和 `sha256:` 摘要，不一致或读取失败时返回 `WORKSTREAM_EVIDENCE_CORRUPT`。`readText` 还要求版本大小不超过 `maxToolTextBytes`，且字节是有效的 UTF-8，否则分别返回 `WORKSTREAM_EVIDENCE_LIMIT_EXCEEDED` 或 `WORKSTREAM_EVIDENCE_INVALID_INPUT`。
 
