@@ -4,7 +4,7 @@ import { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import SessionProjectionRegistry, { SessionProjectionUnitError } from '@deepseek-ai/dsh-session-projection'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { inboxProjectionDefinition, ReactLoopInbox } from '../src/inbox.ts'
 
@@ -62,7 +62,7 @@ async function inboxAgent(rawId: string): Promise<{
 async function reconstructPersistedInbox(
   rawId: string,
   populate: (session: Session) => void,
-): Promise<Error> {
+): Promise<SessionProjectionUnitError> {
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
   await ctx.plugin(SessionStore)
@@ -75,7 +75,7 @@ async function reconstructPersistedInbox(
   try {
     void inbox.nextTurn
   } catch (error: unknown) {
-    if (error instanceof Error) return error
+    if (error instanceof SessionProjectionUnitError) return error
     throw error
   }
   throw new Error('persisted inbox reconstruction unexpectedly succeeded')
@@ -122,8 +122,10 @@ describe('ReactLoopInbox', () => {
         target: 'next-turn', start: 0, removedCount: 1, inserted: [],
       })
     })
-    expect(outOfRange.message).toBe('invalid persisted inbox splice at session seq 0')
-    expect((outOfRange.cause as Error).message).toBe('invalid inbox splice')
+    expect(outOfRange).toMatchObject({ key: 'inbox', phase: 'apply', seq: 0 })
+    const outOfRangeFold = outOfRange.cause as Error
+    expect(outOfRangeFold.message).toBe('invalid persisted inbox splice at session seq 0')
+    expect((outOfRangeFold.cause as Error).message).toBe('invalid inbox splice')
 
     const pending = createUserMessage({
       content: [{ type: 'text', text: 'duplicate' }],
@@ -137,8 +139,10 @@ describe('ReactLoopInbox', () => {
         target: 'next-step', start: 0, inserted: [pending],
       })
     })
-    expect(duplicate.message).toBe('invalid persisted inbox splice at session seq 1')
-    expect((duplicate.cause as Error).message).toBe(`message "${pending.id}" is already pending`)
+    expect(duplicate).toMatchObject({ key: 'inbox', phase: 'apply', seq: 1 })
+    const duplicateFold = duplicate.cause as Error
+    expect(duplicateFold.message).toBe('invalid persisted inbox splice at session seq 1')
+    expect((duplicateFold.cause as Error).message).toBe(`message "${pending.id}" is already pending`)
   })
 
   it('projects inherited inbox events in a forked session', async () => {

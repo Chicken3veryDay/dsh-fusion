@@ -31,6 +31,12 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionMap {
+    'test/private-fold-failure': number
+  }
+}
+
 const OWNER: Principal = { kind: 'owner' }
 const GUEST: Principal = { kind: 'test-guest', guest: 'session-controller' }
 const SHARED = SessionId('shared-session')
@@ -261,6 +267,8 @@ describe('Session Controller access', () => {
         return 0
       },
       apply: (state: number) => state,
+      // Client-visible, so the failure leaves the private Session without a complete cut.
+      wire: { viewSchema: z.number(), view: (state: number) => state },
     })
     const baseline = async (principal: Principal): Promise<SessionControlBaseline> => {
       const iterator = as(principal, 'control').sessionController.control(new AbortController().signal)[Symbol.asyncIterator]()
