@@ -243,3 +243,32 @@ describe('Codex Responses over a signed-in grant', () => {
     expect(requests).toEqual(['/codex/responses'])
   })
 })
+
+describe('GitHub Copilot model offer', () => {
+  async function copilot(...ids: [] | [unknown]): Promise<readonly string[]> {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-copilot-'))
+    onTestFinished(() => rm(dir, { recursive: true, force: true }))
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('github-copilot'), () => Promise.resolve({
+      kind: 'grant',
+      payload: { type: 'oauth', access: 'a', refresh: 'r', expires: Date.now() + 3_600_000,
+        ...ids.length === 0 ? {} : { availableModelIds: ids[0] } },
+    }))
+    await ctx.plugin(PiAi, { providers: { 'github-copilot': {} } })
+    return (await ctx.llm.listModels('github-copilot')).map(model => model.id)
+  }
+
+  it('offers only the models the signed-in account can call', async () => {
+    const all = await copilot()
+    expect(all.length).toBeGreaterThan(2)
+    expect(await copilot([all[0]!, 'not-in-the-catalog'])).toEqual([all[0]])
+  })
+
+  it('offers the whole catalog while the account lists nothing', async () => {
+    const all = await copilot()
+    expect(await copilot('malformed')).toEqual(all)
+  })
+})

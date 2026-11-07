@@ -353,7 +353,16 @@ export class PiAiAdapter extends LlmAdapter {
         if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return []
         throw error
       }
-      return snapshot.models.getModels(provider).map(model => ({
+      const catalog = snapshot.models.getModels(provider)
+      // A provider that narrows its catalog per credential (Copilot, by the
+      // signed-in account) is asked with the stored credential, so the picker
+      // offers only models the account can call. Explicitly selecting another
+      // catalog model still resolves; this narrows the offer, not the route.
+      const filter = snapshot.models.getProvider(provider)?.filterModels
+      const offered = filter === undefined
+        ? catalog
+        : filter(catalog, await this.config.auth.credentials.read(provider))
+      return offered.map(model => ({
         provider,
         id: model.id,
         name: model.name,

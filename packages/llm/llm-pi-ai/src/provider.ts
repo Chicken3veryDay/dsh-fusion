@@ -151,6 +151,11 @@ function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
     ...baseUrl === undefined ? {} : { baseUrl },
     auth: routeAuth(spec, base),
     getModels: () => spec.models,
+    // Credential-specific availability (Copilot lists only the models the
+    // signed-in account may use) stays the catalog provider's policy.
+    ...base.filterModels === undefined ? {} : {
+      filterModels: (models, credential) => base.filterModels?.(models, credential) ?? models,
+    },
     // Delegated rather than copied: the catalog provider stays the receiver, so
     // an implementation holding state on itself keeps working.
     stream: (model, context, options) => base.stream(model, context, options),

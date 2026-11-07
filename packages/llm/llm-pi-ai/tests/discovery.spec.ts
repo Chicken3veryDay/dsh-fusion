@@ -173,6 +173,22 @@ describe('draft-provider model discovery', () => {
     ])
   })
 
+  it('reads a gateway\'s top-level max_completion_tokens as the output capacity', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({ data: [
+        { id: 'hub-alias', context_length: 400_000, max_completion_tokens: 128_000 },
+        // Without a usable output cap the capability stays unknown, not guessed.
+        { id: 'hub-uncapped', context_length: 400_000, max_completion_tokens: 'many' },
+      ] }),
+    })
+    const ctx = await harness()
+
+    expect(await ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url, api: 'openai-completions' })).toEqual([
+      { id: 'hub-alias', name: 'hub-alias', contextWindow: 400_000, maxTokens: 128_000 },
+      { id: 'hub-uncapped', name: 'hub-uncapped', contextWindow: 400_000 },
+    ])
+  })
+
   it('uses Anthropic model-listing paths, headers, and capacity fields', async () => {
     const server = await listingServer({
       body: JSON.stringify({

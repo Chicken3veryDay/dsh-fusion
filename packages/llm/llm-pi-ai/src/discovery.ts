@@ -81,6 +81,7 @@ interface ListingEntry {
   max_input_tokens?: unknown
   maxOutputTokens?: unknown
   max_tokens?: unknown
+  max_completion_tokens?: unknown
   max_output_tokens?: unknown
   maxTokens?: unknown
   limit?: ListingLimit | null
@@ -216,6 +217,7 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       entry?.max_output_tokens,
       entry?.maxTokens,
       entry?.max_tokens,
+      entry?.max_completion_tokens,
       entry?.limit?.output,
       entry?.top_provider?.max_completion_tokens,
     )
