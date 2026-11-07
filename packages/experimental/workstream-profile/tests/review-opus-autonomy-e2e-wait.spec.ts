@@ -72,7 +72,8 @@ it('a member waiting for its Ticket answer wakes for an answer committed after i
   expect(toolResults(logs.get(ROOT)!).find(result => result.name === 'ticket_answer')?.isError).toBe(false)
   const wait = toolResults(logs.get(memberId)!).find(result => result.name === 'workstream_wait')!
   const anyNumber: unknown = expect.any(Number)
-  expect({ result: JSON.parse(wait.text) as unknown, blockedMs: timing.waitEnded - timing.waitStarted < 5_000 ? 'under 5s' : timing.waitEnded - timing.waitStarted },
+  const waitResult: unknown = JSON.parse(wait.text)
+  expect({ result: waitResult, blockedMs: timing.waitEnded - timing.waitStarted < 5_000 ? 'under 5s' : timing.waitEnded - timing.waitStarted },
     'the answer the member waits for was already committed; the wait must not block until its timeout')
     // The wait result gained `cursor` (chained into the next wait, fix-ws-wait round 2); the timing assertion is unchanged.
     .toEqual({ result: { timedOut: false, revision: anyNumber, cursor: anyNumber }, blockedMs: 'under 5s' })
