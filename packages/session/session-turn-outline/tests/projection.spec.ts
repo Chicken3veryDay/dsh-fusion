@@ -247,19 +247,27 @@ describe('turn outline projection unit', () => {
     const checkpoint = ctx.sessionProjections.checkpoint(session)
     const row = checkpoint.turnOutline
     expect(row).toBeDefined()
+    const rejected = { turns: [
+      { turn: 2, seq: 1, prompt: '', response: '' },
+      { turn: 2, seq: 4, prompt: '', response: '' },
+    ], draft: '' }
+    // The state schema owns the invariant: it must name the non-increasing turns.
+    const parsed = turnOutlineProjectionDefinition.stateSchema.safeParse(rejected)
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.issues.map(issue => issue.message).join(' ')).toMatch(/strictly increasing/)
+    const replayed = ctx.sessionProjections.restore({}, [], SessionLogOffset(0), session.header, session.inheritedEventCount)
+    // A full-log restore discards the rejected row and refolds it, so it never seeds state.
+    const restored = ctx.sessionProjections.restore({
+      ...checkpoint, turnOutline: { ...row!, val: rejected },
+    }, [], SessionLogOffset(0), session.header, session.inheritedEventCount)
+    expect(restored.checkpoint.turnOutline?.val).toEqual(replayed.checkpoint.turnOutline?.val)
+    expect(restored.checkpoint.turnOutline?.val).not.toEqual(rejected)
+    // A partial-log restore cannot refold the discarded unit and asks for a full re-read.
+    const atSeq0 = Object.fromEntries(Object.entries(checkpoint).map(([key, value]) => [key, { ...value, seq: SessionSeq(0) }]))
     expect(() => ctx.sessionProjections.restore({
-      ...checkpoint,
-      turnOutline: {
-        ...row!,
-        val: {
-          turns: [
-            { turn: 2, seq: 1, prompt: '', response: '' },
-            { turn: 2, seq: 4, prompt: '', response: '' },
-          ],
-          draft: '',
-        },
-      },
-    }, [], SessionLogOffset(0), session.header, session.inheritedEventCount)).toThrow(/strictly increasing/)
+      ...atSeq0, turnOutline: { ...row!, seq: SessionSeq(0), val: rejected },
+    }, [], SessionLogOffset(1), session.header, session.inheritedEventCount))
+      .toThrow(/"turnOutline" cannot restore from seq 1.*re-read from seq 0/)
     expect(() => ctx.sessionProjections.restore({
       ...checkpoint,
       turnOutline: {

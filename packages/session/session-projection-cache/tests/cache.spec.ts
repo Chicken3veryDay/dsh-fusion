@@ -741,6 +741,31 @@ describe('SessionProjectionCache cold-read seeding', () => {
     })
   })
 
+  it('hydratePrepared refolds from the exact log when a schema-valid cached seed makes a unit throw while folding', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
+    roots.push(root)
+    await seedRecord(root, 'prepared-poisoned', {
+      'cache-test/fragile': { ver: 1, seq: SessionSeq(1), val: 99 },
+    })
+    const { ctx, cache } = await harness({ root })
+    // The seed satisfies the unit's state schema, so the registry keeps it and the fold over the log suffix throws.
+    await ctx.sessionProjections.register({
+      key: 'cache-test/fragile', stateVersion: 1, stateSchema: z.number(), init: () => 0,
+      apply: (state: number) => {
+        if (state === 99) throw new Error('seeded state cannot fold')
+        return state + 1
+      },
+    })
+    const events = storedLog([['fresh']])
+    const header = headerOf(SessionId('prepared-poisoned'))
+    const session = Session.create(header.id, events, header)
+    expect(cache.hydratePrepared(session, events)).toMatchObject({ asOfSeq: 2 })
+    // The retry discarded the cached rows and folded every unit from init over the exact log.
+    const refolded = ctx.sessionProjections.checkpoint(session)['cache-test/fragile']?.val
+    expect(refolded).toBeGreaterThanOrEqual(events.length)
+    expect(refolded).toBeLessThan(99)
+  })
+
   it('coldSnapshot traverses the full log but applies only the events after each cached watermark', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-projcache-'))
     roots.push(root)

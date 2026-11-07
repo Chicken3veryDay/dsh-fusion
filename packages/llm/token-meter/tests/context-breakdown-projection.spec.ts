@@ -464,9 +464,18 @@ describe('contextBreakdown session projection', () => {
         val: { systems: [{ seq: 0, tokens: -1 }], surfaceTokens: 0, breakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 } },
       },
     }
-    expect(() => ctx.sessionProjections.restore(
+    // A full-log restore discards the schema-rejected row and refolds to the full-replay state,
+    // so the negative token count never seeds state.
+    const discarded = ctx.sessionProjections.restore(
       invalid, session.snapshotEvents(), SessionLogOffset(0), session.header, session.inheritedEventCount,
-    )).toThrow()
+    )
+    expect(discarded.snapshot.values.contextBreakdown).toEqual(projected(ctx, session))
+    expect(discarded.checkpoint['contextBreakdown']).toEqual(replayed.checkpoint['contextBreakdown'])
+    // A partial-log restore cannot refold the discarded unit and asks for a full re-read.
+    expect(() => ctx.sessionProjections.restore(
+      { ...checkpoint, contextBreakdown: { ...invalid.contextBreakdown, seq: SessionSeq(meter.seq - 1) } },
+      [meter, replacement], SessionLogOffset(meter.seq), session.header, session.inheritedEventCount,
+    )).toThrow(/"contextBreakdown" cannot restore from seq .*re-read from seq 0/)
   })
 
   it('discards lower-layer version-3 scalar caches and refolds the full surface', async () => {

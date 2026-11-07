@@ -108,15 +108,24 @@ describe('title projection unit', () => {
       { first: { seq: 1, text: 'first' }, count: 0, lastSeq: 1 },
       { first: { seq: 2, text: 'first' }, count: 1, lastSeq: 1 },
     ]
+    const replayed = ctx.sessionProjections.restore({}, [], SessionLogOffset(0), session.header, session.inheritedEventCount)
+    const atSeq0 = Object.fromEntries(Object.entries(checkpoint).map(([key, value]) => [key, { ...value, seq: SessionSeq(0) }]))
     for (const state of invalidStates) {
       const malformed = {
         ...checkpoint,
         titleInput: { ...row!, val: state },
       }
-      expect(() => ctx.sessionProjections.restore(
+      const restored = ctx.sessionProjections.restore(
         malformed, [], SessionLogOffset(0), session.header, session.inheritedEventCount,
-      ))
-        .toThrow(/title input state must pair its count with first and last message seqs/)
+      )
+      // A full-log restore discards the inconsistent row and refolds it, so it never seeds state.
+      expect(restored.checkpoint.titleInput?.val).toEqual(replayed.checkpoint.titleInput?.val)
+      expect(restored.checkpoint.titleInput?.val).not.toEqual(state)
+      // A partial-log restore cannot refold the discarded unit and asks for a full re-read.
+      expect(() => ctx.sessionProjections.restore(
+        { ...atSeq0, titleInput: { ...row!, seq: SessionSeq(0), val: state } },
+        [], SessionLogOffset(1), session.header, session.inheritedEventCount,
+      )).toThrow(/"titleInput" cannot restore from seq 1.*re-read from seq 0/)
     }
 
     expect(() => ctx.sessionProjections.restore({
@@ -126,5 +135,9 @@ describe('title projection unit', () => {
         val: { first: { seq: 1, text: 'first' }, count: 1, lastSeq: 1 },
       },
     }, [], SessionLogOffset(0), session.header, session.inheritedEventCount)).not.toThrow()
+    // A consistent state is the control: the same restore keeps it as the seed, so discarding above is the counter check.
+    const consistent = { first: { seq: 1, text: 'first' }, count: 1, lastSeq: 1 }
+    expect(ctx.sessionProjections.restore({ ...checkpoint, titleInput: { ...row!, val: consistent } },
+      [], SessionLogOffset(0), session.header, session.inheritedEventCount).checkpoint.titleInput?.val).toEqual(consistent)
   })
 })

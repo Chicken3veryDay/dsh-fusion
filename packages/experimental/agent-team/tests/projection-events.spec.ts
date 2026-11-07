@@ -101,7 +101,14 @@ describe('Agent Teams projection events', () => {
       type: 'tool-result', toolCallId: 'retired', content: [{ type: 'text', text: 'old result' }],
     }] as unknown as TeamMessageSnapshot['content'] })
     const retired = { ...valid, messages: [retiredMessage] }
-    expect(() => restore(JSON.parse(JSON.stringify(retired)))).toThrow()
+    // A full-log restore discards the rejected row and refolds to the full-replay state, so retired content never seeds state.
+    const discarded = restore(JSON.parse(JSON.stringify(retired))).checkpoint['agentTeam']?.val
+    expect(discarded).toEqual(project(ROOT, []))
+    expect(discarded).not.toEqual(retired)
+    // A partial-log restore cannot refold the discarded unit and asks for a full re-read.
+    expect(() => ctx.sessionProjections.restore({
+      agentTeam: { ver: teamProjectionDefinition.stateVersion, seq: SessionSeq(0), val: JSON.parse(JSON.stringify(retired)) as unknown },
+    }, [], SessionLogOffset(1), session.header, SessionLogOffset(0))).toThrow(/"agentTeam" cannot restore from seq 1.*re-read from seq 0/)
     expect(() => projectTeam(ROOT, [event('team/message/queued', {
       version: 2, teamId: TEAM, message: retiredMessage,
     }, SessionSeq(0))])).toThrow(/team\/message\/queued payload is invalid/)
