@@ -963,6 +963,25 @@ def main() -> None:
     print(f"smoke-python-runtime: {args.scenario} passed")
 
 
+def hydrate_fusion_execution_identities(text: str) -> str:
+    """Replace fixture identity tokens as snapshots/sdk/fusion-execution/runner.ts does."""
+    sessions = {"session:1": "execution-root", "session:2": "execution-child", "message:1": "execution-input"}
+
+    def replace(match: re.Match[str]) -> str:
+        kind, ordinal = match.group(1), match.group(2)
+        session = sessions.get(f"{kind}:{ordinal}")
+        if session is not None:
+            return session
+        suffix = ordinal.zfill(12)
+        if kind == "id":
+            return f"00000000-0000-4000-8000-{suffix}"
+        if kind == "workflow":
+            return f"00000000-0000-4000-9000-{suffix}"
+        raise AssertionError(f"fusion-execution fixture holds unsupported identity token {match.group(0)}")
+
+    return re.sub(r"\{\{([a-z]+):([1-9]\d*)\}\}", replace, text)
+
+
 def smoke_sdk_fusion_execution(executable: Path) -> None:
     """Replay required execution facts through the exact artifact's closed production owner."""
     from deepseek_harness import DeepSeekHarness
@@ -977,10 +996,7 @@ def smoke_sdk_fusion_execution(executable: Path) -> None:
         home = root / "home"
         sessions = home / "sessions"
         for suffix, session_id in (("", "execution-root"), (".1", "execution-child")):
-            text = (fixture / f"session{suffix}.v4.jsonl").read_text()
-            for token, value in (("{{session:1}}", "execution-root"), ("{{session:2}}", "execution-child"),
-                                 ("{{message:1}}", "execution-input")):
-                text = text.replace(token, value)
+            text = hydrate_fusion_execution_identities((fixture / f"session{suffix}.v4.jsonl").read_text())
             rows = [json.loads(line) for line in text.splitlines()]
             physical = [rows[0], *({**row, "seq": index, "time": 1785097381465 + index}
                                    for index, row in enumerate(rows[1:]))]
