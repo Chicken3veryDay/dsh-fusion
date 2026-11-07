@@ -186,7 +186,7 @@ None for the working conversation.
 - **Citations use the latest read in the working directory** — the index remembers one last-read hash per section, whoever read it. When another agent reads the edited text before the curator files its note, the citation names that newer text although the curator read the older one.
 - **`context_note` stays declared for the curator** — the context tree declares it as a base tool for every agent; the service refuses it for the holder, and the curator prompt says so.
 - **No cross-conversation map** — the map belongs to one root Session; a new conversation starts with an empty map.
-- **Capacity is seen through ended subagents** — work refused for activation capacity waits for a `subagent/end`. A slot freed without one (a child whose startup rolled back, or a raised `maxActiveSubagents`) is used only when another subagent ends or the work changes.
+- **Capacity is seen through ended subagents** — work refused for activation capacity waits for a `subagent/end`. A slot freed without one (a child whose startup rolled back, or a raised `maxActiveSubagents`) is used only when another subagent ends or the work changes. Any subagent end wakes waiting work, including an end in another root's pool; a wake that finds the pool still full costs one claim and its return in the owner's log.
 - **No assistant yet** — the role is built for a harness assistant, but nothing here imports or ships one.
 
 <a id="dev-note"></a>
