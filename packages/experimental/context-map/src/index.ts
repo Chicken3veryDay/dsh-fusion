@@ -753,7 +753,6 @@ export class ContextMapService extends Service {
   }
 
   private async commit(owner: Agent, actor: SessionId, op: Omit<MapOp, 'actor'>, next: Omit<MapSnapshot, 'revision'>): Promise<MapSnapshot> {
-    if (this.disposed) throw new ContextMapError('context map disposed', 'CONTEXT_MAP_DISPOSED')
     const current = this.snapshotOf(owner)
     const snapshot: MapSnapshot = { ...next, ownerSessionId: owner.id, revision: current.revision + 1 }
     // Role metadata must never prevent taking the role needed to shrink content. Measure every
@@ -941,8 +940,8 @@ export class ContextMapService extends Service {
   }
 
   private async releaseGone(ownerId: SessionId, holderId: SessionId): Promise<void> {
-    const owner = this.ctx.agents.get(ownerId)
-    if (owner === undefined || this.disposed) return
+    // `heldOwners` drops an owner when it is disposed, so a holder's end finds only live owners.
+    const owner = this.ownerFor(ownerId)
     const current = this.snapshotOf(owner)
     if (current.curatorId !== holderId) return
     await this.commit(owner, ownerId, { kind: 'release', target: holderId }, { ...current, curatorId: null, route: null })

@@ -65,7 +65,10 @@ interface Run {
   readonly endsBefore: number
 }
 
-/** Lifecycle state of the default curator for one map owner. */
+/**
+ * Lifecycle state of the default curator for one map owner. A record that ends is deleted from the
+ * record map and left `idle`; no event reaches it afterwards, because every event source looks the record up by owner.
+ */
 type CuratorState =
   | { readonly kind: 'idle' }
   /** An evaluation decides whether waiting work starts a run; aborting `evaluation` cancels its reads. */
@@ -76,7 +79,6 @@ type CuratorState =
   | { readonly kind: 'running'; readonly run: Run }
   | { readonly kind: 'yielding'; readonly run: Run; readonly reason: StopReason }
   | { readonly kind: 'settling'; readonly run: Run; readonly reason: string }
-  | { readonly kind: 'disposed' }
 
 /** Everything that moves a record between states. */
 type CuratorEvent =
@@ -120,10 +122,6 @@ interface OwnerRecord {
   awaitingCapacity: string | undefined
   /** Resolved and replaced on every transition. */
   changed: PromiseWithResolvers<void>
-}
-
-function assertNever(value: never): never {
-  throw new Error(`unexpected curator state ${JSON.stringify(value)}`)
 }
 
 /**
@@ -230,21 +228,20 @@ export class DefaultContextCurator extends Service {
   }
 
   private onChange(change: MapChange): void {
-    if (this.stopping) return
     const owner = this.ctx.agents.get(change.ownerSessionId)
     if (owner === undefined) return
-    const record = this.records.get(owner.id)
-    const run = this.runOf(record?.owner === owner ? record : undefined)
+    const known = this.records.get(owner.id)
+    const record = known?.owner === owner ? known : undefined
+    const run = this.runOf(record)
     switch (change.kind) {
       case 'committed': {
-        if (run === undefined) {
+        if (record === undefined || run === undefined) {
           // A live holder that gave up the role hands its waiting work back. A vanished holder is
           // `holder-gone`; a release of a dead holder or of this curator's own run is not news.
           if (change.op === 'release' && change.holderId !== undefined && this.ctx.agents.get(change.holderId) !== undefined
             && this.ctx.contextMap.snapshotOf(owner).curatorId === null) this.trigger(owner, true)
           return
         }
-        if (record === undefined) return
         const holder = this.ctx.contextMap.snapshotOf(owner).curatorId
         // While claiming, the map is unclaimed or already this run's; afterwards it must stay this run's.
         // A role released because this run's own child is gone is the run ending, not a move.
@@ -267,8 +264,6 @@ export class DefaultContextCurator extends Service {
       case 'note-filed':
         this.trigger(owner, true)
         return
-      default:
-        return assertNever(change.kind)
     }
   }
 
@@ -302,14 +297,13 @@ export class DefaultContextCurator extends Service {
     }
     switch (state.kind) {
       case 'idle':
-        if (event.kind === 'trigger' && !record.closing) {
+        // A closing record is disposed by its stop in the same step it becomes closing, so only a live record is triggered.
+        if (event.kind === 'trigger') {
           record.retrigger = false
           const evaluation = new AbortController()
           enter({ kind: 'announced', evaluation })
           this.track(this.evaluate(record, evaluation.signal, event.work))
-        } else if (event.kind === 'stop' && record.closing) {
-          this.dispose(record, enter)
-        }
+        } else this.dispose(record, enter)
         return
       case 'announced':
         if (event.kind === 'trigger') record.retrigger ||= event.news
@@ -326,16 +320,16 @@ export class DefaultContextCurator extends Service {
           record.retrigger = false
           enter({ kind: 'claiming', run })
           this.track(this.start(record, run))
-        } else if (event.kind === 'ineligible') {
+        } else {
           record.skipWork = undefined
           enter({ kind: 'idle' })
           if (record.retrigger) this.transition(record, { kind: 'trigger', news: true })
         }
         return
       case 'withdrawing':
-        if (event.kind === 'trigger') record.retrigger ||= event.news
-        // The aborted evaluation reports its end either way; nothing it decided starts.
-        else if (event.kind === 'eligible' || event.kind === 'ineligible') this.dispose(record, enter)
+        // The aborted evaluation reports its end either way; nothing it decided starts. The owner is
+        // no longer live, so no trigger reaches this record; a second stop changes nothing.
+        if (event.kind === 'eligible' || event.kind === 'ineligible') this.dispose(record, enter)
         return
       case 'claiming':
       case 'running':
@@ -344,7 +338,7 @@ export class DefaultContextCurator extends Service {
         else if (event.kind === 'stop') {
           enter({ kind: 'yielding', run: state.run, reason: event.reason })
           this.abort(state.run, event.reason)
-        } else if (event.kind === 'ended') {
+        } else {
           enter({ kind: 'settling', run: state.run, reason: event.reason })
           this.track(this.settle(record, state.run, event.reason))
         }
@@ -360,19 +354,15 @@ export class DefaultContextCurator extends Service {
         return
       case 'settling':
         if (event.kind === 'trigger') record.retrigger ||= event.news
-        else if (event.kind === 'settled') this.afterRun(record, state.run, state.reason, enter)
+        else this.afterRun(record, state.run, state.reason, enter)
         return
-      case 'disposed':
-        return
-      default:
-        return assertNever(state)
     }
   }
 
-  /** Remove a record that reached its terminal state; a replacement agent for the Session starts fresh. */
+  /** Remove a record that ended; a replacement agent for the Session starts fresh. */
   private dispose(record: OwnerRecord, enter: (next: CuratorState) => void): void {
-    enter({ kind: 'disposed' })
-    if (this.records.get(record.owner.id) === record) this.records.delete(record.owner.id)
+    enter({ kind: 'idle' })
+    this.records.delete(record.owner.id)
     const successor = this.ctx.agents.get(record.owner.id)
     if (record.retrigger && successor !== undefined && successor !== record.owner) this.trigger(successor, true)
   }
