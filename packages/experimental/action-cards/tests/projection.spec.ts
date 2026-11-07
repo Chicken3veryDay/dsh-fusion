@@ -3,6 +3,7 @@ import { createToolResultMessage, createUserMessage, ToolCallId } from '@deepsee
 import {
   appendPluginRecord, Session, SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq, type SessionEvent, type SessionHeader,
 } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import { actionCardProjection, type ActionCardState } from '../src/projection.ts'
 import type { ActionCardDecision } from '../src/types.ts'
 
@@ -42,6 +43,23 @@ function records(...data: ActionCardDecision[]): readonly SessionEvent[] {
 
 const fold = (events: readonly SessionEvent[], state = init()) => events.reduce(projection.apply, state)
 
+function nested(callId: string, value: object, isError = false, name = 'propose_action'): SessionEvent[] {
+  const ids = { rootCallId: ToolCallId('prog'), parentCallId: ToolCallId('prog'), subCallId: ToolCallId(callId), name, arguments: value }
+  return [
+    { type: 'tool/ptc-dispatch-start', seq: SessionSeq(seq++), time: 0, data: ids },
+    { type: 'tool/ptc-dispatch', seq: SessionSeq(seq++), time: 0, data: { ...ids, isError, content: [] } },
+  ]
+}
+
+it('admits a propose_action nested in run_code in the open turn, under the same rules', () => {
+  const state = fold([turn(2), call('prog', { code: '' }, 2, 'run_code'), ...nested('prog:ptc:1', args), result('prog', false, 2)])
+  expect(state.view.proposals).toEqual({ 'prog:ptc:1': { callId: 'prog:ptc:1', turn: 2, ...args } })
+  expect(fold(nested('early', args)).view.proposals).toEqual({})
+  expect(fold([turn(1), ...nested('failed', args, true)]).view.proposals).toEqual({})
+  expect(fold([turn(1), ...nested('other', args, false, 'other_tool')]).view.proposals).toEqual({})
+  expect(Object.keys(fold([...nested('second', args)], state).view.proposals)).toEqual(['prog:ptc:1'])
+})
+
 it('admits a successful propose_action call as a card in its turn and ignores failed, malformed and other calls', () => {
   const state = fold([turn(1), call('c1'), result('c1')])
   expect(state.view.proposals).toEqual({ c1: { callId: 'c1', turn: 1, ...args } })
@@ -62,7 +80,8 @@ it('admits a successful propose_action call as a card in its turn and ignores fa
   expect(Object.keys(pending.calls)).toEqual(['c8'])
   expect(projection.apply(pending, turn(2)).calls).toEqual({})
   const idle = fold([turn(3)])
-  expect(projection.apply(idle, turn(4))).toBe(idle)
+  expect(projection.apply(idle, turn(3))).toBe(idle)
+  expect(projection.apply(idle, turn(4))).toEqual({ ...idle, turn: 4 })
 })
 
 it('keeps the first admitted card of a turn and replaces only unstarted earlier cards', () => {

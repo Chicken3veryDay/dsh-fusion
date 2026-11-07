@@ -216,8 +216,8 @@ export class ActionCards extends TypertRemoteService {
         if (result.isError && this.accepted.get(agent)?.callId === exec.callId) this.accepted.delete(agent)
         return
       }
-      // Loads by subagents or from code activate nothing: `propose_action` refuses both callers.
-      if (exec.parent !== undefined || !this.ctx.agents.roots().includes(agent)) return
+      // Loads by subagents activate nothing: `propose_action` refuses them. Loads from a root's `run_code` program count.
+      if (!this.ctx.agents.roots().includes(agent)) return
       const skill = exec.name === SKILL_TOOL && !result.isError ? skillArguments.safeParse(exec.arguments) : undefined
       if (skill?.success !== true || ![...this.kinds.values()].some(kind => kind.skill === skill.data.name)) return
       const turn = this.ctx.agents.turnBoundaryOf(agent.session).lastTurn
@@ -417,11 +417,11 @@ export class ActionCards extends TypertRemoteService {
     exec: ToolRunContext,
   ): { action: string; title: string; invitation: string } {
     const agent = exec.agent
-    // Step admission declares the tool only to an agent; calls dispatched from code are not logged as tool calls,
-    // so no card could follow them.
-    if (agent === undefined || exec.parent !== undefined) throw new ActionCardError('Call propose_action directly, not from code.', 'ACTION_CARD_NESTED')
-    // Only a live root can act on a card, so a subagent's card could never be used.
-    if (!this.ctx.agents.roots().includes(agent)) throw new ActionCardError('Cards are offered in the main conversation only.', 'ACTION_CARD_ROOT')
+    // Only a live root can act on a card, so a subagent's card could never be used. A call from the root's
+    // `run_code` program is logged as a nested dispatch, which the projection admits like a direct call.
+    if (agent === undefined || !this.ctx.agents.roots().includes(agent)) {
+      throw new ActionCardError('Cards are offered in the main conversation only.', 'ACTION_CARD_ROOT')
+    }
     if (this.projection.stateOf(agent.session).queued >= this.config.queuedMessageLimit) {
       throw new ActionCardError('The user has queued more messages; show no card and answer briefly.', 'ACTION_CARD_QUEUED')
     }

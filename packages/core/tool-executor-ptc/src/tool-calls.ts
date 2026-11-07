@@ -78,6 +78,8 @@ export function isToolCallSettleEvent(event: { readonly type: string }): event i
  * @param event - any Session or Client history event.
  * @returns the started call, or undefined when the event starts none.
  */
+export function effectiveToolCall(event: ToolCallStartEvent): EffectiveToolCall
+export function effectiveToolCall(event: { readonly type: string }): EffectiveToolCall | undefined
 export function effectiveToolCall(event: { readonly type: string }): EffectiveToolCall | undefined {
   if (!isToolCallStartEvent(event)) return undefined
   if (event.type === 'tool/call') {
@@ -95,6 +97,8 @@ export function effectiveToolCall(event: { readonly type: string }): EffectiveTo
  * @param event - any Session or Client history event.
  * @returns the settled result, or undefined when the event settles no call.
  */
+export function effectiveToolResult(event: ToolCallSettleEvent): EffectiveToolResult
+export function effectiveToolResult(event: { readonly type: string }): EffectiveToolResult | undefined
 export function effectiveToolResult(event: { readonly type: string }): EffectiveToolResult | undefined {
   if (!isToolCallSettleEvent(event)) return undefined
   if (event.type === 'tool/result') {
