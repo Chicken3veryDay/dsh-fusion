@@ -26,7 +26,7 @@ Mount the package after `@deepseek-ai/dsh-interaction` and a provider adapter. T
 
 ## Understand the implementation
 
-Provider failures remain failed tool results, preserving structured error details, rendered content, and image attachment references.
+Provider failures remain failed tool results, preserving structured error details, rendered content, and image attachment references. Successful provider results without supported text or image blocks render as JSON.
 
 The tools use step-time activation conditions. Browser and desktop schemas disappear when the corresponding provider is unavailable, while provider-specific compatibility tools can remain visible.
 

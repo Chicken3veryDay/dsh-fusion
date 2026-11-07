@@ -9,7 +9,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { interactionProviderId, isDesktopActionKind } from '@deepseek-ai/dsh-interaction'
-import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { createMcpToolDefinition } from '@deepseek-ai/dsh-mcp-client'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { z } from 'zod'
@@ -151,8 +151,7 @@ export async function apply(ctx: Context): Promise<void> {
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               operationSignal.throwIfAborted()
               const selected = interactionTool(catalog, operation)
-              const registration = registrations.get(selected.name)
-              if (registration === undefined) throw new Error(`Cua Driver tool "${selected.name}" is not registered`)
+              const registration = registrations.get(selected.name) as RegisteredTool
               const settled = await inner.tools.invoke({
                 registration,
                 arguments: selected.args,
@@ -160,7 +159,6 @@ export async function apply(ctx: Context): Promise<void> {
                 agent,
                 callId: ToolCallId(`interaction-${++interactionCallSequence}`),
               })
-              if (!isJsonValue(settled)) throw new Error(`Cua Driver tool "${selected.name}" returned a non-JSON result`)
               operationSignal.throwIfAborted()
               return JSON.parse(JSON.stringify(settled)) as JsonValue
             },

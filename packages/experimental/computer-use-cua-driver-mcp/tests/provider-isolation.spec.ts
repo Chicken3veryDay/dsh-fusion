@@ -1,5 +1,5 @@
 /** The desktop facade runs only the Cua Driver MCP server's own registrations, past admission policies, under either executor. */
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,7 +40,7 @@ class ScriptRuntime extends PtcRuntime {
 
 const executors = ['native', 'ptc'] as const
 
-async function mount(options: { unrelated: boolean; executor: typeof executors[number] }) {
+async function mount(options: { unrelated: boolean; executor: typeof executors[number]; mode?: string }) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-cua-isolation-'))
   roots.push(root)
   const ctx = new Context()
@@ -61,11 +61,11 @@ async function mount(options: { unrelated: boolean; executor: typeof executors[n
       execute: async () => { calls.push('unrelated'); return 'unrelated result' },
     }))
   }
-  await ctx.plugin(Provider, { command: process.execPath, args: [fixture, root], reconnect: { enabled: false } })
+  await ctx.plugin(Provider, { command: process.execPath, args: [fixture, root, options.mode ?? 'default'], reconnect: { enabled: false } })
   const agent = { ctx, id: SessionId('cua-isolation'), session: Session.create(SessionId('cua-isolation')) } as Agent
   const signal = new AbortController().signal
   const session: InteractionSession = await provider!.open(agent, signal)
-  return { ctx, agent, signal, session, calls, runtime: ctx.ptcRuntime as ScriptRuntime }
+  return { ctx, agent, signal, session, calls, root, runtime: ctx.ptcRuntime as ScriptRuntime }
 }
 
 it.each(executors)('does not run an admission-hidden unrelated tool whose name ends in the requested raw operation (%s)', async (executor) => {
@@ -112,4 +112,52 @@ it.each(executors)('runs the provider operation an admitted facade reaches from 
   } finally {
     toolSet.dispose()
   }
+})
+
+it.each([
+  { domain: 'browser', method: 'screenshot' },
+  { domain: 'desktop', method: 'act', action: null },
+  { domain: 'desktop', method: 'act', action: [] },
+  { domain: 'desktop', method: 'act', action: 'click' },
+  { domain: 'desktop', method: 'act', action: {} },
+  { domain: 'desktop', method: 'act', action: { kind: '' } },
+  { domain: 'desktop', method: 'act', action: { kind: 'execute_shell' } },
+  { domain: 'desktop', method: 'act', action: { kind: 'scroll' } },
+  { domain: 'desktop', method: 'observe' },
+] satisfies import('@deepseek-ai/dsh-interaction').InteractionOperation[])('rejects unsupported normalized operations before invoking MCP input (%j)', async (operation) => {
+  const h = await mount({ unrelated: false, executor: 'native' })
+  await expect(h.session.execute(operation, h.signal)).rejects.toThrow()
+  expect(await readFile(join(h.root, 'driver.ndjson'), 'utf8')).not.toContain('"event":"call"')
+})
+
+it.each(['observe', 'screenshot', 'act'] as const)('maps %s to its own fallback catalog and forwards target fields', async (method) => {
+  const h = await mount({ unrelated: false, executor: 'native', mode: 'interaction' })
+  const target = { domain: 'desktop' as const, applicationId: '9', windowId: '7' }
+  const operation = method === 'act'
+    ? { ...target, method, action: { kind: 'click', x: 3 } }
+    : { ...target, method }
+  await expect(h.session.execute(operation, h.signal)).resolves.toMatchObject({ isError: false })
+  const events = (await readFile(join(h.root, 'driver.ndjson'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { event: string; name?: string; arguments?: Record<string, unknown> })
+  expect(events.filter(event => event.event === 'call')).toMatchObject([{ name: method === 'act' ? 'desktop_click' : 'get_desktop_state',
+    arguments: { application_id: '9', window_id: '7', ...method === 'act' ? { x: 3 } : method === 'screenshot' ? { include_screenshot: true } : {} } }])
+  await h.session.close()
+})
+
+it('refuses normalized calls until its MCP connection is ready', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-cua-startup-'))
+  roots.push(root)
+  const ctx = new Context()
+  contexts.push(ctx)
+  const registered = Promise.withResolvers<InteractionProvider>()
+  ctx.provide('interaction', { register(provider: InteractionProvider) { registered.resolve(provider); return () => Promise.resolve() } })
+  await ctx.plugin(ComputerUse)
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(Tools)
+  await ctx.plugin(NativeToolExecutor)
+  const starting = ctx.plugin(Provider, { command: process.execPath, args: [fixture, root], reconnect: { enabled: false } })
+  const provider = await registered.promise
+  const agent = { ctx, id: SessionId('cua-startup'), session: Session.create(SessionId('cua-startup')) } as Agent
+  const session = await provider.open(agent, new AbortController().signal)
+  await expect(session.execute({ domain: 'desktop', method: 'screenshot' }, new AbortController().signal)).rejects.toThrow('not connected')
+  await starting
 })

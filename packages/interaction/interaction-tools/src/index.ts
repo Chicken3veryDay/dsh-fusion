@@ -67,17 +67,6 @@ function successfulResult(value: JsonValue): JsonValue {
   return result.value
 }
 
-function textFromResult(value: JsonValue): string | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const content = value.content
-  if (!Array.isArray(content)) return undefined
-  const text = content.flatMap((block) => {
-    if (typeof block !== 'object' || block === null || Array.isArray(block)) return []
-    return block.type === 'text' && typeof block.text === 'string' ? [block.text] : []
-  }).join('\n')
-  return text.length === 0 ? undefined : text
-}
-
 function contentFromResult(value: JsonValue): ContentBlock[] | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value) || !Array.isArray(value.content)) return undefined
   const content: ContentBlock[] = []
@@ -112,7 +101,7 @@ function agentOf(exec: ToolRunContext): Agent {
 }
 
 function renderResult(_args: unknown, value: Result) {
-  return contentFromResult(value.result) ?? [{ type: 'text' as const, text: textFromResult(value.result) ?? JSON.stringify(value.result) }]
+  return contentFromResult(value.result) ?? [{ type: 'text' as const, text: JSON.stringify(value.result) }]
 }
 
 function presentationMeta(_args: unknown, value: Result): JsonValue {

@@ -26,7 +26,7 @@ Mount the service beside one browser or desktop adapter. The service stores no b
 
 ## Understand the implementation
 
-Providers register an effect-owned adapter. The service opens one live resource for each exact Agent, serializes operations for that Agent, and closes the resource when the Agent or provider is disposed. A replayed Session never reopens a live resource.
+Providers register an effect-owned adapter. The service opens one live resource for each exact Agent, serializes operations for that Agent, and closes the resource when the Agent or provider is disposed. A replayed Session never reopens a live resource. Provider disposal stops new operations and retains the domain registration if cleanup fails.
 
 ## Further Exploration
 

@@ -29,7 +29,10 @@ lines.on('line', (line) => {
       result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'cua-driver-fixture', version: '1.0.0' } }
       break
     case 'tools/list':
-      result = { tools: [
+      result = { tools: mode === 'interaction' ? [
+        { name: 'get_desktop_state', inputSchema: { type: 'object' } },
+        { name: 'desktop_click', inputSchema: { type: 'object' } },
+      ] : [
         { name: 'screenshot', description: 'Capture the selected display.', inputSchema: { type: 'object', properties: { display: { type: 'integer', minimum: 0 } }, required: ['display'], additionalProperties: false } },
         { name: 'disconnect', description: 'Disconnect the fixture.', inputSchema: { type: 'object', properties: {} } },
       ] }

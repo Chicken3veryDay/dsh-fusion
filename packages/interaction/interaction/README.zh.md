@@ -30,7 +30,7 @@ kind: "package-reference"
 <a id="understand-the-implementation"></a>
 ## 实现说明
 
-提供方通过 effect 注册适配器。服务为每个精确 Agent 打开一个活动资源，为该 Agent 串行执行操作，并在 Agent 或提供方释放时关闭资源。重放 Session 不会重新打开活动资源。
+提供方通过 effect 注册适配器。服务为每个精确 Agent 打开一个活动资源，为该 Agent 串行执行操作，并在 Agent 或提供方释放时关闭资源。重放 Session 不会重新打开活动资源。提供方释放时停止接纳新操作；清理失败时保留域注册。
 
 <a id="further-exploration"></a>
 ## 进一步阅读

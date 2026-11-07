@@ -173,7 +173,7 @@ export class InteractionService extends Service {
         const errors: unknown[] = []
         for (const result of settled) if (result.status === 'rejected') errors.push(result.reason)
         if (errors.length > 0) throw new AggregateError(errors, `interaction ${provider.domain} cleanup failed`)
-        if (this.registrations.get(provider.domain) === registration) this.registrations.delete(provider.domain)
+        this.registrations.delete(provider.domain)
       })
       return registration.disposing
     }

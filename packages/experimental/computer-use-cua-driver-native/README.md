@@ -58,7 +58,7 @@ env -u NODE_USE_ENV_PROXY DSH_COMPUTER_USE_NATIVE_E2E=1 node node_modules/vitest
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The provider reserves the shared computer-use registration before loading native code. A child plugin owns discovery, model tools, guidance, and the native runtime. The parent retains the registration until child teardown has removed tools, interrupted native calls and image-capability admission, awaited settlement, and completed native shutdown. Cancellation does not undo input already delivered to an application. A desktop interaction runs the child's own retained `RegisteredTool` for the catalog entry through `ctx.tools.invoke()`, so a same-named registration elsewhere is never run, and admission policies and PTC's direct-call rule do not apply.
+Normalized desktop calls use the validated catalog only after all tool registrations complete. The provider reserves the shared computer-use registration before loading native code. A child plugin owns discovery, model tools, guidance, and the native runtime. The parent retains the registration until child teardown has removed tools, interrupted native calls and image-capability admission, awaited settlement, and completed native shutdown. Cancellation does not undo input already delivered to an application. A desktop interaction runs the child's own retained `RegisteredTool` for the catalog entry through `ctx.tools.invoke()`, so a same-named registration elsewhere is never run, and admission policies and PTC's direct-call rule do not apply.
 
 | File | Role |
 |---|---|
