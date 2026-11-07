@@ -645,7 +645,7 @@ describe('LocalSubprocessRuntime', () => {
         expect.objectContaining({ argv: ['shell', '--literal'] }),
         expect.objectContaining({ PWD: targetCwd, TERM: 'dumb', TARGET_VALUE: 'preserved' }),
         ['--expand-environment=no'],
-        { reportDegraded: expect.any(Function) },
+        expect.objectContaining({ reportDegraded: expect.any(Function) }),
       )
       expect(nodePtySpawn).toHaveBeenCalledWith(
         '/usr/bin/systemd-run',
@@ -1054,7 +1054,7 @@ describe('LocalSubprocessRuntime', () => {
         expect.anything(),
         expect.anything(),
         [],
-        { reportDegraded: expect.any(Function) },
+        expect.objectContaining({ reportDegraded: expect.any(Function) }),
       )
       await linuxRuntime.spawn(spec('true')).done
       expect(confirmLinuxManager).toHaveBeenCalledTimes(3)

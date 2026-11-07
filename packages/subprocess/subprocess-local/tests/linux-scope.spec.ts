@@ -1476,15 +1476,18 @@ describe('Linux scope range exit by cgroup events', () => {
 
   it('keeps polling when a degraded watch has no reporter to tell', async () => {
     const states = [groupUnit(), inactiveGroupUnit()]
-    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), {
+    const sleeper = idleSleeper()
+    const launched = launch(async () => states.shift() ?? inactiveGroupUnit(), {
+      sleep: sleeper.sleep,
+      cgroupRoot: cgroupTree().root,
       watchFile: () => { throw Object.assign(new Error('no inotify'), { code: 'EMFILE' }) },
-      reportDegraded: undefined,
     })
-    const waiting = scope.owner.waitForExit()
-    await scope.sleeper.reached(1)
-    scope.sleeper.elapse()
+    consumeLinuxLaunchRequest(launched.requestPath)
+    const waiting = launched.result.owner.waitForExit()
+    await sleeper.reached(1)
+    sleeper.elapse()
     await expect(waiting).resolves.toBeUndefined()
-    scope.owner.cleanup?.()
+    launched.result.owner.cleanup?.()
   })
 
   it('reports a watcher error once, closes the watcher, and keeps polling', async () => {
@@ -1541,12 +1544,13 @@ describe('Linux scope range exit by cgroup events', () => {
 
   it('wakes on a termination request and keeps the empty-range release', async () => {
     const states = [groupUnit(), groupUnit('0')]
-    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit())
+    const spawnSync = recordingSystemctl()
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), { spawnSync: spawnSync as never })
     const waiting = scope.owner.waitForExit()
     await scope.sleeper.reached(1)
     scope.owner.signal('SIGTERM')
     await expect(waiting).resolves.toBeUndefined()
-    expect(scope.spawnSync.mock.calls.map(call => (call as unknown as string[][])[1]?.[1])).toEqual(['kill', 'stop'])
+    expect(spawnSync.mock.calls.map(call => call[1]?.[1])).toEqual(['kill', 'stop'])
     expect(scope.watchers[0]?.closed).toBe(1)
     scope.owner.cleanup?.()
   })

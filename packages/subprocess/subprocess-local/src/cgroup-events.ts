@@ -96,14 +96,20 @@ export class CgroupEventsWatch {
     return true
   }
 
-  /** @returns whether an event arrived since the last call, clearing it. */
+  /**
+   * Take the pending change notification, clearing it.
+   * @returns whether an event arrived since the last call.
+   */
   consumeEvent(): boolean {
     const pending = this.pending
     this.pending = false
     return pending
   }
 
-  /** @returns whether an event is waiting to be consumed. */
+  /**
+   * Peek at the pending change notification without clearing it.
+   * @returns whether an event is waiting to be consumed.
+   */
   hasEvent(): boolean {
     return this.pending
   }
