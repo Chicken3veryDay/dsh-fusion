@@ -231,3 +231,40 @@ it('fails the turn when history moves after the final admission check of the ste
     type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'TOOL_ADMISSION_FAILED' } } },
   })
 })
+
+it('leaves no tool notice for a tool the model never saw when a continuing series restarts its unsent attempt', async () => {
+  const h = await harness()
+  h.registration()
+  await send(h.agent, 'first')
+  const adapter = h.adapter
+  adapter.toolUpdate = 'in-history'
+  h.ctx.tools.registerAdmissionPolicy(({ agent, candidates }) =>
+    agent.session.deriveMessages().some(message => message.content.some(block => block.type === 'text' && block.text === 'revoke probe'))
+      ? [...candidates.keys()].filter(name => name !== 'probe') : candidates.keys())
+  h.ctx.tools.register(defineTool({
+    name: 'probe', description: 'Test operation.', parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    execute: async () => { h.calls.push('probe'); return 'done' },
+  }))
+  const reached = Promise.withResolvers<undefined>()
+  h.ctx.on('session/event', (session, event) => {
+    if (session === h.agent.session && event.type === 'request/context') reached.resolve(undefined)
+  })
+  // The route change logs request/context in the second request's last pre-settle stretch; the append
+  // queued on it lands during the attempt's final await and forces one restart.
+  const appended = reached.promise.then(() => {
+    h.agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'revoke probe' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+  })
+  h.agent.model.select({ provider: 'mock', model: 'model-2' })
+  await send(h.agent, 'second')
+  await appended
+  const second = h.adapter.requests[1]
+  expect(second?.messages.some(message => message.content.some(block => block.type === 'text' && block.text === 'revoke probe'))).toBe(true)
+  expect({
+    declared: second?.tools?.map(tool => tool.name) ?? [],
+    notices: (second?.messages ?? []).filter(message => message.role === 'developer'
+      && message.content.some(block => block.type === 'tool-addition' || block.type === 'tool-removal')).length,
+  }).toEqual({ declared: [], notices: 0 })
+})

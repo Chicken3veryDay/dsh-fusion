@@ -72,6 +72,17 @@ interface RequestInputs {
 /** Loop-owned nodes committed in this attempt but not yet sent to a model. */
 type UnsentRequestMessages = { readonly system?: SessionSeq; readonly context?: SessionSeq }
 
+/**
+ * What a restarted attempt needs from an attempt abandoned before freezing: the header the model last saw,
+ * the request-series generation before the attempt, and the header and notice it logged but never sent.
+ */
+type AbandonedRequest = {
+  readonly baseline: EpochHeader | undefined
+  readonly generation: number
+  readonly headerSeq?: SessionSeq
+  readonly noticeSeq?: SessionSeq
+}
+
 /** One step's live admission and the immutable evidence for its accepted assembly. */
 type PreparedTools = { readonly toolSet: ResolvedToolSet; readonly assembly: PromptAssembly; readonly inputs: RequestInputs }
 
@@ -502,8 +513,7 @@ export class ReactLoopAgent implements Agent {
   }
 
   /** Whether the assembled tool schemas differ from the logged request header's. */
-  private toolsChanged(tools: PromptAssembly['tools']): boolean {
-    const baseline = this.session.requestHeader()
+  private toolsChanged(tools: PromptAssembly['tools'], baseline: EpochHeader | undefined): boolean {
     if (baseline === undefined) return false
     return !headerEquals(baseline, canonicalHeader({ ...baseline, tools: [...tools] }))
   }
@@ -682,6 +692,7 @@ export class ReactLoopAgent implements Agent {
     position: { turn: number; step: number },
     signal: AbortSignal,
     unsent?: UnsentRequestMessages,
+    carried?: AbandonedRequest,
   ): UnsentRequestMessages {
     const { turn, step } = position
     let system: SessionSeq | undefined
@@ -695,7 +706,8 @@ export class ReactLoopAgent implements Agent {
       ...unsent?.system === undefined ? {} : { unsent: unsent.system },
       startsSeries: startsRequestSeries
         || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
-        || (preparedCall?.toolUpdate === undefined && this.toolsChanged(assembly.tools)),
+        || (preparedCall?.toolUpdate === undefined
+          && this.toolsChanged(assembly.tools, carried === undefined ? this.session.requestHeader() : carried.baseline)),
     })
     // Replacing a node this attempt committed changes nothing a request carried, so when no other
     // surface change preceded it, the replacement keeps the request series.
@@ -734,7 +746,13 @@ export class ReactLoopAgent implements Agent {
       this.session.append('user/message', message, { surfaceOp: 'append' })
     }
     if (context !== undefined && !contextAdmitted) commitContext(context)
-    return { ...system === undefined ? {} : { system }, ...runtime === undefined ? {} : { context: runtime } }
+    // A pass that commits nothing leaves the earlier unsent node unsent.
+    const unsentSystem = system ?? unsent?.system
+    const unsentContext = runtime ?? unsent?.context
+    return {
+      ...unsentSystem === undefined ? {} : { system: unsentSystem },
+      ...unsentContext === undefined ? {} : { context: unsentContext },
+    }
   }
 
   private async step(decision: Extract<PreparedStep, { kind: 'enter' }>): Promise<StepEndReason | null> {
@@ -745,27 +763,32 @@ export class ReactLoopAgent implements Agent {
 
     let firstAttempt = true
     let restarted = false
+    // Nodes an abandoned attempt committed that no request carried; the restarted attempt replaces them.
+    let abandoned: { unsent: UnsentRequestMessages; request: AbandonedRequest } | undefined
     while (true) {
       const { config, preparedCall } = await this.prepareRequest(turn, step, decision.selection, signal)
       const requestContext = await this.loopCtx.systemPrompt.requestContext({
         ...assembleContextFor(this, signal), modelSelection: decision.selection,
       }, firstAttempt ? decision.messages : [])
-      const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
+      const startsRequestSeries = (firstAttempt || abandoned !== undefined) && decision.startsRequestSeries === true
       const before = this.loopCtx.systemPrompt.refreshContext(decision.tools.assembly, {
         ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet: decision.tools.toolSet,
       })
       const unsent = this.commitRequestMessages(
         before, decision, preparedCall, requestContext, firstAttempt, startsRequestSeries, { turn, step }, signal,
+        abandoned?.unsent, abandoned?.request,
       )
       firstAttempt = false
       // Admission reads this history; the checkpoint precedes resolution and assembly because both await.
       const admitted = this.historyCheckpoint()
       await this.reselectForRequest(decision, signal)
       const { assembly, toolSet, inputs } = decision.tools
-      this.commitRequestMessages(assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal, unsent)
+      const reassembled = this.commitRequestMessages(
+        assembly, decision, preparedCall, [], false, startsRequestSeries, { turn, step }, signal, unsent, abandoned?.request,
+      )
       // Validation reads this history; an append after it, including one during the final await, is a change.
       let checked = admitted
-      const request = await this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, {
+      const built = await this.buildRequest(config, preparedCall, assembly.tools, { turn, step }, startsRequestSeries, signal, {
         settle: async () => {
           if (this.historyUnchanged(checked)) return
           // History committed after the checkpoint (reconciliation, tool notices, or a concurrent append
@@ -782,14 +805,21 @@ export class ReactLoopAgent implements Agent {
           }
           return this.historyUnchanged(checked)
         },
-      })
-      if (request === undefined) {
+      }, abandoned?.request)
+      if ('baseline' in built) {
         // History moved after the last admission check. Validation can only confirm a selection, so a
         // fresh attempt resolves against the final history; a second movement fails before dispatch.
         if (restarted) throw new ToolAdmissionError(new Error('Request context did not settle after admission; retry the turn'))
         restarted = true
+        // No request carried what this attempt logged, so the restart replaces its prompt, runtime snapshot
+        // and tool notice, and judges the request series as it stood before the attempt.
+        this.requestSurfaceGeneration = built.generation
+        abandoned = { unsent: reassembled, request: built }
         continue
       }
+      const request = built
+      // The frozen request carries this attempt's nodes, so a transient retry must treat them as sent.
+      abandoned = undefined
       const live = new AssistantStreamAttempt(
         this.session.id,
         ++this.assistantAttemptCounter,
@@ -968,7 +998,9 @@ export class ReactLoopAgent implements Agent {
   /**
    * Log the resolved envelope and derive a frozen request from the admitted surface. `settle` holds the
    * attempt's last await; `verify` runs synchronously before derivation, so nothing commits between it
-   * and freezing. Returns `undefined` when `verify` reports that history moved after its last check.
+   * and freezing. When `verify` reports that history moved after its last check, the attempt is abandoned:
+   * the result carries what the restarted attempt needs to treat this attempt's request-series effects as
+   * never sent. `carried` is that record from the abandoned attempt, if any.
    */
   private async buildRequest(
     config: LlmCallConfig,
@@ -978,7 +1010,8 @@ export class ReactLoopAgent implements Agent {
     startsRequestSeries: boolean,
     signal: AbortSignal,
     admission: { readonly settle: () => Promise<void>; readonly verify: () => boolean },
-  ): Promise<GenerateOptions | undefined> {
+    carried?: AbandonedRequest,
+  ): Promise<GenerateOptions | AbandonedRequest> {
     const { session } = this
     const surfaceGeneration = session.surface.contentGeneration
     const header = canonicalHeader({
@@ -986,19 +1019,22 @@ export class ReactLoopAgent implements Agent {
       ...preparedCall === undefined ? {} : { adapterDefaults: preparedCall.adapterDefaults },
       ...tools.length > 0 ? { tools } : {},
     })
-    const baseline = this.session.requestHeader()
+    // Header, notice and series state before this attempt: no request has carried what an abandoned attempt logged.
+    const latest = this.session.requestHeader()
+    const baseline = carried === undefined ? latest : carried.baseline
     const startsSeries = startsRequestSeries
       || this.requestSurfaceGeneration !== surfaceGeneration
+    const seriesBefore = this.requestSurfaceGeneration
     let headerSeq: SessionSeq | undefined
     if (!this.requestHeaderLogged) {
       // Compaction during the first resumed pre-step must still mark a new series.
       headerSeq = this.session.append('request/header', {
         header,
-        reason: baseline === undefined ? 'initial' : 'resume',
+        reason: latest === undefined ? 'initial' : 'resume',
         ...startsSeries ? { startsSeries: true } : {},
       }).seq
       this.requestHeaderLogged = true
-    } else if (baseline === undefined || !headerEquals(baseline, header)) {
+    } else if (latest === undefined || !headerEquals(latest, header)) {
       headerSeq = this.session.append('request/header', {
         header,
         reason: 'change',
@@ -1007,22 +1043,32 @@ export class ReactLoopAgent implements Agent {
     } else if (startsSeries) {
       this.session.append('request/header', { header, reason: 'series' })
     }
-    if (baseline !== undefined && headerSeq !== undefined) {
-      const previousNames = new Set(baseline.tools?.map(tool => tool.name))
+    let noticeSeq: SessionSeq | undefined = carried?.noticeSeq
+    let replacedNotice = false
+    if (headerSeq !== undefined) {
+      const previousNames = new Set(baseline?.tools?.map(tool => tool.name))
       const currentNames = new Set(tools.map(tool => tool.name))
-      const additions = tools.filter(tool => !previousNames.has(tool.name))
+      const additions = baseline === undefined ? [] : tools.filter(tool => !previousNames.has(tool.name))
         .map(tool => ({ type: 'tool-addition' as const, toolName: tool.name }))
-      const removals = (baseline.tools ?? []).filter(tool => !currentNames.has(tool.name))
+      const removals = (baseline?.tools ?? []).filter(tool => !currentNames.has(tool.name))
         .map(tool => ({ type: 'tool-removal' as const, toolName: tool.name }))
-      if (additions.length > 0 || removals.length > 0) {
-        session.append('developer/message', {
-          ...position,
-          message: createDeveloperMessage({ source: { kind: 'tool-registry' }, content: [...additions, ...removals] }),
-          ...additions.length > 0 ? { headerSeq } : {},
-        }, { surfaceOp: 'append' })
+      const content = [...additions, ...removals]
+      const message = createDeveloperMessage({ source: { kind: 'tool-registry' }, content })
+      const data = { ...position, message, ...additions.length > 0 ? { headerSeq } : {} }
+      if (carried?.noticeSeq !== undefined) {
+        // The abandoned attempt's notice describes a header no request carried: replace it so the
+        // restarted request carries only the change from the header the model last saw.
+        noticeSeq = session.append('developer/message', data, {
+          surfaceOp: { op: 'replace', startSeq: carried.noticeSeq, endSeq: carried.noticeSeq },
+          sourceEventSeqs: [carried.noticeSeq],
+        }).seq
+        replacedNotice = true
+      } else if (content.length > 0) {
+        noticeSeq = session.append('developer/message', data, { surfaceOp: 'append' }).seq
       }
     }
-    this.requestSurfaceGeneration = surfaceGeneration
+    // Replacing the abandoned notice is this attempt's own change, not a surface change since a request.
+    this.requestSurfaceGeneration = replacedNotice ? session.surface.contentGeneration : surfaceGeneration
 
     const contextWindow = preparedCall?.context?.contextWindow
     const systemPromptUpdate = preparedCall?.systemPromptUpdate
@@ -1043,7 +1089,14 @@ export class ReactLoopAgent implements Agent {
 
     await admission.settle()
     signal.throwIfAborted()
-    if (!admission.verify()) return undefined
+    if (!admission.verify()) {
+      return {
+        baseline,
+        generation: seriesBefore,
+        ...headerSeq === undefined ? {} : { headerSeq },
+        ...noticeSeq === undefined ? {} : { noticeSeq },
+      }
+    }
 
     // canonicalHeader is shallow; append logs a detached snapshot, not these local values.
     deepFreeze(header)
