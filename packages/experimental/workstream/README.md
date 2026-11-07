@@ -48,8 +48,6 @@ The [Session projection](../../session/session-projection/README.md) key `workst
 
 ## Understand the implementation
 
-Workstream tools use the shared `dsh-tools` JSON output renderer.
-
 The package has four small layers:
 
 - [`src/types.ts`](src/types.ts) owns the snapshot, member, message, context packet, request, and config types, plus the `workstream/state` event, the `workstream` projection, and the `workstream-message` and `workstream-notice` message source declarations.
