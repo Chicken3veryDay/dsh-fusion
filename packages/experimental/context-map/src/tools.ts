@@ -5,7 +5,7 @@
  */
 import { Context, Service } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, jsonToolOutput } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -18,10 +18,7 @@ function caller(agent: Agent | undefined): Agent {
   return agent
 }
 
-const output = {
-  schema: { type: 'json' as const },
-  render: (_args: unknown, value: unknown): [{ type: 'text'; text: string }] => [{ type: 'text', text: JSON.stringify(value) }],
-}
+const output = jsonToolOutput()
 const root = { root_session_id: { type: 'string' as const, description: 'Map owner Session id; omit for your own conversation, specify for another map you curate.' } }
 const target = (id: string | undefined) => id === undefined ? {} : { rootSessionId: SessionId(id) }
 const revision = { type: 'integer' as const, required: true as const, description: 'Revision from map_view; the edit is rejected if the map moved on.' }

@@ -49,6 +49,8 @@ Workstream 所有者被恢复时，服务会读取每个没有已注册 Agent �
 <a id="understand-the-implementation"></a>
 ## 实现原理
 
+Workstream 工具使用 `dsh-tools` 共享的 JSON 输出渲染器。
+
 包由四个小层次组成：
 
 - [`src/types.ts`](src/types.ts) 负责快照、成员、消息、上下文包、请求和配置类型，以及 `workstream/state` 事件、`workstream` 投影和 `workstream-message`、`workstream-notice` 消息来源的声明。

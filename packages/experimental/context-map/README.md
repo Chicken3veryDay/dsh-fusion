@@ -125,6 +125,8 @@ The package adds the event type `context-map/state`. Each record carries the ope
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
+Map tools use the shared `dsh-tools` JSON output renderer.
+
 - [`src/types.ts`](src/types.ts) holds the map records, requests, and configuration types.
 - [`src/projection.ts`](src/projection.ts) is the Session projection and the strict schemas of the event.
 - [`src/edits.ts`](src/edits.ts) holds the pure edit rules: path parsing, member and citation checks, hashing, and staleness.
