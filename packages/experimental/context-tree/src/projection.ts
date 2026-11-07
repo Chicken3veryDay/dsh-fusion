@@ -1,7 +1,7 @@
 /**
  * Session projection of what the context tree has put into a conversation: loaded sections,
- * activated tools, and the published catalog. Compaction removes the entries it shadows, so
- * the service intersects these candidates with the Session surface for other replacements.
+ * activated tools, and the published catalog. Committed compaction replacements remove shadowed
+ * entries; the service intersects candidates with the Session surface for other replacements.
  *
  * Tool admission for a step runs after the step claims its inbox batch and before that batch
  * is logged, so an activation counts from the moment its message is durably queued for the next
@@ -39,6 +39,8 @@ const stateSchema = z.object({
   catalog: catalog.nullable(),
   /** Loaded material that compaction removed and nothing has loaded again, oldest first, at most {@link DROPPED_RETAINED}. */
   dropped: z.array(dropped),
+  /** Candidate seqs priced by the preceding log-only compaction event, awaiting its replacement. */
+  pendingCompaction: z.array(seq).nullable(),
   /** Whether any catalog was ever published, so a republication can say it replaces an earlier one. */
   published: z.boolean(),
 }).strict()
@@ -84,6 +86,27 @@ export const DROPPED_RETAINED = 64
 /** Projection key; host-only, so no client sees it. */
 export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
 
+/** Remove candidates only after the priced replacement has committed. */
+function revokeCompacted(state: ContextTreeProjectionState, shadowedSeqs: readonly number[]): ContextTreeProjectionState {
+  const shadowed = new Set<number>(shadowedSeqs)
+  const grants = state.grants.filter(entry => !shadowed.has(entry.seq))
+  const activations = state.activations.filter(entry => !shadowed.has(entry.seq))
+  const kept = state.catalog !== null && !shadowed.has(state.catalog.seq)
+  if (grants.length === state.grants.length && activations.length === state.activations.length && (kept || state.catalog === null)) {
+    return state
+  }
+  const retainedKeys = new Set(grants.map(entry => entry.key))
+  const lost = [
+    ...state.grants.filter(entry => shadowed.has(entry.seq) && !retainedKeys.has(entry.key))
+      .map(entry => ({ key: entry.key, paths: [entry.path], tools: [] })),
+    ...state.activations.filter(entry => shadowed.has(entry.seq))
+      .map(entry => ({ key: entry.key, paths: entry.nodes, tools: entry.tools })),
+  ]
+  const lostKeys = new Set(lost.map(entry => entry.key))
+  const remembered = [...state.dropped.filter(entry => !lostKeys.has(entry.key)), ...lost].slice(-DROPPED_RETAINED)
+  return { ...state, grants, activations, dropped: remembered, catalog: kept ? state.catalog : null }
+}
+
 /**
  * Unit that follows context tree messages, the queue they pass through, and the compaction events
  * that shadow them. A record whose source fields cannot be read is not this plugin's message and is
@@ -91,10 +114,20 @@ export const CONTEXT_TREE_PROJECTION_KEY = 'contextTree'
  */
 export const contextTreeProjectionDefinition = {
   key: CONTEXT_TREE_PROJECTION_KEY,
-  stateVersion: 5,
+  stateVersion: 6,
   stateSchema,
-  init: () => ({ grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], published: false }),
+  init: () => ({
+    grants: [], activations: [], inbox: [], claimed: [], catalog: null, dropped: [], pendingCompaction: null, published: false,
+  }),
   apply: (state, event) => {
+    if (state.pendingCompaction !== null) {
+      const pending = state.pendingCompaction
+      state = { ...state, pendingCompaction: null }
+      // The compaction protocol pairs its price with the immediately following replacement.
+      if (typeof event.surfaceOp === 'object') {
+        state = revokeCompacted(state, pending)
+      }
+    }
     if (event.type === 'agent/inbox/spliced') {
       if (event.data.target !== 'next-step') return state
       const start = Math.min(Math.max(event.data.start, 0), state.inbox.length)
@@ -145,22 +178,9 @@ export const contextTreeProjectionDefinition = {
     if (event.type === 'turn/end') return state.claimed.length === 0 ? state : { ...state, claimed: [] }
     if (event.type === 'compaction/summary' || event.type === 'compaction/prune') {
       const shadowed = new Set<number>(event.data.shadowedSeqs)
-      const grants = state.grants.filter(entry => !shadowed.has(entry.seq))
-      const activations = state.activations.filter(entry => !shadowed.has(entry.seq))
-      const kept = state.catalog !== null && !shadowed.has(state.catalog.seq)
-      if (grants.length === state.grants.length && activations.length === state.activations.length && (kept || state.catalog === null)) {
-        return state
-      }
-      const retainedKeys = new Set(grants.map(entry => entry.key))
-      const lost = [
-        ...state.grants.filter(entry => shadowed.has(entry.seq) && !retainedKeys.has(entry.key))
-          .map(entry => ({ key: entry.key, paths: [entry.path], tools: [] })),
-        ...state.activations.filter(entry => shadowed.has(entry.seq))
-          .map(entry => ({ key: entry.key, paths: entry.nodes, tools: entry.tools })),
-      ]
-      const lostKeys = new Set(lost.map(entry => entry.key))
-      const remembered = [...state.dropped.filter(entry => !lostKeys.has(entry.key)), ...lost].slice(-DROPPED_RETAINED)
-      return { ...state, grants, activations, dropped: remembered, catalog: kept ? state.catalog : null }
+      const candidates = [...state.grants, ...state.activations, ...(state.catalog === null ? [] : [state.catalog])]
+        .filter(entry => shadowed.has(entry.seq)).map(entry => entry.seq)
+      return candidates.length === 0 ? state : { ...state, pendingCompaction: candidates }
     }
     return state
   },
