@@ -8,7 +8,18 @@ import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { JsonlSessionHandle, type JsonlBackendTracker } from '../../../session/session-persistence-jsonl/src/storage.ts'
 import Participants, { DeliveryId } from '../src/index.ts'
 import { DeliveryOwner } from '../src/delivery.ts'
+import { COVERAGE_TEST_TIMEOUT_ENV, coverageTestTimeoutOptions } from '../../../../scripts/coverage-partitions.ts'
 import { mount, read } from './harness.ts'
+
+// Captured once before any case installs a spy, so a wrapper never delegates to another case's spy.
+// oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
+const rawFlush = JsonlSessionHandle.prototype.flush
+// oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
+const rawClose = JsonlSessionHandle.prototype.close
+// oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
+const rawDrain = DeliveryOwner.prototype.dispose
+// Each case mounts two hosts and drives a full ordered teardown; it takes the lane budget, never less than one minute.
+const caseTimeout = Math.max(60_000, coverageTestTimeoutOptions(process.env[COVERAGE_TEST_TIMEOUT_ENV]).testTimeout ?? 0)
 
 const phases = ['root', 'receiver', 'completion'] as const
 const routes = ['root', 'root-restart', 'root-update', 'owner', 'owner-restart', 'loop', 'loop-restart', 'persistence', 'persistence-restart', 'task', 'caller'] as const
@@ -39,12 +50,6 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   let disposalSettled = false
   let drainSettled = false
   const writers = new Map<string, JsonlSessionHandle>()
-  // oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
-  const rawFlush = JsonlSessionHandle.prototype.flush
-  // oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
-  const rawClose = JsonlSessionHandle.prototype.close
-  // oxlint-disable-next-line typescript/unbound-method -- invoked with its real receiver.
-  const rawDrain = DeliveryOwner.prototype.dispose
   vi.spyOn(DeliveryOwner.prototype, 'dispose').mockImplementation(function (this: DeliveryOwner) {
     draining.resolve(undefined)
     return rawDrain.call(this).then(() => { drainSettled = true; events.push('drained') })
@@ -93,10 +98,10 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
         : route === 'task' ? task.dispose() : route === 'caller' ? caller.dispose()
           : route.endsWith('restart') ? fiber.restart() : fiber.dispose()
   const disposal = Promise.resolve(dispose).then(() => { disposalSettled = true })
-  await Promise.race([draining.promise, firstClose.promise])
-  // One event-loop turn lets every independently scheduled Cordis disposer enter its barrier.
-  await setImmediate()
   try {
+    await Promise.race([draining.promise, firstClose.promise])
+    // One event-loop turn lets every independently scheduled Cordis disposer enter its barrier.
+    await setImmediate()
     expect(closeAdmissions).toEqual([])
     expect(admissionSettled).toBe(false)
     expect(disposalSettled).toBe(false)
@@ -117,6 +122,8 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   } finally {
     events.push('released')
     release.resolve(undefined)
+    // Join every owned operation before an assertion failure ends the case, so none outlives it.
+    await Promise.allSettled([rejected, queueRejected, disposal])
   }
   await Promise.all([rejected, queueRejected, disposal])
   expect(events.indexOf('drained')).toBeLessThan(events.findIndex(event => event.startsWith('close-admission:')))
@@ -146,4 +153,4 @@ it.each(cases)('retains exact writers through $route at $layer $phase (loop firs
   expect(targetEvents.filter(row => row.type === 'agent/inbox/spliced' && row.data.inserted.length > 0)).toHaveLength(1)
   expect(second.adapter.requests).toHaveLength(0)
   await recovered.dispose()
-})
+}, caseTimeout)
