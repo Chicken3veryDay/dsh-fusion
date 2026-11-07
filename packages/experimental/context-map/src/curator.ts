@@ -232,7 +232,8 @@ export class DefaultContextCurator extends Service {
   }
 
   private onChange(change: MapChange): void {
-    /* v8 ignore if -- the change watcher is removed before the stopping disposer runs, so no change arrives while stopping */
+    /* v8 ignore if -- reverse disposal sets stopping before removing the watcher, both before later microtasks;
+     * synchronous stop transitions emit no map change */
     if (this.stopping) return
     const owner = this.ctx.agents.get(change.ownerSessionId)
     if (owner === undefined) return

@@ -50,6 +50,8 @@ The role is a durable grant recorded in the log, checked against the exact live 
 3. ends when its work is done, the step bound is reached, or another holder claims the role (it yields at once and restarts only after that holder is gone or releases the role);
 4. cancels a pending catalog read on disposal, observes any late catalog failure, releases the role and settles the subagent before the next run or before disposal.
 
+Disposal sets the curator’s stopping flag before removing its map watcher; both occur before later microtasks, and the synchronous stop transitions emit no map change.
+
 Each live map owner has one lifecycle record, and one transition function is the only code that changes its state:
 
 | State | Meaning | Leaves on |
