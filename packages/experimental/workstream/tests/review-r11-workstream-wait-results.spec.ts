@@ -90,7 +90,7 @@ it.each(['abort', 'timeout', 'change', 'unload'] as const)('R11 %s removes the p
   // Fake only the wait's timer; persistence and Cordis continue on their real scheduling primitives.
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   const waiting = ctx.workstreams.waitForChange(owner, owner.id, { ...request, signal: controller.signal })
-  const settled = waiting.then(value => ({ value }), error => ({ error: error as Error }))
+  const settled = waiting.then(value => ({ value }), (error: unknown) => ({ error: error as Error }))
   expect(ctx.events._hooks['session/event']?.length).toBe(baseline + 1)
   expect(vi.getTimerCount()).toBe(1)
   const reason = new Error('R11 cancelled during wait')
@@ -141,7 +141,9 @@ it.each(['change', 'timeout', 'cancel', 'unload', 'change-then-cancel'] as const
   const text = result.data.message.content.map(block => block.type === 'text' ? block.text : '').join('')
   if (outcome === 'change' || outcome === 'timeout') {
     expect(result.data.message.isError).toBe(false)
-    expect(JSON.parse(text)).toMatchObject({ timedOut: outcome === 'timeout', revision: args.after_revision, cursor: expect.any(Number) })
+    const parsed: unknown = JSON.parse(text)
+    const anyNumber: unknown = expect.any(Number)
+    expect(parsed).toMatchObject({ timedOut: outcome === 'timeout', revision: args.after_revision, cursor: anyNumber })
   } else {
     expect(result.data.message.isError).toBe(true)
     expect(text).toMatch(/^Error: /)
