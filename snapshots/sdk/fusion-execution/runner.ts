@@ -34,6 +34,25 @@ export function normalizeExecutionIdentities(contents: readonly string[]): strin
   }).join('\n') + '\n')
 }
 
+const SESSION_IDS: Readonly<Record<string, string>> = { 'session:1': 'execution-root', 'session:2': 'execution-child', 'message:1': 'execution-input' }
+
+/**
+ * Replace committed identity tokens with stable values; execution `{{id:N}}` and `{{workflow:N}}` become distinct valid UUIDs.
+ * @param content - redacted fixture JSONL.
+ * @returns JSONL accepted by the production execution schemas.
+ * @throws {Error} when the fixture holds a token kind or ordinal this replay does not define.
+ */
+function hydrateIdentities(content: string): string {
+  return content.replaceAll(/\{\{([a-z]+):([1-9]\d*)\}\}/gu, (token, kind: string, ordinal: string) => {
+    const session = SESSION_IDS[`${kind}:${ordinal}`]
+    if (session !== undefined) return session
+    const suffix = ordinal.padStart(12, '0')
+    if (kind === 'id') return `00000000-0000-4000-8000-${suffix}`
+    if (kind === 'workflow') return `00000000-0000-4000-9000-${suffix}`
+    throw new Error(`fusion-execution fixture holds unsupported identity token ${token}`)
+  })
+}
+
 /** Replay required records and dormant publication in two independent SDK runtime processes. */
 export async function replayExecution(): Promise<void> {
   const fixture = fileURLToPath(new URL('./', import.meta.url))
@@ -43,9 +62,7 @@ export async function replayExecution(): Promise<void> {
     for (const [index, id] of ['execution-root', 'execution-child'].entries()) {
       const directory = join(sessions, '_no-cwd', id)
       await mkdir(directory, { recursive: true })
-      const content = (await readFile(join(fixture, `session${index === 0 ? '' : '.1'}.v4.jsonl`), 'utf8'))
-        .replaceAll('{{session:1}}', 'execution-root').replaceAll('{{session:2}}', 'execution-child')
-        .replaceAll('{{message:1}}', 'execution-input')
+      const content = hydrateIdentities(await readFile(join(fixture, `session${index === 0 ? '' : '.1'}.v4.jsonl`), 'utf8'))
       const hydrated = content.trim().split('\n').map((line, row) => {
         const value: object = JSON.parse(line)
         return JSON.stringify(row === 0 ? value : { ...value, seq: row - 1, time: 1785097381464 + row })
