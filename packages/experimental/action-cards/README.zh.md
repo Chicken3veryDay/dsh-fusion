@@ -85,7 +85,7 @@ Remote `act(sessionId, callId, verb, payload?)` 先检查服务所有者、在�
 
 #### 模型看到什么
 
-[`propose_action` 声明](../../../docs/tool-catalog.zh.md#deepseek-aidsh-action-cards)只对在本会话中自己调用（直接调用或在其 `run_code` 程序中调用）加载过已注册种类 Skill 的在线根 Agent 出现，从下一步开始，持续到该 Agent 被释放。subagent 看不到它。在 `run_code` 下，它是程序 SDK 中的又一个绑定。种类的 Skill 给出动作名和 `details` 的字段。被接受的调用返回 `Card shown below your answer. Do not restate it. <invitation>`，其中 `<invitation>` 是种类给出的一两句指引，说明如何用用户的语言邀请用户使用卡片，因此模型只会在卡片已经存在之后写邀请。被拒绝的调用不带邀请，只返回原因，例如 `Load skill <skill> first, then call propose_action.`、`One card per turn; the earlier card stands.`、`The user has queued more messages; show no card and answer briefly.`、`Cards are offered in the main conversation only.`、`Unknown action "<action>". Registered actions: <actions>.`（最后一个种类注销后列表为 `none`），或未通过校验的 `details` 字段。
+[`propose_action` 声明](../../../docs/tool-catalog.zh.md#deepseek-aidsh-action-cards)只对在本会话中自己调用（直接调用或在其 `run_code` 程序中调用）加载过已注册种类 Skill 的在线根 Agent 出现，从下一步开始，持续到该 Agent 被释放。subagent 看不到它。在 `run_code` 下，它是程序 SDK 中的又一个绑定。种类的 Skill 给出动作名和 `details` 的字段。被接受的调用返回 `Card shown below your answer. Do not restate it. <invitation>`，其中 `<invitation>` 是种类给出的一两句指引，说明如何用用户的语言邀请用户使用卡片，因此模型只会在卡片已经存在之后写邀请。`run_code` 程序收到的值为 `{ action, title, notice, invitation }`，其中 `notice` 为 `Card shown below your answer. Do not restate it.`，因此返回或打印该值的程序会把同样的指引传给模型。被拒绝的调用不带邀请，只返回原因，例如 `Load skill <skill> first, then call propose_action.`、`One card per turn; the earlier card stands.`、`The user has queued more messages; show no card and answer briefly.`、`Cards are offered in the main conversation only.`、`Unknown action "<action>". Registered actions: <actions>.`（最后一个种类注销后列表为 `none`），或未通过校验的 `details` 字段。
 
 #### Token 影响
 

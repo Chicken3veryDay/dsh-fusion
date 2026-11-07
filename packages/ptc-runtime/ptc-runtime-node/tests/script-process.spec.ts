@@ -83,13 +83,14 @@ it.each([false, true])('reports immediate detached rejection before a Script exc
   expect(next.value).toBe(2)
 })
 
-it('keeps a persistent REPL after a program throws beside a detached rejection', async () => {
+it('reports immediate detached rejection before a REPL exception and runs the next program', async () => {
   const { runtime } = await mountRuntime(new Context(), { executionMode: 'persistent-in-memory' })
   const stateOwner = {}
   const run = (program: string) => runtime.run(runtime.resolve({ program, bindings: [], stateOwner }))
   const failure = await run('void Promise.reject(new Error("immediate detached rejection")); throw new Error("thrown")')
-  expect(failure.error?.kind).toBe('exception')
-  expect(failure.error?.message).toContain('thrown')
+  expect(failure.error?.kind).toBe('worker-exit')
+  expect(failure.error?.message).toContain('immediate detached rejection')
+  expect(failure.error?.message).toContain('retained variables were cleared')
   expect((await run('1 + 1')).value).toBe(2)
 })
 

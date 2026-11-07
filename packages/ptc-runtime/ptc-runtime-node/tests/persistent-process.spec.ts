@@ -157,3 +157,39 @@ it('ignores a REPL asynchronous diagnostic after its evaluation has completed', 
   expect(decodePtcJsonWire((await h.run('2')).value)).toBe(2)
   expect(h.seen.filter(message => message.type === 'done')).toHaveLength(2)
 })
+
+/** Let rejections in this test reach only the REPL evaluator's listener; restore the runner's listeners afterward. */
+function suspendRunnerRejectionListeners(): void {
+  const listeners = process.listeners('unhandledRejection')
+  process.removeAllListeners('unhandledRejection')
+  onTestFinished(() => { for (const listener of listeners) process.on('unhandledRejection', listener) })
+}
+
+it.each([
+  ['after completion', 'void Promise.reject(new Error("first detached")); void Promise.reject(new Error("second detached")); 7'],
+  ['during evaluation', 'void Promise.reject(new Error("first detached")); await new Promise(resolve => setTimeout(resolve, 20)); 7'],
+  ['after a printed exception', 'void Promise.reject(new Error("first detached")); throw new Error("thrown")'],
+])('reports the first unhandled rejection %s as uncaught', async (_label, code) => {
+  suspendRunnerRejectionListeners()
+  const h = await setup()
+  const result = await h.run(code)
+  expect(result.value).toBeUndefined()
+  expect(result.error?.kind).toBe('uncaught')
+  expect(result.error?.message).toMatch(/^Uncaught Error: first detached/)
+})
+
+it('reports a callback exception printed after completion as uncaught', async () => {
+  const h = await setup()
+  const result = await h.run('queueMicrotask(() => { throw new Error("late callback") }); 7')
+  expect(result.error?.kind).toBe('uncaught')
+  expect(result.error?.message).toContain('late callback')
+})
+
+it('ignores rejections from a published evaluation or outside any evaluation', async () => {
+  suspendRunnerRejectionListeners()
+  const h = await setup()
+  expect(decodePtcJsonWire((await h.run('setTimeout(() => { void Promise.reject(new Error("late")) }, 5); 1')).value)).toBe(1)
+  void Promise.reject(new Error('outside'))
+  await new Promise(resolve => setTimeout(resolve, 30))
+  expect(await h.run('2')).toEqual({ value: encodePtcJsonWire(2) })
+})

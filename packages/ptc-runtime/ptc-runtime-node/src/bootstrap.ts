@@ -189,7 +189,7 @@ function outputLimit(maxOutputBytes: number): ProgramResult {
 
 /** Admit one bounded failure message or replace it with the fixed overflow diagnostic. */
 function prepareFailure(
-  kind: 'exception' | 'invalid-output',
+  kind: 'exception' | 'invalid-output' | 'uncaught',
   message: string,
   remainingOutputBytes: number,
   maxOutputBytes: number,
@@ -211,14 +211,32 @@ export function prepareException(
   remainingOutputBytes: number,
   maxOutputBytes: number = remainingOutputBytes,
 ): ProgramResult {
-  let message: string
+  return prepareFailure('exception', renderThrown(error), remainingOutputBytes, maxOutputBytes)
+}
+
+/**
+ * Prepare an asynchronous failure no evaluation handled, which ends the process.
+ * @param message - the printed diagnostic or rendered rejection.
+ * @param remainingOutputBytes - exact bytes left after captured logs.
+ * @param maxOutputBytes - the configured cap named in an overflow diagnostic.
+ * @returns a bounded `uncaught` failure or fixed output-limit fragment; both discard the process.
+ */
+export function prepareUncaught(message: string, remainingOutputBytes: number, maxOutputBytes: number): ProgramResult {
+  return prepareFailure('uncaught', message, remainingOutputBytes, maxOutputBytes)
+}
+
+/**
+ * Render a thrown or rejected value, preferring a native error's stack.
+ * @param error - the thrown or rejected value.
+ * @returns its text, or a fixed notice when rendering throws.
+ */
+export function renderThrown(error: unknown): string {
   try {
     const detail: unknown = isNativeError(error) ? error.stack ?? error.message : error
-    message = typeof detail === 'string' ? detail : String(detail)
+    return typeof detail === 'string' ? detail : String(detail)
   } catch {
-    message = 'program threw an unrenderable value'
+    return 'program threw an unrenderable value'
   }
-  return prepareFailure('exception', message, remainingOutputBytes, maxOutputBytes)
 }
 
 /** Constructor type for one program-visible binding rejection class. */

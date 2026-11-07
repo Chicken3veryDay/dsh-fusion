@@ -1,20 +1,25 @@
 /** Node REPL evaluation with declarations retained in its context. */
 import { start } from 'node:repl'
 import { PassThrough, Writable } from 'node:stream'
-import type { ProgramEvaluator } from './types.ts'
+import type { EvaluatorDiagnostic, ProgramEvaluator } from './types.ts'
 
 /**
  * Create a REPL whose globals survive sequential evaluations until close.
- * @param reportError - REPL diagnostics attributed to the active evaluation.
+ * The REPL domain prints a thrown or callback exception; without a process
+ * listener it also prints an unhandled rejection, indistinguishable from a
+ * throw, so the evaluator listens for unhandled rejections until close.
+ * @param report - REPL diagnostics in the async context of the evaluation that caused them.
  * @returns Retained globals, asynchronous evaluation and REPL cleanup.
  */
-export function createReplEvaluator(reportError: (message: string) => void): ProgramEvaluator {
+export function createReplEvaluator(report: (diagnostic: EvaluatorDiagnostic) => void): ProgramEvaluator {
   const input = new PassThrough()
   const output = new Writable({ write(chunk: Buffer, _encoding, callback) {
     const message = chunk.toString().trim()
-    if (message) reportError(message)
+    if (message) report({ kind: 'printed', message })
     callback()
   } })
+  const onUnhandledRejection = (reason: unknown): void => { report({ kind: 'unhandled-rejection', reason }) }
+  process.on('unhandledRejection', onUnhandledRejection)
   const repl = start({ input, output, terminal: false, prompt: '', useGlobal: false, ignoreUndefined: true })
   // Interactive result setters print notices; program assignments use ordinary retained globals.
   for (const name of ['_', '_error']) {
@@ -30,6 +35,7 @@ export function createReplEvaluator(reportError: (message: string) => void): Pro
       })
     },
     close() {
+      process.off('unhandledRejection', onUnhandledRejection)
       repl.close()
       input.destroy()
       output.destroy()

@@ -102,7 +102,7 @@ it('accepts one card per turn, admits a retry after a failed result and names th
   expect((await call(f, 'propose_action', proposal, 'blocked')).isError).toBe(true)
   blocked()
   const accepted = await call(f, 'propose_action', { ...proposal, title: ' Counter ' }, 'accepted')
-  expect(accepted).toMatchObject({ isError: false, value: { action: ACTION, title: 'Counter', invitation: INVITATION } })
+  expect(accepted).toMatchObject({ isError: false, value: { action: ACTION, title: 'Counter', notice: 'Card shown below your answer. Do not restate it.', invitation: INVITATION } })
   expect(text(accepted)).toBe(`Card shown below your answer. Do not restate it. ${INVITATION}`)
   const second = text(await call(f, 'propose_action', proposal, 'second'))
   // Only an accepted call tells the model how to invite the user to its card.
@@ -126,7 +126,7 @@ it('activates the tool for a skill load dispatched from run_code and accepts a c
   expect((await call(f, 'skill', { name: SKILL }, 'nested-load', f.agent, outer)).isError).toBe(false)
   expect(await declared(f)).toBe(true)
   const accepted = await call(f, 'propose_action', proposal, 'nested-card', f.agent, outer)
-  expect(accepted).toMatchObject({ isError: false, value: { action: ACTION, title: proposal.title, invitation: INVITATION } })
+  expect(accepted).toMatchObject({ isError: false, value: { action: ACTION, title: proposal.title, notice: 'Card shown below your answer. Do not restate it.', invitation: INVITATION } })
 })
 
 it('offers cards in the main conversation only: subagent skill loads activate nothing and non-root calls are refused', async () => {

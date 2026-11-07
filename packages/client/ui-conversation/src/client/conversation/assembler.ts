@@ -488,7 +488,8 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
   /**
    * Route one event to every matching Definition.
    * @param input - event entry to route.
-   * @param relocated - route only Turn-located matches the event did not route before, because its Turn was unresolved then.
+   * @param relocated - route only Turn-located matches, the fallback's included, that the event did not route before because
+   * its Turn was unresolved then.
    * @param accept - acceptance strategy for each routed match.
    * @returns highest requested publication cadence.
    */
@@ -571,21 +572,25 @@ export class ConversationNodeAssembler implements ConversationViewSnapshotStore 
       }
       const id = idOf(result)
       if (id === undefined) continue
-      if (relocated && this.contextsBySeq.get(event.seq)?.some(context => context.definition === definition) === true) continue
+      if (relocated && this.routedBefore(event.seq, definition)) continue
       publication = maximumPublication(publication, accept.call(this, definition, id, matchFor(result.role)))
     }
-    if (relocated) return publication
     const fallback = this.eventDefinitions.fallbackEntry()
     const target = fallback?.target
     if (fallback !== undefined && target !== undefined
       && target !== firstTarget && target !== secondTarget && otherTargets?.has(target) !== true) {
       const result = fallback.match(event)
       const id = result === null ? undefined : idOf(result)
-      if (result !== null && id !== undefined) {
+      if (result !== null && id !== undefined && !(relocated && this.routedBefore(event.seq, fallback))) {
         publication = maximumPublication(publication, accept.call(this, fallback, id, matchFor(result.role)))
       }
     }
     return publication
+  }
+
+  /** @returns whether a context of this Definition already received the event. */
+  private routedBefore(seq: number, definition: ConversationNodeDefinition): boolean {
+    return this.contextsBySeq.get(seq)?.some(context => context.definition === definition) === true
   }
 
   private createContext(

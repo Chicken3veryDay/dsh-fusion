@@ -132,4 +132,27 @@ describe('Turn-located matches', () => {
     new ConversationNodeAssembler(events, { entries: () => [] }).replaceWindow([turnStart, call, dispatchStart], false)
     expect(start).toHaveBeenCalledOnce()
   })
+
+  it('route a fallback match once an older page resolves its Turn, unless its target is occupied', () => {
+    for (const occupied of [false, true]) {
+      const start = vi.fn(() => null)
+      const events = registry()
+      if (occupied) events.register(viewDefinition('chat-located', located))
+      events.registerFallback({ ...viewDefinition('fallback', event => located(event) && { located: 'turn', role: 'start' }), start })
+      const target = new ConversationNodeAssembler(events, { entries: () => [] })
+      target.replaceWindow([dispatchStart], true)
+      target.prepend([turnStart, call], false)
+      expect(start).toHaveBeenCalledTimes(occupied ? 0 : 1)
+    }
+  })
+
+  it('do not route a fallback match again when an older page changes its Turn', () => {
+    const events = registry()
+    events.registerFallback({ ...seen, target: 'test', buildViewNode: () => null })
+    const target = new ConversationNodeAssembler(events, { entries: () => [timelineView] })
+    target.activateTarget('test')
+    target.replaceWindow([call, dispatchStart], true)
+    target.prepend([turnStart], false)
+    expect(seqs(target)).toEqual([3])
+  })
 })
