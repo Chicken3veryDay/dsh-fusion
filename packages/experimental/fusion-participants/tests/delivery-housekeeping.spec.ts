@@ -1,7 +1,7 @@
 /** Bounded repair gaps admit only the exact interrupted step/turn/tool housekeeping. */
 import { expect, it } from 'vitest'
 import { createAssistantMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
-import { SessionId, SessionSeq, interruptedTurnClosers, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, SessionSeq, interruptedTurnClosers, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { ReceiverState } from '../src/delivery-state.ts'
 import { receiverProjection, createIntent, DeliveryId } from '../src/delivery-state.ts'
@@ -19,13 +19,13 @@ it.each([false, true])('matches interrupted tools with started=%s and preserves 
     { type: 'step/start', seq: SessionSeq(1), time: 0, data: { turn: 1, step: 1 } },
     { type: 'assistant/message', seq: SessionSeq(2), time: 0, surfaceOp: 'append', data: { turn: 1, step: 1, message, stream: [] } },
   ]
-  let unmatched: ReceiverState = receiverProjection.init(header)
+  let unmatched: ReceiverState = receiverProjection.init(header, SessionLogOffset(0))
   for (const event of events) unmatched = receiverProjection.apply(unmatched, event)
   expect(receiverProjection.apply(unmatched, { type: 'tool/call', seq: SessionSeq(3), time: 0,
     data: { turn: 1, step: 1, callId: ToolCallId('unrelated'), name: 'test', arguments: '{}' } }).calls).toEqual(unmatched.calls)
   if (started) events.push({ type: 'tool/call', seq: SessionSeq(3), time: 0, data: { turn: 1, step: 1, callId, name: 'test', arguments: '{}' } })
   events.push({ type: 'fusion/delivery-accepted', seq: SessionSeq(events.length), time: 0, data: intent })
-  let state: ReceiverState = receiverProjection.init(header)
+  let state: ReceiverState = receiverProjection.init(header, SessionLogOffset(0))
   for (const event of events) state = receiverProjection.apply(state, event)
   const closers = interruptedTurnClosers(events)
   expect(closers.map(row => row.type)).toEqual(['tool/result', 'step/end', 'turn/end'])

@@ -4,6 +4,7 @@ import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import { admissionProjection, receiverProjection, createIntent, DeliveryId, intentSchema, contentHash } from '../src/delivery-state.ts'
 import { executionProjection } from '../src/execution-state.ts'
 import { rosterProjection } from '../src/state.ts'
+import type { RosterState } from '../src/state.ts'
 import { mount, read } from './harness.ts'
 
 it('restores the full root input from a checkpoint plus suffix, retaining state for unrelated records', async () => {
@@ -213,7 +214,7 @@ it('folds no Fusion record inherited by a fork of a task root and restores that 
   const fork = ctx.sessions.fork(root)
   expect(fork.inheritedEventCount).toBe(root.seq)
   const admissions = await ctx.sessionProjections.register({ ...admissionProjection, key: 'forkFusionAdmissions' })
-  const rosters = await ctx.sessionProjections.register({ ...rosterProjection, key: 'forkFusionRoster' })
+  const rosters = await ctx.sessionProjections.register<'forkFusionRoster', RosterState>({ ...rosterProjection, key: 'forkFusionRoster' })
   const executions = await ctx.sessionProjections.register({ ...executionProjection, key: 'forkFusionExecution' })
   expect(admissions.stateOf(root).entries).toHaveLength(1)
   expect(admissions.stateOf(fork)).toEqual({ sessionId: fork.id, inheritedEventCount: fork.inheritedEventCount, entries: [] })

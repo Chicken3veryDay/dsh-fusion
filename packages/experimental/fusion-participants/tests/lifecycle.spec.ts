@@ -197,7 +197,7 @@ it('refuses malformed or duplicate required lifecycle records during real restar
   root.append('fusion/participant-established', { participantId: SessionId('foreign') })
   await other.dispose()
   await expect(ctx.fusionParticipants.recover(other.roster.rootSessionId)).rejects.toMatchObject({ cleanup: 'complete' })
-  expect(rosterProjection.init()).toEqual({ roster: null, established: [] })
+  expect(rosterProjection.init(root.header, root.inheritedEventCount)).toEqual({ inheritedEventCount: 0, roster: null, established: [] })
 })
 
 it('refuses a root without a roster, composition replacement, and service disposal with a parked resident', async () => {
