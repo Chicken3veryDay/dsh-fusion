@@ -1004,11 +1004,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` when a non-owner names another holder, `CONTEXT_MAP_CONFLICT` when the current holder is not `expectedHolder`; the signal\'s reason when it was aborted.'],
       },
       {
-        signature: 'async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>',
+        signature: 'async release(caller: Agent, request: ReleaseRequest = {}): Promise<MapSnapshot>',
         description: 'Give up the curator role. The holder or the map owner may release it.',
-        parameters: [{ name: 'caller', description: 'the exact live holder or the owner.' }, { name: 'target', description: 'which map.' }],
+        parameters: [{ name: 'caller', description: 'the exact live holder or the owner.' }, { name: 'request', description: 'which map, and the work whose unstarted claim the release returns.' }],
         returns: 'the committed snapshot, or the current one when nobody held the role.',
-        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.'],
+        throws: ['{@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller, or when a non-owner returns a claim.'],
       },
       {
         signature: 'async acknowledgeIndex(caller: Agent, request: MapTarget & { readonly indexDigest: string }): Promise<MapSnapshot>',
@@ -9197,6 +9197,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ReleaseAssignmentRequest',
     declaration: 'export interface ReleaseAssignmentRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly assignmentId: AssignmentId;\n    readonly actorId: SessionId;\n}',
+  },
+  {
+    name: 'ReleaseRequest',
+    declaration: 'export interface ReleaseRequest extends MapTarget {\n    readonly unstartedWork?: string;\n}',
   },
   {
     name: 'Reload',

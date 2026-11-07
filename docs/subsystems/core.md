@@ -1059,11 +1059,11 @@ async claim( caller: Agent, request: ClaimRequest = {}, signal?: AbortSignal, ):
 /**
  * Give up the curator role. The holder or the map owner may release it.
  * @param caller - the exact live holder or the owner.
- * @param target - which map.
+ * @param request - which map, and the work whose unstarted claim the release returns.
  * @returns the committed snapshot, or the current one when nobody held the role.
- * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller.
+ * @throws {@link ContextMapError} `CONTEXT_MAP_UNAUTHORIZED` for any other caller, or when a non-owner returns a claim.
  */
-async release(caller: Agent, target: MapTarget = {}): Promise<MapSnapshot>
+async release(caller: Agent, request: ReleaseRequest = {}): Promise<MapSnapshot>
 
 /**
  * Mark the index observed at claim as fully curated after a successful run. The owner may

@@ -1074,6 +1074,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   EagerCoreProvider: 'packages/experimental/context-tree/README.md',
   AddNoteRequest: 'packages/experimental/context-map/README.md',
   ClaimRequest: 'packages/experimental/context-map/README.md',
+  ReleaseRequest: 'packages/experimental/context-map/README.md',
   ContextMapError: 'packages/experimental/context-map/README.md',
   DropPendingRequest: 'packages/experimental/context-map/README.md',
   CurationWork: 'packages/experimental/context-map/README.md',
