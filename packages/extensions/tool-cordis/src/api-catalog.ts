@@ -2594,15 +2594,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'get(agent: Agent): { active: boolean; pending?: boolean }',
-        description: 'Read the logged plan state and any selected state awaiting the next accepted in-turn pre-step.',
+        description: 'Read the logged plan state and any selected state awaiting the next accepted in-turn step.',
         parameters: [{ name: 'agent', description: 'The agent to read.' }],
         returns: 'Current logged state plus a pending selection, when present.',
       },
       {
         signature: 'set(agent: Agent, active: boolean): \'committed\' | \'queued\' | \'cancelled\' | \'noop\'',
-        description: 'Select whether plan mode should be active. Between turns the method appends the change immediately because no in-turn pre-step will run until another prompt starts a turn. The open-turn fold is the idle signal: agent status stays `running` through post-turn checkpointing, when no further in-turn pre-step runs. During an open turn the selection remains pending until the next accepted in-turn pre-step. Repeated selection of the current or already-pending state is a no-op.',
+        description: 'Select whether plan mode should be active. Between turns the method appends the change immediately because no in-turn pre-step will run until another prompt starts a turn. The open-turn fold is the idle signal: agent status stays `running` through post-turn checkpointing, when no further in-turn pre-step runs. During an open turn the selection remains pending until the next accepted in-turn step. Repeated selection of the current or already-pending state is a no-op.',
         parameters: [{ name: 'agent', description: 'The agent to switch.' }, { name: 'active', description: 'Whether plan mode should be active.' }],
-        returns: 'what happened: `committed` (logged now), `queued` (awaiting the next accepted in-turn pre-step), `cancelled` (an opposite pending selection was cleared; the logged state already matches), or `noop` (already in that state).',
+        returns: 'what happened: `committed` (logged now), `queued` (awaiting the next accepted in-turn step), `cancelled` (an opposite pending selection was cleared; the logged state already matches), or `noop` (already in that state).',
       },
     ],
   },

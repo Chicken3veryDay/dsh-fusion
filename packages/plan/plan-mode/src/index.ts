@@ -8,13 +8,13 @@
  *
  * The `plan` projection folds the session log, so resume and fork restore the
  * state. User selections remain pending until the next accepted in-turn
- * pre-step. The service includes the selected state in the proposed step
+ * step. The service includes the selected state in the proposed step
  * assembly only while that pre-step proposes, then appends `plan/mode` from
  * `agent/step-accepted` only when the step is accepted. Any later assembly, such as
  * a same-step request retry's reselection, sees the logged state alone, so a
  * selection made after the pre-step waits for the next one. A selection made
- * after the proposal assembled but before the pre-step accepted is appended by
- * that pre-step; the section revision changes, so the loop reassembles the step.
+ * after the proposal assembled but before the step was accepted is appended at
+ * that step's acceptance; the section revision changes, so the loop reassembles the step.
  *
  * The exit tool is disclosed progressively: it is admitted from the first step
  * whose selected state is active and stays admitted for the rest of the
@@ -185,7 +185,7 @@ export class PlanModeController extends Service {
   private planProjectionHandle: ProjectionHandle<PlanUnitState> | undefined
 
   /**
-   * Latest selection per session awaiting the next accepted in-turn pre-step.
+   * Latest selection per session awaiting the next accepted in-turn step.
    * `narrate` is true for user selections and false for the exit tool, whose
    * result already narrates the transition.
    */
@@ -259,7 +259,7 @@ export class PlanModeController extends Service {
                 return { kind: 'success', text: 'Plan mode entry cancelled.' }
               case 'noop':
                 // Repeat the queued wording while an exit still awaits the
-                // next accepted pre-step; only a truly inactive session reads
+                // next accepted step; only a truly inactive session reads
                 // idempotent.
                 return this.loggedActive(agent.session)
                   ? { kind: 'success', text: 'Leaving plan mode (applies from the next step).' }
@@ -351,7 +351,7 @@ export class PlanModeController extends Service {
           }
           throw cause
         }
-        // A review may outlive this plugin fiber. Without its pre-step listener,
+        // A review may outlive this plugin fiber. Without its step-acceptance listener,
         // an approved selection could never be appended, so fail and keep planning.
         if (disposed) {
           throw new Error('the plan-mode service was reloaded while the plan was under review; present the plan again')
@@ -365,8 +365,8 @@ export class PlanModeController extends Service {
             : `The user chose to keep planning; their feedback: ${feedback}`)
         }
         // Keep plan guidance for the rest of this assistant tool batch. The
-        // silent selection is appended at the next accepted in-turn pre-step,
-        // before its request assembly.
+        // silent selection is appended when the loop next accepts an in-turn
+        // step, before its request assembly.
         this.pendingIntents.set(agent.session, { active: false, narrate: false })
         return { approved: true }
       },
@@ -390,7 +390,7 @@ export class PlanModeController extends Service {
 
   /**
    * The state a request presents. A pending selection is visible only while the pre-step proposes, because
-   * only an accepted pre-step logs it; every later assembly presents the logged state.
+   * only step acceptance logs it; every later assembly presents the logged state.
    */
   private selectedActive(session: Session): boolean {
     return (this.proposing.has(session) ? this.pendingIntents.get(session)?.active : undefined) ?? this.loggedActive(session)
@@ -413,7 +413,7 @@ export class PlanModeController extends Service {
 
   /**
    * Read the logged plan state and any selected state awaiting the next
-   * accepted in-turn pre-step.
+   * accepted in-turn step.
    *
    * @param agent The agent to read.
    * @returns Current logged state plus a pending selection, when present.
@@ -430,13 +430,13 @@ export class PlanModeController extends Service {
    * another prompt starts a turn. The open-turn fold is the idle signal:
    * agent status stays `running` through post-turn checkpointing, when no
    * further in-turn pre-step runs. During an open turn the selection remains
-   * pending until the next accepted in-turn pre-step. Repeated selection of
+   * pending until the next accepted in-turn step. Repeated selection of
    * the current or already-pending state is a no-op.
    *
    * @param agent The agent to switch.
    * @param active Whether plan mode should be active.
    * @returns what happened: `committed` (logged now), `queued` (awaiting the
-   * next accepted in-turn pre-step), `cancelled` (an opposite pending selection
+   * next accepted in-turn step), `cancelled` (an opposite pending selection
    * was cleared; the logged state already matches), or `noop` (already in that
    * state).
    */
@@ -472,7 +472,7 @@ export class PlanModeController extends Service {
       return
     }
     session.append('plan/mode', { active: target })
-    // Delete only after append succeeds so a later accepted in-turn pre-step
+    // Delete only after append succeeds so a later accepted in-turn step
     // can retry a failed durable write.
     this.pendingIntents.delete(session)
   }

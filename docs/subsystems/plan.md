@@ -55,7 +55,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 ```ts cordis-catalog
 /**
  * Read the logged plan state and any selected state awaiting the next
- * accepted in-turn pre-step.
+ * accepted in-turn step.
  *
  * @param agent The agent to read.
  * @returns Current logged state plus a pending selection, when present.
@@ -68,13 +68,13 @@ get(agent: Agent): { active: boolean; pending?: boolean }
  * another prompt starts a turn. The open-turn fold is the idle signal:
  * agent status stays `running` through post-turn checkpointing, when no
  * further in-turn pre-step runs. During an open turn the selection remains
- * pending until the next accepted in-turn pre-step. Repeated selection of
+ * pending until the next accepted in-turn step. Repeated selection of
  * the current or already-pending state is a no-op.
  *
  * @param agent The agent to switch.
  * @param active Whether plan mode should be active.
  * @returns what happened: `committed` (logged now), `queued` (awaiting the
- * next accepted in-turn pre-step), `cancelled` (an opposite pending selection
+ * next accepted in-turn step), `cancelled` (an opposite pending selection
  * was cleared; the logged state already matches), or `noop` (already in that
  * state).
  */
