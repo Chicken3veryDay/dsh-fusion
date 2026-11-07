@@ -112,63 +112,6 @@
       }
     },
     {
-      "name": "desktop_act",
-      "description": "Use the active Linux desktop to act; obtain fresh state before acting and verify the result afterward. Input is irreversible and requires host permission.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "applicationId": {
-            "type": "string",
-            "description": "Driver process id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          },
-          "windowId": {
-            "type": "string",
-            "description": "Driver window id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          },
-          "action": {
-            "description": "Desktop action with kind: click, type, press_key, scroll, drag, hotkey, or set_value, when the live driver catalog exposes that kind. Other fields pass to the driver as declared by its schema (type uses text; hotkey uses keys; drag uses from_x, from_y, to_x, to_y)."
-          }
-        },
-        "required": [
-          "action"
-        ]
-      }
-    },
-    {
-      "name": "desktop_observe",
-      "description": "Use the active Linux desktop to observe; obtain fresh state before acting and verify the result afterward. Input is irreversible and requires host permission.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "applicationId": {
-            "type": "string",
-            "description": "Driver process id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          },
-          "windowId": {
-            "type": "string",
-            "description": "Driver window id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          }
-        }
-      }
-    },
-    {
-      "name": "desktop_screenshot",
-      "description": "Use the active Linux desktop to screenshot; obtain fresh state before acting and verify the result afterward. Input is irreversible and requires host permission.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "applicationId": {
-            "type": "string",
-            "description": "Driver process id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          },
-          "windowId": {
-            "type": "string",
-            "description": "Driver window id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither."
-          }
-        }
-      }
-    },
-    {
       "name": "edit",
       "description": "Edit an existing UTF-8 text file by replacing literal text.",
       "parameters": {

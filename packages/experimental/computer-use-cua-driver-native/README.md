@@ -124,7 +124,7 @@ An unchanged catalog preserves its tool-definition prefix. Tool results append t
 
 <a id="known-limitations-and-deferred-work"></a>
 
-The package preserves the upstream driver's platform and application limits.
+The package preserves the upstream driver's platform and application limits. Raw-tool recorded-session fixtures replay across macOS and Linux; desktop facade availability is tested separately on Linux.
 
 - **Host permissions and graphics session** — npm installation does not grant desktop access or create a graphical session.
 - **Native cursor overlay** — a headless macOS Node host can receive `facility_unavailable` for overlay operations while screenshots and background input remain usable.

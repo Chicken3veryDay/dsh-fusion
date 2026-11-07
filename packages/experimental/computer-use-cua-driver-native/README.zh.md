@@ -124,7 +124,7 @@ On macOS, cursor-overlay operations may return facility_unavailable even when sc
 
 <a id="known-limitations-and-deferred-work"></a>
 
-此软件包保留上游驱动的平台和应用限制。
+此软件包保留上游驱动的平台和应用限制。原始工具的录制会话夹具可在 macOS 和 Linux 上回放；桌面门面的可用性在 Linux 上单独测试。
 
 - **主机权限与图形会话**——npm 安装不会授予桌面访问权限或创建图形会话。
 - **原生光标覆盖层**——无界面的 macOS Node 主机可能对覆盖层操作返回 `facility_unavailable`，同时截图和后台输入仍可用。

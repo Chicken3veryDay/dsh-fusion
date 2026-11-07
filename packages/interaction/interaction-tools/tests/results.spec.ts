@@ -120,3 +120,22 @@ it.each(['browser', 'desktop'] as const)('includes interaction guidance for a re
     expect(assembly.sections.some(section => section.text.includes('Interaction tools are agent-native'))).toBe(true)
   } finally { toolSet.dispose() }
 })
+
+it('pins desktop id and action guidance independently of host availability', async () => {
+  const { ctx } = await setup(null, 'desktop')
+  const tools = ctx.tools.schemas()
+  for (const method of ['observe', 'act', 'screenshot']) {
+    const tool = tools.find(candidate => candidate.name === `desktop_${method}`)
+    expect(tool?.parameters).toMatchObject({
+      properties: {
+        applicationId: { description: "Driver process id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither." },
+        windowId: { description: "Driver window id as a positive integer string, obtained from the driver's list_windows tool. Whole-display observations do not return ids; observe and screenshot require both ids or neither." },
+      },
+    })
+  }
+  expect(tools.find(tool => tool.name === 'desktop_act')?.parameters).toMatchObject({
+    properties: {
+      action: { description: 'Desktop action with kind: click, type, press_key, scroll, drag, hotkey, or set_value, when the live driver catalog exposes that kind. Other fields pass to the driver as declared by its schema (type uses text; hotkey uses keys; drag uses from_x, from_y, to_x, to_y).' },
+    },
+  })
+})
