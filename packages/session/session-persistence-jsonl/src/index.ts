@@ -58,6 +58,7 @@ import {
 } from './generation.ts'
 
 export type { JsonlCompression } from './format.ts'
+export { JsonlSessionCloseReentryError } from './storage.ts'
 
 /**
  * Internal handoff-reuse policy, not deployment configuration: a cold

@@ -38,6 +38,19 @@ import type {
 } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionWriteLease } from './lease.ts'
 
+/**
+ * A close issued from async work that a still-pending store flush started. Only that caller is refused; the close
+ * proceeds for every other caller, and the same work may join the shared close result once the flush settles.
+ */
+export class JsonlSessionCloseReentryError extends Error {
+  override readonly name = 'JsonlSessionCloseReentryError'
+
+  /** @param sessionId - Session whose writer the refused caller tried to close. */
+  constructor(readonly sessionId: SessionId) {
+    super(`session "${sessionId}": close reentered during store flush`)
+  }
+}
+
 /** Maximum intentional wait before a routed live session batch starts writing. */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200
 
@@ -362,7 +375,7 @@ export class JsonlSessionHandle implements SessionHandle {
       // The reentrant caller receives only the refusal; the real close result is
       // reported to every caller outside the callback and recorded as uncertainty.
     })
-    return Promise.reject(new Error(`session "${this.id}": close reentered during store flush`))
+    return Promise.reject(new JsonlSessionCloseReentryError(this.id))
   }
 
   private joinClose(): Promise<void> {

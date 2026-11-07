@@ -3573,9 +3573,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'isWithdrawing(session: Session): boolean',
-        description: 'Whether an opted-in Session has begun withdrawal but has not yet completed its producer joins.',
+        description: 'Whether an opted-in Session has begun withdrawal and not detached. It stays true after a failed withdrawal, because the Session may still publish: reservation fences such as the JSONL writer\'s depend on it to keep refusing new reservations.',
         parameters: [{ name: 'session', description: 'exact live Session to inspect.' }],
-        returns: 'true while a withdrawal completion is pending.',
+        returns: 'true from the start of withdrawal until the Session detaches, including after a withdrawal failure.',
       },
       {
         signature: 'withdrawalOf(session: Session): Promise<void> | undefined',

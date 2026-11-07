@@ -41,7 +41,9 @@ function reenterFromFlush(writer: JsonlSessionHandle): void {
 it('refuses only the reentrant caller and closes the writer once the flush unwinds', async () => {
   const { ctx, session, writer } = await mount('flush-reentry')
   reenterFromFlush(writer)
-  await expect(ctx.sessions.flush(session)).rejects.toThrow('close reentered during store flush')
+  const refusal = ctx.sessions.flush(session)
+  await expect(refusal).rejects.toThrow(JsonlPlugin.JsonlSessionCloseReentryError)
+  await expect(refusal).rejects.toMatchObject({ name: 'JsonlSessionCloseReentryError', sessionId: session.id })
   // Every later caller joins the one real close, which resolves.
   await expect(writer.close()).resolves.toBeUndefined()
   expect(writer.durabilityOpen).toBe(false)
@@ -52,7 +54,7 @@ it('fences a reserved writer synchronously for a reentrant close and still joins
   const reserved = ctx.sessionPersistence.reserveSessionWriter(session)
   if (reserved.kind !== 'reserved') throw new Error(`reservation refused: ${reserved.reason}`)
   reenterFromFlush(writer)
-  await expect(ctx.sessions.flush(session)).rejects.toThrow('close reentered during store flush')
+  await expect(ctx.sessions.flush(session)).rejects.toThrow(JsonlPlugin.JsonlSessionCloseReentryError)
   expect(reserved.reservation.signal.aborted).toBe(true)
   const joined = writer.close()
   expect(await reserved.reservation.release()).toMatchObject({ kind: 'durable' })
@@ -65,6 +67,6 @@ it('surfaces a recorded failure to every caller outside the callback while refus
   const failure = new Error('recorded storage uncertainty')
   writer.retainFailure(failure)
   reenterFromFlush(writer)
-  await expect(ctx.sessions.flush(session)).rejects.toThrow('close reentered during store flush')
+  await expect(ctx.sessions.flush(session)).rejects.toThrow(JsonlPlugin.JsonlSessionCloseReentryError)
   await expect(writer.close()).rejects.toBe(failure)
 })
