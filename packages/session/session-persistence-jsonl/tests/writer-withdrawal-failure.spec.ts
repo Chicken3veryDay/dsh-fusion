@@ -20,6 +20,15 @@ afterEach(async () => {
   for (const dispose of disposals.splice(0).reverse()) await dispose()
 })
 
+/** Make every effect registered on the root Context settle its disposal with `failure` after the real disposal ran. */
+function failRouteDisposal(ctx: Context, failure: Error): void {
+  const effect = ctx.root.effect.bind(ctx.root)
+  vi.spyOn(ctx.root, 'effect').mockImplementation((execute, label) => {
+    const dispose = effect(execute, label)
+    return Object.assign(async () => { await dispose(); throw failure }, { then: dispose.then.bind(dispose) })
+  })
+}
+
 /** A reserved-capable writer over a Session entered with a controllable producer withdrawal. */
 async function fixture(withdraw: () => Promise<void> = async () => {}) {
   const ctx = new Context()
@@ -98,10 +107,10 @@ it('reports a write handle kept open because its Session withdrawal failed at pr
   void withdrawing.catch((_error: unknown) => { /* observed through the teardown report */ })
   await expect(f.uninstall()).rejects.toMatchObject({
     message: 'memory-fixture dispose failed',
-    errors: [expect.objectContaining({
+    errors: [{
       message: `memory-fixture: session "${f.session.id}" write handle kept open because Session withdrawal failed`,
       cause: { message: 'Session withdrawal failed', errors: [failure] },
-    })],
+    }],
   })
   expect(f.writer.durabilityOpen).toBe(true)
   expect(f.tracker.openHandles.has(f.writer)).toBe(true)
@@ -125,13 +134,8 @@ it('records uncertainty and a warning when route disposal fails after a detached
     if (++calls === 2) throw new Error('registration failed')
     return on(...args)
   })
-  const effect = f.ctx.root.effect.bind(f.ctx.root)
-  const disposal = new Error('route effect disposal failed')
   // The listener detaches synchronously; the effect's own asynchronous disposal then fails.
-  vi.spyOn(f.ctx.root, 'effect').mockImplementation(((...args: Parameters<typeof effect>) => {
-    const dispose = effect(...args)
-    return async () => { await dispose(); throw disposal }
-  }) as typeof f.ctx.root.effect)
+  failRouteDisposal(f.ctx, new Error('route effect disposal failed'))
   const warn = vi.spyOn(f.ctx.logger, 'warn').mockImplementation(() => {})
   expect(() => f.reserve()).toThrow('registration failed')
   await vi.waitFor(() => { expect(f.writer.lifetimeUncertain).toBe(true) })
@@ -142,12 +146,7 @@ it('records uncertainty and a warning when route disposal fails after a detached
 
 it('completes close when the route group disposal rejects after the exact listener removal succeeded', async () => {
   const f = await fixture()
-  const effect = f.ctx.root.effect.bind(f.ctx.root)
-  const disposal = new Error('route group disposal failed')
-  vi.spyOn(f.ctx.root, 'effect').mockImplementation(((...args: Parameters<typeof effect>) => {
-    const dispose = effect(...args)
-    return async () => { await dispose(); throw disposal }
-  }) as typeof f.ctx.root.effect)
+  failRouteDisposal(f.ctx, new Error('route group disposal failed'))
   const pin = f.reserve()
   const closed = f.writer.close()
   expect(await pin.release()).toMatchObject({ kind: 'durable' })
