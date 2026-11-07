@@ -4,8 +4,9 @@ English | [中文](browser-use.zh.md)
 
 Browser use lets an Agent inspect and operate web pages through a DSH-owned interaction capability. DSH owns the task loop, normalized `browser_*` tools, and exact-Agent lifecycle; a configured provider supplies the browser operations and keeps browser state across turns of one live Session.
 
-The Web and Desktop compositions mount the interaction capability by default. On Linux, Playwright MCP supplies browser navigation, observation, tab, and screenshot operations. A Host without a ready provider admits no browser tool schemas, so the model does not receive unusable tools.
+The Web and Desktop compositions mount the interaction capability and browser registry by default. Browser operations require [explicit provider activation](#choose-a-provider). A Host without a ready provider admits no browser tool schemas, so the model does not receive unusable tools.
 
+<a id="choose-a-provider"></a>
 ## Choose a provider
 
 Mount [`dsh-browser-use`](../../packages/browser-use/browser-use/README.md) and one provider in the same composition. The providers are experimental public npm packages and require explicit activation. Their initial browser engine is Chromium.

@@ -4,8 +4,9 @@
 
 浏览器操作让 Agent 通过 DSH 自有的交互能力检查与操作网页。DSH 负责任务循环、规范化的 `browser_*` 工具和精确 Agent 的生命周期；配置的提供方提供浏览器操作，并在一个实时 Session 的多个轮次之间保留浏览器状态。
 
-Web 和 Desktop 组合默认挂载交互能力。在 Linux 上，Playwright MCP 提供浏览器导航、观察、标签页和截图操作。没有就绪提供方的 Host 不会接纳浏览器工具模式，因此模型不会收到不可用的工具。
+Web 和 Desktop 组合默认挂载交互能力和浏览器注册表。浏览器操作需要[显式启用提供方](#choose-a-provider)。没有就绪提供方的 Host 不会接纳浏览器工具模式，因此模型不会收到不可用的工具。
 
+<a id="choose-a-provider"></a>
 ## 选择提供方
 
 在同一组合中挂载 [`dsh-browser-use`](../../packages/browser-use/browser-use/README.zh.md) 和一个提供方。这些提供方是实验性公共 npm 包，需要显式激活。它们最初支持的浏览器引擎是 Chromium。
