@@ -20,11 +20,17 @@
     },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json"
+    "./locale/*.json": "./locale/*.json",
+    "./profiles": {
+      "types": "./lib/types/profiles.d.ts",
+      "default": "./lib/profiles.js"
+    }
   },
   "files": [
     "locale/*.json",
     "lib/index.js",
+    "lib/profiles.js",
+    "lib/shared-*.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",

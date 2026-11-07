@@ -1820,7 +1820,7 @@ export type Config = LocalConfig
 ## `@deepseek-ai/dsh-fusion-config`
 
 - `inject`: `llm` · `credentials` · `commands` · `agentPresets`
-- `source`: [`packages/preset/fusion-config/src/index.ts:54`](../packages/preset/fusion-config/src/index.ts)
+- `source`: [`packages/preset/fusion-config/src/index.ts:55`](../packages/preset/fusion-config/src/index.ts)
 
 ```ts config-catalog
 /** Loader input; document is strictly parsed once before registrations become visible. */
