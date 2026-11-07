@@ -391,6 +391,15 @@ class SystemdScopeOwner implements BoundProcessOwner {
     }
   }
 
+  /**
+   * Whether the final launcher already entered the scope. Only a consumed launch request proves it:
+   * an empty cgroup can also be the scope's initial state, a freezer-only change, or systemd's setup
+   * helper leaving before the launcher attaches.
+   */
+  private payloadEntered(): boolean {
+    return !existsSync(this.startup.files.requestPath)
+  }
+
   private absentUnit(): boolean {
     this.observeRequestConsumption()
     if (this.establishment === 'established') return false
@@ -494,9 +503,13 @@ class SystemdScopeOwner implements BoundProcessOwner {
           `systemctl returned unknown state for ${this.unit}: ${JSON.stringify({ loadState, activeState })}`,
         )
       }
+      const notStarted = activeState === 'inactive' || activeState === 'failed'
+      // A loaded unit proves only that the manager created it: the start job can still be queued.
+      // Until the unit leaves inactive or the launcher consumes its request, treat it like an absent unit.
+      if (notStarted && this.establishment === 'pending') return this.absentUnit()
       this.establishment = 'established'
       this.controlGroup = controlGroup ?? this.controlGroup
-      if (activeState === 'inactive' || activeState === 'failed') return false
+      if (notStarted) return false
       if (!['active', 'activating', 'reloading', 'deactivating'].includes(activeState)) {
         throw new Error(`systemctl returned unknown ActiveState for ${this.unit}: ${JSON.stringify(activeState)}`)
       }
@@ -578,11 +591,14 @@ class SystemdScopeOwner implements BoundProcessOwner {
             continue
           }
           const woke = await this.waitForPoll(pollIntervalMs, generation)
+          // A cgroup wake must not acknowledge a signal's invalidation: the signal still earns its query.
+          const signalled = generation !== this.wakeGeneration
           generation = this.wakeGeneration
-          if (woke === 'wake' && this.cgroup.consumeEvent()) {
+          if (woke === 'wake' && !signalled && this.cgroup.consumeEvent()) {
             const population = this.cgroup.population()
-            if (population === 'empty') break
             if (population === 'populated') continue
+            // Kernel emptiness settles the range only once the launcher is known to be inside the scope.
+            if (population === 'empty' && this.payloadEntered()) break
           } else if (this.establishment === 'established') {
             // Keep establishment responsive, then reduce systemctl process churn
             // while systemd remains the authoritative owner of an active range.
@@ -591,7 +607,8 @@ class SystemdScopeOwner implements BoundProcessOwner {
           active = await this.rangeActive()
         }
       } finally {
-        this.cgroup.close()
+        // A failed observation can be retried, and the retry may watch the scope again.
+        this.cgroup.detach()
       }
       this.stopped = true
     })().catch((error: unknown) => {

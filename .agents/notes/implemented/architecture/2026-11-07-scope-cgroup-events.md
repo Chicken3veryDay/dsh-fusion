@@ -14,13 +14,15 @@ A Linux handle proves its own range empty through its transient user-systemd sco
 
 An event is a wake-up, never the proof. The observer reads `cgroup.events` after each event:
 
-- `populated 0` ends the wait. The kernel clears the flag when the last member exits, the same transition systemd uses to end a scope.
+- `populated 0` ends the wait once the launcher is known to be inside the scope, which the consumed launch request proves. The kernel clears the flag when the last member exits, the same transition systemd uses to end a scope. Before the request is consumed the same reading is not final: an empty cgroup can be a scope's initial state, a freezer-only change (`cgroup.events` also notifies for `frozen`), or the setup helper that systemd forks into a delegated scope leaving before the launcher attaches. Those cases fall through to `systemctl` like a missing file.
 - `populated 1` keeps waiting with no query; the sleep restarts at the same interval without doubling it.
 - A missing or unparsable file falls through to one `systemctl show`, which decides as before.
 
 The poll stays armed beside the watch with today's intervals, so a missed or coalesced event costs no more than before. After attaching, one read closes the window between the last query and the watch: a flag already at `populated 0` sends the observer to `systemctl` instead of ending the wait, because an active scope with no members yet is not proof of an empty range.
 
-Establishment, "unit absent", `signal()` early wake, termination (`systemctl stop` after `TasksCurrent 0` on a requested termination), and terminal-scope paths are unchanged. The watcher closes when the observation settles or fails, on `cleanup()`, and on `terminateForHostExit()`. An aborted caller does not cancel the shared observation, so the watcher lives until the range is empty.
+A cgroup wake never acknowledges a `signal()`: a signal that arrives with an event pending still gets its immediate `systemctl` query, and the event is kept for the next sleep. Termination (`systemctl stop` after `TasksCurrent 0` on a requested termination) and the terminal-scope paths are unchanged. The watcher closes when the observation settles or fails, on `cleanup()`, and on `terminateForHostExit()`. A watcher released by an observation that failed can be attached again by the retried range wait; one that was silent or degraded stays as it was. An aborted caller does not cancel the shared observation, so the watcher lives until the range is empty.
+
+Establishment is corrected. The archived decision treated a loaded `inactive` or `failed` unit as proof of an empty range. Real systemd contradicts that: after `StartTransientUnit` creates the scope and before its start job runs, `systemctl show` reports `LoadState=loaded ActiveState=inactive TasksCurrent=[not set]` (5 of 12 launches on systemd 259), and the launcher then enters the scope and runs the target. A range wait that read that state resolved early, latched `stopped`, and left the target outside `terminate()`, SIGKILL escalation, disposal and host exit. A loaded unit that has not started now counts like an absent one while establishment is pending: the wait continues while the launcher runs with an unconsumed request, and ends when the launcher has exited without consuming it. A unit that has started (any state other than `inactive` or `failed`) or a consumed request establishes the scope, after which `inactive` or `failed` proves the range empty as before.
 
 A host without the unified hierarchy (cgroup v1 or hybrid, detected by a missing `cgroup.controllers`) and a scope collected before the watch starts use the poll silently. Any other fault, such as `EACCES`, inotify exhaustion, a watcher `error`, or an unparsable file, goes once per owner to `reportDegraded`; the runtime logs the first at `warn` and later ones at `debug`. The poll then observes alone.
 
@@ -39,6 +41,8 @@ With events the wait ends within a few milliseconds of the last member's exit; t
 ## Alternatives considered
 
 **D-Bus `PropertiesChanged` subscription.** It needs a D-Bus client dependency or a long-lived `busctl`/`dbus-monitor` child per scope, against zero extra processes for an inotify watch on one file.
+
+**Keep a loaded `inactive` unit as proof of an empty range.** It is the archived decision, and it holds for a unit that ran and ended. It fails for a unit whose start job is still queued, and the two read the same through `LoadState`, `ActiveState` and `TasksCurrent`; the consumed request and the launcher's liveness tell them apart.
 
 **Replace the poll with the watch.** A dropped event, an `IN_Q_OVERFLOW`, or a watch attached after the transition would hang `waitForExit()`. The poll bounds the worst case at today's behavior.
 

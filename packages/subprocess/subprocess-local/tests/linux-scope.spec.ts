@@ -467,21 +467,36 @@ describe('Linux scope establishment and quiescence', () => {
     result.owner.cleanup?.()
   })
 
-  it('uses manager-observed unit existence as establishment proof', async () => {
-    const { child, result } = launch(async () => activeUnit('inactive'))
+  it('uses a started unit as establishment proof', async () => {
+    const states = [activeUnit(), activeUnit('inactive')]
+    const { child, result } = launch(async () => states.shift() ?? activeUnit('inactive'))
     await expect(result.owner.waitForExit()).resolves.toBeUndefined()
     child.exit(1, null)
     await expect(result.direct).rejects.toThrow('before its bootstrap consumed')
     result.owner.cleanup?.()
   })
 
-  it('keeps waiting while the unit is absent and the direct launcher is still running', async () => {
-    const states = [missingUnit(), activeUnit('inactive')]
-    const { child, result } = launch(async () => states.shift() ?? activeUnit('inactive'))
-    await expect(result.owner.waitForExit()).resolves.toBeUndefined()
-    child.exit(1, null)
-    await expect(result.direct).rejects.toThrow('before its bootstrap consumed')
-    result.owner.cleanup?.()
+  it.each([
+    { name: 'inactive', states: () => [activeUnit('inactive')] },
+    { name: 'failed', states: () => [activeUnit('failed')] },
+    { name: 'inactive after an absent unit', states: () => [missingUnit(), activeUnit('inactive')] },
+  ])('keeps waiting while the unit is loaded but $name and the direct launcher is still running', async ({ states }) => {
+    // The start job can still be queued: a loaded unit proves only that the manager created it.
+    const queued = states()
+    const exitAtSleep = queued.length
+    const delays: number[] = []
+    const state: { child?: FakeChild } = {}
+    const launched = launch(async () => queued.shift() ?? activeUnit('inactive'), {
+      sleep: async (delayMs) => {
+        delays.push(delayMs)
+        if (delays.length === exitAtSleep) state.child?.exit(1, null)
+      },
+    })
+    state.child = launched.child
+    await expect(launched.result.owner.waitForExit()).resolves.toBeUndefined()
+    expect(delays).toEqual(Array.from({ length: exitAtSleep }, () => 50))
+    await expect(launched.result.direct).rejects.toThrow('before its bootstrap consumed')
+    launched.result.owner.cleanup?.()
   })
 
   it('treats status-zero not-found as pending until the direct launcher proves the range was never created', async () => {
@@ -889,6 +904,7 @@ describe('Linux scope establishment and quiescence', () => {
       return new EventEmitter()
     })
     const stopped = launch(undefined)
+    consumeLinuxLaunchRequest(stopped.requestPath)
     await expect(stopped.result.owner.waitForExit()).resolves.toBeUndefined()
     stopped.result.owner.cleanup?.()
 
