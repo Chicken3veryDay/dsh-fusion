@@ -7,6 +7,7 @@ import { z } from 'zod'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { contentHash, createIntent, same } from './delivery-state.ts'
 import type { AdmissionState, DeliveryCompletion, DeliveryId, DeliveryIntent, DeliveryOrigin, ReceiverState, TextDelivery } from './delivery-state.ts'
+import type { Admission } from './liveness.ts'
 import { TaskOrder } from './task-order.ts'
 
 /** Host receipt promises one logical instruction, never a claim, execution or effect settlement. */
@@ -45,8 +46,8 @@ interface Owner {
   participants: ReadonlyMap<SessionId, Session>
   projections: { admissions: ProjectionHandle<AdmissionState>; receivers: ProjectionHandle<ReceiverState> }
   signal: AbortSignal
-  /** Synchronous initiating-caller lifetime check; false once the caller or an ancestor is unloading. */
-  live: () => boolean
+  /** Shared task admission lifetime; disposal closes it before draining owned operations. */
+  admission: Admission
 }
 interface Reservation { intent: DeliveryIntent; promise: Promise<DeliveryReceipt> | null }
 const inboxLengths = z.object({ 'next-turn': z.array(z.unknown()), 'next-step': z.array(z.unknown()) })
@@ -92,7 +93,7 @@ export class DeliveryOwner implements DormantDelivery {
     try {
       this.signal.throwIfAborted()
       caller?.throwIfAborted()
-      if (!this.owner.live()) throw new Error('task caller is unloading')
+      if (!this.owner.admission.admits()) throw new Error('task admission is closed')
       if (!this.owner.participants.has(input.targetParticipantId)) throw new Error('target is outside this task')
       const state = this.rootState()
       const existing = this.reservations.get(input.deliveryId)
@@ -147,7 +148,7 @@ export class DeliveryOwner implements DormantDelivery {
   }
 
   reconcile(): Promise<void> {
-    if (!this.owner.live()) return Promise.reject(new DeliveryBlockedError(null, new Error('task caller is unloading')))
+    if (!this.owner.admission.admits()) return Promise.reject(new DeliveryBlockedError(null, new Error('task admission is closed')))
     return this.order.reserve(async () => {
       try {
         this.signal.throwIfAborted()
@@ -202,8 +203,9 @@ export class DeliveryOwner implements DormantDelivery {
     })
   }
 
-  /** Abort caller publication, then drain owned operations before writers can close. */
+  /** Close task admission and abort caller publication, then drain owned operations before writers can close. */
   dispose(): Promise<void> {
+    this.owner.admission.close()
     this.abort.abort(new Error('delivery owner disposed'))
     return this.order.close()
   }

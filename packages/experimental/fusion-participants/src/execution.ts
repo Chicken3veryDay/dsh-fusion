@@ -6,6 +6,7 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionWriterReservation } from '@deepseek-ai/dsh-session-persistence'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type { ExecutionHostProvider, TaskExecutionHost, ExecutionIssuer, ExecutionController, ExecutionRun, HeldAttempt, HeldProducer, ExecutionSettlement } from './execution-host.ts'
+import type { Admission } from './liveness.ts'
 import { openedSchema, grantedSchema, startedSchema, reconciledSchema } from './execution-state.ts'
 import type { ExecutionState, EffectStarted, EffectSettled, ExecutionAttemptId } from './execution-state.ts'
 
@@ -79,8 +80,8 @@ export interface ExecutionOwnerOptions {
   readonly participants: ReadonlyMap<SessionId, Session>
   readonly state: ReadonlyMap<Session, () => ExecutionState>
   readonly signal: AbortSignal
-  /** Synchronous initiating-caller lifetime check; false once the caller or an ancestor is unloading. */
-  readonly live: () => boolean
+  /** Shared task admission lifetime; disposal closes it synchronously before joining admitted work. */
+  readonly admission: Admission
   readonly adapters: readonly ExecutionAdapter[]
   /** Synchronously stop transport admission and return its actual cleanup join. */
   readonly drain: () => Promise<void>
@@ -90,7 +91,7 @@ export interface ExecutionOwnerOptions {
 export class TaskExecutionOwner {
   private readonly incarnation = openedSchema.shape.incarnation.parse(randomUUID())
   private readonly controller = Object.freeze({})
-  private enrollment: { provider: ExecutionHostProvider; current: () => void; done: Promise<TaskExecutionHost> } | undefined
+  private enrollment: { provider: ExecutionHostProvider; done: Promise<TaskExecutionHost> } | undefined
   private readonly held = new WeakMap<HeldAttempt, HeldRequest>()
   private readonly runs = new WeakMap<object, Run>()
   private readonly issuers = new Map<object, ExecutionAdapter>()
@@ -208,16 +209,16 @@ export class TaskExecutionOwner {
 
   /**
    * Enroll one exact host provider and re-pin released empty-open reservations before minting credentials.
+   * The caller binds the declaring lifetime into the shared admission before enrolling.
    * @param provider - trusted inert held producer provider, fixed for this incarnation.
-   * @param current - declaring fiber lifetime check, including withdrawal before effect cleanup runs.
    * @returns memoized exact-provider enrollment; failed enrollment cannot be replaced.
    */
-  enroll(provider: ExecutionHostProvider, current: () => void): Promise<TaskExecutionHost> {
+  enroll(provider: ExecutionHostProvider): Promise<TaskExecutionHost> {
     if (this.disposal !== undefined || this.abort.signal.aborted || this.options.signal.aborted) return Promise.reject(new ExecutionBlockedError('not-live'))
     if (this.enrollment !== undefined) return this.enrollment.provider === provider
       ? this.enrollment.done : Promise.reject(new ExecutionBlockedError('host-replacement'))
     const completion = Promise.withResolvers<TaskExecutionHost>()
-    this.enrollment = { provider, current, done: completion.promise }
+    this.enrollment = { provider, done: completion.promise }
     void (async () => {
       if (!this.ready || this.abort.signal.aborted || this.options.signal.aborted || this.disposal !== undefined
         || this.phase === 'revoking' || this.phase === 'stopped') throw new ExecutionBlockedError('not-live')
@@ -696,11 +697,12 @@ export class TaskExecutionOwner {
     return completion.promise
   }
 
-  /** Fence synchronously and join all work before the acquisition owner closes retained writers. */
+  /** Close task admission synchronously and join all work before the acquisition owner closes retained writers. */
   dispose(): Promise<void> {
     if (this.disposal !== undefined) return this.disposal
     const completion = Promise.withResolvers<void>()
     this.disposal = completion.promise
+    this.options.admission.close()
     this.options.signal.removeEventListener('abort', this.stop)
     this.abort.abort(new ExecutionBlockedError('disposed'))
     this.owner = null
@@ -737,10 +739,9 @@ export class TaskExecutionOwner {
     this.rootWriter = undefined
   }
 
-  /** Refuse new work once the initiating caller or the declaring host fiber is unloading. */
+  /** Refuse new work once any lifetime in the shared task admission has begun teardown. */
   private admitted(): void {
-    if (!this.options.live()) throw new ExecutionBlockedError('not-live')
-    this.enrollment?.current()
+    if (!this.options.admission.admits()) throw new ExecutionBlockedError('not-live')
   }
   private checkLive(agent: Agent): void {
     this.admitted()

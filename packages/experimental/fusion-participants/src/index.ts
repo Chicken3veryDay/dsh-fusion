@@ -22,7 +22,7 @@ import { TaskExecutionOwner, ExecutionBlockedError } from './execution.ts'
 import type { ExecutionSnapshot } from './execution.ts'
 import { executionProjection } from './execution-state.ts'
 import type { ExecutionState } from './execution-state.ts'
-import { fiberAdmits } from './liveness.ts'
+import { TaskAdmission, fiberChain } from './liveness.ts'
 import { rosterProjection } from './state.ts'
 import type { RosterState } from './state.ts'
 
@@ -83,10 +83,12 @@ export default class FusionParticipants extends Service {
   private readonly abort = new AbortController()
   private readonly pending = new Map<Promise<PreparedParticipants>, Promise<void>>()
   private readonly owned = new Map<PreparedParticipants, () => Promise<void>>()
-  private readonly executionOwners = new WeakMap<PreparedParticipants, TaskExecutionOwner>()
+  private readonly executionOwners = new WeakMap<PreparedParticipants, { owner: TaskExecutionOwner; admission: TaskAdmission }>()
   private readonly hosts = new WeakMap<PreparedParticipants, { provider: ExecutionHostProvider; caller: Context['fiber']; done: Promise<TaskExecutionHost> }>()
   private readonly release = Promise.withResolvers<void>()
   private readonly lifetime: { ctx: Context; resources: Scope }
+  /** Owner fiber and its ancestors; their teardown closes every task's admission. */
+  private readonly ownerChain: ReturnType<typeof fiberChain>
   private stopping: Promise<void> | undefined
   private readonly cleanupErrors: unknown[] = []
   private admissions!: ProjectionHandle<AdmissionState>
@@ -96,6 +98,7 @@ export default class FusionParticipants extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'fusionParticipants')
+    this.ownerChain = fiberChain(ctx.fiber)
     const resources = createScope(ctx, {}, { observeCleanup: true })
     this.lifetime = { ctx: resources.ctx, resources }
     ctx.effect(function* (this: FusionParticipants) {
@@ -157,8 +160,8 @@ export default class FusionParticipants extends Service {
   }
 
   /**
-   * Enroll one trusted held host on this exact prepared task. The declaring fiber owns withdrawal;
-   * its teardown fences admission immediately and joins cleanup before releasing dependencies.
+   * Enroll one trusted held host on this exact prepared task. The declaring fiber and its ancestors join the
+   * task admission lifetime; their teardown closes task admission immediately and joins cleanup before releasing dependencies.
    * No provider, capability or callback is transported through model tools or SDK requests.
    * @param task - exact live object returned by this service, never a roster or snapshot copy.
    * @param provider - one exact provider identity per task incarnation and declaring fiber.
@@ -169,8 +172,9 @@ export default class FusionParticipants extends Service {
     try {
       caller.fiber.assertActive()
       this.abort.signal.throwIfAborted()
-      const owner = this.executionOwners.get(task)
-      if (owner === undefined || !this.owned.has(task)) throw new ExecutionBlockedError('identity')
+      const entry = this.executionOwners.get(task)
+      if (entry === undefined || !this.owned.has(task)) throw new ExecutionBlockedError('identity')
+      const { owner, admission } = entry
       const previous = this.hosts.get(task)
       if (previous !== undefined) {
         if (previous.provider !== provider || previous.caller !== caller.fiber) throw new ExecutionBlockedError('host-replacement')
@@ -180,17 +184,15 @@ export default class FusionParticipants extends Service {
       }
       const completion = Promise.withResolvers<TaskExecutionHost>()
       this.hosts.set(task, { provider, caller: caller.fiber, done: completion.promise })
-      // Cordis emits `internal/status` synchronously when an owning fiber starts
-      // unloading, while effect cleanup itself is asynchronous. Fence the
-      // execution owner from that status edge so reentrant admission cannot
-      // race the later cleanup join.
+      const chain = fiberChain(caller.fiber)
+      admission.bind(chain)
+      // Cordis emits `internal/status` synchronously when a fiber starts unloading, while effect cleanup is
+      // asynchronous. Disposing the owner at that edge closes delivery and execution admission before the join.
       const removeStatus = caller.root.on('internal/status', (fiber) => {
-        if (fiber === caller.fiber && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
+        if (chain.has(fiber) && fiber.state === FiberState.UNLOADING) void owner.dispose().catch(() => {})
       })
       caller.effect(() => () => { removeStatus(); return owner.dispose() }, 'fusion-participants.execution-host')
-      void owner.enroll(provider, () => {
-        if (!fiberAdmits(caller.fiber)) throw new ExecutionBlockedError('not-live')
-      }).then(completion.resolve, completion.reject)
+      void owner.enroll(provider).then(completion.resolve, completion.reject)
       return completion.promise
     } catch (error: unknown) { return Promise.reject(error instanceof Error ? error : new ExecutionBlockedError('not-live', error)) }
   }
@@ -374,16 +376,12 @@ export default class FusionParticipants extends Service {
       }
       await this.barrier(root.session)
       signal.throwIfAborted()
-      // The initiating caller and its ancestors fence the task at the synchronous unload edge. Both owners
-      // recheck this at admission, so an observer that runs before the status fence cannot admit new work.
-      const ancestors = new Set<typeof this.ctx.fiber>()
-      for (let fiber = this.ctx.fiber; ; fiber = fiber.parent.fiber) {
-        ancestors.add(fiber)
-        if (fiber.parent.fiber === fiber) break
-      }
-      const live = (): boolean => [...ancestors].every(fiberAdmits)
+      // Every admission entry checks this one lifetime, so an observer that runs before a status fence cannot
+      // admit new work; host enrollment binds its declaring chain into the same lifetime.
+      const ancestors = fiberChain(this.ctx.fiber)
+      const admission = new TaskAdmission([this.ownerChain, ancestors], signal)
       delivery = new DeliveryOwner({
-        ctx: this.lifetime.ctx, root: root.session, signal, live,
+        ctx: this.lifetime.ctx, root: root.session, signal, admission,
         participants: new Map([...participants].map(([id, lease]) => [id, lease.session])),
         projections: { admissions: this.admissions, receivers: this.receivers },
       })
@@ -399,7 +397,7 @@ export default class FusionParticipants extends Service {
       removeFence = this.ctx.root.effect(() => () => { fence() }, 'fusion-participants.delivery-fence')
       const sessions = new Map([...participants].map(([id, lease]) => [id, lease.session]))
       execution = new TaskExecutionOwner({
-        ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, live, adapters: [],
+        ctx: this.lifetime.ctx, root: root.session, participants: sessions, signal, admission, adapters: [],
         drain: () => deliveryOwner.dispose(),
         state: new Map([root.session, ...sessions.values()].map(session => [session, this.executions.readerFor(session)])),
       })
@@ -419,7 +417,7 @@ export default class FusionParticipants extends Service {
         },
         dispose,
       })
-      this.executionOwners.set(prepared, executionOwner)
+      this.executionOwners.set(prepared, { owner: executionOwner, admission })
       setFence(fence)
       this.owned.set(prepared, drain)
       acquired.resolve()

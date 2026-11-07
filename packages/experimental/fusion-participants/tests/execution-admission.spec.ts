@@ -10,24 +10,24 @@ function provider(): ExecutionHostProvider {
 
 it('memoizes exact-provider enrollment and refuses enrollment before open or after disposal', async () => {
   const cold = await fixture({ open: false })
-  try { await expect(cold.owner.enroll(provider(), () => {})).rejects.toThrow('not-live') }
+  try { await expect(cold.owner.enroll(provider())).rejects.toThrow('not-live') }
   finally { await cold.dispose() }
   const f = await fixture()
   try {
     const hostProvider = provider()
-    const enrolled = f.owner.enroll(hostProvider, () => {})
-    expect(f.owner.enroll(hostProvider, () => {})).toBe(enrolled)
-    await expect(f.owner.enroll(provider(), () => {})).rejects.toThrow('host-replacement')
+    const enrolled = f.owner.enroll(hostProvider)
+    expect(f.owner.enroll(hostProvider)).toBe(enrolled)
+    await expect(f.owner.enroll(provider())).rejects.toThrow('host-replacement')
     await enrolled
     await f.owner.dispose()
-    await expect(f.owner.enroll(hostProvider, () => {})).rejects.toThrow('not-live')
+    await expect(f.owner.enroll(hostProvider)).rejects.toThrow('not-live')
   } finally { await f.dispose() }
 })
 
 it('refuses a held reservation when its exact writer cannot be reserved', async () => {
   const f = await fixture()
   try {
-    const host = await f.owner.enroll(provider(), () => {})
+    const host = await f.owner.enroll(provider())
     await host.grant(host.controller, f.agent.session.id)
     const run = host.bindRun(host.issuer, f.agent, new AbortController().signal)
     const spy = vi.spyOn(f.ctx.sessionPersistence, 'reserveSessionWriter').mockReturnValue({ kind: 'refused', reason: 'missing-writer' })
@@ -51,7 +51,7 @@ it('refuses host enrollment when an existing lifetime writer is fenced', async (
   } })
   try {
     fenced = true
-    await expect(f.owner.enroll(provider(), () => {})).rejects.toThrow('writer')
+    await expect(f.owner.enroll(provider())).rejects.toThrow('writer')
     fenced = false
     expect(f.owner.snapshot().owner).toBeNull()
   } finally { await f.dispose() }
@@ -74,7 +74,7 @@ it('removes earlier withdrawal registrations when another Session refuses regist
 
 it('refuses the legacy callback protocol for an enrolled held-only issuer', async () => {
   const f = await fixture()
-  const host = await f.owner.enroll(provider(), () => {})
+  const host = await f.owner.enroll(provider())
   await host.grant(host.controller, f.agent.session.id)
   const run = host.bindRun(host.issuer, f.agent, new AbortController().signal)
   await f.owner.attempt(run, 'inspect')

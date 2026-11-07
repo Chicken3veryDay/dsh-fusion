@@ -80,10 +80,9 @@ it.each(['declaring', 'enclosing'] as const)(
       await registration
       expect(f.control.bodies).toBe(0)
       expect(declaringState).toBe(route === 'declaring' ? FiberState.UNLOADING : FiberState.ACTIVE)
-      expect({ refused, registrations: f.control.registrations, cleanups: f.control.cleanups }).toEqual(
-        route === 'declaring' ? { refused: true, registrations: 0, cleanups: 0 }
-          : { refused: false, registrations: 1, cleanups: 1 },
-      )
+      // The declaring chain, including an enclosing scope, belongs to the task admission lifetime.
+      expect({ refused, registrations: f.control.registrations, cleanups: f.control.cleanups })
+        .toEqual({ refused: true, registrations: 0, cleanups: 0 })
       expect(f.control.identities.size).toBe(0)
     } finally {
       atUnload = undefined
