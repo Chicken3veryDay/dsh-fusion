@@ -341,15 +341,16 @@ export class TicketExecutionService extends Service {
     if (next.kind === 'handed' && previous.kind !== 'handed') void run.settlement?.catch(report)
   }
 
-  private withRecorder<T>(run: AttemptRun, message: string, operation: (recorder: TicketAttemptController) => Promise<T>): Promise<T> {
-    const recorder = run.recorder
+  private withRecorder<T>(
+    recorder: TicketAttemptController | undefined, message: string, operation: (recorder: TicketAttemptController) => Promise<T>,
+  ): Promise<T> {
     if (recorder === undefined) return Promise.reject(new TicketError(message, 'TICKET_RECOVERY_FAILED'))
     return operation(recorder)
   }
 
   /** The ledger takes the outcome synchronously, before any write that can fail, with the known workspace receipt. */
   private handOff(run: AttemptRun, outcome: AttemptOutcome): Promise<unknown> {
-    return this.withRecorder(run, 'Ticket attempt reached the ledger without an admission', (recorder) => {
+    return this.withRecorder(run.recorder, 'Ticket attempt reached the ledger without an admission', (recorder) => {
       const settlement = recorder.settle(outcome, run.workspace === undefined ? undefined : { workspaceReceipt: run.workspace })
       void settlement.catch(() => {})
       return settlement
@@ -465,7 +466,8 @@ export class TicketExecutionService extends Service {
   }
 
   /** Admit the durable attempt; an admission whose flush failed stays `unflushed` for an identical retry. The run enters
-   * `preparing` when the admission is appended, but nothing after it starts before the admission is durable. */
+   * `preparing` when the admission is appended, but nothing after it starts before the admission is durable.
+   * Each retry must receive a recorder from its own beginAttempt call before preparation continues. */
   private async admit(
     run: AttemptRun, root: Session, assignment: AssignmentSnapshot, request: PrepareTicketExecutionRequest,
   ): Promise<TicketAttemptController> {
@@ -505,7 +507,7 @@ export class TicketExecutionService extends Service {
       if (this.apply(run, { type: 'admission-unflushed' }).kind === 'handed') return await this.ended(run, error)
       throw error
     }
-    return this.withRecorder(run, 'Ticket admission did not grant an execution recorder', controller => Promise.resolve(controller))
+    return this.withRecorder(recorder, 'Ticket admission did not grant an execution recorder', controller => Promise.resolve(controller))
       .catch((error: unknown) => { this.apply(run, { type: 'admission-refused' }); throw error })
   }
 
@@ -869,7 +871,7 @@ export class TicketExecutionService extends Service {
   private recordUncertainty(run: AttemptRun, stage: UncertaintyStage, captured: AttemptOutcome | undefined): Promise<void> {
     const pending = run.recordings.get(stage)
     if (pending !== undefined) return pending
-    return this.withRecorder(run, 'Ticket attempt has no admission to record', (recorder) => {
+    return this.withRecorder(run.recorder, 'Ticket attempt has no admission to record', (recorder) => {
       const write = recorder.update(stage, { status: 'unknown', diagnostics: [uncertaintyDiagnostic(stage, captured)] }).then(() => {})
       run.recordings.set(stage, write)
       const { logger } = this
