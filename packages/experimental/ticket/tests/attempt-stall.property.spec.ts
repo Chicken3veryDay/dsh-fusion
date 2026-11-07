@@ -146,7 +146,7 @@ async function run(scenario: Case, serial: number): Promise<string[]> {
     if (afterRelease !== RESERVED) violations.push(`the unknown attempt was not refused by its reservation after the write completed: ${afterRelease}`)
     const current = ctx.tickets.get(root.session, ticket.id)
     await ctx.agents.withInitiator(root, () => ctx.tickets.settleAttempt(root.session, {
-      ticketId: ticket.id, assignmentId: current.assignments[0]!.id, attemptId: current.attempts[0]!.id,
+      ticketId: ticket.id, attemptId: current.attempts[0]!.id,
       expectedRevision: current.revision, actorId: root.id, operationId: TicketOperationId(`${suffix}-host-settled`), outcome: 'cancelled',
     }))
     // A disposed owner is replaced by a live worker with the same identity before admission is retried.
