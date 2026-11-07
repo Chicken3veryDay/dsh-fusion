@@ -25,6 +25,7 @@ import {
   linuxLaunchFilesFromLocator,
   writeLinuxStartupError,
 } from '../src/runner-protocol.ts'
+import { waitWithAbort } from '../src/managed-owner.ts'
 import { SUBPROCESS_RUNNER_ENV } from '../src/runner-launch.ts'
 import { bindManagedProcess } from '../src/spawn.ts'
 
@@ -148,6 +149,10 @@ function launch(
     ...overrides.runnerAvailable === undefined ? {} : { runnerAvailable: overrides.runnerAvailable },
     ...overrides.loadLinuxExecve === undefined ? {} : { loadLinuxExecve: overrides.loadLinuxExecve },
     ...overrides.sleep === undefined ? {} : { sleep: overrides.sleep },
+    ...overrides.cgroupRoot === undefined ? {} : { cgroupRoot: overrides.cgroupRoot },
+    ...overrides.watchFile === undefined ? {} : { watchFile: overrides.watchFile },
+    ...overrides.readFile === undefined ? {} : { readFile: overrides.readFile },
+    ...overrides.reportDegraded === undefined ? {} : { reportDegraded: overrides.reportDegraded },
   })
   const requestPath = options?.env?.[SUBPROCESS_RUNNER_ENV]
   if (requestPath === undefined) throw new Error('launch did not publish a request locator')
@@ -1220,4 +1225,364 @@ it('observes native task counts independently from process-tree membership', () 
     childProcessMocks.spawnSync.mockReturnValue({ status: 0, stdout: 'LoadState=loaded\nActiveState=active\nTasksCurrent=invalid\n' })
     expect(() => owner.inspectTaskCount?.()).toThrow('non-numeric')
   } finally { scope.cleanup() }
+})
+
+/** A watcher whose events the test delivers; counts close calls. */
+class FakeCgroupWatcher extends EventEmitter {
+  closed = 0
+
+  close(): void { this.closed += 1 }
+}
+
+/** Poll sleep that stays pending until the test elapses it or the observer cancels it. */
+function idleSleeper() {
+  const delays: number[] = []
+  const pending: Array<() => void> = []
+  const reached: Array<{ count: number; resolve: () => void }> = []
+  const sleep = (delayMs: number, signal?: AbortSignal): Promise<void> => {
+    delays.push(delayMs)
+    for (const waiter of reached) if (waiter.count <= delays.length) waiter.resolve()
+    return new Promise<void>((resolve) => {
+      pending.push(resolve)
+      signal?.addEventListener('abort', () => { resolve() }, { once: true })
+    })
+  }
+  return {
+    delays,
+    sleep,
+    /** Resolve once the observer has slept this many times. */
+    reached: (count: number): Promise<void> => new Promise<void>((resolve) => {
+      if (delays.length >= count) resolve()
+      else reached.push({ count, resolve })
+    }),
+    /** Let the latest pending poll delay elapse. */
+    elapse: (): void => { pending.at(-1)?.() },
+  }
+}
+
+const CONTROL_GROUP = '/dsh.slice/dsh-subprocess-test.scope'
+
+function groupUnit(tasks = '1', group: string | null = `ControlGroup=${CONTROL_GROUP}`) {
+  return {
+    status: 0,
+    stdout: `LoadState=loaded\nActiveState=active\nTasksCurrent=${tasks}\n${group === null ? '' : `${group}\n`}`,
+    stderr: '',
+  }
+}
+
+function inactiveGroupUnit() {
+  return { status: 0, stdout: 'LoadState=loaded\nActiveState=inactive\nControlGroup=\n', stderr: '' }
+}
+
+/** A cgroup v2 mount whose scope directory holds a `cgroup.events` file the test rewrites. */
+function cgroupTree(populated: '0' | '1' = '1') {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-cgroup-tree-'))
+  directories.push(root)
+  writeFileSync(join(root, 'cgroup.controllers'), 'cpu memory pids\n')
+  mkdirSync(join(root, CONTROL_GROUP), { recursive: true })
+  const eventsPath = join(root, CONTROL_GROUP, 'cgroup.events')
+  const setPopulated = (value: '0' | '1'): void => { writeFileSync(eventsPath, `populated ${value}\nfrozen 0\n`) }
+  setPopulated(populated)
+  return { root, eventsPath, setPopulated }
+}
+
+function watchedScope(
+  query: LinuxScopeInternals['systemctlQuery'],
+  overrides: LinuxScopeInternals = {},
+  tree = cgroupTree(),
+  established = true,
+) {
+  const watchers: FakeCgroupWatcher[] = []
+  const reports: string[] = []
+  const sleeper = idleSleeper()
+  const launched = launch(query, {
+    sleep: sleeper.sleep,
+    cgroupRoot: tree.root,
+    watchFile: () => {
+      const watcher = new FakeCgroupWatcher()
+      watchers.push(watcher)
+      return watcher
+    },
+    reportDegraded: (message) => { reports.push(message) },
+    ...overrides,
+  })
+  if (established) consumeLinuxLaunchRequest(launched.requestPath)
+  return { ...launched, tree, watchers, reports, sleeper, owner: launched.result.owner }
+}
+
+describe('Linux scope range exit by cgroup events', () => {
+  it('ends the wait on the populated-to-empty event without another systemctl query', async () => {
+    const query = vi.fn(async () => groupUnit())
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    expect(scope.watchers).toHaveLength(1)
+    scope.tree.setPopulated('0')
+    scope.watchers[0]?.emit('change', 'change', 'cgroup.events')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledOnce()
+    expect(scope.sleeper.delays).toEqual([50])
+    expect(scope.watchers[0]?.closed).toBe(1)
+    expect(scope.reports).toEqual([])
+    scope.owner.cleanup?.()
+  })
+
+  it('resolves immediately for an exited range and never watches it', async () => {
+    const scope = watchedScope(async () => inactiveGroupUnit())
+    await expect(scope.owner.waitForExit()).resolves.toBeUndefined()
+    expect(scope.watchers).toHaveLength(0)
+    expect(scope.sleeper.delays).toEqual([])
+    scope.owner.cleanup?.()
+  })
+
+  it('does not watch before the scope is established and watches once its cgroup is known', async () => {
+    const states = [missingUnit(), groupUnit()]
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), {}, cgroupTree(), false)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    expect(scope.watchers).toHaveLength(0)
+    scope.sleeper.elapse()
+    await scope.sleeper.reached(2)
+    expect(scope.watchers).toHaveLength(1)
+    expect(scope.sleeper.delays).toEqual([50, 50])
+    scope.tree.setPopulated('0')
+    scope.watchers[0]?.emit('change')
+    await expect(waiting).resolves.toBeUndefined()
+    scope.owner.cleanup?.()
+  })
+
+  it('keeps waiting without a query when an event finds the range still populated', async () => {
+    const query = vi.fn(async () => groupUnit())
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.watchers[0]?.emit('change')
+    await scope.sleeper.reached(2)
+    expect(query).toHaveBeenCalledOnce()
+    expect(scope.sleeper.delays).toEqual([50, 50])
+    scope.tree.setPopulated('0')
+    scope.watchers[0]?.emit('change')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledOnce()
+    scope.owner.cleanup?.()
+  })
+
+  it('consumes an event that arrived during a query before sleeping again', async () => {
+    const secondQuery = Promise.withResolvers<ReturnType<typeof groupUnit>>()
+    const queried = Promise.withResolvers<undefined>()
+    const query = vi.fn()
+      .mockResolvedValueOnce(groupUnit())
+      .mockImplementationOnce(() => { queried.resolve(undefined); return secondQuery.promise })
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.sleeper.elapse()
+    await queried.promise
+    scope.tree.setPopulated('0')
+    scope.watchers[0]?.emit('change')
+    secondQuery.resolve(groupUnit())
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.sleeper.delays).toEqual([50])
+    expect(query).toHaveBeenCalledTimes(2)
+    scope.owner.cleanup?.()
+  })
+
+  it('falls back to the poll when an event is coalesced or missed', async () => {
+    const states = [groupUnit(), groupUnit(), inactiveGroupUnit()]
+    const query = vi.fn(async () => states.shift() ?? inactiveGroupUnit())
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    // The range emptied but no event was delivered: only the poll can notice.
+    scope.tree.setPopulated('0')
+    scope.sleeper.elapse()
+    await scope.sleeper.reached(2)
+    expect(scope.sleeper.delays).toEqual([50, 100])
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(3)
+    expect(scope.watchers[0]?.closed).toBe(1)
+    scope.owner.cleanup?.()
+  })
+
+  it('lets systemctl decide when the range emptied before the watch was attached', async () => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const query = vi.fn(async () => states.shift() ?? inactiveGroupUnit())
+    const scope = watchedScope(query, {}, cgroupTree('0'))
+    await expect(scope.owner.waitForExit()).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(scope.sleeper.delays).toEqual([])
+    expect(scope.watchers[0]?.closed).toBe(1)
+    scope.owner.cleanup?.()
+  })
+
+  it('keeps today\'s poll for an active scope that is empty before any member entered', async () => {
+    const query = vi.fn(async () => groupUnit('0'))
+    const scope = watchedScope(query, {}, cgroupTree('0'))
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    // One recheck after attaching, one before sleeping: the empty file alone never ends the wait.
+    expect(query).toHaveBeenCalledTimes(2)
+    query.mockResolvedValue(inactiveGroupUnit())
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    scope.owner.cleanup?.()
+  })
+
+  it.each([
+    { name: 'no unified hierarchy', prepare: (root: string) => { rmSync(join(root, 'cgroup.controllers')) } },
+    { name: 'no ControlGroup reported', prepare: () => {}, group: 'ControlGroup=' },
+    { name: 'ControlGroup property missing', prepare: () => {}, group: null },
+  ] as Array<{ name: string; prepare: (root: string) => void; group?: string | null }>)('polls exactly as before with $name', async ({ prepare, group }) => {
+    const tree = cgroupTree()
+    prepare(tree.root)
+    const watchFile = vi.fn(() => new FakeCgroupWatcher())
+    const states = [groupUnit('1', group), inactiveGroupUnit()]
+    const scope = watchedScope(
+      async () => states.shift() ?? inactiveGroupUnit(),
+      { watchFile },
+      tree,
+    )
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    expect(watchFile).not.toHaveBeenCalled()
+    expect(scope.reports).toEqual([])
+    scope.owner.cleanup?.()
+  })
+
+  it.each([
+    { name: 'an unwatchable path', code: 'EACCES', reports: 1 },
+    { name: 'inotify exhaustion', code: 'ENOSPC', reports: 1 },
+    { name: 'a scope collected before the watch', code: 'ENOENT', reports: 0 },
+  ])('falls back to the poll and reports degradation for $name only when it is a fault', async ({ code, reports }) => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), {
+      watchFile: () => { throw Object.assign(new Error(`watch ${code}`), { code }) },
+    })
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.reports).toHaveLength(reports)
+    if (reports > 0) {
+      expect(scope.reports[0]).toContain('could not be watched')
+      expect(scope.reports[0]).toContain(`watch ${code}`)
+      expect(scope.reports[0]).toContain('polling systemctl only')
+    }
+    scope.owner.cleanup?.()
+  })
+
+  it('reports a watcher error once, closes the watcher, and keeps polling', async () => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const query = vi.fn(async () => states.shift() ?? inactiveGroupUnit())
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.watchers[0]?.emit('error', new Error('inotify queue overflow'))
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.reports).toHaveLength(1)
+    expect(scope.reports[0]).toContain('watcher failed')
+    expect(scope.reports[0]).toContain('inotify queue overflow')
+    expect(scope.watchers[0]?.closed).toBe(1)
+    expect(query).toHaveBeenCalledTimes(2)
+    scope.owner.cleanup?.()
+  })
+
+  it.each([
+    { name: 'a collected scope', mutate: (tree: ReturnType<typeof cgroupTree>) => { unlinkSync(tree.eventsPath) }, reports: 0 },
+    { name: 'a file without the flag', mutate: (tree: ReturnType<typeof cgroupTree>) => { writeFileSync(tree.eventsPath, 'frozen 0\n') }, reports: 1 },
+  ])('asks systemctl when an event finds $name', async ({ mutate, reports }) => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const query = vi.fn(async () => states.shift() ?? inactiveGroupUnit())
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    mutate(scope.tree)
+    scope.watchers[0]?.emit('change')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(scope.reports).toHaveLength(reports)
+    scope.owner.cleanup?.()
+  })
+
+  it('reports an unreadable events file and still lets systemctl decide', async () => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    let unreadable = false
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit(), {
+      readFile: (path) => {
+        if (!unreadable) return 'populated 1\n'
+        throw Object.assign(new Error(`read ${path}`), { code: 'EACCES' })
+      },
+    })
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    unreadable = true
+    scope.watchers[0]?.emit('change')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.reports).toHaveLength(1)
+    expect(scope.reports[0]).toContain('could not be read')
+    scope.owner.cleanup?.()
+  })
+
+  it('wakes on a termination request and keeps the empty-range release', async () => {
+    const states = [groupUnit(), groupUnit('0')]
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit())
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.owner.signal('SIGTERM')
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.spawnSync.mock.calls.map(call => (call as unknown as string[][])[1]?.[1])).toEqual(['kill', 'stop'])
+    expect(scope.watchers[0]?.closed).toBe(1)
+    scope.owner.cleanup?.()
+  })
+
+  it('keeps the shared observation and its watcher when one caller aborts, then closes on exit', async () => {
+    const scope = watchedScope(async () => groupUnit())
+    const controller = new AbortController()
+    const aborted = waitWithAbort(scope.owner.waitForExit(), controller.signal)
+    await scope.sleeper.reached(1)
+    controller.abort()
+    await expect(aborted).resolves.toBe(false)
+    expect(scope.watchers[0]?.closed).toBe(0)
+    scope.tree.setPopulated('0')
+    scope.watchers[0]?.emit('change')
+    await expect(scope.owner.waitForExit()).resolves.toBeUndefined()
+    expect(scope.watchers[0]?.closed).toBe(1)
+    await expect(scope.owner.waitForExit()).resolves.toBeUndefined()
+    scope.owner.cleanup?.()
+  })
+
+  it('closes the watcher when a later query fails', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce(groupUnit())
+      .mockRejectedValueOnce(new Error('manager lost'))
+    const scope = watchedScope(query)
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.sleeper.elapse()
+    await expect(waiting).rejects.toThrow('manager lost')
+    expect(scope.watchers[0]?.closed).toBe(1)
+    scope.owner.cleanup?.()
+  })
+
+  it.each(['cleanup', 'terminateForHostExit'] as const)('closes the watcher on %s while a wait is pending', async (exit) => {
+    const states = [groupUnit(), inactiveGroupUnit()]
+    const scope = watchedScope(async () => states.shift() ?? inactiveGroupUnit())
+    const waiting = scope.owner.waitForExit()
+    await scope.sleeper.reached(1)
+    scope.owner[exit]?.()
+    expect(scope.watchers[0]?.closed).toBe(1)
+    scope.sleeper.elapse()
+    await expect(waiting).resolves.toBeUndefined()
+    expect(scope.watchers[0]?.closed).toBe(1)
+    if (exit === 'terminateForHostExit') scope.owner.cleanup?.()
+  })
+
+  it('rejects a duplicate ControlGroup report', async () => {
+    const scope = watchedScope(async () => groupUnit('1', 'ControlGroup=/a\nControlGroup=/b'))
+    await expect(scope.owner.waitForExit()).rejects.toThrow('duplicate ControlGroup')
+    scope.owner.cleanup?.()
+  })
 })
