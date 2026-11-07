@@ -14,6 +14,7 @@ import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepsee
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
+import type { WireFailure } from './wire.ts'
 
 /**
  * Map pi-ai usage (reasoning folded into output by pi-ai).
@@ -68,16 +69,37 @@ function classifyPiAiError(message: string): string {
 }
 
 /**
+ * Classify a failure whose HTTP response was observed below pi-ai. The status
+ * decides what it can; the text decides only what a status cannot, such as a
+ * 429 that is an exhausted quota rather than a request-rate limit.
+ * @param status - HTTP status of the rejected response.
+ * @param message - pi-ai's flattened error text.
+ * @returns the harness failure code.
+ */
+function classifyWireStatus(status: number, message: string): string {
+  if (status === 401 || status === 403) return 'AUTH'
+  if (status === 402) return QUOTA_EXCEEDED_CODE
+  if (status === 429) return isQuotaExceededError(message) ? QUOTA_EXCEEDED_CODE : 'RATE_LIMIT'
+  if (status === 408) return 'TIMEOUT'
+  if (status === 400 || status === 413 || status === 422) return 'INVALID_REQUEST'
+  if (status >= 500) return 'SERVER'
+  return classifyPiAiError(message)
+}
+
+/**
  * Map a terminal pi-ai event to the harness finish reason.
  * @param message - the assistant message carried by the `done` or `error` event.
  * @param contextWindow - resolved catalog capacity for usage-based overflow detection.
+ * @param wire - the rejected response observed below pi-ai, when there was one;
+ *   its status, `Retry-After`, and request id become structured failure fields
+ *   and its status replaces text matching for the failure code.
  * @returns the mapped harness reason. Recognized error text, `stop` usage above
  *   `contextWindow`, and zero-output `length` usage that fills the window map
  *   to `CONTEXT_WINDOW_EXCEEDED`; a `stop` with no content blocks maps to an
  *   `EMPTY_RESPONSE` error, while terminal `pending` and `deferred` states map
  *   to non-retryable `PI_AI_ERROR` failures.
  */
-export function mapStopReason(message: AssistantMessage, contextWindow?: number): FinishReason {
+export function mapStopReason(message: AssistantMessage, contextWindow?: number, wire?: WireFailure): FinishReason {
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
@@ -122,7 +144,12 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
-      return { kind: 'error', failure: { message: text, code: classifyPiAiError(text) } }
+      return {
+        kind: 'error',
+        failure: wire === undefined
+          ? { message: text, code: classifyPiAiError(text) }
+          : { ...wire, message: text, code: classifyWireStatus(wire.status, text) },
+      }
     }
   }
 }
@@ -136,6 +163,8 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number)
  * @param callerSignal - caller cancellation state; an aborted caller makes any
  *   in-band terminal error an aborted finish.
  * @param requestedModel - request model identity recorded for durable replay.
+ * @param wire - reads the rejected response observed below pi-ai, if any; asked
+ *   only once the stream has failed.
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event, or
  *   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
@@ -146,6 +175,7 @@ export async function* toStreamChunks(
   contextWindow?: number,
   callerSignal?: AbortSignal,
   requestedModel?: string,
+  wire?: () => WireFailure | undefined,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
   // in stream order), but we track ids per index for tool calls.
@@ -232,6 +262,7 @@ export async function* toStreamChunks(
           reason: mapStopReason(
             callerSignal?.aborted ? { ...event.error, stopReason: 'aborted' } : event.error,
             contextWindow,
+            wire?.(),
           ),
         }
         return

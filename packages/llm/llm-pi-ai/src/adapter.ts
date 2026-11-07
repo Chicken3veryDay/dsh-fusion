@@ -62,6 +62,7 @@ import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
 import { toStreamChunks } from './stream.ts'
+import { isWireObservable, observeWire } from './wire.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
 
 /**
@@ -139,6 +140,7 @@ export interface PiAiAuthInjection {
 /** Copy profile stream knobs into pi-ai's common option vocabulary. */
 function profileOptions(
   profile: ResolvedPiAiProviderProfile,
+  model: Model<Api>,
   reasoning: ModelThinkingLevel | undefined,
   apiKey: string | undefined,
 ): SimpleStreamOptions {
@@ -148,7 +150,14 @@ function profileOptions(
     ...enabledReasoning === undefined ? {} : { reasoning: enabledReasoning },
     ...profile.thinkingBudgets === undefined ? {} : { thinkingBudgets: profile.thinkingBudgets },
     ...profile.cacheRetention === undefined ? {} : { cacheRetention: profile.cacheRetention },
-    ...profile.transport === undefined ? {} : { transport: profile.transport },
+    // pi-ai's Codex default (`auto`) opens a WebSocket and, when it fails before
+    // any output, re-sends the same request over SSE, and it retries a lost
+    // continuation or a connection limit once more: one visible attempt would be
+    // several unlogged requests. SSE is one request per attempt; the WebSocket
+    // stays available through an explicit `transport`.
+    ...profile.transport === undefined
+      ? model.api === 'openai-codex-responses' ? { transport: 'sse' as const } : {}
+      : { transport: profile.transport },
     ...profile.timeoutMs === undefined ? {} : { timeoutMs: profile.timeoutMs },
     ...profile.websocketConnectTimeoutMs === undefined ? {} : { websocketConnectTimeoutMs: profile.websocketConnectTimeoutMs },
     // The agent recovery layer owns visible attempts; one adapter call is one SDK attempt.
@@ -455,15 +464,21 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade, updates.systemPromptUpdate === 'in-history')
+      // pi-ai flattens a rejected response into error text; the observer keeps
+      // its status, Retry-After, and request id for the failure chunk.
+      const wire = isWireObservable(model.api) ? observeWire() : undefined
       const events = snapshot.models.streamSimple(model, context, {
-        ...profileOptions(profile, reasoning, apiKey),
+        ...profileOptions(profile, model, reasoning, apiKey),
+        ...wire === undefined ? {} : { fetch: wire.fetch },
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
         headers: requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders),
       })
-      const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
+      const iterator = toStreamChunks(
+        events, model.contextWindow, options.signal, model.id, wire === undefined ? undefined : () => wire.failure(),
+      )[Symbol.asyncIterator]()
       let exhausted = false
       try {
         while (true) {

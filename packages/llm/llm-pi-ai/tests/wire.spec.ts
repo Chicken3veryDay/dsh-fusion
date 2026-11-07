@@ -1,0 +1,245 @@
+/** Rejected provider responses reach the harness as structured failures, and one attempt is one request. */
+
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
+import type { FinishReason } from '@deepseek-ai/dsh-llm'
+import * as PiAi from '../src/index.ts'
+import { isWireObservable, observeWire, providerRetryAfterMs } from '../src/wire.ts'
+import { assemble } from './assemble.ts'
+import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
+
+afterEach(async () => {
+  await closeMockServers()
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
+
+describe('providerRetryAfterMs', () => {
+  const headers = (init: Record<string, string>): Headers => new Headers(init)
+
+  it('reads retry-after-ms before retry-after, in milliseconds', () => {
+    expect(providerRetryAfterMs(headers({ 'retry-after-ms': '1500', 'retry-after': '9' }))).toBe(1500)
+  })
+
+  it('reads delay-seconds', () => {
+    expect(providerRetryAfterMs(headers({ 'retry-after': '7' }))).toBe(7000)
+    expect(providerRetryAfterMs(headers({ 'retry-after': '0.5' }))).toBe(500)
+  })
+
+  it('reads an HTTP date in the future', () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-07T00:00:00Z') })
+    try {
+      expect(providerRetryAfterMs(headers({ 'retry-after': 'Sat, 07 Nov 2026 00:00:30 GMT' }))).toBe(30_000)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('ignores absent, past, zero, and unparseable delays', () => {
+    expect(providerRetryAfterMs(headers({}))).toBeUndefined()
+    expect(providerRetryAfterMs(headers({ 'retry-after': 'Thu, 01 Jan 1970 00:00:00 GMT' }))).toBeUndefined()
+    expect(providerRetryAfterMs(headers({ 'retry-after': '0' }))).toBeUndefined()
+    expect(providerRetryAfterMs(headers({ 'retry-after': 'soon' }))).toBeUndefined()
+    expect(providerRetryAfterMs(headers({ 'retry-after-ms': 'x', 'retry-after': '2' }))).toBe(2000)
+  })
+})
+
+describe('observeWire', () => {
+  it('returns each response untouched and remembers only a rejected one', async () => {
+    const ok = new Response('fine')
+    const rejected = new Response('no', {
+      status: 429, headers: { 'retry-after': '3', 'x-request-id': 'req_1' },
+    })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(ok).mockResolvedValueOnce(rejected)
+    const wire = observeWire()
+
+    expect(wire.failure()).toBeUndefined()
+    expect(await wire.fetch('http://x.invalid/1')).toBe(ok)
+    expect(wire.failure()).toBeUndefined()
+    expect(await wire.fetch('http://x.invalid/2')).toBe(rejected)
+    expect(wire.failure()).toEqual({ status: 429, providerRetryAfterMs: 3000, requestId: 'req_1' })
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+  })
+
+  it('records the status alone when the headers say nothing else', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('', { status: 402 }))
+    const wire = observeWire()
+
+    await wire.fetch('http://x.invalid')
+
+    expect(wire.failure()).toEqual({ status: 402 })
+  })
+
+  it('falls back to request-id and ignores an empty id', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('', { status: 500, headers: { 'request-id': 'abc' } }))
+      .mockResolvedValueOnce(new Response('', { status: 500, headers: { 'x-request-id': '' } }))
+    const wire = observeWire()
+
+    await wire.fetch('http://x.invalid')
+    expect(wire.failure()).toEqual({ status: 500, requestId: 'abc' })
+    await wire.fetch('http://x.invalid')
+    expect(wire.failure()).toEqual({ status: 500 })
+  })
+
+  it('lets a transport failure through without recording anything', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'))
+    const wire = observeWire()
+
+    await expect(wire.fetch('http://x.invalid')).rejects.toThrow('fetch failed')
+    expect(wire.failure()).toBeUndefined()
+  })
+
+  it('names the APIs whose pi-ai implementation takes a custom fetch', () => {
+    for (const api of ['openai-completions', 'openai-responses', 'openai-codex-responses', 'anthropic-messages']) {
+      expect(isWireObservable(api)).toBe(true)
+    }
+    for (const api of ['google-generative-ai', 'bedrock-converse-stream']) expect(isWireObservable(api)).toBe(false)
+  })
+})
+
+async function gateway(baseURL: string): Promise<Context> {
+  vi.stubEnv('PI_WIRE_KEY', 'fixture-key')
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(PiAi, { providers: { gateway: {
+    apiKeyEnv: 'PI_WIRE_KEY', api: 'openai-completions', baseURL, models: [{ id: 'm' }],
+  } } })
+  return ctx
+}
+
+async function finishOf(baseURL: string): Promise<FinishReason> {
+  const ctx = await gateway(baseURL)
+  return (await assemble(ctx, { provider: 'gateway', model: 'm', messages: [] })).finish
+}
+
+describe('a rejected response through the adapter', () => {
+  it.each([
+    [402, '{"error":{"message":"Payment required"}}', 'QUOTA', {}],
+    [429, '{"error":{"message":"Slow down"}}', 'RATE_LIMIT', { 'retry-after': '12', 'x-request-id': 'req_9' }],
+    [429, '{"error":{"message":"You exceeded your current quota"}}', 'QUOTA', {}],
+    [401, '{"error":{"message":"bad token"}}', 'AUTH', {}],
+    [403, '{"error":{"message":"forbidden"}}', 'AUTH', {}],
+    [408, '{"error":{"message":"slow client"}}', 'TIMEOUT', {}],
+    [422, '{"error":{"message":"unprocessable"}}', 'INVALID_REQUEST', {}],
+    [503, '{"error":{"message":"overloaded"}}', 'SERVER', {}],
+    [404, '{"error":{"message":"missing"}}', 'PI_AI_ERROR', {}],
+  ])('maps %i (%s) to %s with its structured facts', async (status, body, code, headers) => {
+    const server = await mockServer([{ status, body, headers }])
+
+    const finish = await finishOf(server.url)
+
+    expect(finish.kind).toBe('error')
+    expect(finish).toMatchObject({ failure: { code, status } })
+    // One attempt, one request: the adapter never retries underneath the agent.
+    expect(server.requests).toHaveLength(1)
+  })
+
+  it('carries Retry-After and the request id as failure fields', async () => {
+    const server = await mockServer([{
+      status: 429, body: '{"error":{"message":"Slow down"}}', headers: { 'retry-after': '12', 'x-request-id': 'req_9' },
+    }])
+
+    expect(await finishOf(server.url)).toMatchObject({
+      kind: 'error',
+      failure: { code: 'RATE_LIMIT', status: 429, providerRetryAfterMs: 12_000, requestId: 'req_9' },
+    })
+  })
+
+  it('keeps context overflow ahead of the status', async () => {
+    const server = await mockServer([{
+      status: 400,
+      body: '{"error":{"code":"context_length_exceeded","message":"This model\'s maximum context length is 8 tokens"}}',
+    }])
+
+    expect(await finishOf(server.url)).toMatchObject({ kind: 'error', failure: { code: 'CONTEXT_WINDOW_EXCEEDED' } })
+  })
+
+  it('still completes a healthy response', async () => {
+    const server = await mockServer([{ events: textEvents }])
+
+    expect(await finishOf(server.url)).toEqual({ kind: 'stop' })
+  })
+
+  it('leaves a transport failure without a status', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const url = server.url
+    await closeMockServers()
+
+    const finish = await finishOf(url)
+
+    expect(finish.kind).toBe('error')
+    expect(finish).not.toHaveProperty('failure.status')
+  })
+})
+
+describe('Codex Responses over a signed-in grant', () => {
+  const jwt = (claims: Record<string, unknown>): string =>
+    `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`
+  const account = jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acct_fixture' } })
+
+  async function codex(baseURL: string): Promise<Context> {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-wire-'))
+    onTestFinished(() => rm(dir, { recursive: true, force: true }))
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+      kind: 'grant',
+      payload: { type: 'oauth', access: account, refresh: 'r', expires: Date.now() + 3_600_000 },
+    }))
+    await ctx.plugin(PiAi, { providers: { 'openai-codex': { baseURL } } })
+    return ctx
+  }
+
+  it('sends one SSE request by default and maps a usage-limit rejection to a quota failure', async () => {
+    const server = await mockServer([{
+      status: 429,
+      body: JSON.stringify({ error: { code: 'usage_limit_reached', message: 'limit', resets_in_seconds: 60 } }),
+      headers: { 'retry-after': '60' },
+    }])
+    const ctx = await codex(server.url)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+
+    const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
+
+    expect(finish).toMatchObject({ kind: 'error', failure: { status: 429, providerRetryAfterMs: 60_000 } })
+    expect(server.paths).toEqual(['/codex/responses'])
+    expect(server.headers[0]).toMatchObject({ 'chatgpt-account-id': 'acct_fixture' })
+  })
+
+  it('never opens the WebSocket that would re-send a failed request over SSE', async () => {
+    const upgrades: string[] = []
+    const requests: string[] = []
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '')
+      response.writeHead(500, { 'content-type': 'application/json' })
+      response.end('{"error":{"message":"down"}}')
+    })
+    server.on('upgrade', (request, socket) => {
+      upgrades.push(request.url ?? '')
+      socket.destroy()
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    onTestFinished(async () => {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => { resolve() }))
+    })
+    const { port } = server.address() as AddressInfo
+    const ctx = await codex(`http://127.0.0.1:${String(port)}`)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+
+    const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
+
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'SERVER', status: 500 } })
+    expect(upgrades).toEqual([])
+    expect(requests).toEqual(['/codex/responses'])
+  })
+})
