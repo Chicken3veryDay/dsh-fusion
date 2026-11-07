@@ -42,6 +42,29 @@ describe('cheap route selection', () => {
     await expect(selectCuratorRoute(tiny, parentOn('tiny'), config)).rejects.toThrow(/1 mock models inspected/)
   })
 
+  it('compares against an unbounded window and the last effort when the parent\'s model reports no catalog entry', async () => {
+    const choice = await selectCuratorRoute(llm, parentOn('unlisted'), config)
+    expect(choice.route).toEqual({ provider: 'mock', model: 'small', reasoningEffort: 'low' })
+  })
+
+  it('keeps the smallest window when a larger model is listed after it', async () => {
+    const reversed = new CatalogAdapter([], { small: MODELS.small!, big: MODELS.big! })
+    const ordered = {
+      listModels: (p: string) => reversed.listModels(p),
+      resolveModelInfo: (p: string, m: string) => reversed.resolveModel(p, m),
+    }
+    const choice = await selectCuratorRoute(ordered, parentOn('big'), config)
+    expect(choice.route.model).toBe('small')
+    expect(choice.inspected).toBe(2)
+  })
+
+  it('names no reasoning effort for a chosen model that has none', async () => {
+    const lean = new CatalogAdapter([], { big: MODELS.big!, lean: { window: 40_000, efforts: [], defaultEffort: 'none' } })
+    const catalog = { listModels: (p: string) => lean.listModels(p), resolveModelInfo: (p: string, m: string) => lean.resolveModel(p, m) }
+    const choice = await selectCuratorRoute(catalog, parentOn('big'), config)
+    expect(choice.route).toEqual({ provider: 'mock', model: 'lean' })
+  })
+
   it('fails loudly when the parent has no route and bounds how many models it inspects', async () => {
     await expect(selectCuratorRoute(llm, { model: { current: () => undefined } }, config))
       .rejects.toMatchObject({ code: 'CONTEXT_MAP_NO_CHEAP_ROUTE' })

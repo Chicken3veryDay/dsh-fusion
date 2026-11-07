@@ -51,9 +51,12 @@ export class CatalogAdapter extends MockAdapter {
       name: model,
       ...entry === undefined ? {} : {
         context: { contextWindow: entry.window },
-        reasoning: {
-          efforts: entry.efforts.map(id => ({ id: ReasoningEffortId(id), name: id })),
-          defaultEffort: ReasoningEffortId(entry.defaultEffort),
+        // A model without efforts reports no reasoning metadata at all.
+        ...entry.efforts.length === 0 ? {} : {
+          reasoning: {
+            efforts: entry.efforts.map(id => ({ id: ReasoningEffortId(id), name: id })),
+            defaultEffort: ReasoningEffortId(entry.defaultEffort),
+          },
         },
       },
     })
