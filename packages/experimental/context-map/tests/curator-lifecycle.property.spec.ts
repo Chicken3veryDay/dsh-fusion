@@ -32,9 +32,15 @@ const OPS: readonly Op[] = [
 interface Faults {
   failModel: number
   failRoute: number
-  /** Set while the catalog read hangs; resolved when a read enters. */
-  hangRoute: PromiseWithResolvers<undefined> | undefined
+  /** Catalog reads for this provider hang; `entered` resolves when one starts. */
+  hangRoute: { readonly provider: string; readonly entered: PromiseWithResolvers<undefined> } | undefined
 }
+
+/**
+ * Provider of the temporary owner whose run is disposed during route selection. Only its catalog
+ * reads hang, so a run of another root, such as an assistant's own map, never stands in for it.
+ */
+const ROUTE_HANG_PROVIDER = 'route-hang'
 
 /** One world shared by the runs of a property; each run gets fresh agents and a fresh curator. */
 interface Harness {
@@ -56,11 +62,12 @@ async function harness(): Promise<Harness> {
     return textResponse('done')
   }
   const w = await world({ curator: { maxAttempts: MAX_ATTEMPTS }, script: Array.from({ length: 20_000 }, () => answer) })
+  w.ctx.llm.registerAdapter([ROUTE_HANG_PROVIDER], w.adapter)
   const h: Harness = { w, faults, curatorFiber: w.curatorFiber, interleave: undefined, runs: 0 }
   const listModels = w.adapter.listModels.bind(w.adapter)
   vi.spyOn(w.adapter, 'listModels').mockImplementation((provider) => {
-    if (faults.hangRoute !== undefined) {
-      faults.hangRoute.resolve(undefined)
+    if (faults.hangRoute?.provider === provider) {
+      faults.hangRoute.entered.resolve(undefined)
       return new Promise(() => {})
     }
     if (faults.failRoute > 0) {
@@ -93,6 +100,9 @@ async function harness(): Promise<Harness> {
   return h
 }
 
+/** Hang bound for awaited lifecycle steps; generous because specs share CPU with the rest of the suite. */
+const HANG_MS = 20_000
+
 function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   return Promise.race([
@@ -104,7 +114,7 @@ function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
 /** Wait until no evaluation or run for the given owners is in progress, bounded so a leak fails instead of hanging. */
 async function quiesce(w: World, owners: readonly Agent[]): Promise<void> {
   for (let round = 0; round < 3; round++) {
-    const settled = await within(Promise.all(owners.map(owner => w.ctx.contextCurator.idle(owner.id))), 2000)
+    const settled = await within(Promise.all(owners.map(owner => w.ctx.contextCurator.idle(owner.id))), HANG_MS)
     expect(settled, 'curator runs settle').toBe(true)
     await new Promise(resolve => setTimeout(resolve, 0))
   }
@@ -136,10 +146,17 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
   const { w, faults } = h
   const run = ++h.runs
   const owner = await w.spawnRoot(`owner-${String(run)}`)
+  /** Every root this run creates; each step waits for all their curator runs, not only the owner's. */
+  const roots: Agent[] = [owner]
   let assistant: Agent | undefined
   /** The assistant's claim is the newest grant until it is disposed. */
   let assistantHolds = false
   const map = (): ContextMapService => w.ctx.contextMap
+  const spawnAssistant = async (): Promise<Agent> => {
+    const created = await w.spawnRoot(`assistant-${String(run)}`)
+    roots.push(created)
+    return created
+  }
   try {
     await body()
   } finally {
@@ -149,8 +166,8 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
     faults.hangRoute = undefined
     if (assistant !== undefined) await w.disposeRoot(assistant)
     await w.disposeRoot(owner)
-    await quiesce(w, [owner])
-    expectNothingFor(w, owner)
+    await quiesce(w, roots)
+    for (const root of roots) expectNothingFor(w, root)
   }
 
   async function body(): Promise<void> {
@@ -171,12 +188,12 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           await preStep(w.ctx, owner)
           break
         case 'assistant-claim':
-          assistant ??= await w.spawnRoot(`assistant-${String(run)}`)
+          assistant ??= await spawnAssistant()
           await map().claim(owner, { holderId: assistant.id })
           assistantHolds = true
           break
         case 'abort-claim': {
-          assistant ??= await w.spawnRoot(`assistant-${String(run)}`)
+          assistant ??= await spawnAssistant()
           if (map().curatorOf(owner) === assistant.id) break
           h.interleave = { owner, holder: assistant, done: () => { assistantHolds = true } }
           await map().note(owner, { text: 'Interleaved fact.', cites: ['ref:package.json'] }).catch(() => {})
@@ -190,14 +207,15 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           break
         case 'owner-dispose': {
           const temporary = await w.spawnRoot(`temporary-${String(run)}-${String(Math.random()).slice(2, 8)}`)
+          temporary.model.select({ provider: ROUTE_HANG_PROVIDER, model: 'big' })
           const entered = Promise.withResolvers<undefined>()
-          faults.hangRoute = entered
+          faults.hangRoute = { provider: ROUTE_HANG_PROVIDER, entered }
           await map().note(temporary, { text: 'Temporary fact.', cites: ['ref:package.json'] })
-          expect(await within(entered.promise, 2000), 'the temporary owner\'s curator enters route selection').toBe(true)
+          expect(await within(entered.promise, HANG_MS), 'the temporary owner\'s curator enters route selection').toBe(true)
           expect(w.ctx.contextCurator.isRunning(temporary.id)).toBe(true)
           await w.disposeRoot(temporary)
           faults.hangRoute = undefined
-          expect(await within(w.ctx.contextCurator.idle(temporary.id), 1000), 'a disposed owner settles its run').toBe(true)
+          expect(await within(w.ctx.contextCurator.idle(temporary.id), HANG_MS), 'a disposed owner settles its run').toBe(true)
           expectNothingFor(w, temporary)
           break
         }
@@ -210,7 +228,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           {
             const before = claimsFor(owner)
             h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
-            await quiesce(w, [owner])
+            await quiesce(w, roots)
             // With no further owner step, the loading curator itself must pick up waiting work.
             const waiting = await map().curationWork(owner)
             const holder = map().curatorOf(owner)
@@ -228,10 +246,10 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
           break
         case 'compaction': {
-          await quiesce(w, [owner])
+          await quiesce(w, roots)
           owner.followup(createUserMessage({ content: [{ type: 'text', text: 'Conversation to compact.' }], source: { kind: 'user' } }))
           await owner.whenIdle()
-          await quiesce(w, [owner])
+          await quiesce(w, roots)
           const nodes = owner.session.surface.nodes
           const start = nodes.at(1)
           const end = nodes.at(-1)
@@ -247,7 +265,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           throw new Error(`unknown op ${String(unknown)}`)
         }
       }
-      await quiesce(w, [owner])
+      await quiesce(w, roots)
       const children = w.ctx.agents.list().filter(agent => agent.session.header.parentSession === owner.id)
       expect(children.length, 'at most one curator run per owner').toBeLessThanOrEqual(1)
       if (assistantHolds && assistant !== undefined) {
@@ -266,7 +284,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
     const before = claimsFor(owner)
     for (let step = 0; step < 2; step++) {
       await preStep(w.ctx, owner)
-      await quiesce(w, [owner])
+      await quiesce(w, roots)
     }
     const work = await map().curationWork(owner)
     const holder = map().curatorOf(owner)
@@ -285,4 +303,4 @@ it('keeps the curator lifecycle invariants over generated event sequences', asyn
     }),
     { numRuns: 200, seed: 20261106, endOnFailure: true },
   )
-}, 120_000)
+}, 600_000)
