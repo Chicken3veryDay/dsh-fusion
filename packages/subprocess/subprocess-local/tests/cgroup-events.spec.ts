@@ -109,4 +109,26 @@ describe('CgroupEventsWatch on the real filesystem', () => {
     expect(watchFile).toHaveBeenCalledTimes(2)
     expect(closed).toEqual([tree.events, tree.events])
   })
+
+  it('ignores events and errors from a watcher it already released', () => {
+    const tree = realTree()
+    const watchers: Array<{ listeners: Map<string, (error?: Error) => void>; closed: number }> = []
+    const watchFile = (): { on: (event: string, listener: (error?: Error) => void) => void; close: () => void } => {
+      const watcher = { listeners: new Map<string, (error?: Error) => void>(), closed: 0 }
+      watchers.push(watcher)
+      return { on: (event, listener) => { watcher.listeners.set(event, listener) }, close: () => { watcher.closed += 1 } }
+    }
+    const wake = vi.fn()
+    const report = vi.fn()
+    const watch = new CgroupEventsWatch({ cgroupRoot: tree.root, watchFile }, wake, report)
+    expect(watch.attach(tree.group)).toBe(true)
+    watch.detach()
+    expect(watch.attach(tree.group)).toBe(true)
+    watchers[0]?.listeners.get('change')?.()
+    watchers[0]?.listeners.get('error')?.(new Error('late'))
+    expect({ event: watch.hasEvent(), wakes: wake.mock.calls.length, reports: report.mock.calls.length })
+      .toEqual({ event: false, wakes: 0, reports: 0 })
+    expect(watchers.map(watcher => watcher.closed)).toEqual([1, 0])
+    watch.close()
+  })
 })

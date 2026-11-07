@@ -85,13 +85,14 @@ export class CgroupEventsWatch {
       if (!isMissing(error)) this.degrade('could not be watched', error)
       return false
     }
+    // A released watcher must not decide anything or release a later one.
     watcher.on('change', () => {
-      // A watcher released after a degraded read must not decide anything.
       if (this.watcher !== watcher) return
       this.pending = true
       this.wake()
     })
     watcher.on('error', (error) => {
+      if (this.watcher !== watcher) return
       this.release()
       this.degrade('watcher failed', error)
       this.wake()
