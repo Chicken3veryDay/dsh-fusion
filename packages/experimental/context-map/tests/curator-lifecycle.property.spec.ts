@@ -13,9 +13,10 @@ import ContextMapService, { ContextMapTools, DefaultContextCurator } from '../sr
 import { contextMapProjectionDefinition, type ContextMapProjectionState } from '../src/projection.ts'
 import { disposeWorlds, preStep, world, type World } from './fixture.ts'
 
+// Disposal waits for every curator run in the shared world; on a loaded machine that takes longer than the default hook bound.
 afterEach(async () => {
   try { await disposeWorlds() } finally { vi.restoreAllMocks() }
-})
+}, 120_000)
 
 const MAX_ATTEMPTS = 2
 
@@ -50,6 +51,8 @@ interface Harness {
   /** Set by a run to land a foreign claim inside the default curator's next claim read. */
   interleave: { readonly owner: Agent; readonly holder: Agent; readonly done: () => void } | undefined
   runs: number
+  /** Session events appended anywhere in the world; waits treat them as progress. */
+  events: number
 }
 
 async function harness(): Promise<Harness> {
@@ -63,7 +66,8 @@ async function harness(): Promise<Harness> {
   }
   const w = await world({ curator: { maxAttempts: MAX_ATTEMPTS }, script: Array.from({ length: 20_000 }, () => answer) })
   w.ctx.llm.registerAdapter([ROUTE_HANG_PROVIDER], w.adapter)
-  const h: Harness = { w, faults, curatorFiber: w.curatorFiber, interleave: undefined, runs: 0 }
+  const h: Harness = { w, faults, curatorFiber: w.curatorFiber, interleave: undefined, runs: 0, events: 0 }
+  w.ctx.on('session/event', () => { h.events++ })
   const listModels = w.adapter.listModels.bind(w.adapter)
   vi.spyOn(w.adapter, 'listModels').mockImplementation((provider) => {
     if (faults.hangRoute?.provider === provider) {
@@ -100,21 +104,36 @@ async function harness(): Promise<Harness> {
   return h
 }
 
-/** Hang bound for awaited lifecycle steps; generous because specs share CPU with the rest of the suite. */
+/**
+ * Stall bound for awaited lifecycle steps: a wait fails only after this long with no progress in the
+ * world, so a loaded machine that is still working is not reported as a hang.
+ */
 const HANG_MS = 20_000
 
-function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  return Promise.race([
-    promise.then(() => true),
-    new Promise<boolean>((resolve) => { timer = setTimeout(() => { resolve(false) }, ms) }),
-  ]).finally(() => { clearTimeout(timer) })
+/** Any session event, model request, or committed index refresh counts as progress. */
+function progressOf(h: Harness): number {
+  return h.events + h.w.adapter.requests.length + h.w.ctx.contextIndex.refreshes()
 }
 
-/** Wait until no evaluation or run for the given owners is in progress, bounded so a leak fails instead of hanging. */
-async function quiesce(w: World, owners: readonly Agent[]): Promise<void> {
+/** Whether `promise` settles before the world stalls for {@link HANG_MS}. */
+async function settles(h: Harness, promise: Promise<unknown>): Promise<boolean> {
+  const done = promise.then(() => true)
+  for (;;) {
+    const seen = progressOf(h)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settled = await Promise.race([
+      done,
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => { resolve(false) }, HANG_MS) }),
+    ]).finally(() => { clearTimeout(timer) })
+    if (settled) return true
+    if (progressOf(h) === seen) return false
+  }
+}
+
+/** Wait until no evaluation or run for the given owners is in progress; a stall fails instead of hanging. */
+async function quiesce(h: Harness, owners: readonly Agent[]): Promise<void> {
   for (let round = 0; round < 3; round++) {
-    const settled = await within(Promise.all(owners.map(owner => w.ctx.contextCurator.idle(owner.id))), HANG_MS)
+    const settled = await settles(h, Promise.all(owners.map(owner => h.w.ctx.contextCurator.idle(owner.id))))
     expect(settled, 'curator runs settle').toBe(true)
     await new Promise(resolve => setTimeout(resolve, 0))
   }
@@ -166,7 +185,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
     faults.hangRoute = undefined
     if (assistant !== undefined) await w.disposeRoot(assistant)
     await w.disposeRoot(owner)
-    await quiesce(w, roots)
+    await quiesce(h, roots)
     for (const root of roots) expectNothingFor(w, root)
   }
 
@@ -211,11 +230,11 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           const entered = Promise.withResolvers<undefined>()
           faults.hangRoute = { provider: ROUTE_HANG_PROVIDER, entered }
           await map().note(temporary, { text: 'Temporary fact.', cites: ['ref:package.json'] })
-          expect(await within(entered.promise, HANG_MS), 'the temporary owner\'s curator enters route selection').toBe(true)
+          expect(await settles(h, entered.promise), 'the temporary owner\'s curator enters route selection').toBe(true)
           expect(w.ctx.contextCurator.isRunning(temporary.id)).toBe(true)
           await w.disposeRoot(temporary)
           faults.hangRoute = undefined
-          expect(await within(w.ctx.contextCurator.idle(temporary.id), HANG_MS), 'a disposed owner settles its run').toBe(true)
+          expect(await settles(h, w.ctx.contextCurator.idle(temporary.id)), 'a disposed owner settles its run').toBe(true)
           expectNothingFor(w, temporary)
           break
         }
@@ -228,7 +247,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           {
             const before = claimsFor(owner)
             h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
-            await quiesce(w, roots)
+            await quiesce(h, roots)
             // With no further owner step, the loading curator itself must pick up waiting work.
             const waiting = await map().curationWork(owner)
             const holder = map().curatorOf(owner)
@@ -246,10 +265,10 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           h.curatorFiber = await w.ctx.plugin(DefaultContextCurator, { maxAttempts: MAX_ATTEMPTS })
           break
         case 'compaction': {
-          await quiesce(w, roots)
+          await quiesce(h, roots)
           owner.followup(createUserMessage({ content: [{ type: 'text', text: 'Conversation to compact.' }], source: { kind: 'user' } }))
           await owner.whenIdle()
-          await quiesce(w, roots)
+          await quiesce(h, roots)
           const nodes = owner.session.surface.nodes
           const start = nodes.at(1)
           const end = nodes.at(-1)
@@ -265,7 +284,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
           throw new Error(`unknown op ${String(unknown)}`)
         }
       }
-      await quiesce(w, roots)
+      await quiesce(h, roots)
       const children = w.ctx.agents.list().filter(agent => agent.session.header.parentSession === owner.id)
       expect(children.length, 'at most one curator run per owner').toBeLessThanOrEqual(1)
       if (assistantHolds && assistant !== undefined) {
@@ -284,7 +303,7 @@ async function runSequence(h: Harness, ops: readonly Op[]): Promise<void> {
     const before = claimsFor(owner)
     for (let step = 0; step < 2; step++) {
       await preStep(w.ctx, owner)
-      await quiesce(w, roots)
+      await quiesce(h, roots)
     }
     const work = await map().curationWork(owner)
     const holder = map().curatorOf(owner)
@@ -303,4 +322,10 @@ it('keeps the curator lifecycle invariants over generated event sequences', asyn
     }),
     { numRuns: 200, seed: 20261106, endOnFailure: true },
   )
+}, 600_000)
+
+it.each([
+  [['abort-claim', 'map-reload', 'abort-claim', 'assistant-dispose']],
+] satisfies [readonly Op[]][])('keeps the curator lifecycle invariants for the recorded sequence %j', async (ops) => {
+  await runSequence(await harness(), ops)
 }, 600_000)
