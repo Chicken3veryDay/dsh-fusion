@@ -1030,6 +1030,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   TicketId: 'packages/experimental/ticket/README.md',
   TicketView: 'packages/experimental/ticket/README.md',
   TicketAttemptSnapshot: 'packages/experimental/ticket/README.md',
+  TicketCommandAuthority: 'packages/experimental/ticket/README.md',
   CreateTicketRequest: 'packages/experimental/ticket/README.md',
   AssignTicketRequest: 'packages/experimental/ticket/README.md',
   ClaimAssignmentRequest: 'packages/experimental/ticket/README.md',

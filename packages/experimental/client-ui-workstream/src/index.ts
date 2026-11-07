@@ -47,7 +47,13 @@ function workstreamFailure(error: WorkstreamError): RemoteError {
  * @returns the typed failure the Remote rejects with.
  */
 function panelError(error: unknown): unknown {
-  if (error instanceof TicketError) return new RemoteError(ticketCode(error.code), error.message, {}, { cause: error })
+  if (error instanceof TicketError) {
+    // Workstream's commit-time authority refuses a revoked member inside Ticket's queue; it reads as the same membership denial.
+    if (error.code === 'TICKET_AUTHORITY' && error.cause instanceof WorkstreamError && error.cause.code === 'WORKSTREAM_UNAUTHORIZED') {
+      return new RemoteError('workstreamPanel/denied', error.message, { reason: 'not-member' }, { cause: error })
+    }
+    return new RemoteError(ticketCode(error.code), error.message, {}, { cause: error })
+  }
   if (error instanceof WorkstreamError) return workstreamFailure(error)
   return error
 }
@@ -165,7 +171,8 @@ export class WorkstreamPanelController extends TypertRemoteService {
     }
   }
 
-  /** Run one Ticket command on the root Ticket log after the caller's membership is confirmed. */
+  /** Run one Ticket command on the root Ticket log after the caller's membership is confirmed.
+   * The check here is an early refusal; Workstream's Ticket authority enforces membership again where Ticket commits. */
   private async command(agent: Agent, run: (root: Session) => Promise<void>): Promise<void> {
     try {
       const root = rootOf(agent)

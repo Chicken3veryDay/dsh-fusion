@@ -25,7 +25,7 @@ import {
 import type {
   BeginTicketAttemptRequest, UpdateTicketAttemptRequest, SettleTicketAttemptRequest, ReviseTicketRequest,
   SubmitTicketCandidateRequest, CheckTicketCandidateRequest, PlanTicketMissionRequest, MissionView,
-  TicketAttemptSnapshot, TicketMutationRequest, TicketAttemptController,
+  TicketAttemptSnapshot, TicketMutationRequest, TicketAttemptController, TicketCommand,
   AnswerTicketQuestionRequest,
   CloseTicketQuestionRequest,
   AskTicketQuestionRequest,
@@ -173,6 +173,22 @@ function admitCommand(attempt: TicketAttemptSnapshot, command: AttemptCommand): 
   if (decision !== 'allowed') throw new TicketError(`Attempt "${attempt.id}": ${decision.reason}`, 'TICKET_ATTEMPT_STATE')
 }
 
+/** Decides which coordinator a new Ticket names; see {@link TicketService.registerCoordinatorAuthority}. */
+type CoordinatorAuthority = (session: Session, requested: SessionId) => SessionId | undefined
+
+/** Decides whether an acting Session may commit one Ticket command; it throws a `TicketError` to refuse.
+ * @param session - root Session that owns the Ticket log.
+ * @param actorId - live Agent recorded as the command's actor; for `create`, the initiator that creates the Ticket.
+ * @param command - the command at its commit point.
+ */
+export type TicketCommandAuthority = (session: Session, actorId: SessionId, command: TicketCommand) => void
+
+/** The authorities that govern one queued command: those registered when it was admitted plus any registered since. */
+interface Governance {
+  readonly coordinators: readonly CoordinatorAuthority[]
+  readonly commands: readonly TicketCommandAuthority[]
+}
+
 function activeSlot(slot: ExecutionSlotSnapshot | undefined): boolean {
   return slot?.status === 'reserved' || slot?.status === 'running'
 }
@@ -196,8 +212,8 @@ export class TicketService extends Service {
   private readonly scopeReservations = new Map<string, { root: SessionId; attempt: TicketAttemptSnapshot; scopes: readonly WorkScope[] }>()
   private readonly recoveryFailures = new Set<SessionId>()
   private readonly tails = new Map<SessionId, Promise<void>>()
-  private readonly coordinatorAuthorities = new Set<(session: Session, requested: SessionId) => SessionId | undefined>()
-  private readonly assignmentAuthorities = new Set<(session: Session, assigneeId: SessionId) => void>()
+  private readonly coordinatorAuthorities = new Set<CoordinatorAuthority>()
+  private readonly commandAuthorities = new Set<TicketCommandAuthority>()
   private readonly admissionGuards = new Set<(reserved: readonly TicketAttemptSnapshot[]) => void>()
   /** Execution-admitted attempts this service owns until a durable flush shows them settled, keyed like scope reservations. */
   private readonly settlements = new Map<string, Settlement>()
@@ -248,9 +264,10 @@ export class TicketService extends Service {
    * `create` consults every authority inside the Session's command queue, in the same synchronous step that reads the
    * Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment.
    * The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that
-   * returns an id replaces it. An authority that throws fails the creation with nothing appended.
+   * returns an id replaces it. An authority that throws fails the creation with nothing appended. A creation admitted to
+   * the queue before the disposer runs is still decided by this authority.
    * @param authority - synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.
-   * @returns disposer that removes the authority.
+   * @returns disposer that removes the authority for creations admitted later.
    */
   registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void {
     this.coordinatorAuthorities.add(authority)
@@ -259,17 +276,49 @@ export class TicketService extends Service {
 
   /** Register an owner of assignment admission that may refuse an assignee.
    *
-   * `assign` consults every authority inside the Session's command queue, in the same synchronous step that follows the
-   * actor and CAS checks and precedes the append, so a refusal reflects the assignee's standing at the moment the
-   * assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.
+   * A narrowing of {@link registerCommandAuthority} to `assign`: the authority runs in the same queued step, after the
+   * actor, role and CAS checks and immediately before the append, so a refusal reflects the assignee's standing at the
+   * moment the assignment would commit rather than when the call was made. A Session with no registered authority accepts
+   * any assignee.
    * @param authority - synchronous decision for `assigneeId` in `session`; it throws a `TicketError` to refuse, which fails
    * the assignment with that error unchanged and appends nothing. Any other exception returns `TICKET_RECOVERY_FAILED`
    * with the original cause.
-   * @returns disposer that removes the authority.
+   * @returns disposer that removes the authority for later commands; a command already admitted stays governed by it.
    */
   registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void {
-    this.assignmentAuthorities.add(authority)
-    return () => { this.assignmentAuthorities.delete(authority) }
+    return this.registerCommandAuthority((session, _actorId, command) => {
+      if (command.kind === 'assign') authority(session, command.assigneeId)
+    })
+  }
+
+  /** Register an owner of acting authority that may refuse any Ticket command of a Session at its commit point.
+   *
+   * Every mutating command (`TicketCommandKind`) consults every authority inside the root Session's command queue, in the
+   * same synchronous step that follows the command's own actor, role and CAS checks and precedes the append, so the decision
+   * reflects the actor's standing when the command would commit rather than when the call was made or queued. Attempt
+   * writes made by the execution owner for settlement and recovery act as the system rather than as a member and are not
+   * consulted. A Session with no registered authority accepts every command.
+   *
+   * A command is governed by the authorities registered when it was admitted to the queue, plus any registered before it
+   * commits; disposing an authority only stops it from governing commands admitted later.
+   * @param authority - synchronous decision; it throws a `TicketError` to refuse, which fails the command with that error
+   * unchanged and appends nothing. Any other exception fails it with `TICKET_RECOVERY_FAILED` and the original cause.
+   * @returns disposer that removes the authority for later commands.
+   */
+  registerCommandAuthority(authority: TicketCommandAuthority): () => void {
+    this.commandAuthorities.add(authority)
+    return () => { this.commandAuthorities.delete(authority) }
+  }
+
+  /** Wait for the commands already admitted to one root's queue.
+   *
+   * Resolves once every command admitted for `session` before this call has committed or failed. Commands admitted later
+   * are not awaited, so a caller that must not be outrun stops its own admission first. An owner of a command authority
+   * calls this before it releases the state that authority reads.
+   * @param session - root Session whose command queue is awaited.
+   */
+  async whenIdle(session: Session): Promise<void> {
+    await this.tails.get(session.id)
   }
 
   /** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
@@ -321,7 +370,7 @@ export class TicketService extends Service {
   async create(session: Session, request: CreateTicketRequest): Promise<TicketView> {
     const caller = this.assertCaller(undefined)
     if (caller.session !== session) throw new TicketError('Ticket creation requires its technical owner', 'TICKET_AUTHORITY')
-    return await this.enqueue(session, async () => {
+    return await this.enqueue(session, async (governance) => {
       const state = this.state(session)
       if (state.tickets.length >= this.config.maxTickets) throw new TicketError('Ticket limit exhausted', 'TICKET_LIMIT')
       const id = request.id ?? TicketId(`ticket-${session.id}-${String(state.tickets.length + 1)}`)
@@ -329,7 +378,7 @@ export class TicketService extends Service {
       const subject = nonEmpty('subject', request.subject)
       const requested = request.coordinatorId ?? session.id
       let coordinatorId: SessionId
-      try { coordinatorId = this.authorizedCoordinator(session, requested) } catch (cause: unknown) {
+      try { coordinatorId = this.authorizedCoordinator(governance, session, requested) } catch (cause: unknown) {
         // An authority's own TicketError carries its handling code, such as a retryable TICKET_COORDINATOR_UNAVAILABLE.
         if (cause instanceof TicketError) throw cause
         throw new TicketError('Ticket coordinator authority failed', 'TICKET_RECOVERY_FAILED', { cause })
@@ -362,6 +411,7 @@ export class TicketService extends Service {
         createdAt: now,
         updatedAt: now,
       }
+      this.authorize(governance, session, caller.id, { kind: 'create', ticketId: id })
       await this.commit(session, ticket)
       return ticket
     })
@@ -374,11 +424,10 @@ export class TicketService extends Service {
    */
   async assign(session: Session, request: AssignTicketRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'assign', ticketId: request.ticketId, assigneeId: request.ownerId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       if (ticket.assignments.length >= this.config.maxAssignments) throw new TicketError('Assignment limit exhausted', 'TICKET_LIMIT')
       const subject = nonEmpty('assignment subject', request.subject)
-      this.authorizeAssignee(session, request.ownerId)
       const assignmentId = AssignmentId(`assignment-${ticket.id}-${String(ticket.assignments.length + 1)}`)
       const slotId = ExecutionSlotId(`slot-${ticket.id}-${String(ticket.executionSlots.length + 1)}`)
       const mode = request.executionMode ?? 'dedicated-process'
@@ -417,7 +466,7 @@ export class TicketService extends Service {
    */
   async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'claim', ticketId: request.ticketId }, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
       if (assignment.workScopes.some(scope => scope.access === 'write' && scope.exclusive)) throw new TicketError('Exclusive write Assignments require a workspace-bearing attempt instead of claim', 'TICKET_ATTEMPT_STATE')
       if (assignment.activeAttemptId !== undefined) throw new TicketError('admit a fresh attempt instead of claiming an Assignment with attempt history', 'TICKET_ATTEMPT_STATE')
@@ -451,7 +500,7 @@ export class TicketService extends Service {
    */
   async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'release', ticketId: request.ticketId }, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
       const active = ticket.attempts.find(attempt => attempt.id === assignment.activeAttemptId)
       if (active !== undefined) admitCommand(active, 'release')
@@ -474,7 +523,7 @@ export class TicketService extends Service {
    */
   async report(session: Session, request: ReportTicketRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'report', ticketId: request.ticketId }, (ticket) => {
       const assignment = this.assignment(ticket, request.assignmentId)
       if (assignment.ownerId !== request.actorId && ticket.coordinatorId !== request.actorId) throw new TicketError('only the assigned worker or coordinator may report', 'TICKET_AUTHORITY')
       if (!['assigned', 'claimed', 'running', 'blocked'].includes(assignment.status)) throw new TicketError(`Assignment "${assignment.id}" cannot report from ${assignment.status}`, 'TICKET_ASSIGNMENT_STATE')
@@ -519,7 +568,7 @@ export class TicketService extends Service {
    */
   async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'ask', ticketId: request.ticketId }, (ticket) => {
       this.assertParticipant(ticket, request.actorId, request.assignmentId)
       if (ticket.questions.length >= this.config.maxQuestions) throw new TicketError('question limit exhausted', 'TICKET_LIMIT')
       const question: TicketQuestionSnapshot = {
@@ -542,7 +591,7 @@ export class TicketService extends Service {
    */
   async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'answer', ticketId: request.ticketId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       const question = this.question(ticket, request.questionId)
       if (question.status !== 'open') throw new TicketError('only an open question may be answered', 'TICKET_INVALID_INPUT')
@@ -560,7 +609,7 @@ export class TicketService extends Service {
    */
   async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'close-question', ticketId: request.ticketId }, (ticket) => {
       const question = this.question(ticket, request.questionId)
       if (request.actorId !== question.authorId) this.assertCoordinator(ticket, request.actorId)
       if (question.status === 'closed') throw new TicketError('question is already closed', 'TICKET_INVALID_INPUT')
@@ -597,7 +646,7 @@ export class TicketService extends Service {
    */
   async attention(session: Session, request: RequestTicketAttentionRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'attention', ticketId: request.ticketId }, (ticket) => {
       this.assertParticipant(ticket, request.actorId, request.assignmentId)
       if (ticket.attentions.length >= this.config.maxAttentions) throw new TicketError('attention limit exhausted', 'TICKET_LIMIT')
       const attention: TicketAttentionSnapshot = {
@@ -620,7 +669,7 @@ export class TicketService extends Service {
    */
   async block(session: Session, request: BlockTicketRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'block', ticketId: request.ticketId }, (ticket) => {
       this.assertParticipant(ticket, request.actorId)
       if (ticket.attentions.length >= this.config.maxAttentions) throw new TicketError('attention limit exhausted', 'TICKET_LIMIT')
       return { ...ticket, status: 'blocked', attentions: [...ticket.attentions, {
@@ -640,7 +689,7 @@ export class TicketService extends Service {
    */
   async handoff(session: Session, request: HandoffCoordinatorRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'handoff', ticketId: request.ticketId }, (ticket) => {
       if (request.actorId !== session.id) this.assertCoordinator(ticket, request.actorId)
       nonEmpty('newCoordinatorId', request.newCoordinatorId)
       const coordinator = this.ctx.agents.get(request.newCoordinatorId)
@@ -686,7 +735,7 @@ export class TicketService extends Service {
    */
   async revise(session: Session, request: ReviseTicketRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'revise', ticketId: request.ticketId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       const { currentCandidateId: _candidate, ...withoutCandidate } = ticket
       return {
@@ -940,7 +989,7 @@ export class TicketService extends Service {
    */
   async submitCandidate(session: Session, request: SubmitTicketCandidateRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'submit-candidate', ticketId: request.ticketId }, (ticket) => {
       this.assertParticipant(ticket, request.actorId)
       if (request.specRevision !== ticket.specification.revision) throw new TicketError('candidate specification is stale', 'TICKET_STALE_REVISION')
       if (ticket.candidates.length >= this.config.maxReports) throw new TicketError('candidate limit exhausted', 'TICKET_LIMIT')
@@ -967,7 +1016,7 @@ export class TicketService extends Service {
    */
   async checkCandidate(session: Session, request: CheckTicketCandidateRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'check-candidate', ticketId: request.ticketId }, (ticket) => {
       this.assertParticipant(ticket, request.actorId)
       if (ticket.currentCandidateId !== request.candidateId || ticket.specification.revision !== request.specRevision) throw new TicketError('check candidate or specification is stale', 'TICKET_STALE_REVISION')
       const criterion = ticket.specification.acceptanceCriteria.find(item => item.id === request.criterionId)
@@ -990,7 +1039,7 @@ export class TicketService extends Service {
    */
   async planMission(session: Session, request: PlanTicketMissionRequest): Promise<TicketView> {
     this.assertCaller(request.actorId)
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'plan-mission', ticketId: request.ticketId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       const previous = ticket.missionPlans.find(plan => plan.id === request.missionId)
       if ((previous?.revision ?? 0) !== request.expectedPlanRevision) throw new TicketError('Mission plan revision changed', 'TICKET_STALE_REVISION')
@@ -1043,14 +1092,15 @@ export class TicketService extends Service {
   }
 
   private async attemptOperation<T extends TicketMutationRequest & { readonly operationId: TicketOperationId }>(
-    session: Session, request: T, kind: string, update: (ticket: TicketSnapshot) => TicketSnapshot, options: AttemptOperationOptions = {},
+    session: Session, request: T, kind: 'begin' | 'update' | 'settle', update: (ticket: TicketSnapshot) => TicketSnapshot,
+    options: AttemptOperationOptions = {},
   ): Promise<TicketView> {
     const { executionOwned = false } = options
     if (!executionOwned && request.operationId.startsWith('ticket-execution:')) throw new TicketError('Operation prefix ticket-execution: is reserved for execution facts; choose another operation identity', 'TICKET_INVALID_INPUT')
     const { expectedRevision: _revision, ...payload } = request
     const legacyFingerprint = operationFingerprint({ kind, ...payload })
     const fingerprint = createHash('sha256').update(legacyFingerprint).digest('hex')
-    return await this.enqueue(session, async () => {
+    return await this.enqueue(session, async (governance) => {
       const ticket = this.get(session, request.ticketId)
       if (!executionOwned) this.assertParticipant(ticket, request.actorId)
       const operation = ticket.operations.find(item => item.id === request.operationId)
@@ -1097,6 +1147,7 @@ export class TicketService extends Service {
           },
         }],
       }
+      if (!executionOwned) this.authorize(governance, session, request.actorId, { kind: `${kind}-attempt`, ticketId: request.ticketId })
       this.append(session, next)
       options.recorded?.()
       await this.durable(session)
@@ -1128,7 +1179,7 @@ export class TicketService extends Service {
   }
 
   private async updateAttention(session: Session, request: UpdateTicketAttentionRequest, status: 'acknowledged' | 'resolved'): Promise<TicketView> {
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: status === 'resolved' ? 'resolve' : 'acknowledge', ticketId: request.ticketId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       const attention = ticket.attentions.find(item => item.id === request.attentionId)
       if (attention === undefined) throw new TicketError(`unknown attention "${request.attentionId}"`, 'TICKET_INVALID_INPUT')
@@ -1142,7 +1193,7 @@ export class TicketService extends Service {
   }
 
   private async end(session: Session, request: EndTicketRequest, status: Extract<TicketStatus, 'completed' | 'failed' | 'cancelled'>): Promise<TicketView> {
-    return await this.mutate(session, request.ticketId, request.expectedRevision, (ticket) => {
+    return await this.mutate(session, request, { kind: 'end', ticketId: request.ticketId }, (ticket) => {
       this.assertCoordinator(ticket, request.actorId)
       if (ticket.terminalOutcome !== undefined || ticket.status === 'completed' || ticket.status === 'failed' || ticket.status === 'cancelled') throw new TicketError(`Ticket "${ticket.id}" is already terminal`, 'TICKET_TERMINAL')
       for (const attempt of ticket.attempts) admitCommand(attempt, 'end-ticket')
@@ -1166,11 +1217,11 @@ export class TicketService extends Service {
 
   private async mutate(
     session: Session,
-    id: TicketId,
-    expectedRevision: number,
+    { ticketId: id, expectedRevision, actorId }: TicketMutationRequest,
+    command: TicketCommand,
     update: (ticket: TicketSnapshot) => TicketSnapshot,
   ): Promise<TicketView> {
-    return await this.enqueue(session, async () => {
+    return await this.enqueue(session, async (governance) => {
       const ticket = this.get(session, id)
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new TicketError('expectedRevision must be a positive safe integer', 'TICKET_INVALID_INPUT')
       if (ticket.revision !== expectedRevision) throw new TicketError(`Ticket "${id}" is at revision ${String(ticket.revision)}, expected ${String(expectedRevision)}`, 'TICKET_STALE_REVISION')
@@ -1183,14 +1234,18 @@ export class TicketService extends Service {
         createdAt: ticket.createdAt,
         updatedAt: Date.now(),
       }
+      this.authorize(governance, session, actorId, command)
       await this.commit(session, next)
       return next
     })
   }
 
-  private async enqueue<T>(session: Session, operation: () => Promise<T>, executionOwned = false): Promise<T> {
+  /** Queue one command on the root's tail. The governing authorities are fixed here, at admission, so removing an authority
+   * later never leaves a command that was already queued ungoverned. */
+  private async enqueue<T>(session: Session, operation: (governance: Governance) => Promise<T>, executionOwned = false): Promise<T> {
     const prior = this.tails.get(session.id) ?? Promise.resolve()
-    const run = () => { if (!executionOwned) this.assertCaller(undefined); return operation() }
+    const admitted: Governance = { coordinators: [...this.coordinatorAuthorities], commands: [...this.commandAuthorities] }
+    const run = () => { if (!executionOwned) this.assertCaller(undefined); return operation(admitted) }
     const next = prior.then(run, run)
     this.tails.set(session.id, next.then(() => undefined, () => undefined))
     return await next
@@ -1339,19 +1394,21 @@ export class TicketService extends Service {
     return assignment
   }
 
-  private authorizedCoordinator(session: Session, requested: SessionId): SessionId {
-    for (const authority of this.coordinatorAuthorities) {
+  /** The coordinator a new Ticket names: the first replacement a governing authority decides, else the requested one. */
+  private authorizedCoordinator(governance: Governance, session: Session, requested: SessionId): SessionId {
+    for (const authority of new Set([...governance.coordinators, ...this.coordinatorAuthorities])) {
       const coordinatorId = authority(session, requested)
       if (coordinatorId !== undefined) return coordinatorId
     }
     return requested
   }
 
-  private authorizeAssignee(session: Session, assigneeId: SessionId): void {
-    for (const authority of this.assignmentAuthorities) {
-      try { authority(session, assigneeId) } catch (cause: unknown) {
+  /** Consult every governing command authority, synchronously, immediately before the append. */
+  private authorize(governance: Governance, session: Session, actorId: SessionId, command: TicketCommand): void {
+    for (const authority of new Set([...governance.commands, ...this.commandAuthorities])) {
+      try { authority(session, actorId, command) } catch (cause: unknown) {
         if (cause instanceof TicketError) throw cause
-        throw new TicketError('Ticket assignment authority failed', 'TICKET_RECOVERY_FAILED', { cause })
+        throw new TicketError('Ticket command authority failed', 'TICKET_RECOVERY_FAILED', { cause })
       }
     }
   }

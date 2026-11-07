@@ -78,6 +78,8 @@ export class WorkstreamService extends Service {
   /** Running message deliveries by recipient, which `stop` lets finish before it drains that recipient. */
   private readonly deliveriesTo = new Map<SessionId, Set<Promise<unknown>>>()
   private readonly lifetime = new AbortController()
+  /** Disposers of the Ticket authorities this service registered; `shutdown` runs them before it awaits Ticket's queues. */
+  private readonly withdrawals: Array<() => void | Promise<void>> = []
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'workstreams')
@@ -93,7 +95,7 @@ export class WorkstreamService extends Service {
     // admitted while recovered snapshots are not yet readable would record the owner and never be reconciled.
     // A direct `tickets.create` that defaults to the owner names the sitting coordinator, so it cannot disagree with the snapshot.
     // An explicit other coordinator stays the caller's choice; `handoff` moves Tickets held by any member.
-    this.ctx.effect(() => this.ctx.tickets.registerCoordinatorAuthority((session, requested) => {
+    this.withdrawals.push(this.ctx.effect(() => this.ctx.tickets.registerCoordinatorAuthority((session, requested) => {
       if (!this.ready) {
         if (requested !== session.id) return undefined
         const message = 'Workstream is still loading; retry the Ticket creation'
@@ -101,10 +103,10 @@ export class WorkstreamService extends Service {
       }
       const snapshot = this.projection.stateOf(session).snapshot
       return snapshot !== null && requested === snapshot.ownerSessionId ? snapshot.coordinatorId : undefined
-    }), 'workstreams.ticketCoordinator()')
+    }), 'workstreams.ticketCoordinator()'))
     // The same active-child rule as `assignTicket`, checked where Ticket appends, so a stop that completes while an assignment
     // waits in Ticket's queue refuses it. The owner and inactive members are refused; a root without a Workstream is not governed.
-    this.ctx.effect(() => this.ctx.tickets.registerAssignmentAuthority((session, assigneeId) => {
+    this.withdrawals.push(this.ctx.effect(() => this.ctx.tickets.registerAssignmentAuthority((session, assigneeId) => {
       if (!this.ready) {
         const message = 'Workstream is still loading; retry the Ticket assignment'
         throw new TicketError(message, 'TICKET_COORDINATOR_UNAVAILABLE', { cause: new WorkstreamError(message, 'WORKSTREAM_NOT_READY') })
@@ -114,7 +116,25 @@ export class WorkstreamService extends Service {
       const member = snapshot.members.find(candidate => candidate.id === assigneeId)
       if (member?.phase === 'active' && member.id !== snapshot.ownerSessionId) return
       throw new TicketError(`${assigneeId} is not an active member of this Workstream; assign an active child member`, 'TICKET_AUTHORITY')
-    }), 'workstreams.ticketAssignment()')
+    }), 'workstreams.ticketAssignment()'))
+    // Who may act: the same rule as `requireMembership`, checked where Ticket appends. `stop` revokes membership when it
+    // records `stopping`, so a command from that member that waits in Ticket's queue past the revocation is refused. The
+    // execution owner's settlement and recovery writes act as the system and Ticket does not consult authorities for them.
+    this.withdrawals.push(this.ctx.effect(() => this.ctx.tickets.registerCommandAuthority((session, actorId) => {
+      // The root Session is always its Workstream's active owner, so its commands need no snapshot, even while loading.
+      if (actorId === session.id) return
+      if (!this.ready) {
+        const message = 'Workstream is still loading; retry the Ticket command'
+        throw new TicketError(message, 'TICKET_COORDINATOR_UNAVAILABLE', { cause: new WorkstreamError(message, 'WORKSTREAM_NOT_READY') })
+      }
+      const snapshot = this.projection.stateOf(session).snapshot
+      if (snapshot === null) return
+      const member = snapshot.members.find(candidate => candidate.id === actorId && candidate.phase === 'active')
+      const direct = this.ctx.agents.get(actorId)?.session.header.parentSession === session.id
+      if (member !== undefined && direct) return
+      const message = `${actorId} is not an active member of this Workstream`
+      throw new TicketError(message, 'TICKET_AUTHORITY', { cause: new WorkstreamError(message, 'WORKSTREAM_UNAUTHORIZED') })
+    }), 'workstreams.ticketActor()'))
     this.projection = await this.ctx.sessionProjections.register(workstreamProjectionDefinition)
     this.ready = true
     this.ctx.effect(() => () => this.shutdown(), 'workstreams.runtime()')
@@ -670,9 +690,19 @@ export class WorkstreamService extends Service {
     void tail.then(() => { this.pending.delete(run); if (this.tails.get(root) === tail) this.tails.delete(root) })
     return run
   }
+  /** Unload in an explicit, awaited order rather than sibling-effect order.
+   *
+   * Ticket binds each queued command to the authorities registered when it was admitted, so withdrawing the registrations
+   * first ends Workstream governance only for Ticket commands admitted afterwards. Those admitted earlier still run
+   * Workstream's rules, and shutdown awaits them before it drains the members those rules read. */
   private async shutdown(): Promise<void> {
+    // Workstream methods refuse from here on.
     this.lifetime.abort(new WorkstreamError('Workstream service is stopping', 'WORKSTREAM_DISPOSED'))
+    await Promise.allSettled(this.withdrawals.splice(0).map(async (withdraw) => { await withdraw() }))
     await Promise.allSettled([...this.pending])
+    // Ticket commands already admitted for a Workstream root commit or fail while their members are still live.
+    await Promise.allSettled(this.ctx.sessions.list().filter(session => this.projection.stateOf(session).snapshot !== null)
+      .map(session => this.ctx.tickets.whenIdle(session)))
     const results = await Promise.allSettled(this.ctx.agents.list().map(async (owner) => {
       const snapshot = this.projection.stateOf(owner.session).snapshot
       if (snapshot !== null) await this.ctx.subagents.drainChildren(owner, snapshot.members.filter(member => member.role ===

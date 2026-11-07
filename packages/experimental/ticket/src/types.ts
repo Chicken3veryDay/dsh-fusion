@@ -595,3 +595,19 @@ export interface TicketAttemptController {
    */
   settle(outcome: 'succeeded' | 'failed' | 'cancelled', facts?: Pick<SettleTicketAttemptRequest, 'workspaceReceipt'>): Promise<TicketView>
 }
+
+/** Every mutating Ticket command an acting Session can issue; a command authority switches on it.
+ *
+ * Each mutating `TicketService` method maps to one kind: `complete`, `fail` and `cancel` are `end`;
+ * `acknowledgeAttention` and `resolveAttention` are `acknowledge` and `resolve`; `beginAttempt`, `updateAttempt` and
+ * `settleAttempt` are the `*-attempt` kinds; every other method uses its kebab-case name.
+ */
+export type TicketCommandKind =
+  | 'create' | 'assign' | 'claim' | 'release' | 'report' | 'ask' | 'answer' | 'close-question' | 'attention' | 'acknowledge'
+  | 'resolve' | 'block' | 'handoff' | 'end' | 'revise' | 'submit-candidate' | 'check-candidate' | 'plan-mission'
+  | 'begin-attempt' | 'update-attempt' | 'settle-attempt'
+
+/** One Ticket command at its commit point: the kind, the Ticket it changes, and the facts only that kind carries. */
+export type TicketCommand =
+  | { readonly kind: Exclude<TicketCommandKind, 'assign'>; readonly ticketId: TicketId }
+  | { readonly kind: 'assign'; readonly ticketId: TicketId; readonly assigneeId: SessionId }

@@ -4392,15 +4392,26 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void',
-        description: 'Register an owner of coordination that may replace the coordinator a new Ticket would name.\n\n`create` consults every authority inside the Session\'s command queue, in the same synchronous step that reads the Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment. The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that returns an id replaces it. An authority that throws fails the creation with nothing appended.',
+        description: 'Register an owner of coordination that may replace the coordinator a new Ticket would name.\n\n`create` consults every authority inside the Session\'s command queue, in the same synchronous step that reads the Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment. The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that returns an id replaces it. An authority that throws fails the creation with nothing appended. A creation admitted to the queue before the disposer runs is still decided by this authority.',
         parameters: [{ name: 'authority', description: 'synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.' }],
-        returns: 'disposer that removes the authority.',
+        returns: 'disposer that removes the authority for creations admitted later.',
       },
       {
         signature: 'registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void',
-        description: 'Register an owner of assignment admission that may refuse an assignee.\n\n`assign` consults every authority inside the Session\'s command queue, in the same synchronous step that follows the actor and CAS checks and precedes the append, so a refusal reflects the assignee\'s standing at the moment the assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.',
+        description: 'Register an owner of assignment admission that may refuse an assignee.\n\nA narrowing of registerCommandAuthority to `assign`: the authority runs in the same queued step, after the actor, role and CAS checks and immediately before the append, so a refusal reflects the assignee\'s standing at the moment the assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.',
         parameters: [{ name: 'authority', description: 'synchronous decision for `assigneeId` in `session`; it throws a `TicketError` to refuse, which fails the assignment with that error unchanged and appends nothing. Any other exception returns `TICKET_RECOVERY_FAILED` with the original cause.' }],
-        returns: 'disposer that removes the authority.',
+        returns: 'disposer that removes the authority for later commands; a command already admitted stays governed by it.',
+      },
+      {
+        signature: 'registerCommandAuthority(authority: TicketCommandAuthority): () => void',
+        description: 'Register an owner of acting authority that may refuse any Ticket command of a Session at its commit point.\n\nEvery mutating command (`TicketCommandKind`) consults every authority inside the root Session\'s command queue, in the same synchronous step that follows the command\'s own actor, role and CAS checks and precedes the append, so the decision reflects the actor\'s standing when the command would commit rather than when the call was made or queued. Attempt writes made by the execution owner for settlement and recovery act as the system rather than as a member and are not consulted. A Session with no registered authority accepts every command.\n\nA command is governed by the authorities registered when it was admitted to the queue, plus any registered before it commits; disposing an authority only stops it from governing commands admitted later.',
+        parameters: [{ name: 'authority', description: 'synchronous decision; it throws a `TicketError` to refuse, which fails the command with that error unchanged and appends nothing. Any other exception fails it with `TICKET_RECOVERY_FAILED` and the original cause.' }],
+        returns: 'disposer that removes the authority for later commands.',
+      },
+      {
+        signature: 'async whenIdle(session: Session): Promise<void>',
+        description: 'Wait for the commands already admitted to one root\'s queue.\n\nResolves once every command admitted for `session` before this call has committed or failed. Commands admitted later are not awaited, so a caller that must not be outrun stops its own admission first. An owner of a command authority calls this before it releases the state that authority reads.',
+        parameters: [{ name: 'session', description: 'root Session whose command queue is awaited.' }],
       },
       {
         signature: 'registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void',
@@ -10986,6 +10997,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface TicketCheckSnapshot {\n    readonly id: TicketCheckId;\n    readonly candidateId: TicketCandidateId;\n    readonly criterionId: TicketCriterionId;\n    readonly specRevision: number;\n    readonly authorId: SessionId;\n    readonly outcome: \'pass\' | \'fail\';\n    readonly evidence: readonly string[];\n    readonly createdAt: number;\n}',
   },
   {
+    name: 'TicketCommand',
+    declaration: 'export type TicketCommand = {\n    readonly kind: Exclude<TicketCommandKind, \'assign\'>;\n    readonly ticketId: TicketId;\n} | {\n    readonly kind: \'assign\';\n    readonly ticketId: TicketId;\n    readonly assigneeId: SessionId;\n};',
+  },
+  {
+    name: 'TicketCommandAuthority',
+    declaration: 'export type TicketCommandAuthority = (session: Session, actorId: SessionId, command: TicketCommand) => void;',
+  },
+  {
+    name: 'TicketCommandKind',
+    declaration: 'export type TicketCommandKind = \'create\' | \'assign\' | \'claim\' | \'release\' | \'report\' | \'ask\' | \'answer\' | \'close-question\' | \'attention\' | \'acknowledge\' | \'resolve\' | \'block\' | \'handoff\' | \'end\' | \'revise\' | \'submit-candidate\' | \'check-candidate\' | \'plan-mission\' | \'begin-attempt\' | \'update-attempt\' | \'settle-attempt\';',
+  },
+  {
     name: 'TicketContribution',
     declaration: 'export type TicketContribution = \'required\' | \'advisory\';',
   },
@@ -11051,7 +11074,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'TicketService',
-    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void;\n    registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void;\n    registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void;\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAttention(session: Session, request: UpdateTicketAttentionRequest): Promise<TicketView>;\n    async resolveAttention(session: Session, /* …truncated — full shape in source */',
+    declaration: 'export class TicketService extends Service {\n    static inject;\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config = {});\n    registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void;\n    registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void;\n    registerCommandAuthority(authority: TicketCommandAuthority): () => void;\n    async whenIdle(session: Session): Promise<void>;\n    registerAdmissionGuard(guard: (reserved: readonly TicketAttemptSnapshot[]) => void): () => void;\n    recover(session: Session): TicketView[];\n    get(session: Session, id: TicketId): TicketView;\n    list(session: Session): TicketView[];\n    async create(session: Session, request: CreateTicketRequest): Promise<TicketView>;\n    async assign(session: Session, request: AssignTicketRequest): Promise<TicketView>;\n    async claim(session: Session, request: ClaimAssignmentRequest): Promise<TicketView>;\n    async release(session: Session, request: ReleaseAssignmentRequest): Promise<TicketView>;\n    async report(session: Session, request: ReportTicketRequest): Promise<TicketView>;\n    async ask(session: Session, request: AskTicketQuestionRequest): Promise<TicketView>;\n    async answer(session: Session, request: AnswerTicketQuestionRequest): Promise<TicketView>;\n    async closeQuestion(session: Session, request: CloseTicketQuestionRequest): Promise<TicketView>;\n    async acknowledgeAtt /* …truncated — full shape in source */',
   },
   {
     name: 'TicketSnapshot',

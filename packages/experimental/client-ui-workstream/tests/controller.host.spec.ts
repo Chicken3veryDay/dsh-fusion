@@ -111,10 +111,14 @@ describe('Workstream panel Remote', () => {
     })).rejects.toMatchObject({ code: 'workstreamPanel/rejected' })
     await ticketActor(ctx, SessionId('elsewhere'), async () => {})
     const foreign = await ticketActor(ctx, owner.id, () => ctx.tickets.create(owner.session, {
-      subject: 'Foreign', description: 'Coordinated elsewhere', coordinatorId: SessionId('elsewhere'),
+      subject: 'Foreign', description: 'Coordinated elsewhere',
     }))
-    const attended = await ticketActor(ctx, SessionId('elsewhere'), () => ctx.tickets.attention(owner.session, {
-      ticketId: foreign.id, expectedRevision: foreign.revision, actorId: SessionId('elsewhere'), kind: 'review', message: 'Review',
+    const raised = await ticketActor(ctx, owner.id, () => ctx.tickets.attention(owner.session, {
+      ticketId: foreign.id, expectedRevision: foreign.revision, actorId: owner.id, kind: 'review', message: 'Review',
+    }))
+    // The owner may move coordination to any live Agent; a Workstream outsider could not write the attention itself.
+    const attended = await ticketActor(ctx, owner.id, () => ctx.tickets.handoff(owner.session, {
+      ticketId: raised.id, expectedRevision: raised.revision, actorId: owner.id, newCoordinatorId: SessionId('elsewhere'),
     }))
     await expect(ctx.workstreamPanel.resolveAttention(owner, {
       ticketId: attended.id, attentionId: attended.attentions[0]!.id, expectedRevision: attended.revision,

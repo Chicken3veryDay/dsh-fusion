@@ -32,7 +32,11 @@ Ticket 是由软协调者和直接 Worker 共同处理一项工作的持久化�
 
 为某个 Session 负责协调的包通过 `registerCoordinatorAuthority(authority)` 注册，并获得返回的释放函数。`create` 在该 Session 的命令队列内询问每个授权方，且与读取 Session 状态、追加 Ticket 处于同一个同步步骤。授权方收到请求的协调者（`CreateTicketRequest.coordinatorId`，缺省为 Session id），并可返回替代者；第一个替代者生效，因此协调权变化期间创建的 Ticket 总是记录追加时授权方决定的协调者。授权方抛出 `TicketError` 时，创建以该错误原样失败，例如仍在加载的授权方返回可重试的 `TICKET_COORDINATOR_UNAVAILABLE`；其他异常返回带有原始原因的 `TICKET_RECOVERY_FAILED`。两者都不追加任何内容。若协调者不是已注册且存活的 Agent，则返回 `TICKET_AUTHORITY`，错误会写明该协调者、是否由授权方选定，以及补救方法：恢复该 Agent，或把协调权交还给 Session 所有者。
 
-负责决定谁可以接收工作的包通过 `registerAssignmentAuthority(authority)` 注册，并获得返回的释放函数。`assign` 在该 Session 的命令队列内、完成调用方、CAS、数量上限和主题检查之后、追加之前立即询问每个授权方，因此决定反映的是分配提交时受派人的状态，而不是调用发出时的状态。授权方收到 Session 和请求的 `ownerId`，通过抛出 `TicketError` 拒绝，此时分配以该错误原样失败且不追加任何内容；其他异常返回带有原始原因的 `TICKET_RECOVERY_FAILED`。没有注册授权方的 Session 接受任何受派人。
+负责决定谁可以接收工作的包通过 `registerAssignmentAuthority(authority)` 注册，并获得返回的释放函数。`assign` 在该 Session 的命令队列内、完成调用方、CAS、数量上限和主题检查之后、追加之前立即询问每个授权方，因此决定反映的是分配提交时受派人的状态，而不是调用发出时的状态。授权方收到 Session 和请求的 `ownerId`，通过抛出 `TicketError` 拒绝，此时分配以该错误原样失败且不追加任何内容；其他异常返回带有原始原因的 `TICKET_RECOVERY_FAILED`。没有注册授权方的 Session 接受任何受派人。分配授权方是下文命令授权方的 `assign` 情形。
+
+负责决定谁可以在某个 Session 中操作的包通过 `registerCommandAuthority(authority)` 注册，并获得返回的释放函数。每个变更方法都在该 Session 的命令队列内、完成命令自身的调用方、角色和 CAS 检查之后、追加之前立即询问每个授权方，传入 Session、actor id（`create` 为创建它的发起方）和一个 `TicketCommand`。其 `kind` 是一个 `TicketCommandKind`：`create`、`assign`（另带 `assigneeId`）、`claim`、`release`、`report`、`ask`、`answer`、`close-question`、`attention`、`acknowledge`、`resolve`、`block`、`handoff`、`end`（对应 `complete`、`fail` 和 `cancel`）、`revise`、`submit-candidate`、`check-candidate`、`plan-mission`、`begin-attempt`、`update-attempt` 或 `settle-attempt`。拒绝即抛出 `TicketError`，命令以该错误原样失败且不追加任何内容；其他异常返回带有原始原因的 `TICKET_RECOVERY_FAILED`。执行所有者为结算和恢复写入的尝试记录不询问授权方。没有注册授权方的 Session 接受所有命令。
+
+每个排队的命令由其进入队列时已注册的协调者授权方和命令授权方，加上提交前新注册的授权方共同决定。因此释放函数只让授权方不再约束其运行之后进入队列的命令。`whenIdle(session)` 在该 Session 于调用之前进入队列的所有命令都已提交或失败后完成；卸载的授权方所有者先撤回注册，再对其 Session 等待 `whenIdle`，然后才释放授权方读取的状态。
 
 [Session 投影](../../session/session-projection/README.zh.md) 是浏览器安全的读取路径。每个 `ticket/state` 事件包含完整的变更后值，因此打开 Session 或重放事件会得到相同状态，并拒绝格式错误或版本不连续的记录。命令准入和重放共用语义验证；无效命令不会追加事件。提议状态的 Ticket 不能直接完成。持久化刷新可能在追加后失败，重试前应读取当前版本。幂等的尝试操作重试会再次刷新 Session，然后才报告成功，包括已被结算压缩进尝试墓碑记录的操作的重试。墓碑记录保留每个已退役操作的指纹，因此参数不同的压缩操作重试返回 `TICKET_OPERATION_CONFLICT`，将这类 id 用于另一个尝试则返回 `TICKET_ATTEMPT_STATE`。 旧版 v1 报告投影到合成的初始规格，因此保留的结果可以进入 v2 候选而无需改写旧事件。
 

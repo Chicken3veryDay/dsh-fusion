@@ -1,9 +1,10 @@
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TicketService, { TicketError } from '../src/index.ts'
+import type { TicketCommandKind } from '../src/index.ts'
 import { ticketActor } from './ticket-actor.ts'
 
 async function harness() {
@@ -109,5 +110,59 @@ describe('Ticket assignment authority', () => {
       { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, ownerId: worker, subject: 'Do it' })))
       .rejects.toMatchObject({ code: 'TICKET_RECOVERY_FAILED', cause })
     expect(ctx.tickets.get(session, ticket.id).assignments).toEqual([])
+  })
+})
+
+describe('Ticket command authority', () => {
+  it('refuses commands of every kind inside the queue at the append, and governs only later admissions after disposal', async () => {
+    const { ctx, session } = await harness()
+    const ticket = await ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Govern', description: '' }))
+    const consulted: TicketCommandKind[] = []
+    let revoked = false
+    const dispose = ctx.tickets.registerCommandAuthority((candidate, actorId, command) => {
+      expect(candidate).toBe(session)
+      expect(command.ticketId).not.toBe('')
+      consulted.push(command.kind)
+      if (revoked && actorId === session.id) throw new TicketError('actor was revoked', 'TICKET_AUTHORITY')
+    })
+    // Hold one root flush so the next commands wait in the queue behind it.
+    const entered = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>()
+    const flush = ctx.sessions.flush.bind(ctx.sessions)
+    vi.spyOn(ctx.sessions, 'flush').mockImplementationOnce(async (target) => {
+      entered.resolve(undefined); await release.promise; return flush(target)
+    })
+    const barrier = ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Barrier', description: '' }))
+    await entered.promise
+    const base = { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id }
+    const queued = ticketActor(ctx, session.id, async () => Promise.allSettled([
+      ctx.tickets.ask(session, { ...base, question: 'Which branch?' }),
+      ctx.tickets.attention(session, { ...base, kind: 'decision', message: 'Pick a date' }),
+      ctx.tickets.revise(session, { ...base, acceptanceCriteria: [], dependencies: [] }),
+    ]))
+    // Revocation and disposal both happen after admission and before the commit point.
+    revoked = true
+    dispose()
+    release.resolve(undefined)
+    await barrier
+    const outcomes = await queued
+    expect(outcomes.map(outcome => outcome.status === 'rejected' ? (outcome.reason as TicketError).code : 'fulfilled'))
+      .toEqual(['TICKET_AUTHORITY', 'TICKET_AUTHORITY', 'TICKET_AUTHORITY'])
+    expect(consulted).toEqual(['create', 'ask', 'attention', 'revise'])
+    expect(ctx.tickets.get(session, ticket.id)).toEqual(ticket)
+    // A command admitted after disposal is not consulted and commits under the default.
+    const asked = await ticketActor(ctx, session.id, () => ctx.tickets.ask(session, { ...base, question: 'Which branch?' }))
+    expect(asked.questions).toHaveLength(1)
+    expect(consulted).toHaveLength(4)
+  })
+
+  it('wraps a non-Ticket failure of the authority and appends nothing', async () => {
+    const { ctx, session } = await harness()
+    const ticket = await ticketActor(ctx, session.id, () => ctx.tickets.create(session, { subject: 'Wrap', description: '' }))
+    const cause = new Error('broken authority')
+    ctx.tickets.registerCommandAuthority(() => { throw cause })
+    await expect(ticketActor(ctx, session.id, () => ctx.tickets.ask(session,
+      { ticketId: ticket.id, expectedRevision: ticket.revision, actorId: session.id, question: 'Why?' })))
+      .rejects.toMatchObject({ code: 'TICKET_RECOVERY_FAILED', message: 'Ticket command authority failed', cause })
+    expect(ctx.tickets.get(session, ticket.id)).toEqual(ticket)
   })
 })

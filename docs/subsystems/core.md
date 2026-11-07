@@ -1350,23 +1350,50 @@ Durable Ticket commands require a registered live Agent in the initiator scope; 
  * `create` consults every authority inside the Session's command queue, in the same synchronous step that reads the
  * Session state and appends the Ticket, so the Ticket names the coordinator the authority decides at that moment.
  * The authority receives `CreateTicketRequest.coordinatorId` (the Session id when absent); the first authority that
- * returns an id replaces it. An authority that throws fails the creation with nothing appended.
+ * returns an id replaces it. An authority that throws fails the creation with nothing appended. A creation admitted to
+ * the queue before the disposer runs is still decided by this authority.
  * @param authority - synchronous decision returning the replacement coordinator, or `undefined` to keep the requested one.
- * @returns disposer that removes the authority.
+ * @returns disposer that removes the authority for creations admitted later.
  */
 registerCoordinatorAuthority(authority: (session: Session, requested: SessionId) => SessionId | undefined): () => void
 
 /** Register an owner of assignment admission that may refuse an assignee.
  *
- * `assign` consults every authority inside the Session's command queue, in the same synchronous step that follows the
- * actor and CAS checks and precedes the append, so a refusal reflects the assignee's standing at the moment the
- * assignment would commit rather than when the call was made. A Session with no registered authority accepts any assignee.
+ * A narrowing of {@link registerCommandAuthority} to `assign`: the authority runs in the same queued step, after the
+ * actor, role and CAS checks and immediately before the append, so a refusal reflects the assignee's standing at the
+ * moment the assignment would commit rather than when the call was made. A Session with no registered authority accepts
+ * any assignee.
  * @param authority - synchronous decision for `assigneeId` in `session`; it throws a `TicketError` to refuse, which fails
  * the assignment with that error unchanged and appends nothing. Any other exception returns `TICKET_RECOVERY_FAILED`
  * with the original cause.
- * @returns disposer that removes the authority.
+ * @returns disposer that removes the authority for later commands; a command already admitted stays governed by it.
  */
 registerAssignmentAuthority(authority: (session: Session, assigneeId: SessionId) => void): () => void
+
+/** Register an owner of acting authority that may refuse any Ticket command of a Session at its commit point.
+ *
+ * Every mutating command (`TicketCommandKind`) consults every authority inside the root Session's command queue, in the
+ * same synchronous step that follows the command's own actor, role and CAS checks and precedes the append, so the decision
+ * reflects the actor's standing when the command would commit rather than when the call was made or queued. Attempt
+ * writes made by the execution owner for settlement and recovery act as the system rather than as a member and are not
+ * consulted. A Session with no registered authority accepts every command.
+ *
+ * A command is governed by the authorities registered when it was admitted to the queue, plus any registered before it
+ * commits; disposing an authority only stops it from governing commands admitted later.
+ * @param authority - synchronous decision; it throws a `TicketError` to refuse, which fails the command with that error
+ * unchanged and appends nothing. Any other exception fails it with `TICKET_RECOVERY_FAILED` and the original cause.
+ * @returns disposer that removes the authority for later commands.
+ */
+registerCommandAuthority(authority: TicketCommandAuthority): () => void
+
+/** Wait for the commands already admitted to one root's queue.
+ *
+ * Resolves once every command admitted for `session` before this call has committed or failed. Commands admitted later
+ * are not awaited, so a caller that must not be outrun stops its own admission first. An owner of a command authority
+ * calls this before it releases the state that authority reads.
+ * @param session - root Session whose command queue is awaited.
+ */
+async whenIdle(session: Session): Promise<void>
 
 /** Register a check that may refuse shared-workspace attempt admission for reasons the Ticket logs cannot show.
  *
