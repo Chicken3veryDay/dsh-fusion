@@ -75,11 +75,16 @@ export function isToolCallSettleEvent(event: { readonly type: string }): event i
 }
 
 /**
+ * Read the call a start event begins.
+ * @param event - a `tool/call` or nested `tool/ptc-dispatch-start` event.
+ * @returns the started call.
+ */
+export function effectiveToolCall(event: ToolCallStartEvent): EffectiveToolCall
+/**
  * Read the call an event starts.
  * @param event - any Session or Client history event.
  * @returns the started call, or undefined when the event starts none.
  */
-export function effectiveToolCall(event: ToolCallStartEvent): EffectiveToolCall
 export function effectiveToolCall(event: { readonly type: string }): EffectiveToolCall | undefined
 export function effectiveToolCall(event: { readonly type: string }): EffectiveToolCall | undefined {
   if (!isToolCallStartEvent(event)) return undefined
@@ -94,11 +99,16 @@ export function effectiveToolCall(event: { readonly type: string }): EffectiveTo
 }
 
 /**
+ * Read the result a settle event records.
+ * @param event - a `tool/result` or nested `tool/ptc-dispatch` event.
+ * @returns the settled result.
+ */
+export function effectiveToolResult(event: ToolCallSettleEvent): EffectiveToolResult
+/**
  * Read the result an event settles.
  * @param event - any Session or Client history event.
  * @returns the settled result, or undefined when the event settles no call.
  */
-export function effectiveToolResult(event: ToolCallSettleEvent): EffectiveToolResult
 export function effectiveToolResult(event: { readonly type: string }): EffectiveToolResult | undefined
 export function effectiveToolResult(event: { readonly type: string }): EffectiveToolResult | undefined {
   if (!isToolCallSettleEvent(event)) return undefined

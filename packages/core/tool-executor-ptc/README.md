@@ -41,6 +41,8 @@ This package declares `ctx.ptcRuntime` and `ctx.systemPrompt` as required inject
 
 Shared dispatch events and the `ptc-mode` message-source declaration live in `@deepseek-ai/dsh-tool-executor-ptc/types`; Client code imports the same declarations through `@deepseek-ai/dsh-tool-executor-ptc/client`. Both entries exclude Host service declarations. Host policy extensions use `import type` from the package entry for `PtcDispatchLog` and `tools/ptc-dispatch-log` without mounting the executor.
 
+A consumer that follows a tool by name in the Session log reads both forms of a call through the client-safe `@deepseek-ai/dsh-tool-executor-ptc/tool-calls` entry. `effectiveToolCall` returns `{ callId, parentCallId?, name, arguments }` for a `tool/call` or a nested `tool/ptc-dispatch-start`, with `arguments` as JSON text. `effectiveToolResult` returns `{ callId, parentCallId?, name?, content, isError, meta?, error? }` for a `tool/result` or a nested `tool/ptc-dispatch`. Both return `undefined` for other events. Nested events carry no `turn`: a Host fold takes the open turn, and a Client Turn Definition returns a Turn-located match.
+
 [Configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-executor-ptc)
 
 -----
