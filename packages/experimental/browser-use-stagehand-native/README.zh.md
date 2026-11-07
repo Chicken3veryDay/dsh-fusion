@@ -83,6 +83,8 @@ env -u NODE_USE_ENV_PROXY DSH_STAGEHAND_E2E=1 pnpm exec vitest run --config vite
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
+规范化交互操作调用确切注册的 Stagehand 工具，包括其守卫、审批策略和执行包装器。原始调用与规范化调用共用原始工具的资源串行执行。
+
 <details>
 <summary>实现细节——点击展开</summary>
 

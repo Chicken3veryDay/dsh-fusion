@@ -8,11 +8,10 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
 import { BrowserUseProviderName } from '@deepseek-ai/dsh-browser-use/brand'
 import { SessionResources } from '@deepseek-ai/dsh-experimental-browser-use-runtime'
-import { projectProviderImages } from '@deepseek-ai/dsh-experimental-browser-use-runtime/mcp'
 import { createMcpToolDefinition } from '@deepseek-ai/dsh-mcp-client'
 import type { InteractionOperation } from '@deepseek-ai/dsh-interaction'
 import { interactionProviderId, isBrowserActionKind } from '@deepseek-ai/dsh-interaction'
-import { isJsonValue, type JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { z } from 'zod'
 import { browserInputs, stagehandModelSchema, StagehandDrainError } from './native.ts'
 import type { BrowserMethod, NativeBrowserRuntime, StagehandModelConfig } from './native.ts'
@@ -21,7 +20,8 @@ import { launchChromium } from './launch.ts'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-browser-use'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { RegisteredTool, ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 /** Cordis identity for the native Stagehand provider. */
 export const name = 'experimental-browser-use-stagehand-native'
@@ -179,6 +179,8 @@ export function apply(ctx: Context, input: Config): void {
         }
       },
     })
+    const registrations = new Map<BrowserMethod, RegisteredTool>()
+    let interactionCallSequence = 0
     const interaction = ctx.get('interaction')
     if (interaction !== undefined) {
       yield interaction.register({
@@ -193,11 +195,13 @@ export function apply(ctx: Context, input: Config): void {
           return Promise.resolve({
             async execute(operation: InteractionOperation, operationSignal: AbortSignal): Promise<JsonValue> {
               const selected = stagehandOperation(operation)
-              return resources.run(agent, operationSignal, async (resource, activeSignal) => {
-                const raw = await resource.native.execute(selected.method, selected.args, activeSignal)
-                if (!isJsonValue(raw)) throw new Error('Stagehand returned a non-JSON result')
-                return projectProviderImages(ctx, JSON.parse(JSON.stringify(raw)) as JsonValue, selected.method)
+              const registration = registrations.get(selected.method)
+              if (registration === undefined) throw new Error(`Stagehand tool ${selected.method} is unavailable`)
+              const result = await ctx.tools.invoke({
+                registration, arguments: selected.args, signal: operationSignal, agent,
+                callId: ToolCallId(`interaction-${++interactionCallSequence}`),
               })
+              return JSON.parse(JSON.stringify(result)) as JsonValue
             },
             close: async () => {},
           })
@@ -208,13 +212,13 @@ export function apply(ctx: Context, input: Config): void {
     const child = ctx.plugin({
       name: 'browser-use-stagehand-native-tools',
       inject: ['tools', 'systemPrompt'],
-      apply(inner) { mountTools(inner, resources) },
+      apply(inner) { mountTools(inner, resources, registrations) },
     })
     yield child.dispose
   }, 'browser-use-stagehand-native.runtime')
 }
 
-function mountTools(ctx: Context, resources: SessionResources<BrowserResource>): void {
+function mountTools(ctx: Context, resources: SessionResources<BrowserResource>, registrations: Map<BrowserMethod, RegisteredTool>): void {
   const definitions = new Set<ToolDefinition>()
   const descriptions: Record<BrowserMethod, string> = {
     navigate: 'Navigate a Stagehand browser tab to a URL.',
@@ -238,7 +242,9 @@ function mountTools(ctx: Context, resources: SessionResources<BrowserResource>):
       },
     })
     definitions.add(definition)
-    ctx.tools.register(definition)
+    const handle = ctx.tools.register(definition)
+    registrations.set(method, handle.registration)
+    ctx.effect(() => () => { registrations.delete(method) }, `stagehand.${method}.registration`)
   }
   ctx.systemPrompt.section({ name: 'browser-use:stagehand-native', text: GUIDANCE, order: ctx.systemPrompt.getSectionOrder('TOOL_COMPUTER_USE') })
   ctx.on('tools/execute', async (exec, next) => {

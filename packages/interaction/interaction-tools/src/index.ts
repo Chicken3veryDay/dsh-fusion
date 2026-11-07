@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AttachmentIdType, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { defineTool, ToolResultError, type ToolExecutionFailure, type ToolErrorInfo, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
@@ -30,6 +30,42 @@ const JSON_RESULT = {
 } as const
 
 type Result = { result: JsonValue; provider: string; domain: string; method: string }
+
+/** Detached provider data or a failed delegated tool invocation. */
+type InteractionResult = { isError: false; value: JsonValue } | ToolExecutionFailure
+
+function interactionResult(value: JsonValue): InteractionResult {
+  if (typeof value !== 'object' || value === null || Array.isArray(value) || value.isError !== true) {
+    return { isError: false, value }
+  }
+  const failure = value.error
+  if (typeof failure !== 'object' || failure === null || Array.isArray(failure) || typeof failure.message !== 'string') {
+    throw new Error('Interaction provider returned a failure without error details')
+  }
+  const info = failureInfo(failure.info)
+  return {
+    isError: true,
+    error: { message: failure.message, ...info === undefined ? {} : { info } },
+    content: contentFromResult(value) ?? [],
+    ...value.meta === undefined ? {} : { meta: value.meta },
+  }
+}
+
+function failureInfo(value: JsonValue | undefined): ToolErrorInfo | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)
+    || typeof value.name !== 'string' || typeof value.code !== 'string'
+    || (value.reason !== undefined && typeof value.reason !== 'string')) {
+    throw new Error('Interaction provider returned invalid error metadata')
+  }
+  return { name: value.name, code: value.code, ...value.reason === undefined ? {} : { reason: value.reason } }
+}
+
+function successfulResult(value: JsonValue): JsonValue {
+  const result = interactionResult(value)
+  if (result.isError) throw new ToolResultError(result)
+  return result.value
+}
 
 function textFromResult(value: JsonValue): string | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
@@ -109,7 +145,7 @@ function browserTool(ctx: Context, method: BrowserOperation['method']) {
     async execute(args, exec): Promise<Result> {
       const agent = agentOf(exec)
       const operation = { domain: 'browser', method, ...args } as BrowserOperation
-      const result = await ctx.interaction.run(agent, 'browser', operation, exec.signal)
+      const result = successfulResult(await ctx.interaction.run(agent, 'browser', operation, exec.signal))
       const provider = ctx.interaction.describe('browser')?.id ?? 'unknown'
       return { result, provider, domain: 'browser', method }
     },
@@ -136,7 +172,7 @@ function desktopTool(ctx: Context, method: DesktopOperation['method']) {
     async execute(args, exec): Promise<Result> {
       const agent = agentOf(exec)
       const operation = { domain: 'desktop', method, ...args } as DesktopOperation
-      const result = await ctx.interaction.run(agent, 'desktop', operation, exec.signal)
+      const result = successfulResult(await ctx.interaction.run(agent, 'desktop', operation, exec.signal))
       const provider = ctx.interaction.describe('desktop')?.id ?? 'unknown'
       return { result, provider, domain: 'desktop', method }
     },
