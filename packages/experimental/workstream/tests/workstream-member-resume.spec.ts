@@ -184,4 +184,32 @@ describe('owner resume after members were stopped mid-turn', () => {
     await ownerRequest(fixture, resumed)
     expect(notices(resumed.session)).toEqual([])
   })
+
+  it.each(['unended', 'no-turn'] as const)('reports only unfinished work from a %s recovered member log', async (mode) => {
+    const fixture = await setup(['busy initial'])
+    const { ctx, owner } = fixture
+    const busy = await ctx.workstreams.addMember(owner.agent, owner.agent.id, request('busy'))
+    await requested(fixture.mock, busy.id)
+    const resumed = await restart(fixture, () => {
+      const open = ctx.sessionPersistence.open.bind(ctx.sessionPersistence)
+      vi.spyOn(ctx.sessionPersistence, 'open').mockImplementation(async (...args) => {
+        const handle = await open(...args)
+        if (args[0] === busy.id && args[1] === 'read') {
+          const read = handle.read.bind(handle)
+          vi.spyOn(handle, 'read').mockImplementation(async (...readArgs) => {
+            const loaded = await read(...readArgs)
+            return { ...loaded, events: [...loaded.events.slice(0, handle.inheritedEventCount),
+              ...loaded.events.slice(handle.inheritedEventCount).filter(event => event.type !== 'turn/end'
+                && (mode !== 'no-turn' || event.type !== 'turn/start'))] }
+          })
+        }
+        return handle
+      })
+    })
+    await ownerRequest(fixture, resumed)
+    const visible = notices(resumed.session)
+    if (mode === 'unended') expect(visible).toEqual([expect.stringContaining(`busy (${busy.id}, turn 1)`)])
+    else expect(visible).toEqual([])
+  })
+
 })

@@ -63,6 +63,20 @@ function fullFold(session: Session) {
 }
 
 describe('Workstream projection recovery', () => {
+  it('ignores foreign Ticket events and refuses discontinuous revisions or a changed creation identity', async () => {
+    const { owner } = await setup()
+    const events = owner.session.snapshotEvents()
+    const state = fullFold(owner.session)
+    const ticket = events.findLast(event => event.type === 'ticket/state')!
+    expect(workstreamProjectionDefinition.apply(state, { ...ticket, data: { ...ticket.data, sessionId: SessionId('foreign') } })).toBe(state)
+    const opened = events.find(event => event.type === 'workstream/state')!
+    expect(() => workstreamProjectionDefinition.apply(state, opened)).toThrow('revision is not contiguous')
+    const changed = { ...opened, data: { ...opened.data, snapshot: { ...opened.data.snapshot,
+      revision: state.snapshot!.revision + 1, operationId: WorkstreamOperationId('different') } } }
+    expect(() => workstreamProjectionDefinition.apply(state, changed)).toThrow('creation identity changed')
+    expect(workstreamProjectionDefinition.wire.view(state)).toBe(state.snapshot)
+  })
+
   it('discards a stateVersion 1 checkpoint and refolds the full log, recording the event positions', async () => {
     const { ctx, owner, memberId } = await setup()
     const events = owner.session.snapshotEvents()
