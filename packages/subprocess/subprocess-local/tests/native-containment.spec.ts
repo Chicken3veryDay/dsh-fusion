@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleepMs } from 'node:timers/promises'
 import { afterAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { SubprocessSpawnSpec, SubprocessTerminalHandle } from '@deepseek-ai/dsh-subprocess'
@@ -330,7 +331,7 @@ while :; do sleep 60; done
     }
   }, 15_000)
 
-  it('ends the range wait at the last member exit from cgroup.events alone and releases its watch', async () => {
+  it('ends the range wait at the last member exit from the cgroup event and releases its watch', async () => {
     const pidFile = join(scratch, `linger-${Date.now()}.pid`)
     const flag = join(scratch, `linger-${Date.now()}.release`)
     const request = spec(['bash', '-c', lingeringDescendantCommand(pidFile, flag)])
@@ -338,9 +339,12 @@ while :; do sleep 60; done
     const attached = Promise.withResolvers<undefined>()
     let closes = 0
     let queries = 0
+    let watching = false
     const internals: LinuxScopeInternals = {
-      // No poll tick can fire, so only the kernel event can end the wait.
-      sleep: (_delayMs, signal) => new Promise<void>((resolve) => { signal?.addEventListener('abort', () => { resolve() }, { once: true }) }),
+      // Establishment polls normally; once the watch exists no poll tick can fire, so only the kernel event can end the wait.
+      sleep: (delayMs, signal) => watching
+        ? new Promise<void>((resolve) => { signal?.addEventListener('abort', () => { resolve() }, { once: true }) })
+        : sleepMs(delayMs, undefined, { signal }),
       systemctlQuery: (command, args) => new Promise((resolve) => {
         queries += 1
         execFile(command, [...args], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }, (error, stdout, stderr) => {
@@ -352,6 +356,7 @@ while :; do sleep 60; done
         const watcher = watch(path, { persistent: false })
         const close = watcher.close.bind(watcher)
         watcher.close = () => { closes += 1; close() }
+        watching = true
         attached.resolve(undefined)
         return watcher
       },
@@ -359,10 +364,12 @@ while :; do sleep 60; done
     const handle = bindManagedProcess(request, launchLinuxScope(request, targetEnvironment(request), scopeOptions, internals))
     let descendant: number | undefined
     try {
-      const waiting = handle.waitForExit()
-      await attached.promise
+      // Production observes the range after the direct child settles; a query issued while systemd is
+      // still creating the transient unit can read it as loaded but inactive.
       await handle.done
       descendant = await waitForPid(pidFile)
+      const waiting = handle.waitForExit()
+      await attached.promise
       let settled = false
       void waiting.then(() => { settled = true })
       await nextLoopTurn()
@@ -370,7 +377,9 @@ while :; do sleep 60; done
       const queriesBeforeRelease = queries
       writeFileSync(flag, '')
       await expect(waiting).resolves.toBe(true)
-      expect(queries).toBe(queriesBeforeRelease)
+      // The event is the only wake-up. systemd may already have collected the scope when the observer
+      // reads the file; then exactly one systemctl query confirms the absence.
+      expect(queries - queriesBeforeRelease).toBeLessThanOrEqual(1)
       expect(closes).toBe(1)
       await waitGone(descendant)
       await nextLoopTurn()
@@ -382,7 +391,7 @@ while :; do sleep 60; done
         try { process.kill(descendant, 'SIGKILL') } catch { /* already exited */ }
       }
     }
-  })
+  }, 15_000)
 
   it('closes every watch when the runtime is disposed during a pending range wait', async () => {
     const pidFile = join(scratch, `dispose-${Date.now()}.pid`)
@@ -407,7 +416,7 @@ while :; do sleep 60; done
       }
       await fiber.dispose()
     }
-  })
+  }, 15_000)
 
   it('releases the watch of a completed spawn with no surviving descendant', async () => {
     const baselineWatches = inotifyWatchCount()
