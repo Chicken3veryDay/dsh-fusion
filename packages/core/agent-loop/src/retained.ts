@@ -10,10 +10,6 @@ import { repairOpenTurn } from './inbox.ts'
 
 const markerSchema = z.strictObject({ rootSessionId: z.string().min(1) })
 
-function isExternalFlushAware(writer: SessionHandle): writer is SessionHandle & { allowCloseDuringExternalFlush: () => void } {
-  return 'allowCloseDuringExternalFlush' in writer && typeof writer.allowCloseDuringExternalFlush === 'function'
-}
-
 /** Required ownership marker projection; invalid or duplicate markers refuse activation. */
 export const runtimeOwnerProjection = {
   key: 'runtimeOwner',
@@ -155,7 +151,6 @@ export async function retainSession(
         throw new Error(`retained writer release refused: ${released.reason}`,
           'cause' in released ? { cause: released.cause } : undefined)
       }
-      if (writer !== undefined && isExternalFlushAware(writer)) writer.allowCloseDuringExternalFlush()
       await writer?.close()
     } catch (error: unknown) {
       throw new AggregateError([error], 'retained session cleanup failed')
