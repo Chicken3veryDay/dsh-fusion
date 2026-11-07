@@ -9,6 +9,7 @@
  * @module
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { isDeepStrictEqual } from 'node:util'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import { errorChain } from '@deepseek-ai/dsh-llm'
@@ -157,9 +158,9 @@ export class JsonlSessionHandle implements SessionHandle {
   private chain: Promise<unknown> = Promise.resolve()
   private closing: Promise<void> | undefined
   private closeJoin: Promise<void> | undefined
-  private externalFlushDepth = 0
-  private externalFlushCloseAllowed = false
   private observedLength = 0
+  /** Marks the async call stack of a store-flush callback that is awaiting this handle's flush. */
+  private readonly storeFlushScope = new AsyncLocalStorage<true>()
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
   private batchTimer: ReturnType<typeof setTimeout> | undefined
@@ -288,12 +289,12 @@ export class JsonlSessionHandle implements SessionHandle {
     })
   }
 
-  /** Permit the owning retained-session cleanup to wait for an external flush callback. */
-  allowCloseDuringExternalFlush(): void { this.externalFlushCloseAllowed = true }
-  /** Mark a SessionPersistence.flush callback as active for reentrant close fencing. */
-  beginExternalFlush(): void { this.externalFlushDepth += 1 }
-  /** Clear the SessionPersistence.flush callback marker. */
-  endExternalFlush(): void { this.externalFlushDepth -= 1 }
+  /**
+   * Flush on behalf of a `session/flush` listener. A close issued from inside this
+   * call's async stack is refused instead of joined, since it would await this flush.
+   * @returns the same settlement as {@link flush}.
+   */
+  flushForStore(): Promise<void> { return this.storeFlushScope.run(true, () => this.flush()) }
 
   /** Current flush generation, captured before a store flush begins. */
   get durabilityGeneration(): number { return this.flushGeneration }
@@ -330,7 +331,14 @@ export class JsonlSessionHandle implements SessionHandle {
   /**
    * Request handle close; reserved writers separate that request from actual
    * close admission until every reservation has released its final prefix.
-   * Idempotent and uncancellable.
+   * Idempotent and uncancellable: every caller shares one result, including a
+   * close that lands while a store flush for this Session is in flight. That
+   * close waits for the flush through the mutation chain and then closes; a
+   * reserved writer is fenced synchronously and a recorded failure is surfaced.
+   * The one exception is a close issued from inside the store-flush callback's
+   * own call stack ({@link flushForStore}): waiting would wait for itself, so
+   * that caller alone receives a rejection while the close still proceeds,
+   * fenced and joined like any other, for every other caller.
    * A write handle first drains its routed live buffer through the still-open
    * storage. Retained close joins its exact event-listener removal after lease
    * release; a drain, lease or remover failure rejects and retains uncertain
@@ -339,26 +347,18 @@ export class JsonlSessionHandle implements SessionHandle {
    * @returns settlement of the release.
    */
   close(): Promise<void> {
-    if (this.closing !== undefined) return this.closing
-    if (this.closeRequested) return this.closeJoin ?? Promise.reject(new Error(`session "${this.id}": close request is unresolved`))
-    if (this.externalFlushDepth > 0 && !this.externalFlushCloseAllowed) {
-      // A provider can reenter close from its own flush/append callback. Waiting
-      // for reservations here would wait for the callback that is awaiting close.
-      // Publish ordinary close admission, return a fast refusal to the reentrant
-      // caller, and let the actual close join the pins after the operation unwinds.
-      this.closeRequested = true
-      const result = Promise.withResolvers<void>()
-      this.closeJoin = result.promise
-      void result.promise.catch(() => {})
-      queueMicrotask(() => {
-        void (async () => {
-          await Promise.all([...this.pins].map(pin => pin.done))
-          this.closing = result.promise
-          await this.finishClose()
-        })().then(result.resolve, result.reject)
-      })
-      return Promise.reject(new Error(`session "${this.id}": close reentered during ${this.access} operation`))
-    }
+    const joined = this.joinClose()
+    if (this.storeFlushScope.getStore() !== true) return joined
+    void joined.catch((_error: unknown) => {
+      // The reentrant caller receives only the refusal; the real close result is
+      // reported to every caller outside the callback and recorded as uncertainty.
+    })
+    return Promise.reject(new Error(`session "${this.id}": close reentered during store flush`))
+  }
+
+  private joinClose(): Promise<void> {
+    // closeJoin is published in the same step that sets closeRequested, and closing is that same promise.
+    if (this.closeJoin !== undefined) return this.closeJoin
     if (!this.hasReservations && !this.lifetimeUncertain) return this.closeStock()
     this.retainedClose = true
     this.closeRequested = true
@@ -761,6 +761,7 @@ export class JsonlBackendTracker {
     const removers: (() => void)[] = []
     let unpin: (() => void) | undefined
     let newRoute: (() => void | Promise<void>) | undefined
+    let detachRoute: (() => void) | undefined
     let routeArmed = false
     const cleanup = (): void => {
       const errors: unknown[] = []
@@ -773,13 +774,19 @@ export class JsonlBackendTracker {
       const errors: unknown[] = []
       try { cleanup() } catch (error: unknown) { errors.push(error) }
       unpin?.()
-      try {
-        if (newRoute !== undefined && !writer.hasReservations) {
-          routeArmed = false
-          void newRoute()
+      if (newRoute !== undefined && detachRoute !== undefined && !writer.hasReservations) {
+        routeArmed = false
+        try {
+          // The routing entry stays until the listener is detached: a leaked listener
+          // with no entry would route every event a second time beside the install listener.
+          detachRoute()
           this.retainedRoutes.delete(writer)
-        }
-      } catch (error: unknown) { errors.push(error) }
+          void Promise.resolve(newRoute()).catch((error: unknown) => {
+            writer.retainFailure(new AggregateError([error], 'reservation route disposal failed'))
+            ctx.logger.warn(`session "${session.id}": retained route disposal failed after setup rollback: ${String(error)}`)
+          })
+        } catch (error: unknown) { errors.push(error) }
+      }
       done.resolve()
       if (errors.length > 0) {
         const failure = new AggregateError(errors, 'reservation rollback failed')
@@ -795,6 +802,7 @@ export class JsonlBackendTracker {
         let removeListener!: () => void
         let removal: Promise<void> | undefined
         const remove = (): Promise<void> => removal ??= Promise.resolve().then(removeListener)
+        detachRoute = () => { removeListener() }
         newRoute = ctx.root.effect(function* (this: JsonlBackendTracker) {
           removeListener = ctx.root.on('session/event', (exact: Session, event) => {
             if (exact !== session || this.writers.get(session.id) !== writer) return
@@ -803,13 +811,21 @@ export class JsonlBackendTracker {
               ctx.logger.warn(`session "${session.id}": reserved writer background drain failed: ${String(error)}`)
             })
           })
+          // The exact function `on` returned: yielding it moves its ownership into this effect.
           yield removeListener
           // Setup rollback must never close a writer belonging to an earlier pin.
           yield async () => {
             if (!routeArmed || writer.closeRequestedState) return
             const withdrawal = ctx.sessions.withdrawalOf(session)
             if (withdrawal !== undefined) {
-              try { await withdrawal } catch { return }
+              try {
+                await withdrawal
+              } catch (withdrawalFailure: unknown) {
+                // The Session may still publish: keep the open writer and its lease, and report it.
+                const failure = new Error(`session "${session.id}": retained writer kept open because Session withdrawal failed`, { cause: withdrawalFailure })
+                writer.retainFailure(failure)
+                throw failure
+              }
             }
             await writer.close()
           }
@@ -947,7 +963,13 @@ export class JsonlBackendTracker {
             const session = bindings.get(handle as JsonlSessionHandle)
             const withdrawal = session === undefined ? undefined : ctx.sessions.withdrawalOf(session)
             if (withdrawal !== undefined) {
-              try { await withdrawal } catch { continue }
+              try {
+                await withdrawal
+              } catch (withdrawalFailure: unknown) {
+                // The Session may still publish: leave the handle open with its lease, and report it.
+                errors.push(new Error(`${name}: session "${handle.id}" write handle kept open because Session withdrawal failed`, { cause: withdrawalFailure }))
+                continue
+              }
             }
             await handle.close()
           } catch (error: unknown) {
@@ -980,12 +1002,7 @@ export class JsonlBackendTracker {
         if (writer === null || writer === undefined) return undefined
         return (async () => {
           await writer.drainLive()
-          writer.beginExternalFlush()
-          try {
-            await writer.flush()
-          } finally {
-            writer.endExternalFlush()
-          }
+          await writer.flushForStore()
           if (this.active && writer.durabilityOpen && writers.get(session.id) === writer) {
             flushReceipts.set(writer, (flushReceipts.get(writer) ?? 0) + 1)
           }
