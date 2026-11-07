@@ -20,11 +20,11 @@ it('the owner hands the coordinator role to an active member that has finished i
     () => ({ call: 'workstream_open', args: { operation_id: 'open', title: 'Handoff' } }),
     () => ({ call: 'workstream_add_member', args: { root_session_id: ROOT, operation_id: 'add-lead', name: 'lead', description: 'leads',
       provider: 'spawn', prompt: 'ROLE:lead' } }),
-    (r) => { memberId = r.at(-1)!.json!.id; return { call: 'workstream_create_ticket', args: { root_session_id: ROOT, ticket_id: 't1', subject: 'Do', description: 'Do it' } } },
+    (r) => { memberId = (r.at(-1)!.json as { id: string }).id; return { call: 'workstream_create_ticket', args: { root_session_id: ROOT, ticket_id: 't1', subject: 'Do', description: 'Do it' } } },
     () => ({ text: 'waiting for the lead to report ready' }),
     // Woken by the lead's settlement notice ("finished ... ready"): the lead is an active member; hand it the role.
     () => ({ call: 'workstream_get', args: { root_session_id: ROOT } }),
-    r => ({ call: 'workstream_handoff', args: { root_session_id: ROOT, expected_revision: r.at(-1)!.json!.revision, coordinator_id: memberId } }),
+    r => ({ call: 'workstream_handoff', args: { root_session_id: ROOT, expected_revision: (r.at(-1)!.json as { revision: number }).revision, coordinator_id: memberId } }),
     () => ({ call: 'workstream_send', args: { root_session_id: ROOT, operation_id: 'go', target_id: memberId, text: 'publish' } }),
     () => ({ text: 'handed off' }),
   ]

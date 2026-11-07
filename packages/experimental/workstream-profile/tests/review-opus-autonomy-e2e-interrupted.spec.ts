@@ -27,7 +27,7 @@ it('after a restart, a member whose turn the shutdown aborted is resumed or repo
     () => ({ call: 'workstream_open', args: { operation_id: 'open', title: 'Ship it' } }),
     () => ({ call: 'workstream_add_member', args: { root_session_id: ROOT, operation_id: 'add-w', name: 'writer', description: 'writes',
       provider: 'spawn', prompt: 'ROLE:writer' } }),
-    (r) => { memberId = r.at(-1)!.json!.id; return { call: 'workstream_create_ticket', args: { root_session_id: ROOT, ticket_id: 't1', subject: 'Do', description: 'Do it' } } },
+    (r) => { memberId = (r.at(-1)!.json as { id: string }).id; return { call: 'workstream_create_ticket', args: { root_session_id: ROOT, ticket_id: 't1', subject: 'Do', description: 'Do it' } } },
     () => ({ call: 'workstream_assign_ticket', args: { root_session_id: ROOT, ticket_id: 't1', expected_revision: 1, owner_id: memberId, subject: 'Part' } }),
     () => ({ call: 'workstream_send', args: { root_session_id: ROOT, operation_id: 'go-1', target_id: memberId, text: 'go' } }),
     () => ({ text: 'waiting for the writer' }),
@@ -50,7 +50,7 @@ it('after a restart, a member whose turn the shutdown aborted is resumed or repo
   const owner2: ScriptStep[] = [
     () => ({ call: 'workstream_get', args: { root_session_id: ROOT } }),
     () => ({ call: 'ticket_get', args: { root_session_id: ROOT, ticket_id: 't1' } }),
-    r => ({ call: 'workstream_wait', args: { root_session_id: ROOT, after_revision: r.at(-2)!.json!.revision, timeout_ms: 3000 } }),
+    r => ({ call: 'workstream_wait', args: { root_session_id: ROOT, after_revision: (r.at(-2)!.json as { revision: number }).revision, timeout_ms: 3000 } }),
   ]
   adapter2.brain = scripted(request => request.session === ROOT ? owner2 : undefined, { text: 'resumed member' })
   ctx = await boot(world, adapter2)
