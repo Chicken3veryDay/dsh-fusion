@@ -87,7 +87,7 @@ kind: "package-reference"
 
 `structural: ready` 只表示不进行推理的检查通过。覆盖仍为 `live-unverified`，`defaultEligible` 始终为 false，`productAdmission` 在下游安全验证完成前仍不可用。即使显式配置满足结构检查，缺失的提供方能力元数据仍会在凭据中标为 absent。可用元数据与配置冲突时阻止绑定。
 
-OpenAI Responses 使用 `${baseURL}/models`；仅当推理 API 使用 `/v1` 时才在 `baseURL` 中包含该路径。Anthropic Messages 使用 `${baseURL}/v1/models`，不会重复末尾的 `/v1`。
+OpenAI Responses 使用 `${baseURL}/models`；仅当推理 API 使用 `/v1` 时才在 `baseURL` 中包含该路径。Anthropic Messages 使用 `${baseURL}/v1/models`，即其客户端发送 `/v1/messages` 的根路径，因此 `baseURL` 不包含 `/v1`。
 
 ## Understand the implementation
 

@@ -87,7 +87,7 @@ A selection's topology is `top` with `userFacingLead`, `otherCoLead` and `execut
 
 `structural: ready` means the non-inference checks passed. Coverage remains `live-unverified`, `defaultEligible` remains false, and `productAdmission` remains unavailable until downstream runtime safety checks exist. Missing provider capability metadata is retained as absent in the sanitized receipt even when explicit configuration establishes structural readiness. Conflicting available metadata blocks the binding.
 
-OpenAI Responses lists `${baseURL}/models`; include `/v1` in `baseURL` only when the inference API uses it. Anthropic Messages lists `${baseURL}/v1/models` without duplicating a trailing `/v1`.
+OpenAI Responses lists `${baseURL}/models`; include `/v1` in `baseURL` only when the inference API uses it. Anthropic Messages lists `${baseURL}/v1/models`, the root its client posts `/v1/messages` to, so `baseURL` excludes `/v1`.
 
 ## Understand the implementation
 

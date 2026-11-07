@@ -59,7 +59,8 @@ class MetadataFailure extends Error {
 export function metadataEndpoint(binding: Binding): URL {
   const base = new URL(binding.baseURL)
   const path = base.pathname.replace(/\/$/u, '')
-  base.pathname = binding.transport === 'openai-responses' ? `${path}/models` : `${path.replace(/\/v1$/u, '')}/v1/models`
+  // Each client appends its own API version: OpenAI posts to `<base>/responses`, Anthropic to `<base>/v1/messages`.
+  base.pathname = binding.transport === 'openai-responses' ? `${path}/models` : `${path}/v1/models`
   return base
 }
 
