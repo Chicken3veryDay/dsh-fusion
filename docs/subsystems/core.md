@@ -1781,7 +1781,8 @@ list(caller: Agent): WorkstreamSnapshot[]
  * @param caller - owner or current coordinator.
  * @param rootSessionId - stable technical owner.
  * @param request - immutable intent and cancellation before acceptance.
- * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.
+ * @returns active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch, and a Subagent
+ * activation-limit refusal throws WORKSTREAM_CAPACITY with no member recorded.
  */
 async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember>
 

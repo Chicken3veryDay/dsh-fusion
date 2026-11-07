@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage, LlmAdapter, type GenerateOptions, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, LlmAdapter, ToolCallId, type GenerateOptions, type RequestMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { afterAll, afterEach, expect, it } from 'vitest'
 import { bootProductionProfile } from '../../../test-support/loader-smoke/tests/fixtures/production-profile.ts'
@@ -21,14 +21,13 @@ export type Brain = (request: Request, step: number, last: string | undefined) =
 /** The abort reason as an Error, so a rejection always carries one. */
 const abortError = (signal: AbortSignal): Error => signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason))
 
-const textOf = (message: { content: readonly { text?: string }[] | string }): string =>
-  typeof message.content === 'string' ? message.content : message.content.map(block => block.text ?? '').join('')
+const textOf = (message: RequestMessage): string => message.content.map(block => block.type === 'text' ? block.text : '').join('')
 
 export class ScriptAdapter extends LlmAdapter {
   readonly requests: Request[] = []
   brain: Brain = () => ({ text: 'done' })
-  listModels(provider: string) { return Promise.resolve(['deepseek-v4-flash', 'curator-small'].map(id => ({ provider, id, name: id }))) }
-  resolveModel(provider: string, model: string) {
+  override listModels(provider: string) { return Promise.resolve(['deepseek-v4-flash', 'curator-small'].map(id => ({ provider, id, name: id }))) }
+  override resolveModel(provider: string, model: string) {
     const small = model === 'curator-small'
     return Promise.resolve({ provider, id: model, name: model, context: { contextWindow: small ? 40_000 : 200_000 },
       reasoning: { efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }], defaultEffort: small ? 'low' : 'high' } }) as never
@@ -57,7 +56,7 @@ export class ScriptAdapter extends LlmAdapter {
     }
     if ('fail' in next) throw new Error(next.fail)
     if ('call' in next) {
-      const id = next.id ?? `${next.call}-${String(this.requests.length)}`
+      const id = ToolCallId(next.id ?? `${next.call}-${String(this.requests.length)}`)
       const args = JSON.stringify(next.args)
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
       yield { type: 'tool-call-delta', index: 0, id, name: next.call, argumentsDelta: args }

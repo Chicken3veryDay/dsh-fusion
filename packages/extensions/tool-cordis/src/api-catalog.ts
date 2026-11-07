@@ -5479,7 +5479,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'async addMember(caller: Agent, rootSessionId: SessionId, request: AddWorkstreamMemberRequest): Promise<WorkstreamMember>',
         description: 'Provision or reconcile one continuable direct child under a stable operation id.',
         parameters: [{ name: 'caller', description: 'owner or current coordinator.' }, { name: 'rootSessionId', description: 'stable technical owner.' }, { name: 'request', description: 'immutable intent and cancellation before acceptance.' }],
-        returns: 'active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch.',
+        returns: 'active member; unresolved prior effects throw WORKSTREAM_UNKNOWN without another launch, and a Subagent activation-limit refusal throws WORKSTREAM_CAPACITY with no member recorded.',
       },
       {
         signature: 'async handoff(caller: Agent, rootSessionId: SessionId, request: { expectedRevision: number; coordinatorId: SessionId }): Promise<WorkstreamSnapshot>',
