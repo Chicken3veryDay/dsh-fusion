@@ -210,6 +210,8 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
     if (interaction !== undefined) {
       yield interaction.register({
         domain: 'browser',
+        // Same source as the raw-tool masks and the tools/execute guard: only a ready activation uses the browser.
+        admits: agent => clients.get(agent)?.status === 'ready',
         describe: () => {
           const live = [...servers.values()].map(server => operations.methods(raw => server.current().has(raw)))
           const methods = live.length === 0
