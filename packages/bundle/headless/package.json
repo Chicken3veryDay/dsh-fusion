@@ -76,7 +76,12 @@
     "@deepseek-ai/dsh-permission-presets": "workspace:*",
     "@deepseek-ai/dsh-sandbox-policy": "workspace:*",
     "@deepseek-ai/dsh-subagent": "workspace:*",
-    "@deepseek-ai/dsh-user-approval": "workspace:*"
+    "@deepseek-ai/dsh-user-approval": "workspace:*",
+    "@deepseek-ai/dsh-ptc-runtime-node": "workspace:*",
+    "@deepseek-ai/dsh-sandbox-local": "workspace:*",
+    "@deepseek-ai/dsh-subprocess-local": "workspace:*",
+    "@deepseek-ai/dsh-tool-executor-ptc": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-permission-presets": {

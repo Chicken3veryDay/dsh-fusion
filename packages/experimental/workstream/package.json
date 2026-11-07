@@ -68,6 +68,12 @@
     "@deepseek-ai/dsh-subagent-fork-in-process": "workspace:*",
     "@deepseek-ai/dsh-subagent-spawn-in-process": "workspace:*",
     "@deepseek-ai/dsh-experimental-ticket": "workspace:*",
-    "@deepseek-ai/dsh-tools": "workspace:*"
+    "@deepseek-ai/dsh-tools": "workspace:*",
+    "@deepseek-ai/dsh-fs-local": "workspace:*",
+    "@deepseek-ai/dsh-ptc-runtime-node": "workspace:*",
+    "@deepseek-ai/dsh-sandbox-local": "workspace:*",
+    "@deepseek-ai/dsh-sandbox-policy": "workspace:*",
+    "@deepseek-ai/dsh-subprocess-local": "workspace:*",
+    "@deepseek-ai/dsh-tool-testkit": "workspace:*"
   }
 }

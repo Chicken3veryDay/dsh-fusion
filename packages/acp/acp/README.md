@@ -70,7 +70,7 @@ One connection can run several sessions at once, each independent. The calls a c
 | `session/set_config_option` | A serialized update to the advertised `model` or `reasoning_effort`, returning the complete resulting state. |
 | `session/prompt` | Ordered text, resource links, and supported images, one prompt at a time per session; settlement follows root and descendant completion plus ordered update delivery. |
 | `session/cancel` / `$/cancel_request` | The prompt-owned cancellation path; without an ACP prompt in flight it cancels autonomous work, while unknown session ids are no-ops. |
-| `session/update` | Committed assistant messages and thoughts, generic tool lifecycle, configuration changes, and context usage, serialized per session. |
+| `session/update` | Committed assistant messages and thoughts, generic tool lifecycle (including calls made inside a `run_code` program), configuration changes, and context usage, serialized per session. |
 | `session/request_permission` | A permission prompt with one-shot allow/reject choices; your client can answer automatically. |
 
 Session listing and resume admit ordinary forks, including historical logs with `parentSession`; `origin: subagent` remains excluded.
@@ -174,6 +174,7 @@ These limits define when this package is a poor fit or needs special operational
 - **One primary workspace** — additional directories remain unsupported.
 - **Raster prompt images only** — PNG, JPEG, WebP, and GIF require a durable attachment store and an exact image-capable route.
 - **MCP tools only** — MCP resources and prompts have no DSH consumer.
+- **Nested `run_code` calls are parented by `_meta`** — a call made inside a `run_code` program arrives as its own `tool_call` and `tool_call_update` keyed by its sub-call id (`<run_code id>:ptc:<n>`), with `_meta["dsh/parentToolCallId"]` naming the program call, because ACP has no parent field. One permission request covers the whole program and names the `run_code` call, whose `tool_call` update (titled `run_code`, input carrying the program description and any requested sandbox mode and justification) precedes it; the request carries no separate reason text.
 - **No transcript replay or interactive extensions** — session deletion, fork, `session/load`, modes, commands, plans, terminals, client filesystem operations, and elicitation remain outside this automation surface.
 
 <a id="dev-note"></a>

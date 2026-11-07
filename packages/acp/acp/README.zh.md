@@ -70,7 +70,7 @@ kind: "package-reference"
 | `session/set_config_option` | 串行更新公布的 `model` 或 `reasoning_effort`，并返回完整结果状态。 |
 | `session/prompt` | 有序文本、资源链接与受支持图片，每个会话一次一个提示词；根 Agent 与后代完成且有序更新交付后才结算。 |
 | `session/cancel` / `$/cancel_request` | 提示词所拥有的取消路径；没有进行中的 ACP 提示词时取消自主工作，未知会话 id 则为空操作。 |
-| `session/update` | 已提交 assistant 消息与 thought、通用工具生命周期、配置变化与上下文用量，按会话串行交付。 |
+| `session/update` | 已提交 assistant 消息与 thought、通用工具生命周期（含在 `run_code` 程序内发起的调用）、配置变化与上下文用量，按会话串行交付。 |
 | `session/request_permission` | 带一次性允许／拒绝选项的权限提示；你的客户端可以自动回答。 |
 
 会话列表和恢复允许普通 fork，包括含有 `parentSession` 的历史日志；`origin: subagent` 仍被排除。
@@ -174,6 +174,7 @@ kind: "package-reference"
 - **仅一个主 workspace**——附加目录仍不支持。
 - **仅光栅提示词图片**——PNG、JPEG、WebP 与 GIF 要求持久附件存储及确切的图片能力路由。
 - **仅 MCP 工具**——MCP resource 与 prompt 没有 DSH 消费方。
+- **`run_code` 内的嵌套调用通过 `_meta` 关联父调用**——在 `run_code` 程序内发起的调用，会以其子调用 id（`<run_code id>:ptc:<n>`）为键单独到达 `tool_call` 与 `tool_call_update`，并以 `_meta["dsh/parentToolCallId"]` 指明所属程序调用，因为 ACP 没有父级字段。一次权限请求覆盖整个程序并指向该 `run_code` 调用；其 `tool_call` 更新（标题为 `run_code`，输入包含程序描述以及所请求的沙箱模式与理由）先于请求到达，请求本身不带单独的理由文本。
 - **没有 transcript 回放或交互式扩展**——会话删除、fork、`session/load`、mode、命令、计划、终端、客户端文件系统操作与 elicitation 仍不属于此自动化界面。
 
 <a id="dev-note"></a>

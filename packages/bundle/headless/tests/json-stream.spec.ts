@@ -3,7 +3,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import { boundJsonLine, MAX_STRING_BYTES, projectJsonRun, type JsonProjectionOptions } from '../src/json-stream.ts'
 
 interface ProjectionHarness {
@@ -435,6 +438,23 @@ describe('--json projection', () => {
     test.emitSession(assistantMessage([{ type: 'text', text: 'late' }]))
     test.projection.finish('ignored')
     expect(test.parsed().map(event => event.type)).toEqual(['session'])
+  })
+
+  it('keeps the durable error fields of a failed nested run_code call', () => {
+    const test = harness()
+    const dispatch: SessionEvent<'tool/ptc-dispatch'> = {
+      type: 'tool/ptc-dispatch', seq: SessionSeq(0), time: 0,
+      data: {
+        rootCallId: ToolCallId('run-1'), parentCallId: ToolCallId('run-1'), subCallId: ToolCallId('run-1:ptc:1'), name: 'bash', arguments: {},
+        isError: true, content: [{ type: 'text', text: 'denied' }],
+        error: { name: 'AutoReviewDeniedError', code: 'AUTO_REVIEW_DENIED' },
+      },
+    }
+    test.emitSession(dispatch)
+    expect(test.parsed().at(-1)).toEqual({
+      type: 'tool_result', callId: 'run-1:ptc:1', parentCallId: 'run-1', status: 'error', result: 'denied',
+      error: { name: 'AutoReviewDeniedError', code: 'AUTO_REVIEW_DENIED' },
+    })
   })
 
   it('bounds one projected payload through the line writer', () => {

@@ -114,6 +114,7 @@ Workstream 所有者被恢复时，服务会读取每个没有已注册 Agent �
 - 交接会移动所有由 Workstream 成员协调的未结根 Ticket，包括直接通过 `ctx.tickets` 创建的 Ticket。Ticket 历史不记录是谁移动了 Ticket。并发的 Ticket 修改（包括所有者将其交回）可能让某个 Ticket 保持待移动状态，直到重试 `handoff`。创建时显式指定所有者之外协调者的直接 Ticket 会保持该协调者，直到交接将其移动。
 - 被关闭或重新加载停止本轮的成员只会报告给被恢复的所有者，而不会被恢复；在所有者向它发送消息或停止它之前，它的成员身份仍为 `active`，Ticket 分配保持已记录的状态。该报告在每次恢复所有者时为每个此类成员读取一次 Session 日志，并在该成员最后一轮完成之前于每次恢复时重复。
 - 不确定的成员创建或消息投递返回 `WORKSTREAM_UNKNOWN`。仅当调用方用同一操作重试时，服务才会对账；它从不自行重新启动子 Session 或重发消息。
+- 在 Node PTC `run_code` 程序内，`workstream_wait` 还受程序 `timeoutMs`（默认 120 秒，最多 600 秒）限制。程序先结束时，等待随之取消，其变更监听器被移除，程序以超时错误失败。不会丢失唤醒，因为 `revision` 和 `cursor` 是持久的：之后用最近一对值再次调用 `workstream_wait`，会对此后提交的任何变更立即返回。请让 `timeout_ms` 小于程序超时，或在 `run_code` 之外等待。
 
 <a id="dev-note"></a>
 ### 开发备注

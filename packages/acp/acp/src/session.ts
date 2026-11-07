@@ -18,7 +18,7 @@ import { AcpContentError, admitAcpPrompt } from './content.ts'
 import { turnEndToStopReason } from './codec.ts'
 import { mountAcpMcpServers } from './mcp.ts'
 import { AcpModelControl } from './model-control.ts'
-import { assistantUpdates, toolCallUpdate, toolResultUpdate } from './updates.ts'
+import { assistantUpdates, ptcDispatchStartUpdate, ptcDispatchUpdate, toolCallUpdate, toolResultUpdate } from './updates.ts'
 
 /** Subagent completion and teardown without depending on the subagent package. */
 interface SubagentLifecycle {
@@ -355,6 +355,27 @@ export class AcpSession {
           /* v8 ignore start -- supplemental-content conversion failure is contained and cannot fail Agent work. */
           .catch((error: unknown) => {
             this.ctx.logger.warn(`acp: tool-result update delivery failed: ${errorChain(error)}`)
+          })
+        /* v8 ignore stop */
+      } else if (event.type === 'tool/ptc-dispatch-start') {
+        const previous = this.outputTail
+        this.outputTail = previous
+          .then(() => this.notify({ sessionId: this.agent.session.id, update: ptcDispatchStartUpdate(event) }))
+          /* v8 ignore start -- the bridge notifier contains transport rejection. */
+          .catch((error: unknown) => {
+            this.ctx.logger.warn(`acp: nested tool-call update delivery failed: ${errorChain(error)}`)
+          })
+        /* v8 ignore stop */
+      } else if (event.type === 'tool/ptc-dispatch') {
+        const previous = this.outputTail
+        this.outputTail = previous
+          .then(async () => this.notify({
+            sessionId: this.agent.session.id,
+            update: await ptcDispatchUpdate(this.ctx, event),
+          }))
+          /* v8 ignore start -- supplemental-content conversion failure is contained and cannot fail Agent work. */
+          .catch((error: unknown) => {
+            this.ctx.logger.warn(`acp: nested tool-result update delivery failed: ${errorChain(error)}`)
           })
         /* v8 ignore stop */
       }

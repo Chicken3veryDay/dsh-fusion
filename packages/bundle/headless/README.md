@@ -103,6 +103,8 @@ For model-reviewed full-access execution, explicitly enable [Auto review for hea
 
 `tool_result.error`, when present, preserves the durable `{ name, code, reason? }` error fields under the same output limits. `AUTO_REVIEW_DENIED` identifies a final policy denial; `AUTO_REVIEW_FAILED` identifies a reviewer failure. Either leaves the call body unexecuted. A truncated record may omit structured detail; inspect the persisted Session when the complete reason is needed.
 
+A call made inside a `run_code` program is also streamed: its `tool_call` and `tool_result` carry the sub-call id (`<run_code id>:ptc:<n>`) as `callId`, plus a `parentCallId` naming the `run_code` call, which still emits its own `tool_call` and `tool_result` around them. Top-level events have no `parentCallId`, and a nested `tool_call.input` is the JSON-normalized argument object the program passed.
+
 ### When to use it
 
 Use headless for scripted or automated dsh runs — CI steps, batch jobs, quick answers from a terminal. Avoid it when you need a multi-turn interactive session or a GUI; the browser surface ([dsh-web-app](../web-app/README.md)) serves that. The process stays alive only for the run, opens no listening port, and exits on its own, so it fits pipelines that wait on the process. When a supervisor needs progress rather than just the answer, `--json` gives it the event stream and `--session-id` lets a later invocation continue the same conversation.
