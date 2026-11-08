@@ -1,7 +1,7 @@
 /**
- * Recorded wire shapes for the subscription providers DSH signs in to directly:
+ * Synthetic wire responses for the subscription providers DSH signs in to directly:
  * ChatGPT's Codex Responses backend and GitHub Copilot. Nothing here reaches a
- * vendor; each case replays a scripted response and asserts what DSH sent and
+ * vendor; each case supplies a scripted response and asserts what DSH sent and
  * what it made of the reply. Anything only a live subscription can show is
  * listed in the package README.
  */
