@@ -225,7 +225,7 @@ describe('mounting the account documents', () => {
     expect(await offer(ctx, 'RATE_LIMIT')).toBeUndefined()
   })
 
-  it('mounts nothing for an update that arrives while an unload waits on a mount', async () => {
+  it('mounts nothing for an update queued behind a mount that an unload is waiting on', async () => {
     const server = await mockServer([ok])
     const { ctx, settingsPath } = await loadComposition()
     const first = await document('account-1')
@@ -238,10 +238,10 @@ describe('mounting the account documents', () => {
     await writeFile(settingsPath, settings(server.url, { 'account-1': first, 'account-2': second }))
     await mountedFirst
 
-    const disposing = disposeComposition()
-    // The unload has begun and waits for the mount. A settings update now queues a second application.
-    await new Promise<void>((resolve) => { setTimeout(resolve, 100) })
+    // A settings update queues a second application behind the stuck mount, then the unload begins and waits for it.
     ctx.emit('loader/volatile-update', [])
+    const disposing = disposeComposition()
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100) })
     await writeFile(second, [
       'version: 1', 'records:', '  llm-pi-ai/anthropic:', '    kind: grant',
       `    payload: { type: oauth, access: ${token('account-2')}, refresh: r, expires: 4102444800000 }`, '',
