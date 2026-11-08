@@ -1,0 +1,9 @@
+version: 1
+scenario: file-upload-round-script
+profile: web
+composition: web-script
+recording: authored
+header:
+  class: web-script
+replay:
+  override: true

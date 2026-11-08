@@ -9,6 +9,7 @@
 // Record: DSH_SNAPSHOT=record rewrites session.v3.jsonl, then a keyless
 // DSH_SNAPSHOT=refresh regenerates ui.expected.md.
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
@@ -20,12 +21,15 @@ import {
 } from './scaffold.ts'
 import { connectFreshWorkspace, newEnglishPage, saveFailureShot } from './support.ts'
 
-const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/file-upload-round', import.meta.url))
-const FIXTURE = fileURLToPath(new URL('../../../snapshots/web/file-upload-round/session.v3.jsonl', import.meta.url))
-const UI_EXPECTED = fileURLToPath(new URL('../../../snapshots/web/file-upload-round/ui.expected.md', import.meta.url))
-const TRAJECTORY_EXPECTED = fileURLToPath(new URL('../../../snapshots/web/file-upload-round/trajectory.expected.md', import.meta.url))
-const TRAJECTORY_STATUS_EXPECTED = fileURLToPath(new URL('../../../snapshots/web/file-upload-round/trajectory-status.expected.md', import.meta.url))
-const OVERRIDE = fileURLToPath(new URL('../../../snapshots/web/file-upload-round/replay.override.json', import.meta.url))
+const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/file-upload-round-script', import.meta.url))
+const EXPECTED_DIR = fileURLToPath(new URL('./expected/file-upload-round-script/', import.meta.url))
+// The native generations stay committed and owned; this scenario drives the Script default.
+const NATIVE_SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/file-upload-round', import.meta.url))
+const FIXTURE = join(SNAPSHOT_DIR, 'session.v4.jsonl')
+const UI_EXPECTED = join(EXPECTED_DIR, 'ui.expected.md')
+const TRAJECTORY_EXPECTED = join(EXPECTED_DIR, 'trajectory.expected.md')
+const TRAJECTORY_STATUS_EXPECTED = join(EXPECTED_DIR, 'trajectory-status.expected.md')
+const OVERRIDE = join(SNAPSHOT_DIR, 'replay.override.json')
 const DRAFT_EXPECTED = fileURLToPath(new URL('./expected/file-upload-round/draft.expected.md', import.meta.url))
 const HISTORY_EXPECTED = fileURLToPath(new URL('./expected/file-upload-round/history.expected.md', import.meta.url))
 const IMAGE_FIXTURE = fileURLToPath(new URL('../../../snapshots/session/read-image/workspace/red.png', import.meta.url))
@@ -34,7 +38,7 @@ const MODE = webSnapshotMode()
 /** The uploaded fixture file: constant bytes so record and replay share one content digest. */
 const FILE_NAME = 'poem.txt'
 const FILE_TEXT = 'UPLOAD_ROUND_OK\n'
-const PROMPT = 'Read the attached file with the read tool, reply with exactly the single word it contains, and stop.'
+const PROMPT = 'Using one run_code program, read the attached file with the read tool and return its contents, then reply with exactly the single word the file contains, and stop.'
 const IMAGE_NAMES = Array.from({ length: 10 }, (_unused, index) => `reference-${String(index + 1)}.png`)
 
 /** Browser-measured relations for the mixed composer attachment rail. */
@@ -306,21 +310,28 @@ describe('web e2e: generic file upload through the real assembly', () => {
     expect(fileBlock.attachment.bytes).toBe(Buffer.byteLength(FILE_TEXT))
     expect(String(fileBlock.attachment.attachmentId)).toMatch(/^sha256:[0-9a-f]{64}$/)
 
-    const readCall = sessionEvents.find(
+    const program = sessionEvents.find(
       (event): event is Extract<SessionEvent, { type: 'tool/call' }> =>
-        event.type === 'tool/call' && event.data.name === 'read',
+        event.type === 'tool/call' && event.data.name === 'run_code',
     )
-    if (readCall === undefined) throw new Error('the replayed turn did not call the read tool')
-    expect(readCall.data.arguments).toContain(FILE_NAME)
-    const readResult = sessionEvents.find(
+    if (program === undefined) throw new Error('the replayed turn did not call run_code')
+    expect(sessionEvents.filter(event => event.type === 'tool/call').map(event => event.data.name)).toEqual(['run_code'])
+    const programResult = sessionEvents.find(
       (event): event is Extract<SessionEvent, { type: 'tool/result' }> =>
-        event.type === 'tool/result' && event.data.message.source.callId === readCall.data.callId,
+        event.type === 'tool/result' && event.data.message.source.callId === program.data.callId,
     )
-    if (readResult === undefined) throw new Error('the read call produced no durable result')
-    const message = readResult.data.message
-    expect(message.isError).toBe(false)
-    expect(message.content.filter(block => block.type === 'text').map(block => block.text).join(''))
-      .toContain('UPLOAD_ROUND_OK')
+    if (programResult === undefined) throw new Error('the run_code call produced no durable result')
+    expect(programResult.data.message.isError).toBe(false)
+    // The nested read of the stored copy is the independent effect: its bytes are the uploaded text.
+    const readDispatch = sessionEvents.find(
+      (event): event is Extract<SessionEvent, { type: 'tool/ptc-dispatch' }> => event.type === 'tool/ptc-dispatch',
+    )
+    if (readDispatch === undefined) throw new Error('the program recorded no nested tool result')
+    expect(readDispatch.data.name).toBe('read')
+    expect(readDispatch.data.isError).toBe(false)
+    expect(JSON.stringify(readDispatch.data.arguments)).toContain(FILE_NAME)
+    expect(readDispatch.data.content.filter(block => block.type === 'text').map(block => block.text).join(''))
+      .toContain(FILE_TEXT.trimEnd())
 
     const turnEnds = sessionEvents.filter(event => event.type === 'turn/end')
     expect(turnEnds.length).toBe(1)
@@ -430,7 +441,9 @@ describe('web e2e: generic file upload through the real assembly', () => {
   it.skipIf(MODE === 'record')('stayed clean and kept the exact fixture inventory', async () => {
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
-    await assertFixtureInventory(SNAPSHOT_DIR, [
+    await assertFixtureInventory(SNAPSHOT_DIR, ['session.v4.jsonl', 'replay.override.json'])
+    await assertFixtureInventory(EXPECTED_DIR, ['ui.expected.md', 'trajectory.expected.md', 'trajectory-status.expected.md'])
+    await assertFixtureInventory(NATIVE_SNAPSHOT_DIR, [
       'session.v3.jsonl', 'replay.override.json', 'ui.expected.md', 'trajectory.expected.md', 'trajectory-status.expected.md',
     ])
   })
