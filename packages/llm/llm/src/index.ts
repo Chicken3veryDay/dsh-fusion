@@ -1019,7 +1019,14 @@ export class LlmRuntime extends TypertRemoteService {
 
   private registration(provider: string): AdapterRegistration {
     const registration = this.adapters.get(provider)
-    if (!registration) throw new LlmError(`no adapter registered for provider "${provider}"`, 'NO_ADAPTER')
+    if (!registration) {
+      // A provider an adapter can activate but that has no route is signed out or unconfigured;
+      // say how to fix it rather than leaving the caller to guess between a typo and a missing sign-in.
+      const setup = this.directory.has(provider)
+        ? '; this provider is available but not set up: sign in or add its credential in the Models settings, or select another model'
+        : ''
+      throw new LlmError(`no adapter registered for provider "${provider}"${setup}`, 'NO_ADAPTER')
+    }
     return registration
   }
 

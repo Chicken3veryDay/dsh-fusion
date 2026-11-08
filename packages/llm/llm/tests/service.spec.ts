@@ -426,6 +426,23 @@ describe('LlmRuntime', () => {
     expect(finish.reason.failure.message).toContain('no adapter registered')
   })
 
+  it('tells a caller whose provider is available but has no route how to set it up', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerConfigurableProviders([
+      { provider: 'signed-out', displayName: 'Signed out', settingsNs: 'x', settingsPath: ['providers', 'signed-out'] },
+    ])
+
+    await expect(ctx.llm.listModels('signed-out')).rejects.toMatchObject({
+      code: 'NO_ADAPTER',
+      message: expect.stringContaining('sign in or add its credential in the Models settings') as string,
+    })
+    // A name no adapter could ever serve gets no setup advice.
+    await expect(ctx.llm.listModels('typo')).rejects.toMatchObject({
+      message: 'no adapter registered for provider "typo"',
+    })
+  })
+
   it.each(['done', 'value'] as const)('normalizes a throwing IteratorResult.%s getter', async (field) => {
     const original = new LlmError(`${field} getter failed`, 'RESULT_GETTER_FAILED')
     const result = field === 'done' ? {} : { done: false }
