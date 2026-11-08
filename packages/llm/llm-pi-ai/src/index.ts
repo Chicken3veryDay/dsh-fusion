@@ -609,10 +609,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       ctx.logger.error(error)
       return
     }
-    if (!mounted()) {
-      await retire()
-      return
-    }
     retirePool = retire
     pool = new AccountPool(spec, stores)
   }
@@ -625,6 +621,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.on('loader/volatile-update', () => { void reconcilePool() })
   ctx.effect(() => async () => {
     unloaded = true
+    // An application that was mounting finishes first, so a pool it publishes during unload is retired below.
     await applying
     pool = undefined
     await retirePool?.()

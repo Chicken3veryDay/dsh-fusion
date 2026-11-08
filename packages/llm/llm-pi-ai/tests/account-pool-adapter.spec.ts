@@ -394,6 +394,77 @@ describe('abort and reservations', () => {
     idle(pool, 'account-1')
   })
 
+  it('releases a claim that completed in the same instant the preparation was aborted', async () => {
+    const { adapter, runtime, pool } = await rig([ok])
+    const ctx = await runtime()
+    const controller = new AbortController()
+    const original = adapter['claimAccount'].bind(adapter)
+    // Abort after the claim has resolved the preparation but before the preparation continues: two microtask turns.
+    adapter['claimAccount'] = async (...args) => {
+      const claim = await original(...args)
+      void Promise.resolve().then(() => undefined).then(() => { controller.abort(new Error('late abort')) })
+      return claim
+    }
+    const release = vi.spyOn(pool!, 'release')
+    await expect(ctx.llm.prepareCall(CALL, controller.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(release).toHaveBeenCalledOnce()
+    idle(pool, 'account-1')
+  })
+
+  it('releases a claim that completed after the abort won the race', async () => {
+    const { adapter, runtime, pool } = await rig([ok])
+    const ctx = await runtime()
+    const controller = new AbortController()
+    const original = adapter['claimAccount'].bind(adapter)
+    // The abort lands after the claim exists but before the preparation can take ownership of it.
+    adapter['claimAccount'] = async (...args) => {
+      const claim = await original(...args)
+      controller.abort(new Error('abort at completion'))
+      return claim
+    }
+    const release = vi.spyOn(pool!, 'release')
+    await expect(ctx.llm.prepareCall(CALL, controller.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    await vi.waitFor(() => { expect(release).toHaveBeenCalledOnce() })
+    idle(pool, 'account-1')
+  })
+
+  it('keeps a cooling outcome harmless when the preparation is aborted at the same instant', async () => {
+    const { adapter, runtime, pool } = await rig([ok])
+    pool?.settle('account-1', 'fp', { code: 'RATE_LIMIT', providerRetryAfterMs: 5000 })
+    pool?.settle('account-2', 'fp', { code: 'RATE_LIMIT', providerRetryAfterMs: 6000 })
+    const ctx = await runtime()
+    const controller = new AbortController()
+    const original = adapter['claimAccount'].bind(adapter)
+    adapter['claimAccount'] = async (...args) => {
+      const claim = await original(...args)
+      void Promise.resolve().then(() => undefined).then(() => { controller.abort(new Error('late abort')) })
+      return claim
+    }
+    await expect(ctx.llm.prepareCall(CALL, controller.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(pool?.earliestReset()).toEqual({ delayMs: 5000, code: 'RATE_LIMIT' })
+  })
+
+  it('refuses to prepare once the adapter is unloaded', async () => {
+    const server = await mockServer([ok])
+    const profiles = resolveProfiles({ anthropic: { baseURL: server.url, accounts: [{ id: 'account-1', credentialsPath: '/home/u/a.yaml' }] } })
+    const config = profiles.get('anthropic')?.accountPool
+    const auth = memoryAuth({ anthropic: oauth(token('account-1')) })
+    const pool = new AccountPool(config!, new Map([['account-1', auth.credentials]]), { random: () => 0 })
+    const lifetime = new AbortController()
+    const adapter = new PiAiAdapter({
+      profiles: () => profiles, resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth({}), accountPool: () => pool,
+      lifetime: lifetime.signal,
+    })
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['anthropic'], adapter)
+    lifetime.abort(new Error('adapter unloaded'))
+    await expect(ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(server.requests).toEqual([])
+    expect(pool.acquire()?.account).toBe('account-1')
+  })
+
   it('gives the account back when a prepared call is aborted before it streams', async () => {
     const { runtime, pool } = await rig([ok])
     const ctx = await runtime()

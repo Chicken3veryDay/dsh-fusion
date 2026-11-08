@@ -205,6 +205,13 @@ describe('account availability', () => {
     expect(pool.acquire()).toBeUndefined()
   })
 
+  it('keeps the sooner reset when a later account resets later', () => {
+    const { pool } = makePool()
+    pool.settle('account-1', 'fp', { code: 'RATE_LIMIT', providerRetryAfterMs: 300 })
+    pool.settle('account-2', 'fp', { code: 'QUOTA', providerRetryAfterMs: 900 })
+    expect(pool.earliestReset()).toEqual({ delayMs: 300, code: 'RATE_LIMIT' })
+  })
+
   it('signs an account out on AUTH and re-admits it only when its stored grant changes', async () => {
     const { pool, auth } = makePool()
     const original = await pool.fingerprint('account-1')
