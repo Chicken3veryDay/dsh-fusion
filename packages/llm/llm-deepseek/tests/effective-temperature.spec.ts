@@ -19,8 +19,8 @@ afterEach(async () => {
 })
 
 /** Count every outbound request; the official origin must never see one for a refused call. */
-function trapFetch(): ReturnType<typeof vi.fn> {
-  const trap = vi.fn(() => Promise.resolve(new Response(sse(textEvents), { headers: { 'content-type': 'text/event-stream' } })))
+function trapFetch(): ReturnType<typeof vi.fn<typeof fetch>> {
+  const trap = vi.fn<typeof fetch>(() => Promise.resolve(new Response(sse(textEvents), { headers: { 'content-type': 'text/event-stream' } })))
   vi.stubGlobal('fetch', trap)
   return trap
 }
@@ -120,9 +120,9 @@ describe('official DeepSeek endpoint without reasoning', () => {
     }))
     expect(resolveAuth).toHaveBeenCalledTimes(2)
     expect(fetchTrap).toHaveBeenCalledTimes(2)
-    for (const [url, init] of fetchTrap.mock.calls as unknown as [string, RequestInit][]) {
+    for (const [url, init] of fetchTrap.mock.calls) {
       expect(url).toBe(`${PUBLIC_BASE_URL}/v1/messages`)
-      expect(JSON.parse(init.body as string)).toMatchObject({ temperature: 0.2, thinking: { type: 'disabled' } })
+      expect(await new Response(init?.body).json()).toMatchObject({ temperature: 0.2, thinking: { type: 'disabled' } })
     }
   })
 
@@ -138,7 +138,7 @@ describe('official DeepSeek endpoint without reasoning', () => {
     await chunks(prepared.stream({ ...prepared.config, messages: [user()] }))
     expect(resolveAuth).toHaveBeenCalledTimes(1)
     expect(fetchTrap).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((fetchTrap.mock.calls[0] as unknown as [string, RequestInit])[1].body as string))
+    expect(await new Response(fetchTrap.mock.calls[0]?.[1]?.body).json())
       .toMatchObject({ stop_sequences: ['END'], max_tokens: 321, thinking: { type: 'enabled' } })
   })
 })
@@ -191,7 +191,7 @@ describe('prepared generation isolation', () => {
     await chunks(prepared.stream({ ...prepared.config, messages: [user()] }))
     expect(resolveAuth).toHaveBeenCalledTimes(1)
     expect(fetchTrap).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((fetchTrap.mock.calls[0] as unknown as [string, RequestInit])[1].body as string))
+    expect(await new Response(fetchTrap.mock.calls[0]?.[1]?.body).json())
       .toMatchObject({ temperature: 0.2, thinking: { type: 'disabled' } })
   })
 
