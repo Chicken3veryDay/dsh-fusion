@@ -8,7 +8,7 @@ import { HarnessError } from './error.ts'
 import type { LlmFailure, LlmUnsupportedControl } from './types.ts'
 
 const CONTROL_NAMES: ReadonlySet<unknown> = new Set(['reasoningEffort', 'temperature', 'maxTokens', 'stop'] satisfies LlmUnsupportedControl['control'][])
-const CONTROL_REASONS: ReadonlySet<unknown> = new Set(['adapter-rejects', 'reasoning-active', 'model-forbids'] satisfies LlmUnsupportedControl['reason'][])
+const CONTROL_REASONS: ReadonlySet<unknown> = new Set(['adapter-rejects', 'reasoning-active', 'model-forbids', 'account-omits'] satisfies LlmUnsupportedControl['reason'][])
 
 /**
  * Detach serializable provider facts from a value thrown by an adapter.

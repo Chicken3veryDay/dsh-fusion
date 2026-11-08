@@ -349,6 +349,7 @@ describe('LlmRuntime', () => {
       expect(projected, fixture.name).toMatchObject({ type: 'text' })
       if (projected?.type !== 'text') throw new Error(`expected projected text for ${fixture.name}`)
       expect(projected.text, fixture.name).toContain(fixture.expected)
+      expect(ctx.llm.fileRequestText(attachment), fixture.name).toBe(projected.text)
       if (fixture.fs !== undefined) {
         expect(projected.text, fixture.name).toContain('include this saved path in the delegation prompt')
       }
@@ -374,6 +375,31 @@ describe('LlmRuntime', () => {
     expect(() => ctx.llm.providerRetryPolicy('missing')).toThrow(
       expect.objectContaining({ code: 'NO_ADAPTER' }),
     )
+  })
+
+  it('detaches final assessment aliases without freezing adapter-owned values', async () => {
+    const constraints = [{ kind: 'model-output-ceiling' as const, maxTokens: 777 }]
+    const assessment = { fields: { maxTokens: { kind: 'supported' as const, constraints } } }
+    const adapter = new class extends RecordingAdapter {
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        const prepared = await super.prepareCall(provider, model, signal)
+        return {
+          ...prepared,
+          finalizeControls: async () => ({ assessment, stream: (options: GenerateOptions) => prepared.stream(options) }),
+        }
+      }
+    }(SCRIPT)
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['test-provider'], adapter)
+    const prepared = await ctx.llm.prepareCall({ provider: 'test-provider', model: 'test-model', maxTokens: 777 })
+    expect(Object.isFrozen(assessment.fields)).toBe(false)
+    constraints[0]!.maxTokens = 1
+    expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'supported', constraints: [{ kind: 'model-output-ceiling', maxTokens: 777 }] })
+    expect(Object.isFrozen(prepared.assessment.fields.maxTokens)).toBe(true)
+    await collect(prepared.stream({ ...prepared.config, messages: [] }))
+    expect(adapter.lastOptions?.maxTokens).toBe(777)
   })
 
   it('keeps a prepared registration and retry policy after route replacement', async () => {
@@ -579,10 +605,14 @@ describe('LlmRuntime', () => {
 
   it('maps adapter failure to aborted when the request signal is aborted', async () => {
     const controller = new AbortController()
-    controller.abort('cancelled')
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
-    ctx.llm.registerAdapter(['test'], new ThrowingAdapter(new Error('stopped')))
+    ctx.llm.registerAdapter(['test'], new class extends ThrowingAdapter {
+      override stream(options: GenerateOptions) {
+        controller.abort('cancelled')
+        return super.stream(options)
+      }
+    }(new Error('stopped')))
 
     const chunks = await collect(ctx.llm.stream({
       provider: 'test',

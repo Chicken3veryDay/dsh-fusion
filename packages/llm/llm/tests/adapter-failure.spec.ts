@@ -60,6 +60,14 @@ describe('adapter failure normalization', () => {
     expect(normalizeLlmFailure(accessorBacked)).toEqual({ message: 'provider failed', code: 'UNKNOWN' })
   })
 
+  it('retains account-omits as a detached typed refusal', () => {
+    const future = new Error('refused')
+    Object.assign(future, { code: 'UNSUPPORTED_CONTROL', failure: {
+      message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason: 'account-omits' },
+    } })
+    expect(normalizeLlmFailure(future)).toMatchObject({ code: 'UNSUPPORTED_CONTROL', unsupportedControl: { reason: 'account-omits' } })
+  })
+
   it('carries a valid refused-control fact and rejects unknown control or reason values', () => {
     const carried = Object.assign(new Error('refused'), {
       code: 'UNSUPPORTED_CONTROL',

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
-import type { AuthContext, Credential, CredentialInfo, CredentialStore, Models } from '@earendil-works/pi-ai'
+import type { AuthContext, Credential, CredentialInfo, CredentialStore, Models, AuthResult, Model, Api } from '@earendil-works/pi-ai'
 import { ModelsError } from '@earendil-works/pi-ai/utils/models-error'
 import type { Context } from '@deepseek-ai/cordis'
 import {
@@ -336,8 +336,21 @@ export const SUBSCRIPTION_TOKEN_REFUSAL =
  *   Caller cancellation propagates, and stored grants are never deleted.
  */
 export async function chatgptAccessToken(models: Models, signal?: AbortSignal): Promise<string> {
+  return (await chatgptAuth(models, signal)).auth.apiKey
+}
+
+/**
+ * Resolve the complete ChatGPT authentication, retaining the sign-in-only check
+ * and refresh failure classification used by bearer export and dispatch.
+ * @param models - captured collection with the harness credential store.
+ * @param signal - cancellation of the caller's wait; an active refresh still persists.
+ * @param model - exact dispatch model, including model-owned headers; omitted for bearer export.
+ * @returns effective OAuth authentication; absence or API-key substitution fails AUTH.
+ */
+export async function chatgptAuth(models: Models, signal?: AbortSignal, model?: Model<Api>): Promise<AuthResult & { auth: AuthResult['auth'] & { apiKey: string } }> {
   let resolved: Awaited<ReturnType<Models['getAuth']>>
-  try { resolved = await models.getAuth('openai', signal === undefined ? undefined : { signal }) }
+  const options = signal === undefined ? undefined : { signal }
+  try { resolved = await (model === undefined ? models.getAuth('openai', options) : models.getAuth(model, options)) }
   catch (error) {
     if (!(error instanceof ModelsError)) throw error
     const classified = classifyPiAiError(error.message)
@@ -347,5 +360,5 @@ export async function chatgptAccessToken(models: Models, signal?: AbortSignal): 
   if (resolved?.source !== 'OAuth' || resolved.auth.apiKey === undefined) {
     throw new LlmError('ChatGPT sign-in is no longer available; sign in again. API-key billing was not selected.', 'AUTH')
   }
-  return resolved.auth.apiKey
+  return { ...resolved, auth: { ...resolved.auth, apiKey: resolved.auth.apiKey } }
 }

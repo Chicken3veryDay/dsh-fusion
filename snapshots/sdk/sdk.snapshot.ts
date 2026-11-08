@@ -268,6 +268,12 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'account-control-refusal': {
+    modelRequestsFile: 'account-requests.jsonl',
+    storedCredentials: {
+      'llm-pi-ai/openai': { kind: 'grant', payload: { type: 'api_key', key: 'synthetic-session-access' } },
+    },
+  },
   'unsupported-control-refusal': {
     modelRequestsFile: 'codex-requests.jsonl',
     storedCredentials: {
@@ -1733,16 +1739,17 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
         expect(JSON.stringify(events)).not.toContain('usage_limit_reached')
       }
-      if (scenario.name === 'unsupported-control-refusal') {
-        // The real Codex adapter refuses the extension's `stop` while the turn is prepared: the trapped endpoint
-        // saw no request (so no credential-bearing call), and the log holds the retained input and the failure only.
+      if (scenario.name === 'unsupported-control-refusal' || scenario.name === 'account-control-refusal') {
+        // The real adapter refuses during preparation; diagnostic input remains without admitting a request.
         expect(modelRequests).toEqual([])
         const events = results.flatMap(result => result.events)
         const turnEnds = events.filter(event => event.type === 'turn/end')
         expect(turnEnds, JSON.stringify(turnEnds)).toHaveLength(1)
         expect(turnEnds[0]?.data['reason']).toMatchObject({
           kind: 'error',
-          error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'stop', reason: 'adapter-rejects' } },
+          error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: scenario.name === 'account-control-refusal'
+            ? { control: 'temperature', reason: 'account-omits' }
+            : { control: 'stop', reason: 'adapter-rejects' } },
         })
         for (const type of ['request/header', 'request/context', 'assistant/attempt', 'assistant/message', 'llm/retry']) {
           expect(events.filter(event => event.type === type), `${type} was logged for a refused call`).toEqual([])

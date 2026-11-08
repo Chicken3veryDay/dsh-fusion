@@ -2826,6 +2826,11 @@
       "doc": "docs/subsystems/forge.md",
       "symbol": "ForgeReviewResult",
       "source": "packages/experimental/forge/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/llm-streaming.md",
+      "symbol": "PreparedAdapterCall",
+      "source": "packages/llm/llm/src/index.ts"
     }
   ]
 }

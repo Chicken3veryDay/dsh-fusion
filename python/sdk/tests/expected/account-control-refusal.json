@@ -1,0 +1,35 @@
+{
+  "final_response": "",
+  "finish_reason": "error",
+  "reason": {
+    "kind": "error",
+    "error": {
+      "message": "provider \"openai\" model \"gpt-5.5\" does not support temperature (account-omits)",
+      "code": "UNSUPPORTED_CONTROL",
+      "unsupportedControl": {
+        "control": "temperature",
+        "reason": "account-omits"
+      }
+    }
+  },
+  "event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "step/end",
+    "turn/end"
+  ],
+  "user_input": [
+    [
+      {
+        "type": "text",
+        "text": "Say hello."
+      }
+    ]
+  ],
+  "outbound_requests": ""
+}

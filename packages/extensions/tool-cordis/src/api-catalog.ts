@@ -8985,7 +8985,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedAdapterCall',
-    declaration: 'export interface PreparedAdapterCall {\n    readonly model: LlmResolvedModelInfo;\n    assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export interface PreparedAdapterCall {\n    readonly model: LlmResolvedModelInfo;\n    assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment;\n    finalizeControls?(controls: Readonly<LlmCallControls>, signal?: AbortSignal): Promise<{\n        readonly assessment: CallControlAssessment;\n        readonly stream: PreparedAdapterCall[\'stream\'];\n    }>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
     name: 'PreparedDeepSeekLlmApiExtension',
@@ -11633,7 +11633,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'UnsupportedControlReason',
-    declaration: 'export type UnsupportedControlReason = \'adapter-rejects\' | \'reasoning-active\' | \'model-forbids\';',
+    declaration: 'export type UnsupportedControlReason = \'adapter-rejects\' | \'reasoning-active\' | \'model-forbids\' | \'account-omits\';',
   },
   {
     name: 'UpdateBundleOptions',

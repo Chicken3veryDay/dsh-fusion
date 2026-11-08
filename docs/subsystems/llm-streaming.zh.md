@@ -268,9 +268,10 @@ type LlmControlName = 'reasoningEffort' | 'temperature' | 'maxTokens' | 'stop'
 /**
  * Why a captured adapter generation refuses a supplied control: the adapter
  * never sends it (`adapter-rejects`), the active reasoning mode cannot carry it
- * (`reasoning-active`), or the exact model forbids it (`model-forbids`).
+ * (`reasoning-active`), the exact model forbids it (`model-forbids`), or the
+ * bound account omits it (`account-omits`).
  */
-type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids'
+type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids' | 'account-omits'
 ```
 
 ```ts type-equiv
@@ -903,7 +904,9 @@ interface LlmCallConfigAdapterDefaults {
 
 ## 服务与提供方约定
 
-`LlmAdapter` 是提供方约定：创建子类、实现 `stream()`，再用 `ctx.llm.registerAdapter(providers, adapter)` 注册一个适配器实例。`GenerateOptions.provider` 选择已注册适配器；`GenerateOptions.model` 会传给该适配器，无需在生命周期启动时注册。重复提供方路由会原子失败。可选的 `providerRetryPolicy()` 会按路由捕获并填入 normal 默认值，`providerInfo()` 与异步 `listModels()` 方法则为 `LlmRuntime.listProviders()` / `listModels()` 提供分离的 selector 元数据。该目录仅供参考，不是请求白名单：适配器仍是权威，并可接受未列出的模型 id。单次异步 `resolveModel()` 查询返回确切模型身份，以及可选的对正确性敏感的上下文容量、适配器配置的 `defaultMaxTokens`、由模型持有的有序推理强度 ID 和可选的部署默认值；字段缺失表示元数据不可用或保留提供方持有的行为，而不表示目录成员关系无效。解析器会接收可选的取消信号，并且必须在信号中止后迅速完成结算。`LlmRuntime.resolveModelInfo()` 会校验聚合结果并返回分离值。在最终适配器边界，`resolveCallConfig()` 仅在 `maxTokens` 缺失时填入输出默认值，并校验和填入推理强度，因此直接调用也无法绕过任何一项已配置行为；直接分派会在等待解析前捕获一项适配器注册。agent loop 则使用 `prepareCall()`，使模型解析、请求头持久记录和分派全程使用同一项注册，保留来自同一次查询的分离上下文元数据，并报告适配器填入的配置字段。在 `ConfigureCall` 与已填入的默认值之后，`prepareCall()` 与未准备的直接流路径都会调用所捕获代次的同步纯函数 `assessControls()` 一次。每个已提供的控制项（值不是 `undefined` 的字段，包括被默认值填入的推理强度或输出上限）会得到 `supported`、`translated`、`unsupported` 或 `unverified`；未做任何声明的代次为 `unverified`（`adapter-undeclared`），绝不视为受支持。被声明为 `unsupported` 的控制项会在凭据解析、HTTP 或分派之前以 `LlmError` 的 `UNSUPPORTED_CONTROL` 失败，直接流则把同一拒绝规范化为终端 `error` 结束。`PreparedLlmCall.assessment` 在进程内暴露这些结论，从不持久化，分派已准备调用时不会再次评估。适配器查找发生在 `llm/stream` waterfall 的终端 continuation，因此 listener 可以在查找前短路调用，或路由一个可变的一次性请求。AgentLoop 在外层 waterfall 返回流句柄时观察到一次请求尝试；这个有限边界不能证明惰性终端适配器已构造完成或开始提供方 I/O。`block-start` / `block-end` 的 `index` 关联与 assembler 共同意味着适配器只需 emit 格式正确的分片——块重组不是每个适配器各自的问题。`ctx.llm.stream()` 与 `llm/stream` waterfall 在一个轮次中的位置见 [architecture.md](../architecture.zh.md#turn-flow)。
+`LlmAdapter` 是提供方约定：创建子类、实现 `stream()`，再用 `ctx.llm.registerAdapter(providers, adapter)` 注册一个适配器实例。`GenerateOptions.provider` 选择已注册适配器；`GenerateOptions.model` 会传给该适配器，无需在生命周期启动时注册。重复提供方路由会原子失败。可选的 `providerRetryPolicy()` 会按路由捕获并填入 normal 默认值，`providerInfo()` 与异步 `listModels()` 方法则为 `LlmRuntime.listProviders()` / `listModels()` 提供分离的 selector 元数据。该目录仅供参考，不是请求白名单：适配器仍是权威，并可接受未列出的模型 id。单次异步 `resolveModel()` 查询返回确切模型身份，以及可选的对正确性敏感的上下文容量、适配器配置的 `defaultMaxTokens`、由模型持有的有序推理强度 ID 和可选的部署默认值；字段缺失表示元数据不可用或保留提供方持有的行为，而不表示目录成员关系无效。解析器会接收可选的取消信号，并且必须在信号中止后迅速完成结算。`LlmRuntime.resolveModelInfo()` 会校验聚合结果并返回分离值。在最终适配器边界，`resolveCallConfig()` 仅在 `maxTokens` 缺失时填入输出默认值，并校验和填入推理强度，因此直接调用也无法绕过任何一项已配置行为；直接分派会在等待解析前捕获一项适配器注册。agent loop 则使用 `prepareCall()`，使模型解析、请求头持久记录和分派全程使用同一项注册，保留来自同一次查询的分离上下文元数据，并报告适配器填入的配置字段。在 `ConfigureCall` 与已填入的默认值之后，`prepareCall()` 与未准备的直接流路径都会调用所捕获代次的同步纯函数 `assessControls()` 一次。每个已提供的控制项（值不是 `undefined` 的字段，包括被默认值填入的推理强度或输出上限）会得到 `supported`、`translated`、`unsupported` 或 `unverified`；未做任何声明的代次为 `unverified`（`adapter-undeclared`），绝不视为受支持。纯评估中被声明为 `unsupported` 的控制项会在凭据解析、HTTP 或分派之前以 `LlmError` 的 `UNSUPPORTED_CONTROL` 失败，直接流则把同一拒绝规范化为终端 `error` 结束。`PreparedLlmCall.assessment` 在进程内暴露这些结论，从不持久化，分派已准备调用时不会再次评估。适配器查找发生在 `llm/stream` waterfall 的终端 continuation，因此 listener 可以在查找前短路调用，或路由一个可变的一次性请求。AgentLoop 在外层 waterfall 返回流句柄时观察到一次请求尝试；这个有限边界不能证明惰性终端适配器已构造完成或开始提供方 I/O。`block-start` / `block-end` 的 `index` 关联与 assembler 共同意味着适配器只需 emit 格式正确的分片——块重组不是每个适配器各自的问题。`ctx.llm.stream()` 与 `llm/stream` waterfall 在一个轮次中的位置见 [architecture.md](../architecture.zh.md#turn-flow)。
+
+纯评估后，可选的 `finalizeControls()` 会在准备返回或直接流式调用投影消息之前，绑定依赖账户的最终结论与分派。取消会丢弃迟到结果；最终不支持结论同样在请求入日志前拒绝。`PreparedLlmCall.assessment` 是分离的不可变结果，不持久化。
 
 ```ts type-equiv
 /** One model call whose config and adapter registration were resolved together. */
@@ -935,6 +938,39 @@ interface PreparedLlmCall {
    * @param options - fully assembled request carrying the prepared config.
    * @returns the chunk stream, including the `llm/stream` waterfall.
    */
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+}
+```
+
+```ts type-equiv
+/** One adapter-owned model-resolution generation bound to its eventual stream call. */
+interface PreparedAdapterCall {
+  /** Exact model metadata from the same adapter generation as {@link stream}. */
+  readonly model: LlmResolvedModelInfo
+  /**
+   * Judge each supplied control against this generation's captured facts.
+   * Synchronous and pure: no credential, network or clock access. The runtime
+   * calls it after `ConfigureCall` and model defaults, before any dispatch,
+   * on both {@link LlmRuntime.prepareCall} and the unprepared stream path.
+   * @param controls - the call's controls with model defaults materialized.
+   * @returns one disposition for each control whose value is not `undefined`;
+   *   a missing entry is read as `unverified`, never as supported.
+   */
+  assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment
+  /**
+   * Finalize account-dependent verdicts and bind dispatch to the authentication
+   * examined by this operation. Called only after pure assessment succeeds,
+   * before request admission or message projection. Omission keeps pure verdicts
+   * and lazy dispatch. Implementations must abort promptly and discard late results.
+   * @param controls - detached controls after configuration and model defaults.
+   * @param signal - this preparation's cancellation signal.
+   * @returns final verdicts and the dispatch using precisely their captured authentication.
+   */
+  finalizeControls?(
+    controls: Readonly<LlmCallControls>,
+    signal?: AbortSignal,
+  ): Promise<{ readonly assessment: CallControlAssessment; readonly stream: PreparedAdapterCall['stream'] }>
+  /** Dispatch through that generation without re-reading dynamic connection facts. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 }
 ```

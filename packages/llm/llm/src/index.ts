@@ -223,6 +223,19 @@ export interface PreparedAdapterCall {
    *   a missing entry is read as `unverified`, never as supported.
    */
   assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment
+  /**
+   * Finalize account-dependent verdicts and bind dispatch to the authentication
+   * examined by this operation. Called only after pure assessment succeeds,
+   * before request admission or message projection. Omission keeps pure verdicts
+   * and lazy dispatch. Implementations must abort promptly and discard late results.
+   * @param controls - detached controls after configuration and model defaults.
+   * @param signal - this preparation's cancellation signal.
+   * @returns final verdicts and the dispatch using precisely their captured authentication.
+   */
+  finalizeControls?(
+    controls: Readonly<LlmCallControls>,
+    signal?: AbortSignal,
+  ): Promise<{ readonly assessment: CallControlAssessment; readonly stream: PreparedAdapterCall['stream'] }>
   /** Dispatch through that generation without re-reading dynamic connection facts. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 }
@@ -1005,13 +1018,13 @@ export class LlmRuntime extends TypertRemoteService {
 
   /**
    * Assess every control of one resolved config against its adapter generation
-   * and refuse a declared unsupported control before any credential, message
-   * or provider work. A supplied control the generation did not answer is
+   * and refuse a declared unsupported control before message or provider work.
+   * Pure verdicts are checked before account finalization. A supplied control the generation did not answer is
    * `unverified`; absence never becomes support.
    */
-  private assessCall(adapterCall: PreparedAdapterCall, config: LlmCallConfig): CallControlAssessment {
+  private assessCall(config: LlmCallConfig, declaredAssessment: CallControlAssessment): CallControlAssessment {
     const { provider, model, ...controls } = config
-    const declared = adapterCall.assessControls(controls).fields
+    const declared = declaredAssessment.fields
     const assessment = assessSuppliedControls(controls, control => declared[control] ?? { kind: 'unverified', reason: 'adapter-undeclared' })
     for (const control of CONTROL_ORDER) {
       const disposition = assessment.fields[control]
@@ -1024,6 +1037,19 @@ export class LlmRuntime extends TypertRemoteService {
       }
     }
     return assessment
+  }
+
+  /** Run pure refusal before optional account work, and detach the final verdicts. */
+  private async finalizeCall(adapterCall: PreparedAdapterCall, config: LlmCallConfig, signal?: AbortSignal) {
+    if (signal?.aborted) throw new LlmError('LLM preparation aborted', 'ABORTED', { cause: signal.reason })
+    const { provider: _provider, model: _model, ...controls } = config
+    const assessment = this.assessCall(config, adapterCall.assessControls(controls))
+    if (adapterCall.finalizeControls === undefined) {
+      return { assessment, stream: (options: GenerateOptions) => adapterCall.stream(options) }
+    }
+    const finalized = await adapterCall.finalizeControls(deepFreeze(structuredClone(controls)), signal)
+    signal?.throwIfAborted()
+    return { assessment: this.assessCall(config, finalized.assessment), stream: finalized.stream }
   }
 
   /**
@@ -1055,7 +1081,7 @@ export class LlmRuntime extends TypertRemoteService {
     signal?.throwIfAborted()
     const resolved = this.resolveCallWithInfo(proposed, modelInfo)
     const resolvedConfig = deepFreeze(structuredClone(resolved.config))
-    const assessment = this.assessCall(adapterCall, resolvedConfig)
+    const finalized = await this.finalizeCall(adapterCall, resolvedConfig, signal)
     const context = resolved.context === undefined
       ? undefined
       : deepFreeze(structuredClone(resolved.context))
@@ -1072,7 +1098,7 @@ export class LlmRuntime extends TypertRemoteService {
       config: resolvedConfig,
       retryPolicy: registration.retryPolicy,
       adapterDefaults,
-      assessment,
+      assessment: finalized.assessment,
       ...context === undefined ? {} : { context },
       ...modelInfo.inputModalities === undefined
         ? {}
@@ -1094,7 +1120,7 @@ export class LlmRuntime extends TypertRemoteService {
           registration,
           config: resolvedConfig,
           modelInfo,
-          dispatch: options => adapterCall.stream(options),
+          dispatch: finalized.stream,
         })
       },
     })
@@ -1170,8 +1196,8 @@ export class LlmRuntime extends TypertRemoteService {
         const adapterCall = await adapter.prepareCall(options.provider, options.model, options.signal)
         modelInfo = this.normalizeModelInfo(registration, options.model, adapterCall.model)
         resolvedConfig = this.resolveCallWithInfo(options, modelInfo).config
-        this.assessCall(adapterCall, resolvedConfig)
-        dispatch = options => adapterCall.stream(options)
+        const finalized = await this.finalizeCall(adapterCall, resolvedConfig, options.signal)
+        dispatch = finalized.stream
       } else {
         modelInfo = prepared.modelInfo
         resolvedConfig = prepared.config

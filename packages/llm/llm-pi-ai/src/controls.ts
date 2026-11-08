@@ -1,7 +1,7 @@
 /** Pure assessment of request controls against one captured pi-ai model and profile. */
 
 import { MIN_ANSWER_TOKENS, thinkingBudgetForLevel } from '@earendil-works/pi-ai/api/simple-options'
-import type { Api, AnthropicMessagesCompat, Model, ThinkingLevel } from '@earendil-works/pi-ai'
+import type { Api, AnthropicMessagesCompat, AuthResult, Model, ThinkingLevel } from '@earendil-works/pi-ai'
 import { assessSuppliedControls } from '@deepseek-ai/dsh-llm'
 import type { CallControlAssessment, ControlConstraint, ControlDisposition, LlmCallControls } from '@deepseek-ai/dsh-llm'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
@@ -111,4 +111,32 @@ function anthropicAllowance(
     }],
     constraints: [{ kind: 'model-output-ceiling', maxTokens: model.maxTokens }, ...contextClamp(model)],
   }
+}
+
+/**
+ * Finalize Responses controls using the authentication dispatch will apply.
+ * Only the exact official endpoint and non-API key combination triggers
+ * pi-ai's session omission. Legacy allowances retain floor and context-clamp
+ * behavior and remain protocol-unverified rather than claiming an exact cap.
+ * @param model - captured protocol descriptor.
+ * @param controls - resolved controls before request admission.
+ * @param assessment - pure verdicts, already checked for refusal.
+ * @param auth - detached effective authentication, kept private to preparation.
+ * @returns detached nonsecret final verdicts; missing authentication stays unverified.
+ */
+export function finalizeOpenAiControls(
+  model: Model<Api>,
+  controls: Readonly<LlmCallControls>,
+  assessment: CallControlAssessment,
+  auth: AuthResult | undefined,
+): CallControlAssessment {
+  const key = auth?.auth.apiKey
+  const session = model.provider === 'openai' && (auth?.auth.baseUrl || model.baseUrl) === 'https://api.openai.com/v1'
+    && key !== undefined && !key.startsWith('sk-')
+  return assessSuppliedControls(controls, (control) => {
+    if (control !== 'temperature' && control !== 'maxTokens') return assessment.fields[control] ?? { kind: 'unverified', reason: 'adapter-undeclared' }
+    if (key === undefined) return { kind: 'unverified', reason: 'account-mode-unresolved' }
+    if (session) return { kind: 'unsupported', reason: 'account-omits' }
+    return control === 'temperature' ? { kind: 'supported' } : { kind: 'unverified', reason: 'protocol-unverified' }
+  })
 }

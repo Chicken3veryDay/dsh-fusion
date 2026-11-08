@@ -77,9 +77,10 @@ export type LlmControlName = 'reasoningEffort' | 'temperature' | 'maxTokens' | '
 /**
  * Why a captured adapter generation refuses a supplied control: the adapter
  * never sends it (`adapter-rejects`), the active reasoning mode cannot carry it
- * (`reasoning-active`), or the exact model forbids it (`model-forbids`).
+ * (`reasoning-active`), the exact model forbids it (`model-forbids`), or the
+ * bound account omits it (`account-omits`).
  */
-export type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids'
+export type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids' | 'account-omits'
 
 /** The control and reason carried by an `UNSUPPORTED_CONTROL` failure. */
 export interface LlmUnsupportedControl {

@@ -502,6 +502,52 @@ describe('request stability across the loop', () => {
     expect(agent.session.requestHeader()?.config).toEqual({ provider: 'mock', model: 'mock' })
   })
 
+  it('keeps account refusal outside transport retries and prepares fresh authentication for each later attempt', async () => {
+    let finalizations = 0
+    const adapter = new class extends MockAdapter {
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        const prepared = await super.prepareCall(provider, model, signal)
+        return {
+          ...prepared,
+          finalizeControls: async (controls: Readonly<LlmCallControls>) => {
+            finalizations++
+            return {
+              assessment: assessSuppliedControls(controls, () => finalizations === 1
+                ? { kind: 'unsupported', reason: 'account-omits' }
+                : { kind: 'supported' }),
+              stream: (options: GenerateOptions) => prepared.stream(options),
+            }
+          },
+        }
+      }
+    }([() => { throw new LlmError('request is too large', 'CONTEXT_LENGTH') }, textResponse('retried')])
+    const ctx = await harness(adapter)
+    ctx.on('agent/request', async (_event, next) => ({ ...await next(), temperature: 0.2 }))
+    const agent = await ctx.agentLoop.create(SessionId('account-refusal-retry'), { provider: 'mock', model: 'mock' })
+    let retries = 0
+    ctx.on('agent/request-error', async ({ failure }) => {
+      expect(failure).toMatchObject({ code: 'CONTEXT_LENGTH' })
+      retries++
+      return { kind: 'retry' }
+    })
+    send(agent, 'retain this diagnostic input')
+    await waitForIdle(ctx, agent)
+    const refusedEvents = agent.session.snapshotEvents().map(event => event.type)
+    expect(refusedEvents).not.toContain('request/header')
+    expect(refusedEvents).not.toContain('assistant/message')
+    expect(adapter.requests).toHaveLength(0)
+    expect(retries).toBe(0)
+    expect(finalizations).toBe(1)
+    send(agent, 'fresh attempt')
+    await waitForIdle(ctx, agent)
+    expect(finalizations).toBe(3)
+    expect(retries).toBe(1)
+    expect(adapter.requests).toHaveLength(2)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'request/header')).toHaveLength(1)
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data.source.kind === 'user')).toHaveLength(2)
+    await ctx.fiber.dispose()
+  })
+
   it('lets a short-circuiting llm/stream listener own an unregistered route', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)

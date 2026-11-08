@@ -63,8 +63,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
-import { assessPiAiControls } from './controls.ts'
-import { carriesSubscriptionToken, chatgptAccessToken, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
+import { assessPiAiControls, finalizeOpenAiControls } from './controls.ts'
+import { carriesSubscriptionToken, chatgptAccessToken, chatgptAuth, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
 import { discoverModels, withinBounds } from './discovery.ts'
 import { toStreamChunks } from './stream.ts'
 import { isWireObservable, observeWire } from './wire.ts'
@@ -137,7 +137,7 @@ export interface PiAiAdapterOptions {
   resolveImageAccess?: (attachments: AttachmentStore, ref: ImageAttachmentRef) => ImageAttachmentAccess | undefined
   /**
    * Lifetime of the owner (the plugin instance). Its abort cancels every network
-   * model listing in flight and closes the connections; omission leaves only each
+   * model listing and control finalization in flight and closes the connections; omission leaves only each
    * caller's own cancellation and the route's `modelListTimeoutMs`.
    */
   lifetime?: AbortSignal
@@ -376,7 +376,8 @@ export class PiAiAdapter extends LlmAdapter {
    * the complete effective authentication (key, base URL, headers, environment)
    * exactly once, refuses a Claude subscription token found in any of it, and
    * returns that resolution in `checked` so the dispatch applies it instead of
-   * resolving again. Every other request leaves resolution to pi-ai's dispatch.
+   * resolving again. Responses requests on the OpenAI route also retain their complete effective
+   * resolution. Other requests leave resolution to pi-ai's dispatch.
    * @param snapshot - the captured configuration.
    * @param provider - the route.
    * @param profile - the route's resolved profile.
@@ -384,6 +385,7 @@ export class PiAiAdapter extends LlmAdapter {
    * @param signal - caller cancellation for a request; the bounds of a lookup, which
    *   the credential store also receives.
    * @param headers - the request headers this call will send.
+   * @param preparing - stop after each cancelled await before publishing preparation.
    * @returns the explicit credential to pass as the request's `apiKey`, if any,
    *   and the checked resolution when one was made.
    */
@@ -394,10 +396,11 @@ export class PiAiAdapter extends LlmAdapter {
     model?: Model<Api>,
     signal?: AbortSignal,
     headers: Readonly<Record<string, string>> = {},
+    preparing = false,
   ): Promise<{ apiKey: string | undefined; checked?: CheckedAuth }> {
     // A lookup stops at the first wait that outlives its bounds; a request
     // leaves its caller's abort to the dispatch, which reports an aborted finish.
-    const lookup = model === undefined ? signal : undefined
+    const lookup = model === undefined || preparing ? signal : undefined
     const explicit = await this.config.resolveApiKey(provider, profile)
     lookup?.throwIfAborted()
     const messages = model?.api === 'anthropic-messages'
@@ -412,9 +415,9 @@ export class PiAiAdapter extends LlmAdapter {
     }
     if (provider === 'openai' && model !== undefined && stored?.type === 'oauth') {
       if (model.api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
-      return { apiKey: await chatgptAccessToken(snapshot.models, signal) }
+      return { apiKey: undefined, checked: { ok: true, result: structuredClone(await chatgptAuth(snapshot.models, signal, model)) } }
     }
-    if (provider !== 'anthropic' && !messages) return { apiKey: explicit }
+    if (provider !== 'anthropic' && !messages && !(provider === 'openai' && model?.api === 'openai-responses')) return { apiKey: explicit }
     if (provider === 'anthropic' && stored?.type === 'oauth') {
       throw new LlmError('Direct Anthropic requests require an API key; configure ANTHROPIC_API_KEY or use the official Claude Code integration for subscription access. The saved sign-in is unchanged.', 'AUTH')
     }
@@ -436,11 +439,12 @@ export class PiAiAdapter extends LlmAdapter {
       if (error instanceof ModelsError) return { apiKey: explicit, checked: { ok: false, error } }
       throw error
     }
+    lookup?.throwIfAborted()
     const resolvedCredentials = [resolved?.auth.apiKey, ...Object.values(resolved?.auth.headers ?? {})]
     if (carriesSubscriptionToken([explicit, ...resolvedCredentials, ...Object.values(headers)])) {
       throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
     }
-    return { apiKey: explicit, checked: { ok: true, result: resolved } }
+    return { apiKey: explicit, checked: { ok: true, result: structuredClone(resolved) } }
   }
 
   /**
@@ -632,11 +636,40 @@ export class PiAiAdapter extends LlmAdapter {
     const snapshot = this.current()
     return Promise.resolve().then(() => {
       const profile = this.profileOf(snapshot, provider)
-      const piModel = this.modelOf(snapshot, provider, model)
+      const piModel = structuredClone(this.modelOf(snapshot, provider, model))
+      const stream = (options: GenerateOptions) => this.streamWithSnapshot(options, snapshot, undefined, piModel)
       return {
         model: this.modelInfo(snapshot, provider, model),
         assessControls: controls => assessPiAiControls(piModel, profile, controls),
-        stream: options => this.streamWithSnapshot(options, snapshot),
+        finalizeControls: async (controls, caller) => {
+          const assessment = assessPiAiControls(piModel, profile, controls)
+          if (piModel.provider !== 'openai' || piModel.api !== 'openai-responses'
+            || (controls.temperature === undefined && controls.maxTokens === undefined)) {
+            return { assessment, stream }
+          }
+          const signal = AbortSignal.any([caller, this.config.lifetime].filter(entry => entry !== undefined))
+          const settled = Promise.withResolvers<Awaited<ReturnType<PiAiAdapter['requestAuth']>>>()
+          const onAbort = (): void => { settled.reject(new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })) }
+          signal.addEventListener('abort', onAbort, { once: true })
+          try {
+            if (signal.aborted) onAbort()
+            else this.requestAuth(snapshot, provider, profile, piModel, signal, {}, true).then(settled.resolve, settled.reject)
+            const binding = await settled.promise
+            signal.throwIfAborted()
+            const resolved = binding.checked?.ok === true ? binding.checked.result : undefined
+            const effective = resolved === undefined ? undefined : {
+              ...resolved,
+              auth: { ...resolved.auth, ...binding.apiKey === undefined ? {} : { apiKey: binding.apiKey } },
+            }
+            return {
+              assessment: finalizeOpenAiControls(piModel, controls, assessment, effective),
+              stream: options => this.streamWithSnapshot(options, snapshot, binding, piModel),
+            }
+          } finally {
+            signal.removeEventListener('abort', onAbort)
+          }
+        },
+        stream,
       }
     })
   }
@@ -648,6 +681,8 @@ export class PiAiAdapter extends LlmAdapter {
   private async * streamWithSnapshot(
     options: GenerateOptions,
     snapshot: PiAiSnapshot,
+    binding?: Awaited<ReturnType<PiAiAdapter['requestAuth']>>,
+    capturedModel?: Model<Api>,
   ): AsyncIterable<StreamChunk> {
     // One capture per stream call, taken before any await: the profile, the
     // model descriptor, and the collection all come from the same immutable
@@ -655,7 +690,7 @@ export class PiAiAdapter extends LlmAdapter {
     // mid-request builds a separate snapshot, so this request finishes under
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
-    const model = this.modelOf(snapshot, options.provider, options.model)
+    const model = capturedModel ?? this.modelOf(snapshot, options.provider, options.model)
     const updates = conversationUpdates(model)
     // pi-ai collapses Anthropic tool updates without an initially active declaration.
     const tools = options.tools ?? []
@@ -671,7 +706,7 @@ export class PiAiAdapter extends LlmAdapter {
       options.reasoningEffort ?? profile.reasoning,
     )
     const headers = requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders)
-    const { apiKey, checked } = await this.requestAuth(snapshot, options.provider, profile, model, options.signal, headers)
+    const { apiKey, checked } = binding ?? await this.requestAuth(snapshot, options.provider, profile, model, options.signal, headers)
     const dispatch = this.dispatchModels(snapshot, model, checked)
 
     const consumer = new AbortController()

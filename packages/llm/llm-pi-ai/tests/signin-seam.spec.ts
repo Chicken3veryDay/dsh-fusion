@@ -337,7 +337,7 @@ describe('official ChatGPT-plan origin', () => {
     const ctx = await mounted(undefined)
     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
     expect((await ctx.llm.listModels('openai')).map(({ id }) => id)).toEqual(['gpt-5.4'])
-    const result = await assemble(ctx, { ...request, system: 'Custom system prompt', maxTokens: 500, tools: [{ name: 'custom_tool', description: 'Custom tool', parameters: { type: 'object', properties: {} } }] })
+    const result = await assemble(ctx, { ...request, system: 'Custom system prompt', tools: [{ name: 'custom_tool', description: 'Custom tool', parameters: { type: 'object', properties: {} } }] })
     expect(result.finish).toEqual({ kind: 'stop' })
     expect(server.paths).toEqual(['/v1/models', '/v1/responses'])
     expect(server.headers[1]?.authorization).toBe('Bearer synthetic-access')

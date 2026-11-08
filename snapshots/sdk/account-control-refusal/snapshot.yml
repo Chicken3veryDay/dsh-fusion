@@ -1,0 +1,12 @@
+version: 1
+scenario: account-control-refusal
+profile: sdk
+composition: sdk-account-control-refusal
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: openai
+  DSH_SNAPSHOT_MODEL: gpt-5.5
+header:
+  class: sdk-account-control-refusal
+  pin: true
+  requests: 0

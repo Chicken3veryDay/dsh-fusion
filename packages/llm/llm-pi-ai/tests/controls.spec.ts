@@ -14,7 +14,7 @@ import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { Model } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
 import { resolveProfiles } from '../src/config.ts'
-import { assessPiAiControls, CONTEXT_RESERVE_TOKENS, MINIMUM_WIRE_TOKENS, ZERO_BUDGET_SENDS } from '../src/controls.ts'
+import { assessPiAiControls, finalizeOpenAiControls, CONTEXT_RESERVE_TOKENS, MINIMUM_WIRE_TOKENS, ZERO_BUDGET_SENDS } from '../src/controls.ts'
 import { memoryAuth } from './auth-double.ts'
 import { anthropicTextEvents, closeMockServers, mockServer } from './mock-server.ts'
 import type { PiAiProviderProfile } from '../src/config.ts'
@@ -66,7 +66,7 @@ function contextClamp(contextWindow: number) {
 async function dispatch(p: Probe, config: LlmCallConfig, input = messages) {
   const prepared = await p.ctx.llm.prepareCall(config)
   expect(p.requests).toHaveLength(0)
-  expect(p.authCalls()).toBe(0)
+  expect(p.authCalls()).toBe(config.provider === 'openai' && (config.temperature !== undefined || config.maxTokens !== undefined) ? 1 : 0)
   await collect(prepared.stream({ ...prepared.config, messages: input }))
   expect(p.requests).toHaveLength(1)
   return { prepared, body: p.requests[0] }
@@ -272,13 +272,13 @@ describe('Anthropic Messages controls', () => {
 })
 
 describe('account- and protocol-dependent controls', () => {
-  it('OpenAI API-shaped credential: allowance and temperature are unverified (pending account mode) yet still dispatch', async () => {
+  it('OpenAI API-shaped credential binds temperature and keeps legacy allowance protocol-unverified', async () => {
     const p = await probe('openai', {})
     try {
       const { prepared, body } = await dispatch(p, { provider: 'openai', model: 'gpt-5.5', temperature: 0.2, maxTokens: 777 })
       expect(prepared.assessment.fields).toMatchObject({
-        temperature: { kind: 'unverified', reason: 'account-mode-unresolved' },
-        maxTokens: { kind: 'unverified', reason: 'account-mode-unresolved' },
+        temperature: { kind: 'supported' },
+        maxTokens: { kind: 'unverified', reason: 'protocol-unverified' },
       })
       expect(body).toMatchObject({ max_output_tokens: 777, temperature: 0.2 })
     } finally { await p.dispose() }
@@ -288,12 +288,12 @@ describe('account- and protocol-dependent controls', () => {
     const p = await probe('openai', {})
     try {
       const { prepared, body } = await dispatch(p, { provider: 'openai', model: 'gpt-5.5', maxTokens: 1 })
-      expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'unverified', reason: 'account-mode-unresolved' })
+      expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'unverified', reason: 'protocol-unverified' })
       expect(body).toMatchObject({ max_output_tokens: 16 })
     } finally { await p.dispose() }
   })
 
-  it('OpenAI sign-in credential on the official endpoint omits both fields and is not advertised as supported', async () => {
+  it('OpenAI sign-in credential on the official endpoint refuses before dispatch', async () => {
     const original = globalThis.fetch
     const server = await mockServer([{ events: [] }])
     globalThis.fetch = async (input, init) => {
@@ -310,14 +310,9 @@ describe('account- and protocol-dependent controls', () => {
     try {
       await ctx.plugin(LlmRuntime)
       ctx.llm.registerAdapter(['openai'], adapter)
-      const prepared = await ctx.llm.prepareCall({ provider: 'openai', model: 'gpt-5.5', temperature: 0.2, maxTokens: 777 })
-      expect(prepared.assessment.fields).toMatchObject({
-        temperature: { kind: 'unverified', reason: 'account-mode-unresolved' },
-        maxTokens: { kind: 'unverified', reason: 'account-mode-unresolved' },
-      })
-      await collect(prepared.stream({ ...prepared.config, messages }))
-      expect(server.requests[0]).not.toHaveProperty('max_output_tokens')
-      expect(server.requests[0]).not.toHaveProperty('temperature')
+      await expect(ctx.llm.prepareCall({ provider: 'openai', model: 'gpt-5.5', temperature: 0.2, maxTokens: 777 }))
+        .rejects.toMatchObject({ code: 'UNSUPPORTED_CONTROL', failure: { unsupportedControl: { control: 'temperature', reason: 'account-omits' } } })
+      expect(server.requests).toHaveLength(0)
     } finally {
       globalThis.fetch = original
       await ctx.fiber.dispose()
@@ -333,6 +328,18 @@ describe('account- and protocol-dependent controls', () => {
         maxTokens: { kind: 'unverified', reason: 'protocol-unverified' },
       })
     } finally { await p.dispose() }
+  })
+
+  it('finalization preserves pure effort facts and cannot invent support for an undeclared one', () => {
+    const profile = resolveProfiles({ openai: {} }).get('openai')
+    const model = profile?.piProvider?.getModels()[0]
+    if (model === undefined || model.type !== 'chat') throw new Error('missing captured model')
+    const effort = { reasoningEffort: ReasoningEffortId('off'), temperature: 0.2 }
+    const auth = { source: 'synthetic', auth: { apiKey: 'sk-synthetic' } }
+    expect(finalizeOpenAiControls(model, effort, { fields: {} }, auth).fields.reasoningEffort)
+      .toEqual({ kind: 'unverified', reason: 'adapter-undeclared' })
+    expect(finalizeOpenAiControls(model, effort, { fields: { reasoningEffort: { kind: 'supported' } } }, auth).fields.reasoningEffort)
+      .toEqual({ kind: 'supported' })
   })
 
   it('a default call supplies no controls, so nothing is assessed or refused', async () => {
