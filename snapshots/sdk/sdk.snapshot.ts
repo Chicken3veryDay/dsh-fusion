@@ -268,6 +268,13 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'account-auth-retry': {
+    expectedFinalResponse: 'Authentication retry completed.',
+    modelRequestsFile: 'auth-requests.jsonl',
+    storedCredentials: {
+      'llm-pi-ai/openai': { kind: 'grant', payload: { type: 'oauth', access: 'synthetic-expired', refresh: 'synthetic-refresh', expires: 0, clientId: 'synthetic-issued-client' } },
+    },
+  },
   'account-control-refusal': {
     modelRequestsFile: 'account-requests.jsonl',
     storedCredentials: {
@@ -1297,7 +1304,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       const retained = scenario.manifest.sessionFormat !== undefined
       const notificationsExpectedPath = join(scenarioDir, retained ? 'notifications.current.expected.jsonl' : 'notifications.expected.jsonl')
       const resultExpectedPath = join(scenarioDir, 'result.expected.json')
-      const hasWireGoldens = existsSync(notificationsExpectedPath) || existsSync(resultExpectedPath)
+      const hasWireGoldens = scenario.name === 'account-auth-retry' || existsSync(notificationsExpectedPath) || existsSync(resultExpectedPath)
       const assertions = SDK_ASSERTIONS[scenario.name] ?? {}
       const writesSessionFixtures = writesCurrentSessionFixtures(scenario.manifest, sessionWriteMode)
 
@@ -1738,6 +1745,23 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(turnEnds[0]?.data['reason']).not.toHaveProperty('error.status')
         expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
         expect(JSON.stringify(events)).not.toContain('usage_limit_reached')
+      }
+      if (scenario.name === 'account-auth-retry') {
+        expect(modelRequests).toEqual([
+          { kind: 'refresh', attempt: 1 }, { kind: 'refresh', attempt: 2 },
+          { kind: 'inference', refreshes: 2, temperature: 0.2, model: 'gpt-5.5' },
+        ])
+        const events = results.flatMap(result => result.events)
+        expect(events.filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+        expect(events.filter(event => event.type === 'llm/retry')).toMatchObject([{ data: { failure: { code: 'SERVER' } } }])
+        expect(events.filter(event => event.type === 'llm/retry-started')).toHaveLength(1)
+        expect(events.filter(event => event.type === 'assistant/message')).toHaveLength(1)
+        const notificationsText = JSON.stringify(notifications)
+        for (const secret of ['synthetic-expired', 'synthetic-refresh', 'sk-synthetic-fresh-binding', 'synthetic-issued-client']) {
+          expect(JSON.stringify(events)).not.toContain(secret)
+          expect(notificationsText).not.toContain(secret)
+          expect(ordered.map(log => log.content).join('')).not.toContain(secret)
+        }
       }
       if (scenario.name === 'unsupported-control-refusal' || scenario.name === 'account-control-refusal') {
         // The real adapter refuses during preparation; diagnostic input remains without admitting a request.

@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { scanLog } from '../../../session/session-persistence-jsonl/src/format.ts'
+import { validateStoredEvents } from '../../../session/session-persistence/src/storage-contract.ts'
+import { normalizeLlmFailure as oldNormalizer } from './fixtures/adapter-failure-before-account-omits.ts'
 import { describe, expect, it } from 'vitest'
 import { normalizeLlmFailure } from '../src/adapter-failure.ts'
 
@@ -95,5 +99,33 @@ describe('adapter failure normalization', () => {
     const error = new Error('provider failed')
     Object.defineProperty(error, 'message', { get() { throw new Error('message getter failed') } })
     expect(normalizeLlmFailure(error)).toEqual({ message: 'LLM adapter failed', code: 'UNKNOWN' })
+  })
+})
+
+
+describe('same-version account refusal readers', () => {
+  const refused = (reason: string) => Object.assign(new Error('refused'), { code: 'UNSUPPORTED_CONTROL', failure: {
+    message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason },
+  } })
+  it('preserves failure in both old and current normalizers', () => {
+    expect(oldNormalizer(refused('account-omits'))).toEqual({ message: 'refused', code: 'UNKNOWN' })
+    expect(normalizeLlmFailure(refused('account-omits'))).toEqual({ message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason: 'account-omits' } })
+    for (const reason of ['model-forbids', 'unknown-future-reason']) {
+      expect(normalizeLlmFailure(refused(reason))).toEqual(oldNormalizer(refused(reason)))
+    }
+    expect(oldNormalizer(refused('model-forbids')).code).toBe('UNSUPPORTED_CONTROL')
+    expect(oldNormalizer(refused('unknown-future-reason')).code).toBe('UNKNOWN')
+  })
+
+  it('admits the new recording through the actual stored-event reader as an error', () => {
+    const bytes = readFileSync(new URL('../../../../snapshots/sdk/account-control-refusal/session.v4.jsonl', import.meta.url))
+    const physical = bytes.toString().replaceAll('{{cwd}}', '/synthetic-reader').trim().split('\n').map((line, index) => {
+      const record: unknown = JSON.parse(line)
+      if (typeof record !== 'object' || record === null) throw new Error('expected a recorded event object')
+      return JSON.stringify(index === 0 ? record : { ...record, seq: index - 1, time: 0 })
+    }).join('\n') + '\n'
+    const scanned = scanLog(Buffer.from(physical))
+    const events = validateStoredEvents(scanned.meta, scanned.events)
+    expect(events.findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'error', error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { reason: 'account-omits' } } } } })
   })
 })

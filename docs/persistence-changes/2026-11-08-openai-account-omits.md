@@ -52,7 +52,7 @@ The structural classifier reports union-variants-changed requiring compatibility
 <a id="verification"></a>
 ## Verification
 
-Source probe .artifacts/account-reader-evidence.ts executed the published-base normalizer and unchanged validateStoredEvents against the new account-control-refusal recording: old normalization UNKNOWN, current UNSUPPORTED_CONTROL/account-omits, storage accepts the error event. pnpm run test:snapshot snapshots/sdk/sdk.snapshot.ts -t account-control-refusal: 1 passed. Owning adapter-failure regression retains the new reason and rejects unknown reasons.
+The repository test packages/llm/llm/tests/adapter-failure.spec.ts compares the frozen pre-account-omits normalizer fixture with the current normalizer: account-omits remains an error (old UNKNOWN, current UNSUPPORTED_CONTROL), older and unknown reasons keep their existing outcomes. The same test restores physical event sequence/time fields from the committed account-control-refusal recording, then runs scanLog and validateStoredEvents and asserts its error turn/end. Run pnpm exec vitest run packages/llm/llm/tests/adapter-failure.spec.ts.
 
 <a id="dev-note"></a>
 ## Dev Note

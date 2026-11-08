@@ -1,0 +1,31 @@
+# Shipped SDK profile with synthetic OAuth and intercepted external transport.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    includeDefaultRoots: false
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+  disabled: true
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js dshHomePath('sessions')
+    compression: none
+- id: llm-pi-ai
+  config:
+    providers:
+      openai:
+        retryPolicy:
+          mode: normal
+          backoff:
+            initialDelayMs: 1
+            maxDelayMs: 1
+            jitterRatio: 0
+- insert:
+    - id: snapshot-clock
+      name: './clock.mjs'
+    - id: retry-transport-fixture
+      name: './retry-fixture.mjs'
+- id: time-context
+  config:
+    timeZone: UTC

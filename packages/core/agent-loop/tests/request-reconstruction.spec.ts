@@ -6,7 +6,7 @@
  */
 
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { assessSuppliedControls, createUserMessage, LlmError, ReasoningEffortId  } from '@deepseek-ai/dsh-llm'
 import type { ControlDisposition, GenerateOptions, LlmCallControls, LlmModelReasoningInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -17,6 +17,10 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 
+import { PiAiAdapter } from '../../../llm/llm-pi-ai/src/adapter.ts'
+import { resolveProfiles } from '../../../llm/llm-pi-ai/src/config.ts'
+import { memoryAuth } from '../../../llm/llm-pi-ai/tests/auth-double.ts'
+import type { LlmAdapter } from '@deepseek-ai/dsh-llm'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { MockAdapter, textResponse, toolCallResponse } from './mock-adapter.ts'
@@ -34,7 +38,7 @@ async function harness(adapter: MockAdapter, persona = 'stable base') {
 }
 
 async function harnessRoutes(
-  adapters: readonly (readonly [provider: string, adapter: MockAdapter])[],
+  adapters: readonly (readonly [provider: string, adapter: LlmAdapter])[],
   persona = 'stable base',
 ) {
   const ctx = new Context()
@@ -1068,5 +1072,81 @@ describe('request/context capacity records', () => {
       { provider: 'mock', model: 'known', contextWindow: 64_000 },
       { provider: 'mock', model: 'unknown' },
     ])
+  })
+})
+
+describe('pi-ai authentication retry ownership', () => {
+  it('keeps an AUTH policy refusal before admission and outside request-error retry', async () => {
+    const original = new LlmError('synthetic sign-in required', 'AUTH')
+    const resolve = vi.fn(() => Promise.reject(original))
+    const headers = vi.fn((_request, headers: Headers) => headers)
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ openai: {} }), resolveApiKey: resolve, auth: memoryAuth(), prepareHeaders: headers,
+    })
+    const fetch = vi.fn(() => { throw new Error('AUTH refusal must not send HTTP') })
+    vi.stubGlobal('fetch', fetch)
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    const ctx = await harnessRoutes([['openai', adapter]])
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.on('agent/request', async (_event, next) => ({ ...await next(), temperature: 0.2 }))
+    const hook = vi.fn(() => Promise.resolve(undefined))
+    ctx.on('agent/request-error', hook)
+    const agent = await ctx.agentLoop.create(SessionId('pi-ai-auth-refusal'), { provider: 'openai', model: 'gpt-5.5' })
+    const idle = waitForIdle(ctx, agent)
+    send(agent, 'hello')
+    await idle
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect(hook).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(headers).not.toHaveBeenCalled()
+    const events = agent.session.snapshotEvents()
+    expect(events.filter(event => ['request/header', 'assistant/attempt', 'assistant/message', 'llm/retry'].includes(event.type))).toEqual([])
+    expect(events.findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'error', error: { code: 'AUTH', message: original.message } } } })
+  })
+
+  it('retries transient finalization through the request-error hook with a fresh binding', async () => {
+    const failure = new LlmError('synthetic credential transport unavailable', 'TRANSPORT')
+    const resolve = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue('sk-synthetic-retry')
+    const headers = vi.fn((_request, headers: Headers) => headers)
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ openai: {} }), resolveApiKey: resolve, auth: memoryAuth(), prepareHeaders: headers,
+    })
+    const item = { type: 'message', id: 'msg_retry', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok', annotations: [] }] }
+    const frames = [
+      { type: 'response.created', response: { id: 'resp_retry' } },
+      { type: 'response.output_item.added', output_index: 0, item },
+      { type: 'response.output_item.done', output_index: 0, item },
+      { type: 'response.completed', response: { id: 'resp_retry', status: 'completed', output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+    ]
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      expect(request.url).toBe('https://api.openai.com/v1/responses')
+      expect(request.headers.get('authorization')).toBe('Bearer sk-synthetic-retry')
+      return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } })
+    })
+    vi.stubGlobal('fetch', fetch)
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    const ctx = await harnessRoutes([['openai', adapter]])
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.on('agent/request', async (_event, next) => ({ ...await next(), temperature: 0.2 }))
+    const hook = vi.fn(({ failure }) => {
+      expect(failure).toMatchObject({ code: 'TRANSPORT', message: 'synthetic credential transport unavailable' })
+      expect(resolve).toHaveBeenCalledTimes(1)
+      expect(fetch).not.toHaveBeenCalled()
+      return Promise.resolve({ kind: 'retry' as const })
+    })
+    ctx.on('agent/request-error', hook)
+    const agent = await ctx.agentLoop.create(SessionId('pi-ai-auth-retry'), { provider: 'openai', model: 'gpt-5.5' })
+    const idle = waitForIdle(ctx, agent)
+    send(agent, 'hello')
+    await idle
+    expect(hook).toHaveBeenCalledTimes(1)
+    expect(resolve).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(headers).toHaveBeenCalledTimes(1)
+    const events = agent.session.snapshotEvents()
+    expect(events.filter(event => event.type === 'assistant/attempt')).toHaveLength(1)
+    expect(events.filter(event => event.type === 'assistant/message')).toHaveLength(1)
+    expect(events.findLast(event => event.type === 'turn/end')).toMatchObject({ data: { reason: { kind: 'completed' } } })
   })
 })

@@ -1,0 +1,11 @@
+version: 1
+scenario: account-auth-retry
+profile: sdk
+composition: sdk-account-auth-retry
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: openai
+  DSH_SNAPSHOT_MODEL: gpt-5.5
+header:
+  class: sdk-account-auth-retry
+  pin: true

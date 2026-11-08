@@ -1,7 +1,7 @@
 /** Authentication and wire evidence for pre-admission Responses control finalization. */
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AuthResult, Credential, Provider } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
@@ -57,12 +57,16 @@ async function fixture(input: {
   }
   const adapter = new PiAiAdapter({ profiles: () => profiles, resolveApiKey: resolve, auth, prepareHeaders: headers })
   const requests: { url: string; key: string | null; body: Record<string, unknown> }[] = []
+  const refreshRequests: { url: string; body: string }[] = []
+  const refresh = vi.fn<() => Promise<Response>>()
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
-    requests.push({
-      url: request.url, key: request.headers.get('authorization'),
-      body: JSON.parse(await request.text()) as Record<string, unknown>,
-    })
+    const body = await request.text()
+    if (request.url === 'https://auth.openai.com/api/accounts/oauth/token') {
+      refreshRequests.push({ url: request.url, body })
+      return refresh()
+    }
+    requests.push({ url: request.url, key: request.headers.get('authorization'), body: JSON.parse(body) as Record<string, unknown> })
     return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
   }))
   const ctx = new Context()
@@ -70,7 +74,7 @@ async function fixture(input: {
   await ctx.plugin(LlmRuntime)
   const registration = ctx.llm.registerAdapter(['openai'], adapter)
   return {
-    ctx, registration, effective, dispatched, auth, read, ambient, resolve, headers, requests, profiles, adapter,
+    ctx, registration, effective, dispatched, auth, read, ambient, resolve, headers, requests, refresh, refreshRequests, profiles, adapter,
     setKey: (value: string) => { key = value },
   }
 }
@@ -236,19 +240,48 @@ describe('Responses account control admission', () => {
       : expect(drain(f.ctx.llm.stream({ ...route, ...controls, messages: [], signal: controller.signal })))
         .resolves.toMatchObject([{ type: 'finish', reason: { kind: 'aborted' } }])
     await entered.promise
+    const readsAtAbort = f.read.mock.calls.length
     controller.abort()
     await rejected
-    released.resolve(API_KEY)
-    // Quiesce the abandoned continuation, including its post-read abort check.
+    released.resolve(undefined)
+    // Drain the released resolver and its downstream promise continuations.
     await released.promise
-    await Promise.resolve()
+    await new Promise<void>(resolve => setImmediate(resolve))
     expect(f.requests).toEqual([])
     expect(f.headers).not.toHaveBeenCalled()
+    expect(f.read).toHaveBeenCalledTimes(readsAtAbort)
     if (held === 'key') expect(f.read).not.toHaveBeenCalled()
     const directController = new AbortController()
     directController.abort()
     expect(await drain(f.ctx.llm.stream({ ...route, ...controls, messages: [], signal: directController.signal })))
       .toMatchObject([{ type: 'finish', reason: { kind: 'aborted' } }])
+  })
+
+  it.each(['prepared', 'direct', 'disposal'] as const)('discards held getAuth completion after %s cancellation', async (path) => {
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const continued = Promise.withResolvers<undefined>()
+    const f = await fixture({ effective: { source: 'synthetic', auth: { apiKey: API_KEY } }, profile: { api: 'openai-responses', baseURL: 'https://api.openai.com/v1', models: [{ id: route.model, maxTokens: 128000 }] } })
+    f.effective.mockImplementation(async () => { entered.resolve(undefined); await release.promise; continued.resolve(undefined); return { source: 'synthetic', auth: { apiKey: API_KEY } } })
+    const controller = new AbortController()
+    if (path === 'disposal') {
+      f.registration()
+      f.ctx.llm.registerAdapter(['openai'], new PiAiAdapter({ profiles: () => f.profiles, resolveApiKey: f.resolve, auth: f.auth, lifetime: controller.signal, prepareHeaders: f.headers }))
+    }
+    const rejected = path === 'direct'
+      ? expect(drain(f.ctx.llm.stream({ ...route, ...controls, messages: [], signal: controller.signal }))).resolves.toMatchObject([{ type: 'finish', reason: { kind: 'aborted' } }])
+      : expect(f.ctx.llm.prepareCall({ ...route, ...controls }, path === 'disposal' ? undefined : controller.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    await entered.promise
+    const reads = f.read.mock.calls.length
+    controller.abort(new Error('explicit held auth cancellation'))
+    await rejected
+    release.resolve(undefined)
+    await continued.promise
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(f.effective).toHaveBeenCalledTimes(1)
+    expect(f.read).toHaveBeenCalledTimes(reads)
+    expect(f.headers).not.toHaveBeenCalled()
+    expect(f.requests).toEqual([])
   })
 
   it('pins a failed effective resolution without another auth attempt during dispatch', async () => {
@@ -258,6 +291,16 @@ describe('Responses account control admission', () => {
     expect(prepared.assessment.fields.temperature).toMatchObject({ kind: 'unverified' })
     await drain(prepared.stream({ ...prepared.config, messages: [] }))
     expect(f.effective).toHaveBeenCalledTimes(1)
+    expect(f.requests).toEqual([])
+  })
+
+  it('keeps an effective resolver AUTH refusal before headers and dispatch', async () => {
+    const f = await fixture({ effective: { source: 'synthetic', auth: { apiKey: API_KEY } }, profile: { api: 'openai-responses', baseURL: 'https://api.openai.com/v1', models: [{ id: route.model, maxTokens: 128000 }] } })
+    f.effective.mockRejectedValue(new ModelsError('auth', 'synthetic 401 authentication denied'))
+    await expect(f.ctx.llm.prepareCall({ ...route, ...controls })).rejects.toMatchObject({ code: 'AUTH', message: 'API key auth failed for provider openai: synthetic 401 authentication denied' })
+    expect(await drain(f.ctx.llm.stream({ ...route, ...controls, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'API key auth failed for provider openai: synthetic 401 authentication denied' } } }])
+    expect(f.effective).toHaveBeenCalledTimes(2)
+    expect(f.headers).not.toHaveBeenCalled()
     expect(f.requests).toEqual([])
   })
 
@@ -272,14 +315,14 @@ describe('Responses account control admission', () => {
 
   it('owner disposal aborts a held finalization and late auth cannot publish a call', async () => {
     const entered = Promise.withResolvers<undefined>()
-    const release = Promise.withResolvers<string>()
+    const release = Promise.withResolvers<string | undefined>()
     const lifetime = new AbortController()
     const f = await fixture()
     f.registration()
     const adapter = new PiAiAdapter({
       profiles: () => resolveProfiles({ openai: {} }),
       resolveApiKey: () => { entered.resolve(undefined); return release.promise },
-      auth: f.auth, lifetime: lifetime.signal,
+      auth: f.auth, lifetime: lifetime.signal, prepareHeaders: f.headers,
     })
     f.ctx.llm.registerAdapter(['openai'], adapter)
     const pending = f.ctx.llm.prepareCall({ ...route, ...controls })
@@ -287,20 +330,120 @@ describe('Responses account control admission', () => {
     await entered.promise
     lifetime.abort()
     await rejected
-    release.resolve(API_KEY)
+    release.resolve(undefined)
     await release.promise
-    await Promise.resolve()
+    await new Promise<void>(resolve => setImmediate(resolve))
     expect(f.requests).toEqual([])
+    expect(f.headers).not.toHaveBeenCalled()
     expect(f.read).not.toHaveBeenCalled()
   })
 
-  it('retains refresh failure classification and stored grant', async () => {
+  it('retains a missing issued client ID failure and stored grant', async () => {
     const credential = { ...oauth(), expires: 0 }
     const f = await fixture({ stored: credential })
-    await expect(f.ctx.llm.prepareCall({ ...route, ...controls })).rejects.toMatchObject({ code: 'PI_AI_ERROR' })
+    const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+    await expect(preparing).resolves.toMatchObject({ config: route })
+    const prepared = await preparing
+    expect(await drain(prepared.stream({ ...prepared.config, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code: 'PI_AI_ERROR' } } }])
     expect(f.auth.stored.get('openai')).toBe(credential)
     expect(f.requests).toEqual([])
     expect(f.headers).not.toHaveBeenCalled()
+  })
+
+  it.each(['TRANSPORT', 'PI_AI_ERROR', 'STORE_IO'])('pins %s auth I/O failure at finalization without re-resolution', async (code) => {
+    const original = new LlmError('synthetic auth I/O unavailable', code)
+    const f = await fixture({ resolve: () => Promise.reject(original) })
+    const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+    await expect(preparing).resolves.toMatchObject({ config: route })
+    const prepared = await preparing
+    expect(prepared.assessment.fields.temperature).toEqual({ kind: 'unverified', reason: 'account-mode-unresolved' })
+    expect(f.headers).not.toHaveBeenCalled()
+    expect(await drain(prepared.stream({ ...prepared.config, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code, message: original.message } } }])
+    expect(() => prepared.stream({ ...prepared.config, messages: [] })).toThrow(/only be dispatched once/)
+    expect(f.resolve).toHaveBeenCalledTimes(1)
+    expect(await drain(f.ctx.llm.stream({ ...route, ...controls, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code, message: original.message } } }])
+    expect(f.resolve).toHaveBeenCalledTimes(2)
+    expect(f.read).not.toHaveBeenCalled()
+    expect(f.headers).not.toHaveBeenCalled()
+    expect(f.requests).toEqual([])
+  })
+
+  it('keeps stored credential read failures stream-owned without retrying that read', async () => {
+    const f = await fixture()
+    f.read.mockRejectedValue(new LlmError('synthetic store unavailable', 'TRANSPORT'))
+    const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+    await expect(preparing).resolves.toMatchObject({ config: route })
+    const prepared = await preparing
+    expect(await drain(prepared.stream({ ...prepared.config, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code: 'TRANSPORT', message: 'synthetic store unavailable' } } }])
+    expect(f.read).toHaveBeenCalledTimes(1)
+    expect(f.headers).not.toHaveBeenCalled()
+    expect(f.requests).toEqual([])
+  })
+
+  it('keeps AUTH and missing credential policy failures before admission', async () => {
+    for (const code of ['AUTH', 'MISSING_CREDENTIAL']) {
+      const original = new LlmError('synthetic credential refusal', code)
+      const f = await fixture({ resolve: () => Promise.reject(original) })
+      await expect(f.ctx.llm.prepareCall({ ...route, ...controls })).rejects.toBe(original)
+      expect(await drain(f.ctx.llm.stream({ ...route, ...controls, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code } } }])
+      expect(f.headers).not.toHaveBeenCalled()
+      expect(f.requests).toEqual([])
+    }
+  })
+
+  it.each([
+    ['https://api.openai.com/v1', 'https://gateway.invalid/v1', false],
+    ['https://gateway.invalid/v1', 'https://api.openai.com/v1', true],
+  ])('uses effective auth URL %s → %s for session omission', async (baseURL, baseUrl, refused) => {
+    const f = await fixture({ effective: { source: 'synthetic', auth: { apiKey: SESSION_KEY, baseUrl } }, profile: { api: 'openai-responses', baseURL, models: [{ id: route.model, maxTokens: 128000 }] } })
+    if (refused) {
+      await expect(f.ctx.llm.prepareCall({ ...route, ...controls })).rejects.toMatchObject({ failure: { unsupportedControl: { reason: 'account-omits' } } })
+      expect(f.headers).not.toHaveBeenCalled()
+      expect(f.requests).toEqual([])
+    } else {
+      const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+      await expect(preparing).resolves.toMatchObject({ config: route })
+      const prepared = await preparing
+      await drain(prepared.stream({ ...prepared.config, messages: [] }))
+      expect(f.requests).toMatchObject([{ url: `${baseUrl}/responses`, key: `Bearer ${SESSION_KEY}`, body: { temperature: 0.2, max_output_tokens: 777 } }])
+    }
+    expect(f.effective).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not apply the Messages subscription-token policy to OpenAI Responses', async () => {
+    const f = await fixture({ explicit: 'sk-ant-oat-synthetic-openai-route' })
+    const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+    await expect(preparing).resolves.toMatchObject({ config: route })
+    const prepared = await preparing
+    await drain(prepared.stream({ ...prepared.config, messages: [] }))
+    expect(f.requests).toMatchObject([{ key: 'Bearer sk-ant-oat-synthetic-openai-route' }])
+  })
+
+  it.each([
+    [401, 'AUTH'], [403, 'AUTH'], [503, 'SERVER'], [0, 'TRANSPORT'],
+  ] as const)('classifies real OAuth refresh failure %s as %s and preserves the issued grant', async (status, code) => {
+    const credential = { ...oauth(), expires: 0, clientId: 'synthetic-issued-client' }
+    const f = await fixture({ stored: credential })
+    f.refresh.mockImplementation(async () => {
+      if (status === 0) throw new TypeError('synthetic network unavailable')
+      return new Response('synthetic refresh unavailable', { status })
+    })
+    if (code === 'AUTH') {
+      await expect(f.ctx.llm.prepareCall({ ...route, ...controls })).rejects.toMatchObject({ code })
+    } else {
+      const preparing = f.ctx.llm.prepareCall({ ...route, ...controls })
+      await expect(preparing).resolves.toMatchObject({ config: route })
+      const prepared = await preparing
+      expect(prepared.assessment.fields.temperature).toEqual({ kind: 'unverified', reason: 'account-mode-unresolved' })
+      expect(await drain(prepared.stream({ ...prepared.config, messages: [] }))).toMatchObject([{ type: 'finish', reason: { kind: 'error', failure: { code } } }])
+    }
+    expect(f.refresh).toHaveBeenCalledTimes(1)
+    expect(f.refreshRequests).toHaveLength(1)
+    expect(Object.fromEntries(new URLSearchParams(f.refreshRequests[0]!.body))).toEqual({ grant_type: 'refresh_token', client_id: 'synthetic-issued-client', refresh_token: 'synthetic-refresh', resource: 'https://api.openai.com/v1' })
+    expect(f.auth.stored.get('openai')).toBe(credential)
+    expect(f.resolve).toHaveBeenCalledTimes(1)
+    expect(f.headers).not.toHaveBeenCalled()
+    expect(f.requests).toEqual([])
   })
 
   it('applies configured allowance defaults before finalization', async () => {

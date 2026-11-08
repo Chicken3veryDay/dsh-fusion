@@ -64,7 +64,7 @@ for await (const chunk of ctx.llm.stream({
 
 `prepareCall(config, signal, configure?)` 接受具体的 `LlmCallConfig` 值。可选的同步纯函数 `ConfigureCall` 接收已分离且深度冻结的 `LlmCallControls`，以及捕获的适配器代次所提供的模型元数据。调用方可组合普通函数来选择具体控制项；后执行的写入替换先前的值。准备操作保留捕获的路由，为省略的控制项应用默认值，校验结果，再返回用于记录与分发的冻结配置。回调失败或取消会在分发前拒绝。准备操作要求注册适配器。应用默认值后，捕获的适配器代次通过其同步纯函数 `assessControls()` 评估每个已提供的控制项；`PreparedLlmCall.assessment` 携带进程内的结论（`supported`、`translated`、`unsupported`、`unverified`），未做声明的适配器使每个控制项保持 `unverified`。`supported` 或 `translated` 结论还可以携带 `constraints`（`model-output-ceiling`、`context-window-clamp`）：适配器在序列化时应用的条件，取决于模型以及准备阶段尚不存在的消息，因此绝不是精确的载荷值。纯评估中被声明为 `unsupported` 的控制项会在任何凭据、HTTP 或分派工作之前，以 `LlmError` 的 `UNSUPPORTED_CONTROL` 及类型化的 `failure.unsupportedControl` 数据拒绝准备；未准备的 `ctx.llm.stream()` 路径评估方式相同，并以终端 `error` 结束。
 
-纯评估成功后，适配器可通过 `PreparedAdapterCall.finalizeControls()` 完成依赖账户的控制项评估。运行时等待其完成后才返回不可变评估或投影直接流式调用的消息。该操作拥有一个取消信号，并返回绑定确切认证结果的分派函数；它不贡献请求头，也不发起 HTTP 推理。最终评估拒绝时同样返回 `UNSUPPORTED_CONTROL`。准备好的调用在配置替换或退出登录后仍保留捕获的认证；新准备操作解析当前认证。
+纯评估成功后，适配器可通过 `PreparedAdapterCall.finalizeControls()` 完成依赖账户的控制项评估。运行时等待其完成后才返回不可变评估或投影直接流式调用的消息。该操作拥有一个取消信号，并返回绑定确切认证结果的分派函数；它不贡献请求头，也不发起 HTTP 推理。最终评估拒绝时同样返回 `UNSUPPORTED_CONTROL`。准备好的调用在配置替换或退出登录后仍保留捕获的认证；新准备操作解析当前认证。 当正常请求错误钩子负责恢复时，适配器将认证操作故障保留在已绑定的流中；分派不得重复该解析。认证策略拒绝和取消仍使准备操作失败。
 
 配置函数在适配器默认值物化之前选择控制项。例如，将最低强度选择与显式输出上限组合，再将 `configure(maxTokens)` 作为第三个参数传入：
 

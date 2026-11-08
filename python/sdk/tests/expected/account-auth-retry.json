@@ -1,0 +1,67 @@
+{
+  "final_response": "Authentication retry completed.",
+  "finish_reason": "completed",
+  "reason": {
+    "kind": "completed"
+  },
+  "event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/attempt",
+    "llm/retry",
+    "llm/retry-started",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "notification_event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/attempt",
+    "llm/retry",
+    "llm/retry-started",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "retry_failures": [
+    {
+      "message": "OAuth refresh failed for openai: OpenAI OAuth token request failed (503): Synthetic sign-in service unavailable; retry when the sign-in service is available",
+      "code": "SERVER"
+    }
+  ],
+  "outbound_requests": [
+    {
+      "kind": "refresh",
+      "attempt": 1
+    },
+    {
+      "kind": "refresh",
+      "attempt": 2
+    },
+    {
+      "kind": "inference",
+      "refreshes": 2,
+      "temperature": 0.2,
+      "model": "gpt-5.5"
+    }
+  ]
+}

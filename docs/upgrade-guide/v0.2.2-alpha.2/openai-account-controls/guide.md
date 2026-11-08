@@ -9,7 +9,7 @@ English | [中文](guide.zh.md)
 
 ## Change
 
-OpenAI Responses calls to `https://api.openai.com/v1` with a session-shaped effective credential refuse supplied `temperature` and `maxTokens` with `UNSUPPORTED_CONTROL` and `account-omits`. Previously pi-ai silently omitted these fields. Configured model defaults count as supplied controls. Refusal occurs during preparation, before a request header or assistant output is recorded; the loop retains diagnostic user input.
+OpenAI Responses calls to `https://api.openai.com/v1` with a session-shaped effective credential refuse supplied `temperature` and `maxTokens` with `UNSUPPORTED_CONTROL` and `account-omits`. Previously pi-ai silently omitted these fields. Configured model defaults count as supplied controls. Refusal occurs during preparation, before a request header or assistant output is recorded; the loop retains diagnostic user input. Transient authentication failures discovered during preparation retain normal request-stream retry handling. Each new attempt resolves authentication afresh; a failed prepared operation never resolves it twice. Authentication policy refusals and cancellation remain immediate.
 
 ## Migration
 

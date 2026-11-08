@@ -52,7 +52,7 @@ changes:
 <a id="verification"></a>
 ## 验证
 
-源代码探针 .artifacts/account-reader-evidence.ts 对新的 account-control-refusal 记录执行了已发布基线 的归一化器和未改变的 validateStoredEvents：旧归一化为 UNKNOWN，当前为 UNSUPPORTED_CONTROL/account-omits，存储接受错误事件。pnpm run test:snapshot snapshots/sdk/sdk.snapshot.ts -t account-control-refusal：1 个测试通过。所属 adapter-failure 回归保留新原因并拒绝未知原因。
+仓库测试 packages/llm/llm/tests/adapter-failure.spec.ts 对比添加 account-omits 前冻结的归一化器夹具和当前归一化器：account-omits 仍为错误（旧版 UNKNOWN，当前 UNSUPPORTED_CONTROL），已有及未知原因保持原有结果。同一测试从已提交的 account-control-refusal 记录恢复物理事件的序号和时间字段，再运行 scanLog 和 validateStoredEvents 并断言 turn/end 为错误。运行 pnpm exec vitest run packages/llm/llm/tests/adapter-failure.spec.ts。
 
 <a id="dev-note"></a>
 ## 开发备注

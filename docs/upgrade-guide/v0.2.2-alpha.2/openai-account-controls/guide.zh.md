@@ -9,7 +9,7 @@ description: "OpenAI Responses 会拒绝其绑定账户省略的已选控制项�
 
 ## 变更
 
-向 `https://api.openai.com/v1` 发送并使用会话形态有效凭据的 OpenAI Responses 调用，会对已提供的 `temperature` 和 `maxTokens` 返回 `UNSUPPORTED_CONTROL` 及 `account-omits`。此前 pi-ai 静默省略这些字段。配置的模型默认值也视为已提供的控制项。拒绝发生在准备阶段、请求头或助手输出记录之前；循环保留用于诊断的用户输入。
+向 `https://api.openai.com/v1` 发送并使用会话形态有效凭据的 OpenAI Responses 调用，会对已提供的 `temperature` 和 `maxTokens` 返回 `UNSUPPORTED_CONTROL` 及 `account-omits`。此前 pi-ai 静默省略这些字段。配置的模型默认值也视为已提供的控制项。拒绝发生在准备阶段、请求头或助手输出记录之前；循环保留用于诊断的用户输入。 准备期间发现的临时认证故障保留正常请求流的重试处理。每个新尝试重新解析认证；失败的准备操作绝不会重复解析。认证策略拒绝与取消仍立即生效。
 
 ## 迁移
 

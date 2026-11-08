@@ -66,7 +66,7 @@ import { conversationUpdates, createModels, getSupportedThinkingLevels } from '.
 import { assessPiAiControls, finalizeOpenAiControls } from './controls.ts'
 import { carriesSubscriptionToken, chatgptAccessToken, chatgptAuth, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
 import { discoverModels, withinBounds } from './discovery.ts'
-import { toStreamChunks } from './stream.ts'
+import { classifyPiAiError, toStreamChunks } from './stream.ts'
 import { isWireObservable, observeWire } from './wire.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
 
@@ -441,7 +441,7 @@ export class PiAiAdapter extends LlmAdapter {
     }
     lookup?.throwIfAborted()
     const resolvedCredentials = [resolved?.auth.apiKey, ...Object.values(resolved?.auth.headers ?? {})]
-    if (carriesSubscriptionToken([explicit, ...resolvedCredentials, ...Object.values(headers)])) {
+    if ((provider === 'anthropic' || messages) && carriesSubscriptionToken([explicit, ...resolvedCredentials, ...Object.values(headers)])) {
       throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
     }
     return { apiKey: explicit, checked: { ok: true, result: structuredClone(resolved) } }
@@ -654,8 +654,22 @@ export class PiAiAdapter extends LlmAdapter {
           try {
             if (signal.aborted) onAbort()
             else this.requestAuth(snapshot, provider, profile, piModel, signal, {}, true).then(settled.resolve, settled.reject)
-            const binding = await settled.promise
+            let binding: Awaited<ReturnType<PiAiAdapter['requestAuth']>>
+            try { binding = await settled.promise }
+            catch (error) {
+              if (signal.aborted) throw new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })
+              if (error instanceof LlmError && ['AUTH', 'MISSING_CREDENTIAL', 'ABORTED'].includes(error.code)) throw error
+              // Authentication I/O failures belong to the request stream and its retry owner.
+              // This operation must never resolve authentication again.
+              return {
+                assessment: finalizeOpenAiControls(piModel, controls, assessment, undefined),
+                stream: async function* () { await settled.promise },
+              }
+            }
             signal.throwIfAborted()
+            if (binding.checked?.ok === false && classifyPiAiError(binding.checked.error.message) === 'AUTH') {
+              throw new LlmError(binding.checked.error.message, 'AUTH', { cause: binding.checked.error })
+            }
             const resolved = binding.checked?.ok === true ? binding.checked.result : undefined
             const effective = resolved === undefined ? undefined : {
               ...resolved,

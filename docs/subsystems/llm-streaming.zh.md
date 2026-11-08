@@ -962,6 +962,10 @@ interface PreparedAdapterCall {
    * examined by this operation. Called only after pure assessment succeeds,
    * before request admission or message projection. Omission keeps pure verdicts
    * and lazy dispatch. Implementations must abort promptly and discard late results.
+   * Pin recoverable authentication I/O failures in the returned stream with unverified
+   * verdicts so the request-error hook owns retries; never resolve that operation again.
+   * Policy refusals and cancellation reject preparation. Configuration callback errors
+   * remain preparation errors.
    * @param controls - detached controls after configuration and model defaults.
    * @param signal - this preparation's cancellation signal.
    * @returns final verdicts and the dispatch using precisely their captured authentication.

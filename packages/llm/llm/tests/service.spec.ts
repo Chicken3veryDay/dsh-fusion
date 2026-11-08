@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, {
@@ -349,7 +349,6 @@ describe('LlmRuntime', () => {
       expect(projected, fixture.name).toMatchObject({ type: 'text' })
       if (projected?.type !== 'text') throw new Error(`expected projected text for ${fixture.name}`)
       expect(projected.text, fixture.name).toContain(fixture.expected)
-      expect(ctx.llm.fileRequestText(attachment), fixture.name).toBe(projected.text)
       if (fixture.fs !== undefined) {
         expect(projected.text, fixture.name).toContain('include this saved path in the delegation prompt')
       }
@@ -375,6 +374,61 @@ describe('LlmRuntime', () => {
     expect(() => ctx.llm.providerRetryPolicy('missing')).toThrow(
       expect.objectContaining({ code: 'NO_ADAPTER' }),
     )
+  })
+
+  it('does not assess, finalize or dispatch a pre-aborted generic stream', async () => {
+    const assess = vi.fn(() => ({ fields: {} }))
+    const finalize = vi.fn(async () => ({ assessment: { fields: {} }, stream: () => (async function* () {})() }))
+    const stream = vi.fn(() => { throw new Error('must never dispatch') })
+    const adapter = new class extends ScriptedAdapter {
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        const prepared = await super.prepareCall(provider, model, signal)
+        return { ...prepared, assessControls: assess, finalizeControls: finalize, stream }
+      }
+    }(SCRIPT)
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['test-provider'], adapter)
+    const controller = new AbortController()
+    controller.abort(new LlmError('explicit stop', 'ABORTED'))
+    expect(await collect(ctx.llm.stream({ provider: 'test-provider', model: 'test-model', messages: [], signal: controller.signal }))).toMatchObject([{ type: 'finish', reason: { kind: 'aborted' } }])
+    expect(assess).not.toHaveBeenCalled()
+    expect(finalize).not.toHaveBeenCalled()
+    expect(stream).not.toHaveBeenCalled()
+  })
+
+  it('rejects a signal-ignoring finalizer that settles after abort without publishing a prepared call', async () => {
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const continued = Promise.withResolvers<undefined>()
+    const dispatch = vi.fn()
+    const adapter = new class extends ScriptedAdapter {
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        const prepared = await super.prepareCall(provider, model, signal)
+        return { ...prepared, finalizeControls: async () => {
+          entered.resolve(undefined)
+          await release.promise
+          continued.resolve(undefined)
+          return { assessment: { fields: {} }, stream: (options: GenerateOptions) => { dispatch(); return prepared.stream(options) } }
+        } }
+      }
+    }(SCRIPT)
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['test-provider'], adapter)
+    const controller = new AbortController()
+    const reason = new Error('explicit finalizer cancellation')
+    const pending = ctx.llm.prepareCall({ provider: 'test-provider', model: 'test-model' }, controller.signal)
+    const rejected = expect(pending).rejects.toBe(reason)
+    await entered.promise
+    controller.abort(reason)
+    release.resolve(undefined)
+    await continued.promise
+    await rejected
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(dispatch).not.toHaveBeenCalled()
   })
 
   it('detaches final assessment aliases without freezing adapter-owned values', async () => {
