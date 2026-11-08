@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallControls, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { DeepSeekAccount } from '@deepseek-ai/dsh-deepseek-account'
 import * as Account from '../src/index.ts'
 
 const PROVIDER = 'deepseek-account'
@@ -52,7 +51,7 @@ async function host(origin: string) {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(LlmRuntime)
-  ctx.provide('deepseekAccount', { resolveToken } as DeepSeekAccount)
+  ctx.provide('deepseekAccount', { resolveToken } as never)
   await ctx.plugin(Account, origin === OFFICIAL_ORIGIN ? {} : { baseURL: `${origin}/anthropic` })
   return { ctx, requests, bodies, tokenReads: () => resolveToken.mock.calls.length }
 }

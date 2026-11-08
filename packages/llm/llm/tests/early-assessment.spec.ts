@@ -10,7 +10,7 @@ import type {
 
 const ROUTE = 'route'
 const MODEL = 'model'
-const finish: StreamChunk = { type: 'finish', reason: { kind: 'complete' } } as StreamChunk
+const finish: StreamChunk = { type: 'finish', reason: { kind: 'stop' } }
 const unsupported = (control: 'temperature'): CallControlAssessment => assessSuppliedControls(
   { [control]: 1 }, (): ControlDisposition => ({ kind: 'unsupported', reason: 'reasoning-active' }),
 )
