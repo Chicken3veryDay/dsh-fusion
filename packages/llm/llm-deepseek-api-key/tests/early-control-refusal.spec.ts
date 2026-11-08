@@ -280,10 +280,10 @@ describe('accepted-call generation isolation', () => {
 })
 
 describe('cancellation', () => {
-  it('rejects a pre-aborted prepareCall with no work', async () => {
+  it('rejects a pre-aborted prepareCall with the abort reason and no work', async () => {
     const h = await host()
-    const result = await run(h, 'prepareCall', { temperature: 0.2 }, { signal: AbortSignal.abort(new Error('caller gone')) })
-    expect(result.ok).toBe(false)
+    const pending = h.ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL, temperature: 0.2 }, AbortSignal.abort(new Error('caller gone')))
+    await expect(pending).rejects.toThrow('caller gone')
     expect(h.credentialReads()).toBe(0)
     expect(h.requests).toEqual([])
   })

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { LlmCallControls, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { PUBLIC_BASE_URL, resolveAdapterOptions } from '../src/index.ts'
 import type { ResolvedDeepSeekOptions } from '../src/index.ts'
 import { DeepSeekAdapter } from '../src/adapter.ts'
@@ -215,5 +215,90 @@ describe('prepared generation isolation', () => {
       .toEqual({ kind: 'unsupported', reason: 'reasoning-active' })
     expect(prepared.assessControls({ temperature: 0.2, reasoningEffort: OFF }).fields.temperature)
       .toEqual({ kind: 'supported' })
+  })
+})
+
+/**
+ * Register the real adapter with separate entry and captured connections, as a plugin whose
+ * `connect` resolves a different generation than the synchronous `options` read does.
+ */
+async function wireGenerations(entry: () => ResolvedDeepSeekOptions, captured: () => Promise<ResolvedDeepSeekOptions>) {
+  const resolveAuth = vi.fn(() => Promise.resolve({ headers: { 'x-api-key': 'test-key' } }))
+  const options = vi.fn(entry)
+  const connect = vi.fn(captured)
+  const ctx = new Context()
+  cleanup.push(() => ctx.fiber.dispose())
+  await ctx.plugin(LlmRuntime)
+  ctx.llm.registerAdapter([PROVIDER], new DeepSeekAdapter({
+    options, connect, resolveAuth, resolveUserId: () => 'test-user' as never, prepareExtensions,
+  }))
+  options.mockClear() // registration reads the connection once for its retry policy
+  return { ctx, resolveAuth, options, connect }
+}
+
+describe('early assessment against the connection captured for dispatch', () => {
+  it('refuses by the connection current at entry before the captured connection is resolved', async () => {
+    const fetchTrap = trapFetch()
+    const gate = Promise.withResolvers<ResolvedDeepSeekOptions>()
+    const { ctx, options, connect } = await wireGenerations(() => official(), () => gate.promise)
+    const error = await ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL, temperature: 0.2 })
+      .then(() => undefined, (rejected: unknown) => rejected)
+    expect(refusal(error)).toMatchObject({ unsupportedControl: { control: 'temperature', reason: 'reasoning-active' } })
+    expect(options).toHaveBeenCalledTimes(1)
+    expect(connect).not.toHaveBeenCalled()
+    expect(fetchTrap).not.toHaveBeenCalled()
+    gate.resolve(official())
+  })
+
+  it('never accepts a call the captured connection refuses, even when entry judged it unverified', async () => {
+    const custom = resolveAdapterOptions({ baseURL: 'https://gateway.example.test/anthropic' })
+    const fetchTrap = trapFetch()
+    const { ctx, options, connect, resolveAuth } = await wireGenerations(() => custom, () => Promise.resolve(official()))
+    await expect(ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL, temperature: 0.2 }))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_CONTROL', failure: { unsupportedControl: { reason: 'reasoning-active' } } })
+    expect(options).toHaveBeenCalledTimes(1)
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(resolveAuth).not.toHaveBeenCalled()
+    expect(fetchTrap).not.toHaveBeenCalled()
+  })
+
+  it('dispatches an accepted call through the captured connection while the replacement is waiting', async () => {
+    const fetchTrap = trapFetch()
+    const gate = Promise.withResolvers<ResolvedDeepSeekOptions>()
+    let current = official({ thinking: 'disabled' })
+    const { ctx, resolveAuth } = await wireGenerations(() => current, () => gate.promise)
+    const pending = ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL, temperature: 0.2 })
+    current = official()
+    gate.resolve(official({ thinking: 'disabled' }))
+    const prepared = await pending
+    expect(prepared.assessment.fields.temperature).toEqual({ kind: 'supported' })
+    await chunks(prepared.stream({ ...prepared.config, messages: [user()] }))
+    expect(resolveAuth).toHaveBeenCalledTimes(1)
+    expect(await new Response(fetchTrap.mock.calls[0]?.[1]?.body).json()).toMatchObject({ temperature: 0.2, thinking: { type: 'disabled' } })
+  })
+
+  it('reads the synchronous connection once for a callback-free call and not at all with a ConfigureCall', async () => {
+    trapFetch()
+    const { ctx, options } = await wireGenerations(() => official(), () => Promise.resolve(official()))
+    await ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL })
+    expect(options).toHaveBeenCalledTimes(1)
+    options.mockClear()
+    const dropTemperature = ({ temperature: _dropped, ...rest }: LlmCallControls) => rest
+    await ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL, temperature: 0.2 }, undefined, dropTemperature)
+    expect(options).not.toHaveBeenCalled()
+  })
+
+  it('reads the synchronous connection once more for dispatch when the plugin has no connect', async () => {
+    trapFetch()
+    const options = vi.fn(() => official())
+    const ctx = new Context()
+    cleanup.push(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter([PROVIDER], new DeepSeekAdapter({
+      options, resolveAuth: () => Promise.resolve({ headers: {} }), resolveUserId: () => 'test-user' as never, prepareExtensions,
+    }))
+    options.mockClear()
+    await ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL })
+    expect(options).toHaveBeenCalledTimes(2)
   })
 })

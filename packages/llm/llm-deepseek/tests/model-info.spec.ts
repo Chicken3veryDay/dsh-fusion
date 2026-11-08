@@ -1,6 +1,6 @@
 /** Catalog metadata supports embedding callers without deployment normalization. */
 import { expect, it } from 'vitest'
-import { assessControls, catalogModelInfo } from '../src/model-info.ts'
+import { assessControls, assessControlsEarly, catalogModelInfo } from '../src/model-info.ts'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { PUBLIC_BASE_URL, resolveAdapterOptions } from '../src/index.ts'
 
@@ -59,4 +59,39 @@ it('reports a non-official origin as unverified with reasoning and supported wit
     .toEqual({ kind: 'unverified', reason: 'protocol-unverified' })
   expect(assessControls(CUSTOM, { reasoningEffort: ReasoningEffortId('off'), temperature: 0 }).fields.temperature)
     .toEqual({ kind: 'supported' })
+})
+
+it.each([
+  ['the default effort', {}, undefined],
+  ['an explicit enabled effort', {}, 'high'],
+  ['the maximum effort', { reasoningEffort: 'max' as const }, undefined],
+])('refuses a temperature early on the official origin by %s', (_name, config, effort) => {
+  const connection = resolveAdapterOptions({ baseURL: PUBLIC_BASE_URL, ...config })
+  const controls = { temperature: 0.2, ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) } }
+  expect(assessControlsEarly(connection, controls)?.fields.temperature).toEqual({ kind: 'unsupported', reason: 'reasoning-active' })
+})
+
+it('reads the connection default effort exactly as model resolution does', () => {
+  const off = resolveAdapterOptions({ baseURL: PUBLIC_BASE_URL, reasoningEffort: 'off' })
+  expect(assessControlsEarly(off, { temperature: 0.2 })?.fields.temperature).toEqual({ kind: 'supported' })
+  const disabled = resolveAdapterOptions({ baseURL: PUBLIC_BASE_URL, thinking: 'disabled' })
+  expect(assessControlsEarly(disabled, { temperature: 0.2 })?.fields.temperature).toEqual({ kind: 'supported' })
+  expect(assessControlsEarly(OFFICIAL, { temperature: 0.2, reasoningEffort: ReasoningEffortId('off') })?.fields.temperature)
+    .toEqual({ kind: 'supported' })
+})
+
+it('leaves an effort the connection does not offer to model resolution', () => {
+  const disabled = resolveAdapterOptions({ baseURL: PUBLIC_BASE_URL, thinking: 'disabled' })
+  expect(assessControlsEarly(disabled, { temperature: 0.2, reasoningEffort: ReasoningEffortId('high') })).toBeUndefined()
+  expect(assessControlsEarly(OFFICIAL, { temperature: 0.2, reasoningEffort: ReasoningEffortId('ultra') })).toBeUndefined()
+})
+
+it('reports a custom origin as unverified, never as an early refusal', () => {
+  const custom = resolveAdapterOptions({ baseURL: 'https://gateway.example.test/anthropic' })
+  expect(assessControlsEarly(custom, { temperature: 0.2 })?.fields.temperature).toEqual({ kind: 'unverified', reason: 'protocol-unverified' })
+})
+
+it('assesses only the supplied controls', () => {
+  expect(assessControlsEarly(OFFICIAL, {})?.fields).toEqual({})
+  expect(assessControlsEarly(OFFICIAL, { maxTokens: 9, stop: ['END'] })?.fields).toEqual({ maxTokens: { kind: 'supported' }, stop: { kind: 'supported' } })
 })
