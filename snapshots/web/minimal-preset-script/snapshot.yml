@@ -1,0 +1,8 @@
+version: 1
+scenario: minimal-preset-script
+profile: web
+composition: web-minimal-script
+recording: authored
+header:
+  class: web-minimal-script
+  pin: true

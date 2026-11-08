@@ -1,0 +1,38 @@
+- banner:
+  - navigation "Session hierarchy": "Using three run_code programs: first"
+  - text: Minimal mode
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: "Using three run_code programs: first run bash `printf 'MINIMAL_BASH_CARD_OK\\n'`; second change into persistent-state and export DSH_MINIMAL_STATE=PERSISTED; third print the variable with the working directory. Then reply exactly MINIMAL_PRESET_REQUEST_OK and stop. {{clock}}"
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [expanded]
+- button "Ran code and ran commands" [expanded]
+- button "Code Print the bash card marker"
+- button "Bash Print the bash card marker" [expanded]
+- text: Done $ printf 'MINIMAL_BASH_CARD_OK\n'
+- button "Copy"
+- text: MINIMAL_BASH_CARD_OK [Command finished with exit code 0]
+- button "Inspect"
+- button "Code Enter persistent-state and export the variable"
+- text: Bash cd persistent-state && export DSH_MINIMAL_STATE=PERSISTED
+- button "Code Print the variable with the working directory"
+- text: Bash printf "%s:%s\n" "$DSH_MINIMAL_STATE" "$PWD"
+- paragraph: MINIMAL_PRESET_REQUEST_OK
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- button "1 turns 4 steps · {{throughput}} tok/s": 1 turns 4 steps{{throughput}} tok/s
+- button "56 tok · Cache hit 0%": 56 tokCache hit 0%
+- button "0% of context used": 0%

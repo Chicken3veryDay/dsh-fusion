@@ -1,4 +1,3 @@
-import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -7,7 +6,7 @@ import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SessionAttachmentValue } from '@deepseek-ai/dsh-api-session-controller'
-import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -29,11 +28,11 @@ import {
 } from './scaffold.ts'
 import { expandOwningTurnProcess, newEnglishPage, saveFailureShot } from './support.ts'
 
-const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/minimal-preset', import.meta.url))
-const FIXTURE = join(SNAPSHOT_DIR, 'session.v3.jsonl')
-const UI_EXPECTED = join(SNAPSHOT_DIR, 'ui.expected.md')
+const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/minimal-preset-script', import.meta.url))
+const FIXTURE = join(SNAPSHOT_DIR, 'session.v4.jsonl')
+const UI_EXPECTED = fileURLToPath(new URL('./expected/minimal-preset-script/ui.expected.md', import.meta.url))
 const MODE = webSnapshotMode()
-const PROMPT = "Use the bash tool to run exactly: printf 'MINIMAL_BASH_CARD_OK\\n'. Then reply exactly MINIMAL_PRESET_REQUEST_OK and stop."
+const PROMPT = "Using three run_code programs: first run bash `printf 'MINIMAL_BASH_CARD_OK\\n'`; second change into persistent-state and export DSH_MINIMAL_STATE=PERSISTED; third print the variable with the working directory. Then reply exactly MINIMAL_PRESET_REQUEST_OK and stop."
 
 /** Rendered text of the system prompt surface node, or undefined when the surface carries none. */
 function systemPromptText(session: Session): string | undefined {
@@ -62,6 +61,8 @@ describe('minimal agent preset', () => {
       agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
       setup: agentCtx => scaffold.ctx.agentPresets.mount(agentCtx, 'minimal').then(() => undefined),
     })
+    // The second model program changes into this directory; it must exist before the turn starts.
+    await mkdir(join(scaffold.workspaceCwd, 'persistent-state'))
     agentHandle.agent.followup(createUserMessage({
       content: [{ type: 'text', text: PROMPT }],
       source: { kind: 'user' },
@@ -100,50 +101,24 @@ describe('minimal agent preset', () => {
     expect(scaffold.ctx.agentPresets.serviceFor(agentHandle.agent, 'compaction')).toBeDefined()
     expect(scaffold.ctx.commands.find(agentHandle.agent, 'compact')).toBeDefined()
 
-    const stateDir = join(scaffold.workspaceCwd, 'persistent-state')
-    await mkdir(stateDir)
-    const signal = new AbortController().signal
-    await executeToolFixture(scaffold.ctx, {
-      signal,
-      callId: ToolCallId('minimal-bash-state-setup'),
-      name: 'bash',
-      arguments: { command: `cd ${JSON.stringify(stateDir)} && export DSH_MINIMAL_STATE=PERSISTED` },
-      agent: agentHandle.agent,
-    })
-    const bash = await executeToolFixture(scaffold.ctx, {
-      signal,
-      callId: ToolCallId('minimal-bash-state-read'),
-      name: 'bash',
-      arguments: { command: 'printf \'%s:%s\n\' "$DSH_MINIMAL_STATE" "$PWD"' },
-      agent: agentHandle.agent,
-    })
-    const text = (result: typeof bash): string => result.content
-      .filter(block => block.type === 'text')
-      .map(block => block.text)
+    const dispatches = agentHandle.agent.session.snapshotEvents().flatMap(event => event.type === 'tool/ptc-dispatch' ? [event.data] : [])
+    expect(dispatches.map(dispatch => [dispatch.name, dispatch.isError])).toEqual([['bash', false], ['bash', false], ['bash', false]])
+    const outputOf = (dispatch: (typeof dispatches)[number]): string => dispatch.content
+      .flatMap(block => block.type === 'text' ? [block.text] : [])
       .join('')
       .replaceAll(scaffold.workspaceCwd, '{{cwd}}')
-      .trimEnd()
+    // The export happened in the second program and is read by the third: only one shell holds it across programs.
+    expect(outputOf(dispatches[2]!)).toBe('PERSISTED:{{cwd}}/persistent-state\n[Command finished with exit code 0]')
 
     expect({
       prompt: systemPrompt,
       tools: requestHeader.tools?.map(tool => tool.name),
       goalCommand: scaffold.ctx.commands.find(agentHandle.agent, 'goal') !== undefined,
-      bash: text(bash),
-    }).toMatchInlineSnapshot(`
-      {
-        "bash": "PERSISTED:{{cwd}}/persistent-state
-      [Command finished with exit code 0]",
-        "goalCommand": false,
-        "prompt": "You are a helpful software engineer assistant.",
-        "tools": [
-          "bash",
-          "read_image",
-          "working_directory",
-        ],
-      }
-    `)
-    expect(requestHeader.tools?.toSorted((left, right) => left.name.localeCompare(right.name)))
-      .toEqual(scaffold.ctx.tools.schemas(agentHandle.agent).toSorted((left, right) => left.name.localeCompare(right.name)))
+    }).toEqual({
+      prompt: 'You are a helpful software engineer assistant.',
+      tools: ['run_code'],
+      goalCommand: false,
+    })
   })
 
   it.skipIf(MODE === 'record')('expands the completed persistent Bash call in the Web conversation', async () => {
@@ -181,11 +156,11 @@ describe('minimal agent preset', () => {
     await row.click()
 
     await expect.poll(() => row.getAttribute('aria-expanded')).toBe('true')
-    const call = row.locator('xpath=..')
-    await call.getByText('IN', { exact: true }).waitFor()
-    await call.getByText('OUT', { exact: true }).waitFor()
-    await call.getByText('MINIMAL_BASH_CARD_OK\n[Command finished with exit code 0]', { exact: true }).waitFor()
-    await call.getByText(/"command": "printf 'MINIMAL_BASH_CARD_OK/).waitFor()
+    // The nested Bash call renders as a terminal card under its program: the command, its output and the exit line.
+    const terminal = row.locator('xpath=..').locator('[data-terminal]')
+    await terminal.locator('[data-command-text]').getByText("printf 'MINIMAL_BASH_CARD_OK\\n'", { exact: true }).waitFor()
+    await terminal.getByText('MINIMAL_BASH_CARD_OK', { exact: true }).waitFor()
+    await terminal.getByText('[Command finished with exit code 0]', { exact: true }).waitFor()
 
     const snapshot = await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(UI_EXPECTED, snapshot, MODE)
@@ -195,10 +170,9 @@ describe('minimal agent preset', () => {
 
   it('keeps its snapshot inventory closed', async () => {
     await assertFixtureInventory(SNAPSHOT_DIR, [
-      'session.v3.jsonl',
+      'session.v4.jsonl',
       'system-prompt.expected.md',
       'tool-schemas.expected.json',
-      'ui.expected.md',
     ])
   })
 })
@@ -320,8 +294,9 @@ describe('minimal manual compaction', () => {
 })
 
 describe('minimal image reading', () => {
-  const snapshotDir = fileURLToPath(new URL('../../../snapshots/web/minimal-read-image', import.meta.url))
-  const prompt = 'Use read_image to inspect red.png. Then reply exactly MINIMAL_IMAGE_OK and stop.'
+  const snapshotDir = fileURLToPath(new URL('../../../snapshots/web/minimal-read-image-script', import.meta.url))
+  const expectedDir = fileURLToPath(new URL('./expected/minimal-read-image-script/', import.meta.url))
+  const prompt = 'Using one run_code program, read red.png with read_image and return its media type. Then reply exactly MINIMAL_IMAGE_OK and stop.'
   let scaffold: WebScaffold
   let handle: AgentHandle
   let browser: Browser | undefined
@@ -389,10 +364,14 @@ describe('minimal image reading', () => {
 
   it('logs a durable image with the minimal tool roster', async () => {
     const session = handle.agent.session
-    expect(session.requestHeader()?.tools?.map(tool => tool.name)).toEqual(['bash', 'read_image', 'working_directory'])
-    const result = session.snapshotEvents().find(event => event.type === 'tool/result')
-    expect(result?.data.message.isError).toBe(false)
-    expect(result?.data.meta).toEqual({ path: join(scaffold.workspaceCwd, 'red.png') })
+    expect(session.requestHeader()?.tools?.map(tool => tool.name)).toEqual(['run_code'])
+    const events = session.snapshotEvents()
+    const program = events.find(event => event.type === 'tool/result')
+    expect(program?.data.message.isError).toBe(false)
+    const nested = events.find(event => event.type === 'tool/ptc-dispatch')
+    expect(nested?.data.name).toBe('read_image')
+    expect(nested?.data.isError).toBe(false)
+    expect(nested?.data.meta).toEqual({ path: join(scaffold.workspaceCwd, 'red.png') })
     const image = session.deriveMessages().flatMap(message => message.content).find(block => block.type === 'image')
     if (image?.type !== 'image') throw new Error('minimal read_image produced no durable image')
     expect(image.attachment).toMatchObject({ mediaType: 'image/png', width: 1, height: 1, bytes: 69 })
@@ -408,7 +387,7 @@ describe('minimal image reading', () => {
     const preview = card.locator('img').first()
     await preview.waitFor()
     await expect.poll(() => preview.evaluate(img => img instanceof HTMLImageElement && img.naturalWidth)).toBe(1)
-    await compareOrRefreshGolden(join(snapshotDir, 'ui.expected.md'),
+    await compareOrRefreshGolden(join(expectedDir, 'ui.expected.md'),
       await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd), MODE)
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
@@ -513,20 +492,14 @@ describe('minimal image reading', () => {
     })
     expect(missingImage.attachmentId).not.toBe(image.attachment.attachmentId)
     const { headerLine, events } = parseSeedFixture(rawSessionLog(handle.agent.session))
-    const missingEvents = events.map(event => event.type === 'tool/result'
-      ? {
-        ...event,
-        data: {
-          ...event.data,
-          message: {
-            ...event.data.message,
-            content: event.data.message.content.map(block => block.type === 'image'
-              ? { ...block, attachment: missingImage }
-              : block),
-          },
-        },
-      }
-      : event)
+    // Script carries the stored image twice: in the nested dispatch the card renders and in the deferred user message.
+    const repoint = <T extends { type: string }>(content: readonly T[]): (T | (T & { attachment: typeof missingImage }))[] =>
+      content.map(block => block.type === 'image' ? { ...block, attachment: missingImage } : block)
+    const missingEvents = events.map((event) => {
+      if (event.type === 'user/message') return { ...event, data: { ...event.data, content: repoint(event.data.content) } }
+      if (event.type === 'tool/ptc-dispatch') return { ...event, data: { ...event.data, content: repoint(event.data.content) } }
+      return event
+    })
     const missingId = await seedSession(scaffold,
       `${renderSeedFixture(headerLine, missingEvents)}${interruptedTurn(2, 'Check the missing image')}\n`,
       'minimal-image-missing', 'minimal')
@@ -541,7 +514,7 @@ describe('minimal image reading', () => {
       expect(await card.getByText('Loading image…', { exact: true }).count()).toBe(0)
       expect(await card.locator('[aria-busy="true"]').count()).toBe(0)
       expect(await card.locator('img').count()).toBe(0)
-      await compareOrRefreshGolden(join(snapshotDir, 'missing-image.expected.md'),
+      await compareOrRefreshGolden(join(expectedDir, 'missing-image.expected.md'),
         await captureStableAria(page, '[data-tool="read_image"]', scaffold.workspaceCwd), MODE)
     } finally {
       await scaffold.ctx.attachments.saveImage({ data: stored.data, mediaType: stored.ref.mediaType })
@@ -550,7 +523,7 @@ describe('minimal image reading', () => {
 
   it('keeps its snapshot inventory closed', async () => {
     await assertFixtureInventory(snapshotDir, [
-      'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json', 'ui.expected.md', 'missing-image.expected.md',
+      'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json',
     ])
   })
 })
