@@ -55,7 +55,7 @@ async function streamOnce(): Promise<void> {
 }
 describe('pi-ai discovery egress', () => {
   it('goes through the proxy', async () => {
-    const observed = await observe(() => discoverModels({ baseURL: 'http://pi-probe.invalid/v1', api: 'openai-completions', apiKey: 'probe' }))
+    const observed = await observe(() => discoverModels({ signal: new AbortController().signal, baseURL: 'http://pi-probe.invalid/v1', api: 'openai-completions', apiKey: 'probe' }))
     expect(observed.join('|')).toContain('pi-probe.invalid')
   })
 })

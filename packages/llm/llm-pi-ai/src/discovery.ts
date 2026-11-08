@@ -264,12 +264,16 @@ export interface StoredModelDiscoveryProfile {
   /** Resolve the named route's credential only when the draft carries none. */
   readonly resolveApiKey: () => Promise<string | undefined>
   /** Resolve a stored ChatGPT grant through pi-ai, including refresh; absent for API-key routes. */
-  readonly chatgpt?: (signal?: AbortSignal) => Promise<{ baseURL: string; accessToken: string } | undefined>
+  readonly chatgpt?: (signal: AbortSignal) => Promise<{ baseURL: string; accessToken: string } | undefined>
 }
 
 /**
- * Interrogate one draft provider endpoint for the models it advertises.
- * @param request - the endpoint, protocol, and one-shot credential to use.
+ * Interrogate one draft provider endpoint for the models it advertises. This
+ * applies no deadline of its own; product callers run it through
+ * {@link withinBounds}, whose combined signal it passes to every cancellable
+ * step and checks after each credential wait.
+ * @param request - the endpoint, protocol, one-shot credential, and the
+ *   lookup's signal.
  * @param storedProfile - Host-owned headers and lazy credential resolution for
  *   the named route. A stored ChatGPT grant selects account discovery before
  *   the catalog shortcut; other credentials resolve only on the network path
@@ -279,12 +283,14 @@ export interface StoredModelDiscoveryProfile {
  *   refuses or fails the request, or the reply is not a model listing.
  */
 export async function discoverModels(
-  request: LlmModelDiscoveryOperation,
+  request: LlmModelDiscoveryOperation & { readonly signal: AbortSignal },
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
 ): Promise<readonly DiscoveredModel[]> {
   let stored = request.provider === 'openai' ? storedProfile?.() : undefined
   const plan = request.provider === 'openai' && request.apiKey === undefined
     ? await stored?.chatgpt?.(request.signal) : undefined
+  // A credential wait may outlive its lookup's bounds; abandoned work stops here.
+  request.signal.throwIfAborted()
   // A catalog route already has its answer, and a better one: the installed
   // entries carry context windows and output caps no listing endpoint reports.
   if (plan === undefined && request.provider !== undefined) {
@@ -328,6 +334,7 @@ export async function discoverModels(
   // deployment-owned Authorization header when neither key exists.
   stored ??= storedProfile?.()
   const supplied = plan?.accessToken ?? request.apiKey ?? await stored?.resolveApiKey()
+  request.signal.throwIfAborted()
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
   // The listing carries the key and deployment headers to whatever endpoint the
   // draft names, so a Claude subscription token is refused here exactly as the
@@ -349,10 +356,10 @@ export async function discoverModels(
     response = await fetch(url, {
       method: 'GET',
       headers,
-      ...request.signal === undefined ? {} : { signal: request.signal },
+      signal: request.signal,
     })
   } catch (error: unknown) {
-    if (request.signal?.aborted) {
+    if (request.signal.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
     throw new LlmError(`could not reach ${url}`, 'DISCOVERY_FAILED', { cause: error })
@@ -370,7 +377,7 @@ export async function discoverModels(
     // Cancellation during the body read rejects with the abort reason, which
     // may be any value; the caller gets the same coded failure it would have
     // for a cancellation before the request went out.
-    if (request.signal?.aborted) {
+    if (request.signal.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
     throw error
@@ -408,11 +415,57 @@ export interface DiscoveryBounds {
 }
 
 /**
- * Run {@link discoverModels} under a deadline and its owner's lifetime. One
- * signal covers the credential lookup, the request, and the body read, so a
- * listing that never answers, or stalls mid-body, settles and closes its
- * connection instead of holding its caller. The deadline timer is cleared when
- * the lookup settles.
+ * Run one model lookup under a deadline, its owner's lifetime and its caller's
+ * signal. The operation receives one signal combining all three and must pass
+ * it to every cancellable step and check it after every wait it cannot cancel.
+ *
+ * The returned promise settles as soon as any bound fires, even while the
+ * operation still waits on a step that ignores the signal, such as a credential
+ * read whose interface takes none. That abandoned operation keeps running only
+ * until its next signal check, which it reaches before any further I/O or
+ * report; its eventual outcome is observed and discarded here, so a late
+ * rejection is never unhandled. The deadline timer and abort listener are
+ * released when the returned promise settles.
+ * @param bounds - the deadline and owner lifetime.
+ * @param caller - the caller's own cancellation, if any.
+ * @param operation - the lookup, given the combined signal.
+ * @returns what the operation resolves with, when it finishes first.
+ * @throws LlmError `TIMEOUT` when the deadline fires first; `ABORTED` for the
+ *   caller's or the owner's cancellation; otherwise what the operation throws.
+ */
+export async function withinBounds<T>(
+  bounds: DiscoveryBounds,
+  caller: AbortSignal | undefined,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const deadline = new AbortController()
+  const timer = setTimeout(() => { deadline.abort() }, bounds.timeoutMs)
+  const signal = AbortSignal.any([deadline.signal, bounds.lifetime, caller].filter(entry => entry !== undefined))
+  const bounded = (cause: unknown): LlmError => {
+    const cancelled = bounds.lifetime?.aborted === true || caller?.aborted === true
+    return cancelled
+      ? new LlmError('model discovery aborted by caller', 'ABORTED', { cause })
+      : new LlmError(`model listing did not finish within ${String(bounds.timeoutMs)}ms`, 'TIMEOUT', { cause })
+  }
+  const settled = Promise.withResolvers<T>()
+  const onAbort = (): void => { settled.reject(bounded(signal.reason)) }
+  signal.addEventListener('abort', onAbort, { once: true })
+  try {
+    // An abort rejects synchronously from its listener, before any reaction to
+    // the operation's own outcome can run, so the bound always names the failure.
+    if (signal.aborted) onAbort()
+    else operation(signal).then(settled.resolve, settled.reject)
+    return await settled.promise
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Run {@link discoverModels} through {@link withinBounds}, so a listing whose
+ * credential lookup is held, or whose endpoint never answers or stalls
+ * mid-body, settles and closes its connection instead of holding its caller.
  * @param bounds - the deadline and owner lifetime.
  * @param request - the draft or route to interrogate.
  * @param storedProfile - Host-owned headers and credential resolution.
@@ -420,23 +473,10 @@ export interface DiscoveryBounds {
  * @throws LlmError `TIMEOUT` when the deadline passes first; `ABORTED` for the
  *   caller's or the owner's cancellation; otherwise what {@link discoverModels} throws.
  */
-export async function discoverModelsWithin(
+export function discoverModelsWithin(
   bounds: DiscoveryBounds,
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
 ): Promise<readonly DiscoveredModel[]> {
-  const deadline = new AbortController()
-  const timer = setTimeout(() => { deadline.abort() }, bounds.timeoutMs)
-  const signals = [deadline.signal, bounds.lifetime, request.signal].filter(signal => signal !== undefined)
-  try {
-    return await discoverModels({ ...request, signal: AbortSignal.any(signals) }, storedProfile)
-  } catch (error: unknown) {
-    const cancelled = bounds.lifetime?.aborted === true || request.signal?.aborted === true
-    if (deadline.signal.aborted && !cancelled) {
-      throw new LlmError(`model listing did not finish within ${String(bounds.timeoutMs)}ms`, 'TIMEOUT', { cause: error })
-    }
-    throw error
-  } finally {
-    clearTimeout(timer)
-  }
+  return withinBounds(bounds, request.signal, signal => discoverModels({ ...request, signal }, storedProfile))
 }

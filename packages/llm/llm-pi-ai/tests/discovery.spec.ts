@@ -110,7 +110,7 @@ describe('catalog-route model discovery', () => {
       .rejects.toThrow(/set a baseURL/)
     // The seam refuses a request naming neither, so the module's own guard for
     // that shape is only reachable by calling it directly.
-    await expect(discoverModels({})).rejects.toThrow(/set a baseURL/)
+    await expect(discoverModels({ signal: new AbortController().signal })).rejects.toThrow(/set a baseURL/)
   })
 })
 
@@ -469,6 +469,7 @@ describe('draft-provider model discovery', () => {
 describe('probe key format', () => {
   it('reports an illegal probe key as a credential fault, not an unreachable endpoint', async () => {
     await expect(discoverModels({
+      signal: new AbortController().signal,
       baseURL: 'https://acme.test',
       api: 'openai-completions',
       apiKey: 'sk-\u{1F600}',
@@ -481,6 +482,7 @@ describe('probe key format', () => {
     // key is judged, and only an absent one probes unauthenticated. '' means
     // "I have a key" and is answered as the empty key it is.
     await expect(discoverModels({
+      signal: new AbortController().signal,
       baseURL: 'https://acme.test',
       api: 'openai-completions',
       apiKey: '',
@@ -501,7 +503,7 @@ describe('probe key format', () => {
       })
     })
 
-    await discoverModels({ baseURL: 'https://acme.test', api: 'openai-completions' })
+    await discoverModels({ signal: new AbortController().signal, baseURL: 'https://acme.test', api: 'openai-completions' })
 
     const headers = new Headers(requests[0]?.headers)
     expect(headers.has('authorization')).toBe(false)

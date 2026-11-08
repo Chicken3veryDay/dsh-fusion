@@ -19,6 +19,7 @@ import type { Provider } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
 import { catalogProvider } from '../src/catalog.ts'
 import { resolveProfiles } from '../src/config.ts'
+import { discoverModelsWithin } from '../src/discovery.ts'
 import * as PiAi from '../src/index.ts'
 import { assemble } from './assemble.ts'
 import { memoryAuth } from './auth-double.ts'
@@ -232,6 +233,103 @@ describe('bounded model lookups', () => {
   })
 })
 
+describe('credential waits inside a bounded lookup', () => {
+  /** Let every pending promise reaction run; timers are not involved. */
+  const flush = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+  /** The lookup's outcome if it has settled by now, else 'pending'. */
+  const observe = async (settled: Promise<unknown>): Promise<unknown> => Promise.race([settled, flush().then(() => 'pending')])
+
+  it.each(['deadline', 'caller', 'lifetime'] as const)('settles draft discovery at the %s while the stored key resolver is held, and sends nothing once it returns', async (trigger) => {
+    const sends = vi.fn(() => Promise.resolve(Response.json({ data: [] })))
+    vi.stubGlobal('fetch', sends)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const entered = Promise.withResolvers<undefined>()
+    const gate = Promise.withResolvers<string>()
+    const caller = new AbortController()
+    const lifetime = new AbortController()
+    const settled = discoverModelsWithin({ timeoutMs: 4_000, lifetime: lifetime.signal },
+      { provider: 'synthetic-gateway', api: 'openai-completions', baseURL: 'http://127.0.0.1:9', signal: caller.signal },
+      () => ({ headers: undefined, resolveApiKey: () => { entered.resolve(undefined); return gate.promise } }))
+      .then(() => 'fulfilled', (error: unknown) => (error as LlmError).code)
+    await entered.promise
+    if (trigger === 'deadline') await vi.advanceTimersByTimeAsync(4_000)
+    if (trigger === 'caller') caller.abort()
+    if (trigger === 'lifetime') lifetime.abort()
+    expect(await observe(settled)).toBe(trigger === 'deadline' ? 'TIMEOUT' : 'ABORTED')
+    expect(vi.getTimerCount()).toBe(0)
+    gate.resolve('ordinary-synthetic-key')
+    await flush()
+    expect(sends).not.toHaveBeenCalled()
+  })
+
+  /** An account adapter whose credential reads wait on one gate. */
+  function heldAccount(lifetime: AbortSignal) {
+    const entered = Promise.withResolvers<undefined>()
+    const gate = Promise.withResolvers<undefined>()
+    const auth = memoryAuth({ openai: { type: 'oauth', access: 'synthetic-access', refresh: 'synthetic-refresh', expires: 4_000_000_000_000 } })
+    const read = auth.credentials.read.bind(auth.credentials)
+    const reads: (AbortSignal | undefined)[] = []
+    auth.credentials.read = async (id, options) => {
+      reads.push(options?.signal)
+      entered.resolve(undefined)
+      await gate.promise
+      return read(id, options)
+    }
+    const unoffered = vi.fn()
+    const adapter = new PiAiAdapter({
+      profiles: () => resolveProfiles({ openai: { baseURL: 'http://127.0.0.1:9/v1', modelListTimeoutMs: 4_000 } }),
+      resolveApiKey: () => Promise.resolve(undefined), auth, lifetime, onUnofferedAccountModels: unoffered,
+    })
+    return { adapter, entered: entered.promise, release: () => { gate.resolve(undefined) }, reads, unoffered }
+  }
+
+  it.each(['deadline', 'lifetime', 'caller'] as const)('settles an account lookup at the %s while its initial credential read is held, then neither lists nor reports', async (trigger) => {
+    const sends = vi.fn(() => Promise.resolve(new Response(listing('gpt-5.4', 'gpt-future-unlisted'))))
+    vi.stubGlobal('fetch', sends)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const lifetime = new AbortController()
+    const caller = new AbortController()
+    const held = heldAccount(lifetime.signal)
+    const lookup = trigger === 'caller'
+      ? held.adapter.canSelectModel('openai', 'gpt-5.4', caller.signal)
+      : held.adapter.listModels('openai')
+    const settled = lookup.then(() => 'fulfilled', (error: unknown) => (error as LlmError).code)
+    await held.entered
+    expect(held.reads[0]?.aborted).toBe(false)
+    if (trigger === 'deadline') await vi.advanceTimersByTimeAsync(4_000)
+    if (trigger === 'lifetime') lifetime.abort()
+    if (trigger === 'caller') caller.abort()
+    expect(await observe(settled)).toBe(trigger === 'deadline' ? 'TIMEOUT' : 'ABORTED')
+    expect(held.reads[0]?.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+    held.release()
+    await flush()
+    await flush()
+    expect(sends).not.toHaveBeenCalled()
+    expect(held.unoffered).not.toHaveBeenCalled()
+  })
+
+  it('still lists and reports when the held read returns before the deadline', async () => {
+    const sends = vi.fn(() => Promise.resolve(new Response(listing('gpt-5.4', 'gpt-future-unlisted'))))
+    vi.stubGlobal('fetch', sends)
+    const held = heldAccount(new AbortController().signal)
+    const listed = held.adapter.listModels('openai')
+    await held.entered
+    held.release()
+    expect((await listed).map(({ id }) => id)).toEqual(['gpt-5.4'])
+    expect(sends).toHaveBeenCalledTimes(1)
+    expect(held.unoffered).toHaveBeenCalledWith({ provider: 'openai', models: ['gpt-future-unlisted'] })
+  })
+
+  it('does not start a lookup whose caller has already given up', async () => {
+    const held = heldAccount(new AbortController().signal)
+    const aborted = new AbortController()
+    aborted.abort()
+    await expect(held.adapter.canSelectModel('openai', 'gpt-5.4', aborted.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(held.reads).toEqual([])
+  })
+})
+
 describe('official ChatGPT-plan origin', () => {
   it('sends the plan-only request shape to api.openai.com while only the transport is rerouted', async () => {
     const server = await mockServer([{ body: listing('gpt-5.4') }, { events: completed }])
@@ -342,7 +440,7 @@ describe('Messages subscription restriction through every credential source', ()
     expect(server.headers[0]?.['x-native-routing']).toBe('native-value')
   })
 
-  it('passes the caller signal through and leaves a native auth failure to the dispatch', async () => {
+  it('passes the caller signal through and reports a native auth failure as the dispatch would', async () => {
     const server = await mockServer([{ events: anthropicTextEvents }])
     const live = new AbortController()
     const chunks: StreamChunk[] = []
@@ -376,6 +474,104 @@ describe('Messages subscription restriction through every credential source', ()
     const server = await mockServer([{ events: anthropicTextEvents }])
     await expect(drain(nativeRoute(server, { authorization: 'Bearer sk-ant-oat-native' }, 'ordinary-native-key'))).rejects.toMatchObject({ code: 'AUTH' })
     expect(server.paths).toEqual([])
+  })
+})
+
+describe('a Messages request dispatches exactly the authentication it checked', () => {
+  const messages = { provider: 'openrouter', model: 'claude-test', messages: [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] })] }
+  interface Dispatched { baseUrl: string; apiKey: string | undefined; headers: Record<string, string | null> | undefined; env: unknown }
+
+  /**
+   * A native Messages route whose authentication answers each resolution from
+   * `answers` in turn, recording what the protocol implementation receives.
+   */
+  function changingRoute(answers: readonly (() => Promise<unknown>)[]) {
+    const profiles = resolveProfiles({ openrouter: {
+      api: 'anthropic-messages', baseURL: 'https://unused.invalid', headers: { 'x-shared': 'profile', 'x-profile': 'kept' },
+      models: [{ id: 'claude-test', contextWindow: 1000, maxTokens: 100 }],
+    } })
+    const profile = profiles.get('openrouter')
+    if (profile?.piProvider === undefined) throw new Error('profile did not build')
+    const base = profile.piProvider
+    const dispatched: Dispatched[] = []
+    let resolutions = 0
+    const piProvider: Provider = {
+      ...base,
+      auth: { apiKey: { name: 'native', resolve: () => {
+        const answer = answers[Math.min(resolutions, answers.length - 1)]
+        resolutions++
+        if (answer === undefined) throw new Error('no answer')
+        return answer() as never
+      } } },
+      streamSimple: (model, context, options) => {
+        dispatched.push({ baseUrl: model.baseUrl, apiKey: options?.apiKey, headers: options?.headers, env: options?.env })
+        return base.streamSimple(model, context, options)
+      },
+    }
+    profiles.set('openrouter', { ...profile, piProvider })
+    const adapter = new PiAiAdapter({ profiles: () => profiles, resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth() })
+    const drain = async (): Promise<StreamChunk[]> => {
+      const chunks: StreamChunk[] = []
+      for await (const chunk of adapter.stream(messages)) chunks.push(chunk)
+      return chunks
+    }
+    return { drain, dispatched, resolutions: () => resolutions }
+  }
+
+  it('sends the checked key, base URL, merged headers and environment even when a later resolution would differ', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const route = changingRoute([
+      () => Promise.resolve({ source: 'native', env: { NATIVE_ENV: 'checked' }, auth: {
+        apiKey: 'ordinary-checked-key', baseUrl: server.url, headers: { 'X-Native-Control': 'native', 'X-Shared': 'native' },
+      } }),
+      () => Promise.resolve({ source: 'native', auth: { apiKey: 'sk-ant-oat-changed', baseUrl: 'http://127.0.0.1:9', headers: {} } }),
+    ])
+    expect((await route.drain()).at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(route.resolutions()).toBe(1)
+    expect(route.dispatched).toHaveLength(1)
+    const [sent] = route.dispatched
+    expect(sent).toMatchObject({ baseUrl: server.url, apiKey: 'ordinary-checked-key', env: { NATIVE_ENV: 'checked' } })
+    // Every value under one case-insensitive name, so a duplicate spelling would show.
+    const values = (name: string): unknown[] => Object.entries(sent?.headers ?? {})
+      .filter(([key]) => key.toLowerCase() === name).map(([, value]) => value)
+    expect(values('x-shared')).toEqual(['profile'])
+    expect(values('x-native-control')).toEqual(['native'])
+    expect(values('x-profile')).toEqual(['kept'])
+    expect(server.headers[0]?.['x-api-key']).toBe('ordinary-checked-key')
+    expect(server.headers[0]?.['x-native-control']).toBe('native')
+    expect(JSON.stringify(server.headers)).not.toContain('sk-ant-oat')
+    expect(JSON.stringify(server.requests)).not.toContain('Claude Code')
+  })
+
+  it('reports a failed resolution without resolving again or constructing a request', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const route = changingRoute([
+      () => Promise.reject(new Error('native lookup failed')),
+      () => Promise.resolve({ source: 'native', auth: { apiKey: 'sk-ant-oat-after-failure', baseUrl: server.url } }),
+    ])
+    const chunks = await route.drain()
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'error', failure: { code: 'PI_AI_ERROR' } } })
+    expect(JSON.stringify(chunks.at(-1))).toContain('API key auth failed for provider openrouter')
+    expect(route.resolutions()).toBe(1)
+    expect(route.dispatched).toEqual([])
+    expect(server.paths).toEqual([])
+  })
+
+  it('resolves every request on its own and keeps an unconfigured result unconfigured', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }, { events: anthropicTextEvents }])
+    const route = changingRoute([
+      () => Promise.resolve({ source: 'native', auth: { apiKey: 'ordinary-first', baseUrl: server.url } }),
+      () => Promise.resolve({ source: 'native', auth: { apiKey: 'ordinary-second', baseUrl: server.url } }),
+      () => Promise.resolve(undefined),
+    ])
+    await route.drain()
+    await route.drain()
+    expect(route.dispatched.map(entry => entry.apiKey)).toEqual(['ordinary-first', 'ordinary-second'])
+    expect(server.headers.map(headers => headers['x-api-key'])).toEqual(['ordinary-first', 'ordinary-second'])
+    const unconfigured = await route.drain()
+    expect(JSON.stringify(unconfigured.at(-1))).toContain('Provider is not configured: openrouter')
+    expect(route.resolutions()).toBe(3)
+    expect(route.dispatched).toHaveLength(2)
   })
 })
 

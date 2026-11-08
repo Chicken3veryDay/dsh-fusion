@@ -359,8 +359,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       headers: profile.headers,
       resolveApiKey: () => resolveApiKey(provider, profile),
       ...provider !== 'openai' || profile.apiKeyEnv !== undefined ? {} : {
-        chatgpt: async (signal?: AbortSignal) => {
-          const stored = await auth.credentials.read(provider)
+        chatgpt: async (signal: AbortSignal) => {
+          const stored = await auth.credentials.read(provider, { signal })
           if (stored?.type !== 'oauth') return undefined
           const models = createModels(auth)
           if (profile.piProvider !== undefined) models.setProvider(profile.piProvider)

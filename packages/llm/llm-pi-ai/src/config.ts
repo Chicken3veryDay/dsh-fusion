@@ -172,10 +172,11 @@ export interface PiAiProviderProfile {
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
   /**
-   * Deadline in milliseconds for one network model listing of this route (an
-   * account's models, or a draft endpoint's interrogation), covering connection,
-   * headers, and body. A listing that misses it fails with `TIMEOUT` and its
-   * connection is closed; other routes' catalogs are unaffected.
+   * Deadline in milliseconds for one model lookup of this route (its model
+   * offers, a selection check, or a draft endpoint's interrogation), covering
+   * every credential read, the connection, headers, and body. A lookup that
+   * misses it fails with `TIMEOUT` even while a credential read is still
+   * pending, and its connection is closed; other routes' catalogs are unaffected.
    */
   modelListTimeoutMs?: number
   /**
