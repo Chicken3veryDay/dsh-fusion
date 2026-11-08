@@ -1197,13 +1197,14 @@ Source: [`packages/llm/llm/src/index.ts`](../../packages/llm/llm/src/index.ts)
 
 #### `llm/adapters-updated` — emit
 
-The provider topology changed: an adapter registered or unregistered routes, or the configurable-provider directory gained or lost entries. This payload-free registry notification fires at each commit point (including registration disposal); consumers re-read `listProviders()`, `listModels()`, or `listConfigurableProviders()` for the new state. Observer failures are contained and cannot veto the registry mutation.
+The provider topology changed: an adapter registered or unregistered routes, the configurable-provider directory gained or lost entries, or an adapter re-announced unchanged routes because the model offers behind them changed. This payload-free registry notification fires at each commit point (including registration disposal); consumers re-read `listProviders()`, `listModels()`, or `listConfigurableProviders()` for the new state. Observer failures are contained and cannot veto the registry mutation.
 
 ```ts cordis-catalog
 /**
  * The provider topology changed: an adapter registered or unregistered
- * routes, or the configurable-provider directory gained or lost entries.
- * This payload-free registry notification fires at each commit point
+ * routes, the configurable-provider directory gained or lost entries, or an
+ * adapter re-announced unchanged routes because the model offers behind them
+ * changed. This payload-free registry notification fires at each commit point
  * (including registration disposal); consumers re-read `listProviders()`,
  * `listModels()`, or `listConfigurableProviders()` for the new state.
  * Observer failures are contained and cannot veto the registry mutation.

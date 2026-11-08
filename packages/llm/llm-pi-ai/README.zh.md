@@ -92,7 +92,7 @@ kind: "package-reference"
 
 ### 登录提供方
 
-pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。退出登录会移除自动激活的路由。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
+pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。挂载会等待凭据存储中已有的登录，因此启动后的第一个请求就能看到它们；没有凭据存储时挂载不会等待，之后出现的存储会让路由随之生效。退出登录或移除凭据存储会移除自动激活的路由及其就绪状态，已配置的 profile 保持不变；在其存储被替换或撤回之后才完成的列表不会发布任何内容。替换提供方的已存储授权时，如果该提供方的模型供给取决于授权（例如 GitHub Copilot 按账户限定的模型），会通过 `llm/adapters-updated` 重新宣告供给，因此提供方 id 不变时，已打开的选择器和 ACP 会话也会刷新。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
 
 OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存储在 `llm-pi-ai/installation-id`。退出登录会移除提供方授权，但保留该安装实例标识。
 
@@ -118,7 +118,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 失败与恢复
 
-pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
+pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。提供方错误 code 或消息表明额度已耗尽的 429（例如 Codex 的 `usage_limit_reached`）为 `QUOTA`，不参与常规重试；其他 429 仍是可重试的 `RATE_LIMIT`。适配器从 429 响应体的有界副本中读取该 code，因为 pi-ai 会把错误压平为消息文本，且该 code 不会被持久化。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
 
 Config 更新严格验证发生变化的 provider。初始加载将已存储的目录故障保留为可编辑的 provider 诊断；未更改的故障 provider 不阻止其他编辑。可用模型仍可选择，无法解析的模型在网络 I/O 前失败。修复或删除问题配置会清除其诊断。
 
@@ -169,7 +169,7 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 
 ### 注册与目录
 
-插件会在可配置提供方目录中声明它能认证的每个已安装目录提供方，并加入当前 profile 声明的每条路由，因此配置界面可以在任何路由存在之前提供完整目录。目录列出了模型却没有聊天模型的提供方（例如只有分类器模型）不进入目录，也不注册登录流程，因为本适配器只分派聊天请求。每个条目都携带 `declared`——pi-ai 是否在该键下不提供任何内容——因为只有适配器能区分手工声明路由与收窄目录路由。目录条目以 `defaultBaseURL` 表示提供方的固定端点或全部模型共用的固定端点，以 `baseURLEnv` 表示端点配置变量，以 `nativeAuth` 表示认证变量和 OAuth 可用性。不同模型的端点和未展开的 URL 模板不会显示为单一固定默认值。`hasStoredCredential` 报告本适配器拥有的受支持存储登录，不包括其他插件的记录和安装 id。路由注册具有原子性：与其他适配器冲突的候选集合会让此前路由继续服务。裸挂载没有 profile 时会保持休眠，直到设置提供 profile 或受支持的已存储登录激活已安装目录路由；退出登录会移除自动路由，显式配置路由则仍由 Config 控制。
+插件会在可配置提供方目录中声明它能认证的每个已安装目录提供方，并加入当前 profile 声明的每条路由，因此配置界面可以在任何路由存在之前提供完整目录。目录列出了模型却没有聊天模型的提供方（例如只有分类器模型）不进入目录，也不注册登录流程，因为本适配器只分派聊天请求。每个条目都携带 `declared`——pi-ai 是否在该键下不提供任何内容——因为只有适配器能区分手工声明路由与收窄目录路由。目录条目以 `defaultBaseURL` 表示提供方的固定端点或全部模型共用的固定端点，以 `baseURLEnv` 表示端点配置变量，以 `nativeAuth` 表示认证变量和 OAuth 可用性。不同模型的端点和未展开的 URL 模板不会显示为单一固定默认值。`hasStoredCredential` 报告本适配器拥有、且已解析的 profile 实际使用的受支持存储登录，不包括其他插件的记录、安装 id，以及被路由显式 `apiKeyEnv` 覆盖的登录。路由注册具有原子性：与其他适配器冲突的候选集合会让此前路由继续服务。裸挂载没有 profile 时会保持休眠，直到设置提供 profile 或受支持的已存储登录激活已安装目录路由；退出登录会移除自动路由，显式配置路由则仍由 Config 控制。
 
 <a id="generated-provider-metadata"></a>
 ### 生成的提供方元数据
