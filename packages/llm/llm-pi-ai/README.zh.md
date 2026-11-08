@@ -92,7 +92,7 @@ kind: "package-reference"
 
 ### 登录提供方
 
-pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。挂载会等待凭据存储中已有的登录，因此启动后的第一个请求就能看到它们；没有凭据存储时挂载不会等待，之后出现的存储会让路由随之生效。退出登录或移除凭据存储会移除自动激活的路由及其就绪状态，已配置的 profile 保持不变；路由会立即移除，在其存储被替换或撤回之后才完成的列表不会发布任何内容。对存储的每次列表读取都归适配器所有：拆除（移除存储、释放适配器或释放根）会先停止接纳新的列表读取，因此排在运行中读取之后的刷新永远不会读取存储，然后等待已经在运行的读取完成，存储或适配器才会结束卸载。因此列表读取永不完成的存储会使该拆除一直等待；应用列表时的失败会被记录，路由保持不变。替换提供方的已存储授权时，如果该提供方的模型供给取决于授权（例如 GitHub Copilot 按账户限定的模型），会通过 `llm/adapters-updated` 重新宣告供给，因此提供方 id 不变时，已打开的选择器和 ACP 会话也会刷新。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
+pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。挂载会等待凭据存储中已有的登录，因此启动后的第一个请求就能看到它们；没有凭据存储时挂载不会等待，之后出现的存储会让路由随之生效。退出登录或移除凭据存储会移除自动激活的路由及其就绪状态，已配置的 profile 保持不变；路由会立即移除，在其存储被替换或撤回之后才完成的列表不会发布任何内容。每次列表读取只读取其绑定加载时挂载的那个存储，绝不读取替换后的存储。该存储被撤回或替换（包括挂载时的列表读取仍在运行时发生的撤回或替换），以及适配器或根开始释放，都会立即停止接纳新的列表读取，因此排在运行中读取之后的刷新永远不会读取任何存储。随后拆除会等待已经在运行的读取完成，存储或适配器才会结束卸载。因此列表读取永不完成的存储会使该拆除一直等待；应用列表时的失败会被记录，路由保持不变。替换提供方的已存储授权时，如果该提供方的模型供给取决于授权（例如 GitHub Copilot 按账户限定的模型），会通过 `llm/adapters-updated` 重新宣告供给，因此提供方 id 不变时，已打开的选择器和 ACP 会话也会刷新。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
 
 OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存储在 `llm-pi-ai/installation-id`。退出登录会移除提供方授权，但保留该安装实例标识。
 
@@ -118,7 +118,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 失败与恢复
 
-pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。提供方错误 code 或消息表明额度已耗尽的 429（例如 Codex 的 `usage_limit_reached`）为 `QUOTA`，不参与常规重试；其他 429 仍是可重试的 `RATE_LIMIT`。流中传递的订阅用量或用户数据暂时不可用 code 为可重试的 `SERVER` 失败。适配器从 429 响应体的有界副本中读取该 code，因为 pi-ai 会把错误压平为消息文本，且该 code 不会被持久化。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
+pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。提供方错误 code 或消息表明额度已耗尽的 429（例如 Codex 的 `usage_limit_reached`）为 `QUOTA`，不参与常规重试；其他 429 仍是可重试的 `RATE_LIMIT`。流中传递的订阅用量或用户数据暂时不可用 code 为可重试的 `SERVER` 失败。成功流中的 Codex 失败帧（`error` 或 `response.failed`）按其 code 分类：`usage_limit_reached` 与 `usage_not_included` 为 `QUOTA`，`rate_limit_exceeded` 为 `RATE_LIMIT`，没有 code 或为其他 code 的帧按其消息分类；这类失败不携带 HTTP 状态，若观察到被拒绝的响应，则由该响应决定。适配器从 429 响应体的有界副本中读取 429 code，从 pi-ai 的 `onProviderStreamEvent` 回调中读取帧 code，因为 pi-ai 会把两者都压平为消息文本；两种 code 都不会被持久化。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
 
 Config 更新严格验证发生变化的 provider。初始加载将已存储的目录故障保留为可编辑的 provider 诊断；未更改的故障 provider 不阻止其他编辑。可用模型仍可选择，无法解析的模型在网络 I/O 前失败。修复或删除问题配置会清除其诊断。
 

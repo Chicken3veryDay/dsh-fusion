@@ -58,6 +58,15 @@ describe('pi-ai SDK retry boundary', () => {
     })
   })
 
+  it('observes HTTP responses of a non-Codex API without subscribing to its provider frames', async () => {
+    streamSimple.mockImplementation(() => { throw new Error('mock SDK boundary') })
+
+    await drain(gatewayAdapter())
+
+    expect(streamSimple.mock.calls[0]?.[2]).toHaveProperty('fetch')
+    expect(streamSimple.mock.calls[0]?.[2]).not.toHaveProperty('onProviderStreamEvent')
+  })
+
   it('dispatches a hand-declared route to the endpoint and model its configuration describes', async () => {
     streamSimple.mockImplementation(() => { throw new Error('mock SDK boundary') })
 

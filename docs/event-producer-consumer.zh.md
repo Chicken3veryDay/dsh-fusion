@@ -59,7 +59,7 @@
 | `goal/changed` | `emit` | [`packages/goal/goal/src/domain.ts:114`](../packages/goal/goal/src/domain.ts) | [`goal`](../packages/goal/goal) (`emit`) | [`goal-round-driver`](../packages/goal/goal-round-driver) |
 | `hmr/change` | `emit` | [`packages/boot/hmr/src/index.ts:35`](../packages/boot/hmr/src/index.ts) | [`hmr`](../packages/boot/hmr) (`emit`) | - |
 | `hmr/reload` | `emit` | [`packages/boot/hmr/src/index.ts:40`](../packages/boot/hmr/src/index.ts) | [`hmr`](../packages/boot/hmr) (`emit`) | - |
-| `llm-pi-ai/request-headers` | `waterfall` | [`packages/llm/llm-pi-ai/src/index.ts:115`](../packages/llm/llm-pi-ai/src/index.ts) | [`llm-pi-ai`](../packages/llm/llm-pi-ai) (`waterfall`) | - |
+| `llm-pi-ai/request-headers` | `waterfall` | [`packages/llm/llm-pi-ai/src/index.ts:117`](../packages/llm/llm-pi-ai/src/index.ts) | [`llm-pi-ai`](../packages/llm/llm-pi-ai) (`waterfall`) | - |
 | `llm/adapters-updated` | `emit` | [`packages/llm/llm/src/types.ts:25`](../packages/llm/llm/src/types.ts) | [`llm`](../packages/llm/llm) (`events.dispatch`) | [`acp`](../packages/acp/acp), `remotes` |
 | `llm/models-updated` | `emit` | [`packages/llm/llm/src/types.ts:31`](../packages/llm/llm/src/types.ts) | [`llm-deepseek`](../packages/llm/llm-deepseek) (`emit`) | `remotes` |
 | `llm/stream` | `waterfall` | [`packages/llm/llm/src/index.ts:75`](../packages/llm/llm/src/index.ts) | [`llm`](../packages/llm/llm) (`waterfall`) | [`llm-replay`](../packages/test-support/llm-replay), [`session-checkpoint-policy`](../packages/session/session-checkpoint-policy), [`session-title`](../packages/session/session-title) |
@@ -115,7 +115,7 @@
 | `internal/config` | - | [`llm-pi-ai`](../packages/llm/llm-pi-ai) |
 | `internal/dispatch` | - | [`terminal-bash`](../packages/terminal/terminal-bash) |
 | `internal/plugin` | - | `computer-use-cua-driver-native`, `inspector`, `loader`, [`lsp-stdio`](../packages/lsp/lsp-stdio), [`mcp-client`](../packages/mcp/mcp-client), `modules`, [`session-persistence-jsonl`](../packages/session/session-persistence-jsonl) |
-| `internal/service` | - | `client-ui-forge`, `gateway` |
+| `internal/service` | - | `client-ui-forge`, `gateway`, [`llm-pi-ai`](../packages/llm/llm-pi-ai) |
 | `internal/status` | - | [`agent`](../packages/core/agent), `claude-code-mods`, `fusion-participants`, `inspector`, [`session-persistence-jsonl`](../packages/session/session-persistence-jsonl), `translator`, [`web`](../packages/web/web) |
 | `loader/volatile-update` | - | [`llm-deepseek`](../packages/llm/llm-deepseek), [`llm-deepseek-api-key`](../packages/llm/llm-deepseek-api-key), [`llm-pi-ai`](../packages/llm/llm-pi-ai), [`plugin-market`](../packages/boot/plugin-market), `product-analytics`, `speech-to-text` |
 | `locale/change` | `locale` (`emit`) | `locale` |

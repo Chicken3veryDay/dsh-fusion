@@ -274,6 +274,233 @@ describe('credential store lifecycle', () => {
     } finally { store.drain() }
   })
 
+  /**
+   * Withdraw the mount-time store through the exact disposer `ctx.provide` returned, without
+   * awaiting it, while the initial listing is held; mount a replacement before that listing
+   * settles; optionally end the adapter or the root in the same overlap.
+   */
+  async function withdrawDuringInitialListing(end: 'none' | 'adapter' | 'root'): Promise<{
+    retiredCalls: number
+    replacementCalls: number
+    replacementCallsBeforeRelease: number
+    announced: string[][]
+    routes: string[]
+  }> {
+    const ctx = await runtime()
+    const llm = ctx.llm
+    const retired = gatedStore('deferred')
+    let replacementCalls = 0
+    const replacement = {
+      listRecords: (): Promise<Listing> => {
+        replacementCalls += 1
+        return Promise.resolve([grant('github-copilot')])
+      },
+    }
+    let withdraw: (() => void) | undefined
+    await ctx.plugin({
+      name: 'retiring-credential-store',
+      apply: (child: Context) => { withdraw = child.provide('credentials', retired.service as never) },
+    })
+    const announced: string[][] = []
+    let mounting: ReturnType<Context['plugin']> | undefined
+    let withdrawing: Promise<void> | undefined
+    let ending: Promise<void> | undefined
+    try {
+      mounting = ctx.plugin(PiAi)
+      await retired.entered()
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('openai-codex'))
+      ctx.on('llm/adapters-updated', () => { announced.push(llm.listProviders().map(provider => provider.id)) })
+      // `provide` is typed as a synchronous disposer, but Cordis returns its removal promise.
+      withdrawing = Promise.resolve(withdraw?.())
+      await ctx.plugin({
+        name: 'replacement-credential-store',
+        apply: (child: Context) => { child.provide('credentials', replacement as never) },
+      })
+      const replacementCallsBeforeRelease = replacementCalls
+      if (end === 'adapter') ending = mounting.dispose()
+      if (end === 'root') ending = ctx.fiber.dispose()
+      retired.release([grant('openai-codex')])
+      await withdrawing
+      await mounting
+      await ending
+      return {
+        retiredCalls: retired.calls(),
+        replacementCalls,
+        replacementCallsBeforeRelease,
+        announced,
+        routes: llm.listProviders().map(provider => provider.id),
+      }
+    } finally {
+      retired.drain()
+      await withdrawing
+      await mounting
+      await ending
+    }
+  }
+
+  it('retires an initially loading binding at withdrawal, before Cordis can unload it', async () => {
+    const result = await withdrawDuringInitialListing('none')
+
+    // The replacement is listed once, by its own binding; the retired binding read only its own store
+    // and published nothing after withdrawal was requested.
+    expect(result.replacementCallsBeforeRelease).toBe(0)
+    expect(result.retiredCalls).toBe(1)
+    expect(result.replacementCalls).toBe(1)
+    // Every announcement after withdrawal shows the replacement's routes: neither the retired
+    // route nor an interim empty set was ever published.
+    expect(result.announced.length).toBeGreaterThan(0)
+    for (const announcement of result.announced) expect(announcement).toEqual(['github-copilot'])
+    expect(result.routes).toEqual(['github-copilot'])
+  })
+
+  it('admits no listing of either store when the adapter is disposed in the same initial-load overlap', async () => {
+    const result = await withdrawDuringInitialListing('adapter')
+
+    expect(result.retiredCalls).toBe(1)
+    expect(result.replacementCalls).toBe(0)
+    expect(result.announced.flat()).not.toContain('openai-codex')
+    expect(result.routes).toEqual([])
+  })
+
+  it('admits no listing of either store when the root is disposed in the same initial-load overlap', async () => {
+    const result = await withdrawDuringInitialListing('root')
+
+    expect(result.retiredCalls).toBe(1)
+    expect(result.replacementCalls).toBe(0)
+    expect(result.announced.flat()).not.toContain('openai-codex')
+    expect(result.routes).toEqual([])
+  })
+
+  it('starts no queued listing once the adapter alone is disposed during the initial listing', async () => {
+    const ctx = await runtime()
+    const store = gatedStore('deferred')
+    await ctx.plugin({
+      name: 'owned-credential-store',
+      apply: (child: Context) => { child.provide('credentials', store.service as never) },
+    })
+    let mounting: ReturnType<Context['plugin']> | undefined
+    let disposing: Promise<void> | undefined
+    try {
+      mounting = ctx.plugin(PiAi)
+      await store.entered()
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('github-copilot'))
+      let disposed = false
+      disposing = mounting.dispose().then(() => { disposed = true })
+      await nextTurn()
+      expect(disposed).toBe(false)
+
+      store.release([grant('openai-codex')])
+      await nextTurn()
+      // Checked before joining teardown: an admitted queued listing would hold it open.
+      expect(store.calls()).toBe(1)
+      await disposing
+      await mounting
+
+      expect(store.calls()).toBe(1)
+      expect(routes(ctx)).toEqual([])
+    } finally {
+      store.drain()
+      await disposing
+      await mounting
+    }
+  })
+
+  it('lists only its own store when the adapter restarts during the initial listing', async () => {
+    const ctx = await runtime()
+    const store = gatedStore('deferred')
+    await ctx.plugin({
+      name: 'owned-credential-store',
+      apply: (child: Context) => { child.provide('credentials', store.service as never) },
+    })
+    let mounting: ReturnType<Context['plugin']> | undefined
+    let restarting: Promise<void> | undefined
+    try {
+      mounting = ctx.plugin(PiAi)
+      await store.entered()
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('github-copilot'))
+      restarting = mounting.restart()
+
+      store.release([grant('openai-codex')])
+      // The update queued behind the initial listing still belongs to the same store.
+      await store.entered()
+      store.release([grant('openai-codex')])
+      // The restarted adapter lists the store again through its own binding.
+      await store.entered()
+      store.release([grant('github-copilot')])
+      await restarting
+      await mounting
+
+      await vi.waitFor(() => { expect(routes(ctx)).toEqual(['github-copilot']) })
+      expect(store.calls()).toBe(3)
+    } finally {
+      store.drain()
+      await restarting
+      await mounting
+    }
+  })
+
+  it('retires the initial binding when its store\'s provider restarts, and follows the restarted store', async () => {
+    const ctx = await runtime()
+    const store = gatedStore('deferred')
+    const source = await ctx.plugin({
+      name: 'owned-credential-store',
+      apply: (child: Context) => { child.provide('credentials', store.service as never) },
+    })
+    const announced: string[][] = []
+    let mounting: ReturnType<Context['plugin']> | undefined
+    let restarting: Promise<void> | undefined
+    try {
+      mounting = ctx.plugin(PiAi)
+      await store.entered()
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('github-copilot'))
+      ctx.on('llm/adapters-updated', () => { announced.push(routes(ctx)) })
+      restarting = source.restart()
+
+      store.release([grant('openai-codex')])
+      await store.entered()
+      store.release([grant('github-copilot')])
+      await restarting
+      await mounting
+
+      await vi.waitFor(() => { expect(routes(ctx)).toEqual(['github-copilot']) })
+      // The retired binding neither ran its queued update nor published its initial listing.
+      expect(store.calls()).toBe(2)
+      expect(announced.flat()).not.toContain('openai-codex')
+    } finally {
+      store.drain()
+      await restarting
+      await mounting
+    }
+  })
+
+  it('keeps a binding live through a service notification that still carries its store', async () => {
+    const { ctx, store } = await mountOver([grant('openai-codex')])
+    try {
+      ctx.reflect.notify(['credentials'])
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('github-copilot'))
+      await store.entered()
+      store.release([grant('openai-codex'), grant('github-copilot')])
+
+      await vi.waitFor(() => { expect(routes(ctx).sort()).toEqual(['github-copilot', 'openai-codex']) })
+      expect(store.calls()).toBe(2)
+    } finally { store.drain() }
+  })
+
+  it('keeps following a credential service through a notification that still carries it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-binding-'))
+    onTestFinished(() => rm(dir, { recursive: true, force: true }))
+    const ctx = await runtime()
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await ctx.plugin(PiAi)
+
+    ctx.reflect.notify(['credentials'])
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+      kind: 'grant', payload: { type: 'oauth', access: 'synthetic', refresh: 'synthetic', expires: 4102444800000 },
+    }))
+
+    await vi.waitFor(() => { expect(routes(ctx)).toEqual(['openai-codex']) })
+  })
+
   it('contains a failure while publishing a refresh and keeps later refreshes running', async () => {
     const ctx = await runtime()
     const error = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})

@@ -58,15 +58,17 @@ import type {} from '@deepseek-ai/dsh-settings'
 
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 
+import { symbols } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-fs'
 import { credentialKeyId, credentialKeyScope } from '@deepseek-ai/dsh-credentials'
+import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
-import { authContextFrom, credentialStoreFrom, RECORD_SCOPE } from './auth.ts'
+import { authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE } from './auth.ts'
 import { catalogProvider, catalogProviderIds } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
@@ -182,17 +184,31 @@ function directoryEntries(
 }
 
 /**
+ * The implementation a service value stands for. Cordis hands a listener or a declared
+ * injection a context-bound view of a traceable service, and that view names its target.
+ * @param value - a service implementation or a view of one.
+ * @returns the viewed implementation, or `value` itself when it is not a view.
+ */
+function serviceIdentity(value: unknown): unknown {
+  const original: unknown = (typeof value === 'object' || typeof value === 'function') && value !== null
+    ? Reflect.get(value, symbols.original)
+    : undefined
+  return original ?? value
+}
+
+/**
  * Register pi-ai routes from profiles and supported stored sign-ins.
  * @param ctx - Plugin context with the LLM registry and optional credential store.
  * @param config - Provider profiles and their request defaults.
  * @returns after the credential store present at mount has been listed for initial route
  *   registration; at once when no store exists yet. Its sign-in routes follow that store:
  *   they leave when it is withdrawn and are re-read from a replacement. Every listing, initial
- *   or event-triggered, belongs to the binding to the store. Teardown of the store, the adapter,
- *   or the root closes admission first (a queued listing never reads the store), withdraws the
- *   routes, then joins the listing already running while the store is still mounted. A store
- *   whose listing never settles therefore holds that teardown. Listing and publication failures
- *   are logged, never rejected.
+ *   or event-triggered, belongs to the binding to the store and reads only the store that binding
+ *   committed to. Withdrawal or replacement of the store, even during the initial listing, and the
+ *   start of adapter or root disposal close admission at once (a queued listing never reads any
+ *   store, and a running one publishes nothing); teardown then withdraws the routes and joins the
+ *   listing already running while the store is still mounted. A store whose listing never settles
+ *   therefore holds that teardown. Listing and publication failures are logged, never rejected.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
@@ -384,8 +400,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Everything read from a store belongs to the binding to that store: when the
   // store is withdrawn or replaced its sign-ins leave with it, and a listing
   // still in flight from it can no longer publish.
-  let disposed = false
-  ctx.effect(() => () => { disposed = true })
+  /** False from the moment disposal of this adapter begins, before Cordis unloads it. */
+  const mounted = (): boolean => ctx.fiber.uid !== null
   /**
    * Whether a changed credential can change what its route offers. Only a
    * catalog provider that narrows its models per credential (Copilot, by the
@@ -394,21 +410,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const offersVaryByCredential = (provider: string): boolean =>
     catalogProvider(provider)?.filterModels !== undefined && registration !== undefined
   /**
-   * One refresh of the signed-in set from the store this binding is bound to. Never
+   * One refresh of the signed-in set from the store one binding committed to. Never
    * rejects: a failure is logged and leaves the routes as they were, so a refresh
    * started from an event has no caller to report to and cannot go unhandled.
+   * @param store - the credential store the binding captured when it loaded.
+   * @param admitted - whether the binding may still publish; asked again after the listing settles.
+   * @param touched - the provider whose record changed, for an event-triggered refresh.
    */
-  const refreshSignedIn = async (live: () => boolean, touched: string | undefined): Promise<void> => {
+  const refreshSignedIn = async (
+    store: CredentialProvider,
+    admitted: () => boolean,
+    touched: string | undefined,
+  ): Promise<void> => {
     try {
-      let stored: Awaited<ReturnType<typeof auth.credentials.list>>
-      try { stored = await auth.credentials.list() }
+      let stored: Awaited<ReturnType<typeof listProviderCredentials>>
+      try { stored = await listProviderCredentials(store) }
       catch (error) {
         ctx.logger.warn('llm-pi-ai: could not list stored credentials; signed-in routes are unchanged')
         ctx.logger.warn(error)
         return
       }
-      // The listing was admitted before teardown began; its result is dropped.
-      if (disposed || !live()) return
+      // The listing was admitted before its binding was retired; its result is dropped.
+      if (!admitted()) return
       const next = new Set(stored
         .filter(entry => catalogProvider(entry.providerId) !== undefined
           && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
@@ -428,10 +451,26 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
   }
   const bindingFiber = ctx.inject(['credentials'], (binding) => {
-    // Admission: a refresh reads the store only while the binding is live. Teardown closes
-    // it first, so a queued refresh never starts against a retired store or, through this
-    // binding, against its replacement.
+    // The store this binding committed to. Every listing of the binding reads it, never the
+    // store the context currently resolves, which after a replacement is another binding's.
+    const store = binding.credentials
+    // Its identity: the committed implementation itself, since the injected store and the value a
+    // service notification carries can each be a context-bound view of it.
+    const committed = serviceIdentity(binding.fiber.committed?.credentials?.value)
+    // Validity, kept apart from the store and its identity: Cordis holds a binding's unload until
+    // its load callback settles, so while the initial listing runs, withdrawal, replacement, and the
+    // provider's own disposal reach the binding only as service notifications. Each one retires the
+    // binding at once unless the active store still is the committed implementation, which is the
+    // test Cordis itself applies before unloading the binding later; a notification that changed
+    // nothing for this store leaves the binding live.
     let live = true
+    binding.on('internal/service', (name) => {
+      if (name === 'credentials' && serviceIdentity(binding.get('credentials')) !== committed) live = false
+    })
+    // Admission: a refresh reads the store only while the binding is live and the adapter is
+    // not being disposed. Both close before teardown can unload anything, so a queued refresh
+    // never starts against a retired store.
+    const admitted = (): boolean => live && mounted()
     // Refreshes run one after another so a slow listing cannot overwrite a newer one.
     // The chain never rejects (`refreshSignedIn` contains its failures), so joining it is safe.
     let refreshing: Promise<void> = Promise.resolve()
@@ -439,16 +478,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       live = false
       // Withdraw the sign-in routes now; the store is still mounted, because Cordis
       // unloads this binding before the service provider it depends on.
-      if (!disposed && signedIn.size > 0) {
+      if (mounted() && signedIn.size > 0) {
         signedIn = new Set()
         reconcile()
       }
       // Quiescence: the admitted listing, if any, settles before the store or this
-      // plugin may finish unloading. Queued refreshes see `live === false` and skip the store.
+      // plugin may finish unloading. Queued refreshes are no longer admitted and skip the store.
       await refreshing
     })
     const refresh = (touched?: string): Promise<void> => {
-      refreshing = refreshing.then(() => live ? refreshSignedIn(() => live, touched) : undefined)
+      refreshing = refreshing.then(() => admitted() ? refreshSignedIn(store, admitted, touched) : undefined)
       return refreshing
     }
     binding.on('credentials/record-updated', (key) => {

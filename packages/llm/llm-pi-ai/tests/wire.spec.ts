@@ -161,6 +161,36 @@ describe('observeWire', () => {
     expect(wire.failure()).toBeUndefined()
   })
 
+  it('keeps the code of the last Codex frame only while that frame is a terminal failure', () => {
+    const wire = observeWire()
+    expect(wire.frameErrorCode()).toBeUndefined()
+
+    wire.onProviderStreamEvent({ type: 'error', code: 'usage_limit_reached', error: { code: 'rate_limit_exceeded' } })
+    expect(wire.frameErrorCode()).toBe('usage_limit_reached')
+    wire.onProviderStreamEvent({ type: 'error', error: { code: 'rate_limit_exceeded' } })
+    expect(wire.frameErrorCode()).toBe('rate_limit_exceeded')
+    wire.onProviderStreamEvent({ type: 'response.output_text.delta', delta: 'x' })
+    expect(wire.frameErrorCode()).toBeUndefined()
+    wire.onProviderStreamEvent({ type: 'response.failed', response: { error: { code: 'usage_not_included' } } })
+    expect(wire.frameErrorCode()).toBe('usage_not_included')
+    for (const frame of [null, 'error', 7, [], { type: 'error' }, { type: 'error', error: null }, { type: 'response.failed' }, { type: 'response.failed', response: { error: null } }]) {
+      wire.onProviderStreamEvent(frame)
+      expect(wire.frameErrorCode()).toBeUndefined()
+    }
+    // A frame never makes up an HTTP rejection.
+    expect(wire.failure()).toBeUndefined()
+  })
+
+  it('forgets a frame code when another HTTP attempt starts', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('fine'))
+    const wire = observeWire()
+    wire.onProviderStreamEvent({ type: 'error', code: 'usage_limit_reached' })
+
+    await wire.fetch('http://x.invalid')
+
+    expect(wire.frameErrorCode()).toBeUndefined()
+  })
+
   it('names the APIs whose pi-ai implementation takes a custom fetch', () => {
     for (const api of ['openai-completions', 'openai-responses', 'openai-codex-responses', 'anthropic-messages']) {
       expect(isWireObservable(api)).toBe(true)
@@ -371,6 +401,93 @@ describe('Codex Responses over a signed-in grant', () => {
     expect(upgrades).toEqual([])
     expect(requests).toEqual(['/codex/responses'])
   })
+
+  /** One Codex terminal failure frame in each form pi-ai accepts, with a message that names no code. */
+  const failureFrame = (form: 'response.failed' | 'error' | 'nested error', code: string): string => JSON.stringify(
+    form === 'response.failed' ? { type: 'response.failed', response: { status: 'failed', error: { code, message: 'limit' } } }
+      : form === 'error' ? { type: 'error', code, message: 'limit' }
+        : { type: 'error', error: { code, message: 'limit' } },
+  )
+  const created = JSON.stringify({ type: 'response.created', response: { id: 'resp_fixture' } })
+
+  async function codexFinish(events: string[][]): Promise<{ finishes: FinishReason[]; paths: string[] }> {
+    const server = await mockServer(events.map(frames => ({ events: frames })))
+    const ctx = await signedIn(server.url)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+    const finishes: FinishReason[] = []
+    for (const _ of events) finishes.push((await assemble(ctx, { provider: 'openai-codex', model, messages: [] })).finish)
+    return { finishes, paths: server.paths }
+  }
+
+  it.each([
+    ['response.failed', 'usage_limit_reached', 'QUOTA'],
+    ['response.failed', 'usage_not_included', 'QUOTA'],
+    ['response.failed', 'rate_limit_exceeded', 'RATE_LIMIT'],
+    ['error', 'usage_limit_reached', 'QUOTA'],
+    ['error', 'usage_not_included', 'QUOTA'],
+    ['error', 'rate_limit_exceeded', 'RATE_LIMIT'],
+    ['nested error', 'usage_limit_reached', 'QUOTA'],
+    ['nested error', 'usage_not_included', 'QUOTA'],
+    ['nested error', 'rate_limit_exceeded', 'RATE_LIMIT'],
+  ] as const)('classifies an in-band %s frame carrying %s as %s from its code alone', async (form, code, expected) => {
+    const { finishes: [finish], paths } = await codexFinish([[created, failureFrame(form, code)]])
+
+    // pi-ai flattens the frame to its message, which names no code.
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: expected } })
+    expect(finish?.kind === 'error' ? finish.failure.message : undefined).toMatch(/^(?:Codex error: )?limit$/)
+    // A failure inside a 2xx stream has no HTTP status to report.
+    expect(finish).not.toHaveProperty('failure.status')
+    expect(finish).not.toHaveProperty('failure.providerCode')
+    expect(defaultRetryableCodes().includes(expected)).toBe(expected === 'RATE_LIMIT')
+    expect(paths).toEqual(['/codex/responses'])
+  })
+
+  it('classifies an in-band frame without a usable code by its text', async () => {
+    const { finishes } = await codexFinish([
+      [JSON.stringify({ type: 'error', code: 'server_error', message: 'upstream 503' })],
+      [JSON.stringify({ type: 'response.failed', response: { status: 'failed', error: { message: 'rate limit reached' } } })],
+      [JSON.stringify({ type: 'response.failed', response: { status: 'failed', error: { message: 'limit' } } })],
+      [JSON.stringify({ type: 'error', code: 42, error: 'usage_limit_reached', message: 'limit' })],
+      [JSON.stringify({ type: 'response.failed', response: { status: 'failed', error: 'usage_limit_reached' } })],
+      [JSON.stringify({ type: 'error', code: '', message: 'limit' })],
+    ])
+
+    expect(finishes.map(finish => finish.kind === 'error' ? finish.failure.code : finish.kind))
+      .toEqual(['SERVER', 'RATE_LIMIT', 'PI_AI_ERROR', 'PI_AI_ERROR', 'PI_AI_ERROR', 'PI_AI_ERROR'])
+  })
+
+  it('takes no code from a frame that is not a terminal failure, nor from an earlier request', async () => {
+    const coded = JSON.stringify({ type: 'response.created', code: 'usage_limit_reached', error: { code: 'usage_limit_reached' }, response: { id: 'resp_fixture' } })
+    const { finishes: [plain, afterCodedFrame, quota, afterQuota], paths } = await codexFinish([
+      [created],
+      [coded],
+      [created, failureFrame('error', 'usage_limit_reached')],
+      [created],
+    ])
+
+    // Each truncated stream keeps the classification its own text gives.
+    expect(plain).toMatchObject({ kind: 'error' })
+    expect(afterCodedFrame).toEqual(plain)
+    expect(quota).toMatchObject({ kind: 'error', failure: { code: 'QUOTA' } })
+    expect(afterQuota).toEqual(plain)
+    expect(paths).toHaveLength(4)
+  })
+
+  it('keeps each concurrent request\'s frame code to that request', async () => {
+    const server = await mockServer([
+      { events: [created, failureFrame('response.failed', 'usage_limit_reached')] },
+      { events: [created] },
+    ])
+    const ctx = await signedIn(server.url)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+    const request = { provider: 'openai-codex', model, messages: [] }
+
+    const finishes = await Promise.all([assemble(ctx, request), assemble(ctx, request)])
+
+    const codes = finishes.map(({ finish }) => finish.kind === 'error' ? finish.failure.code : finish.kind)
+    expect(codes.filter(code => code === 'QUOTA')).toHaveLength(1)
+    expect(server.paths).toHaveLength(2)
+  })
 })
 
 describe('Codex Responses with an expired sign-in', () => {
@@ -414,6 +531,23 @@ describe('a sign-in failure below pi-ai', () => {
     expect(failed('OAuth refresh failed for openai-codex: fetch failed')).toMatchObject({ failure: { code: 'TRANSPORT' } })
     expect(failed('OAuth refresh failed for openai-codex: token refresh failed (503)')).toMatchObject({ failure: { code: 'SERVER' } })
     expect(failed('Something else entirely')).toMatchObject({ failure: { code: 'PI_AI_ERROR' } })
+  })
+})
+
+describe('an in-band failure code beside other failure facts', () => {
+  const message = (errorMessage: string) => ({
+    role: 'assistant' as const, content: [], api: 'openai-codex-responses', provider: 'openai-codex', model: 'm',
+    usage: ZERO_USAGE, stopReason: 'error' as const, errorMessage, timestamp: 0,
+  })
+
+  it('lets an observed HTTP rejection outrank the frame code', () => {
+    expect(mapStopReason(message('limit'), undefined, { status: 500 }, 'usage_limit_reached'))
+      .toEqual({ kind: 'error', failure: { message: 'limit', code: 'SERVER', status: 500 } })
+  })
+
+  it('lets a sign-in failure outrank the frame code', () => {
+    expect(mapStopReason(message('OAuth refresh failed for openai-codex: 401'), undefined, undefined, 'rate_limit_exceeded'))
+      .toMatchObject({ failure: { code: 'AUTH' } })
   })
 })
 

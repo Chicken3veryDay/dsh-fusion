@@ -14,7 +14,7 @@ import type { FinishReason, LlmFailure, StreamChunk, TokenUsage, ToolCallId } fr
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
-import type { WireFailure } from './wire.ts'
+import type { WireFailure, WireObserver } from './wire.ts'
 
 /**
  * Map pi-ai usage (reasoning folded into output by pi-ai).
@@ -37,7 +37,7 @@ export function mapUsage(usage: PiUsage): TokenUsage {
 }
 
 /**
- * Classify subscription error codes preserved in pi-ai's flattened error text.
+ * Classify subscription error codes, whether a provider code or pi-ai's flattened error text.
  * @param message - The provider code or pi-ai's error text.
  * @returns Terminal quota, transient subscription outage, or no subscription classification.
  */
@@ -109,6 +109,20 @@ function classifyWireStatus(status: number, message: string, providerCode: strin
   return classifyPiAiError(message)
 }
 
+/**
+ * Classify a failure carried by a Codex terminal frame inside a successful stream.
+ * The code decides what it names; any other code leaves the text to decide.
+ * @param code - the frame's structured error code.
+ * @param message - pi-ai's flattened error text, which names no code.
+ * @returns the harness failure code.
+ */
+function classifyFrameCode(code: string, message: string): string {
+  const subscription = subscriptionFailureCode(code)
+  if (subscription !== undefined) return subscription
+  if (code === 'rate_limit_exceeded') return 'RATE_LIMIT'
+  return classifyPiAiError(message)
+}
+
 /** pi-ai's wording when a stored sign-in cannot be refreshed. */
 const OAUTH_REFRESH_FAILED = /^OAuth refresh failed for ([a-z0-9-]+)/
 
@@ -147,13 +161,21 @@ function wireFailure(wire: WireFailure, text: string): LlmFailure {
  * @param wire - the rejected response observed below pi-ai, when there was one;
  *   its status, `Retry-After`, and request id become structured failure fields
  *   and its status replaces text matching for the failure code.
+ * @param frameCode - the code of a Codex terminal failure frame inside a successful
+ *   stream; it decides the failure code only when no rejected response was observed,
+ *   and adds no status.
  * @returns the mapped harness reason. Recognized error text, `stop` usage above
  *   `contextWindow`, and zero-output `length` usage that fills the window map
  *   to `CONTEXT_WINDOW_EXCEEDED`; a `stop` with no content blocks maps to an
  *   `EMPTY_RESPONSE` error, while terminal `pending` and `deferred` states map
  *   to non-retryable `PI_AI_ERROR` failures.
  */
-export function mapStopReason(message: AssistantMessage, contextWindow?: number, wire?: WireFailure): FinishReason {
+export function mapStopReason(
+  message: AssistantMessage,
+  contextWindow?: number,
+  wire?: WireFailure,
+  frameCode?: string,
+): FinishReason {
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
@@ -200,11 +222,10 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number,
       const text = message.errorMessage ?? 'pi-ai stream error'
       const signIn = signInFailure(text)
       if (signIn !== undefined) return { kind: 'error', failure: signIn }
+      if (wire !== undefined) return { kind: 'error', failure: wireFailure(wire, text) }
       return {
         kind: 'error',
-        failure: wire === undefined
-          ? { message: text, code: classifyPiAiError(text) }
-          : wireFailure(wire, text),
+        failure: { message: text, code: frameCode === undefined ? classifyPiAiError(text) : classifyFrameCode(frameCode, text) },
       }
     }
   }
@@ -219,8 +240,8 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number,
  * @param callerSignal - caller cancellation state; an aborted caller makes any
  *   in-band terminal error an aborted finish.
  * @param requestedModel - request model identity recorded for durable replay.
- * @param wire - reads the rejected response observed below pi-ai, if any; asked
- *   only once the stream has failed.
+ * @param wire - the request's observer below pi-ai, if any; its rejected response
+ *   and frame code are read only once the stream has failed.
  * @returns the harness chunks, ending with `usage` then `finish`; throws
  *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event, or
  *   `MALFORMED_RESPONSE` when completed tool arguments are invalid. Length-limited
@@ -231,7 +252,7 @@ export async function* toStreamChunks(
   contextWindow?: number,
   callerSignal?: AbortSignal,
   requestedModel?: string,
-  wire?: () => WireFailure | undefined,
+  wire?: Pick<WireObserver, 'failure' | 'frameErrorCode'>,
 ): AsyncGenerator<StreamChunk> {
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
   // in stream order), but we track ids per index for tool calls.
@@ -318,7 +339,8 @@ export async function* toStreamChunks(
           reason: mapStopReason(
             callerSignal?.aborted ? { ...event.error, stopReason: 'aborted' } : event.error,
             contextWindow,
-            wire?.(),
+            wire?.failure(),
+            wire?.frameErrorCode(),
           ),
         }
         return

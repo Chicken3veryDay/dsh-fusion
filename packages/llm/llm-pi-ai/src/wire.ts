@@ -1,11 +1,13 @@
 /**
- * HTTP facts about a rejected provider response, captured below pi-ai.
+ * Failure facts of one provider request, captured below pi-ai.
  *
  * pi-ai folds a failed request into `AssistantMessage.errorMessage` text, so the
  * status, `Retry-After`, and request id of the rejected response are gone by the
  * time the harness sees the error. pi-ai exposes one structured seam that still
  * sees them: the `fetch` it is told to use. This module wraps that `fetch`
- * and keeps the facts of the one rejected response a request produced.
+ * and keeps the facts of the one rejected response a request produced. A Codex
+ * failure carried inside a successful stream loses its code the same way; pi-ai's
+ * `onProviderStreamEvent` sees the frame first, so the observer keeps that code too.
  *
  * @module dsh-llm-pi-ai/wire
  */
@@ -32,12 +34,23 @@ export interface WireFailure {
   readonly providerCode?: string
 }
 
-/** One request's observer: the `fetch` to hand pi-ai and the facts it saw. */
+/** One request's observer: the `fetch` and frame callback to hand pi-ai, and the facts they saw. */
 export interface WireObserver {
   /** Pass as pi-ai's `fetch` option; behaves exactly like `globalThis.fetch` and only reads each response. */
   readonly fetch: WireFetch
+  /**
+   * Pass as pi-ai's `onProviderStreamEvent` option of an `openai-codex-responses` request.
+   * Only reads the frame and never throws, so it cannot turn into pi-ai's callback failure.
+   */
+  readonly onProviderStreamEvent: (frame: unknown) => void
   /** @returns the facts of the most recent rejected response, or undefined when none was rejected. */
   failure(): WireFailure | undefined
+  /**
+   * @returns the code of the Codex terminal failure frame (`error` or `response.failed`) when it
+   *   was the last frame of the current HTTP attempt, else undefined. Classification input only:
+   *   like {@link WireFailure.providerCode}, it never becomes a persisted failure field.
+   */
+  frameErrorCode(): string | undefined
 }
 
 /**
@@ -149,18 +162,46 @@ async function providerErrorCode(response: Response): Promise<string | undefined
 }
 
 /**
- * Observe the HTTP responses of one provider request.
+ * One field of a parsed stream value.
+ * @param value - a frame or one of its fields, as parsed from the stream.
+ * @param field - the field to read.
+ * @returns the field's value, or undefined when `value` is not an object.
+ */
+function fieldOf(value: unknown, field: string): unknown {
+  return typeof value === 'object' && value !== null ? Reflect.get(value, field) : undefined
+}
+
+/**
+ * Read the code of a Codex terminal failure frame the way pi-ai does: an `error` frame's
+ * top-level `code`, else its nested `error.code`; a `response.failed` frame's `response.error.code`.
+ * @param frame - one parsed provider frame.
+ * @returns the non-empty code, or undefined for any other frame or a frame without one.
+ */
+function frameErrorCodeOf(frame: unknown): string | undefined {
+  const type = fieldOf(frame, 'type')
+  const top = fieldOf(frame, 'code')
+  const code = type === 'error' ? typeof top === 'string' ? top : fieldOf(fieldOf(frame, 'error'), 'code')
+    : type === 'response.failed' ? fieldOf(fieldOf(fieldOf(frame, 'response'), 'error'), 'code')
+      : undefined
+  return typeof code === 'string' && code.length > 0 ? code : undefined
+}
+
+/**
+ * Observe the HTTP responses and Codex stream frames of one provider request.
  *
  * The observer resolves `globalThis.fetch` on each call, so a proxy dispatcher
  * or test double installed after construction still applies, and it returns the
  * response untouched: nothing here retries or delays. A 429 body is read from a
  * clone, bounded to {@link ERROR_BODY_LIMIT_BYTES}, to keep its structured code.
+ * The frame code follows the last frame only, and each HTTP attempt starts without one.
  * @returns the observer for exactly one request; do not share it between requests.
  */
 export function observeWire(): WireObserver {
   let seen: WireFailure | undefined
+  let frameCode: string | undefined
   return {
     fetch: async (input, init) => {
+      frameCode = undefined
       const response = await globalThis.fetch(input, init)
       if (response.ok) return response
       const retryAfterMs = providerRetryAfterMs(response.headers)
@@ -174,6 +215,8 @@ export function observeWire(): WireObserver {
       }
       return response
     },
+    onProviderStreamEvent: (frame) => { frameCode = frameErrorCodeOf(frame) },
     failure: () => seen,
+    frameErrorCode: () => frameCode,
   }
 }

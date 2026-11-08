@@ -43,7 +43,7 @@ const INSTALLATION_ID = 'installation-id'
 
 /**
  * The record holding this installation's device id. It sits under the adapter's
- * own scope but is not a provider's credential, so {@link credentialStoreFrom}
+ * own scope but is not a provider's credential, so {@link listProviderCredentials}
  * hides it from listings and treats the id as one no provider route can use.
  */
 const INSTALLATION_KEY = credentialKey(RECORD_SCOPE, INSTALLATION_ID)
@@ -188,6 +188,26 @@ function writableStore(ctx: Context): CredentialProvider {
 }
 
 /**
+ * The provider credentials this adapter family stored in one credential store.
+ * @param credentials - the store to list; undefined lists nothing.
+ * @returns one entry per provider record under {@link RECORD_SCOPE}, without the installation record.
+ */
+export async function listProviderCredentials(credentials: CredentialProvider | undefined): Promise<readonly CredentialInfo[]> {
+  const stored = await credentials?.listRecords() ?? []
+  const mine: CredentialInfo[] = []
+  for (const entry of stored) {
+    // Records another plugin owns are not this collection's to report:
+    // their payloads are written in a format pi-ai never agreed to.
+    if (credentialKeyScope(entry.key) !== RECORD_SCOPE || entry.key === INSTALLATION_KEY) continue
+    mine.push({
+      providerId: credentialKeyId(entry.key),
+      type: entry.kind === 'api-key' ? 'api_key' : 'oauth',
+    })
+  }
+  return mine
+}
+
+/**
  * A pi-ai `CredentialStore` over the harness credential records.
  *
  * pi-ai runs OAuth refresh *inside* `modify()`, so this store's exclusion has
@@ -212,20 +232,7 @@ export function credentialStoreFrom(ctx: Context): CredentialStore {
       if (!addressesCredential(providerId)) return undefined
       return toPiCredential(await credentials.readRecord(recordKeyFor(providerId)))
     },
-    async list(): Promise<readonly CredentialInfo[]> {
-      const stored = await ctx.get('credentials')?.listRecords() ?? []
-      const mine: CredentialInfo[] = []
-      for (const entry of stored) {
-        // Records another plugin owns are not this collection's to report:
-        // their payloads are written in a format pi-ai never agreed to.
-        if (credentialKeyScope(entry.key) !== RECORD_SCOPE || entry.key === INSTALLATION_KEY) continue
-        mine.push({
-          providerId: credentialKeyId(entry.key),
-          type: entry.kind === 'api-key' ? 'api_key' : 'oauth',
-        })
-      }
-      return mine
-    },
+    list: () => listProviderCredentials(ctx.get('credentials')),
     async modify(providerId, mutate) {
       if (!addressesCredential(providerId)) {
         throw new LlmError(

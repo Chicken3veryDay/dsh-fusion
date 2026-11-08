@@ -477,11 +477,14 @@ export class PiAiAdapter extends LlmAdapter {
           },
         }, onReplayDegrade, updates.systemPromptUpdate === 'in-history')
       // pi-ai flattens a rejected response into error text; the observer keeps
-      // its status, Retry-After, and request id for the failure chunk.
+      // its status, Retry-After, and request id for the failure chunk. Codex alone
+      // drops an in-band failure frame's code the same way, so only it is handed
+      // the frame callback.
       const wire = isWireObservable(model.api) ? observeWire() : undefined
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, model, reasoning, apiKey),
         ...wire === undefined ? {} : { fetch: wire.fetch },
+        ...wire === undefined || model.api !== 'openai-codex-responses' ? {} : { onProviderStreamEvent: wire.onProviderStreamEvent },
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
@@ -489,7 +492,7 @@ export class PiAiAdapter extends LlmAdapter {
         headers: requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders),
       })
       const iterator = toStreamChunks(
-        events, model.contextWindow, options.signal, model.id, wire === undefined ? undefined : () => wire.failure(),
+        events, model.contextWindow, options.signal, model.id, wire,
       )[Symbol.asyncIterator]()
       let exhausted = false
       try {
