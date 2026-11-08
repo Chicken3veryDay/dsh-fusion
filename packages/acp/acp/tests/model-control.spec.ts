@@ -1,6 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
+import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 import { AgentModel, modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
-import AgentRegistry, { type ModelSelection } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type AgentOptions } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { createServer } from 'node:http'
@@ -12,6 +13,8 @@ import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import LlmService, { ReasoningEffortId, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import * as PiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { AcpModelControl } from '../src/model-control.ts'
+import { AcpSession } from '../src/session.ts'
+import { makeBridgeHarness } from './harness.ts'
 
 /** Minimal LLM catalog/runtime double for pure standard-option tests. */
 function llmRuntime(overrides: Partial<LlmRuntime> = {}): LlmRuntime {
@@ -44,7 +47,7 @@ function llmRuntime(overrides: Partial<LlmRuntime> = {}): LlmRuntime {
   } as unknown as LlmRuntime
 }
 
-async function createControl(runtime: LlmRuntime, initial?: ModelSelection) {
+async function createControl(runtime: LlmRuntime, initial?: AgentOptions) {
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
   await ctx.plugin(SessionStore)
@@ -186,20 +189,85 @@ async function accountListing(): Promise<{ url: string; paths: string[] }> {
   return { url: `http://127.0.0.1:${String(address.port)}`, paths }
 }
 
+/** Mount a synthetic signed-in account whose advertised models come from a loopback listener. */
+async function registerAccount(ctx: Context) {
+  const server = await accountListing()
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-acp-model-control-'))
+  onTestFinished(() => rm(dir, { recursive: true, force: true }))
+  await ctx.plugin(LocalCredentialProvider, { path: join(dir, 'credentials.yml'), watch: false })
+  await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai'), () => Promise.resolve({
+    kind: 'grant', payload: { type: 'oauth', access: 'synthetic-access', refresh: 'synthetic-refresh', expires: 4_000_000_000_000, clientId: 'login-one' },
+  }))
+  await ctx.plugin(PiAi, { providers: { openai: { baseURL: `${server.url}/v1` } } })
+  return server
+}
+
+describe('ACP configuration admission', () => {
+  it('returns no options when the live route fallback is withdrawn during a catalog lookup', async () => {
+    const initial: { provider?: string; model?: string } = { provider: 'mock', model: 'mock' }
+    const entered = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    const listModels = async () => {
+      entered.resolve(undefined)
+      await release.promise
+      return []
+    }
+    const { control } = await createControl(llmRuntime({ listModels }), initial)
+    const pending = control.options()
+    try {
+      await entered.promise
+      delete initial.provider
+      release.resolve(undefined)
+      await expect(pending).resolves.toEqual([])
+    } finally {
+      release.resolve(undefined)
+      await pending.catch(() => undefined)
+    }
+  })
+
+  it('creates a session without a selection without listing an unrelated account', async () => {
+    const harness = await makeBridgeHarness({ config: { provider: undefined, model: undefined } })
+    onTestFinished(() => harness.dispose())
+    const server = await registerAccount(harness.ctx)
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+
+    expect(created.configOptions).toEqual([])
+    expect(server.paths).toEqual([])
+  })
+
+  it('refuses a cancelled configuration request before listing an unrelated account', async () => {
+    const harness = await makeBridgeHarness()
+    onTestFinished(() => harness.dispose())
+    const server = await registerAccount(harness.ctx)
+    const resolveModel = harness.adapter.resolveModel.bind(harness.adapter)
+    harness.adapter.resolveModel = (provider: string, model: string, signal?: AbortSignal) => {
+      signal?.throwIfAborted()
+      return resolveModel(provider, model)
+    }
+    const record = await AcpSession.create(harness.ctx, {
+      sessionId: SessionId('cancelled-configuration'), cwd: process.cwd(), mcpServers: [],
+      agentOptions: { provider: 'mock', model: 'mock' }, signal: new AbortController().signal,
+      notify: async () => {},
+    })
+    onTestFinished(() => record.close('configuration test finished'))
+    const cancellation = new Error('configuration request cancelled')
+    const controller = new AbortController()
+    controller.abort(cancellation)
+
+    await expect(record.configOptions(controller.signal)).rejects.toBe(cancellation)
+    expect(server.paths).toEqual([])
+  })
+})
+
 describe('ACP selection on a signed-in account route', () => {
   /** The shipped pi-ai plugin with one stored ChatGPT grant, its account listing on loopback. */
   async function accountControl() {
-    const server = await accountListing()
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-acp-model-control-'))
-    onTestFinished(() => rm(dir, { recursive: true, force: true }))
     await ctx.plugin(LlmService)
-    await ctx.plugin(LocalCredentialProvider, { path: join(dir, 'credentials.yml'), watch: false })
-    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai'), () => Promise.resolve({
-      kind: 'grant', payload: { type: 'oauth', access: 'synthetic-access', refresh: 'synthetic-refresh', expires: 4_000_000_000_000, clientId: 'login-one' },
-    }))
-    await ctx.plugin(PiAi, { providers: { openai: { baseURL: `${server.url}/v1` } } })
+    const server = await registerAccount(ctx)
     const created = await createControl(ctx.llm, { provider: 'openai', model: 'gpt-5.4' })
     return { ...created, server }
   }

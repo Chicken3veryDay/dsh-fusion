@@ -43,13 +43,18 @@ export class AcpModelControl {
 
   /**
    * Return the complete standard config-option state after prior mutations
-   * settle. This lists every provider's catalog and retains the result for the
-   * state returned by later mutations.
+   * settle. An absent selection returns no options without listing; cancellation
+   * before admission rejects before catalog access. Otherwise this lists every
+   * provider's catalog and retains the result for later mutations.
    * @param signal - optional catalog and exact-model cancellation.
    * @returns all current standard configuration options.
    */
   options(signal?: AbortSignal): Promise<SessionConfigOption[]> {
-    return this.serialize(async () => this.project(await this.list(), signal))
+    return this.serialize(async () => {
+      if (this.model.current() === undefined) return []
+      signal?.throwIfAborted()
+      return this.project(await this.list(), signal)
+    })
   }
 
   /**
