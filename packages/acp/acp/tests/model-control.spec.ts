@@ -44,7 +44,7 @@ function llmRuntime(overrides: Partial<LlmRuntime> = {}): LlmRuntime {
       },
     }),
     ...overrides,
-  } as unknown as LlmRuntime
+  } as LlmRuntime
 }
 
 async function createControl(runtime: LlmRuntime, initial?: AgentOptions) {

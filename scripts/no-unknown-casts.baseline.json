@@ -132,9 +132,6 @@
     "675c87b795fc26ac67070e7d49a9cd0750861386e09c8af8c5b212df146148dc": 1,
     "c8143cf470138c1cff63fe1eed254de749779427c65ed0e635df999c1926ce92": 1
   },
-  "packages/acp/acp/tests/model-control.spec.ts": {
-    "2eaef770949ab37a50b7ca061635842999eafbccabd1fb41bb24dabadcf2e851": 1
-  },
   "packages/acp/acp/tests/updates.spec.ts": {
     "1236c44ff3e9bddee9e26949567c68ea48623c4dbaa594e70dcb32b4fb8e2973": 1,
     "3c5e7f2e3ddae10d67995210f3a3169829681f159d0aeb9c4b285b9e3093b5dc": 3,
