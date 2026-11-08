@@ -113,7 +113,7 @@ async function documents(accounts: readonly string[]): Promise<{ id: string; cre
 
 async function harness(
   url: string,
-  accounts: readonly { id: string; credentialsPath: string }[],
+  accounts: { id: string; credentialsPath: string }[],
   tool: () => void,
   cooldownMs = 60_000,
 ) {

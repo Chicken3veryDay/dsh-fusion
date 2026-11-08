@@ -283,7 +283,7 @@ describe('account stream observation', () => {
     const { pool } = makePool()
     const lease = claim(pool)
     const other = claim(pool)
-    const stream = observeAccountStream(pool, lease, 'fp', chunks({ type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } } as StreamChunk, stop))
+    const stream = observeAccountStream(pool, lease, 'fp', chunks({ type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } }, stop))
     const iterator = stream[Symbol.asyncIterator]()
     await iterator.next()
     expect(lease.started).toBe(true)

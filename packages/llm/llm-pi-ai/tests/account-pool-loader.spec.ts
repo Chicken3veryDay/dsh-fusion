@@ -164,7 +164,7 @@ describe('mounting the account documents', () => {
     }))
     await ready(ctx)
     await decoy(ctx)
-    const before = Object.fromEntries(await Promise.all(Object.entries(paths).map(async ([id, path]) => [id, await readFile(path, 'utf8')])))
+    const before = Object.fromEntries(await Promise.all(Object.entries(paths).map(async ([id, path]): Promise<[string, string]> => [id, await readFile(path, 'utf8')])))
     const main = await readFile(join(root!, '.credentials.yaml'), 'utf8')
 
     expect((await request(ctx)).finish).toEqual({ kind: 'stop' })

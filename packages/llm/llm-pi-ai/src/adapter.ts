@@ -137,11 +137,13 @@ type PoolClaim =
   }
 
 /** A stream whose only chunk is the terminal failure of a request that never reached a provider. */
+// oxlint-disable-next-line typescript/require-await -- an async generator keeps a failure a stream element, never a synchronous throw
 async function* failedStream(failure: LlmFailure): AsyncGenerator<StreamChunk> {
   yield { type: 'finish', reason: { kind: 'error', failure } }
 }
 
 /** A stream that reports a failure the request already met before streaming. */
+// oxlint-disable-next-line typescript/require-await -- an async generator defers the throw to the first pull, like a provider stream
 async function* throwingStream(error: unknown): AsyncGenerator<StreamChunk> {
   throw error
 }

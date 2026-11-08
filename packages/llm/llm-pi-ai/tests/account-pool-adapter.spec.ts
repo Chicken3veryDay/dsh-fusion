@@ -6,10 +6,11 @@
  */
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import type { MockInstance } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { Credential } from '@earendil-works/pi-ai'
+import type { Credential, CredentialStore } from '@earendil-works/pi-ai'
 import { AccountPool } from '../src/account-pool.ts'
 import { PiAiAdapter } from '../src/adapter.ts'
 import { resolveProfiles } from '../src/config.ts'
@@ -55,7 +56,7 @@ interface Rig {
   clock: { now: number }
   accounts: Map<string, ReturnType<typeof memoryAuth>>
   main: ReturnType<typeof memoryAuth>
-  mainRead: ReturnType<typeof vi.spyOn>
+  mainRead: MockInstance<CredentialStore['read']>
   runtime: () => Promise<Context>
 }
 
@@ -378,19 +379,19 @@ describe('abort and reservations', () => {
     const store = accounts.get('account-1')!.credentials
     const base = store.read.bind(store)
     const gate = Promise.withResolvers<undefined>()
-    vi.spyOn(store, 'read').mockImplementation(async (id, options) => { await gate.promise; return base(id, options) })
+    const read = vi.spyOn(store, 'read').mockImplementation(async (id, options) => { await gate.promise; return base(id, options) })
     const release = vi.spyOn(pool!, 'release')
     const ctx = await runtime()
     const controller = new AbortController()
     const preparing = ctx.llm.prepareCall(CALL, controller.signal)
     const outcome = expect(preparing).rejects.toMatchObject({ code: 'ABORTED' })
     // The read is the barrier: the claim exists and is waiting for its grant.
-    await vi.waitFor(() => { expect(store.read).toHaveBeenCalled() })
+    await vi.waitFor(() => { expect(read).toHaveBeenCalled() })
     controller.abort(new Error('user abort'))
     await outcome
     gate.resolve(undefined)
     await vi.waitFor(() => { expect(release).toHaveBeenCalled() })
-    vi.mocked(store.read).mockRestore()
+    read.mockRestore()
     idle(pool, 'account-1')
   })
 
@@ -400,7 +401,7 @@ describe('abort and reservations', () => {
     const controller = new AbortController()
     const original = adapter['claimAccount'].bind(adapter)
     // Abort after the claim has resolved the preparation but before the preparation continues: two microtask turns.
-    adapter['claimAccount'] = async (...args) => {
+    adapter['claimAccount'] = async (...args: Parameters<typeof original>) => {
       const claim = await original(...args)
       void Promise.resolve().then(() => undefined).then(() => { controller.abort(new Error('late abort')) })
       return claim
@@ -417,7 +418,7 @@ describe('abort and reservations', () => {
     const controller = new AbortController()
     const original = adapter['claimAccount'].bind(adapter)
     // The abort lands after the claim exists but before the preparation can take ownership of it.
-    adapter['claimAccount'] = async (...args) => {
+    adapter['claimAccount'] = async (...args: Parameters<typeof original>) => {
       const claim = await original(...args)
       controller.abort(new Error('abort at completion'))
       return claim
@@ -435,7 +436,7 @@ describe('abort and reservations', () => {
     const ctx = await runtime()
     const controller = new AbortController()
     const original = adapter['claimAccount'].bind(adapter)
-    adapter['claimAccount'] = async (...args) => {
+    adapter['claimAccount'] = async (...args: Parameters<typeof original>) => {
       const claim = await original(...args)
       void Promise.resolve().then(() => undefined).then(() => { controller.abort(new Error('late abort')) })
       return claim
@@ -506,16 +507,16 @@ describe('abort and reservations', () => {
     const store = accounts.get('account-1')!.credentials
     const base = store.read.bind(store)
     const gate = Promise.withResolvers<undefined>()
-    vi.spyOn(store, 'read').mockImplementation(async (id, options) => { await gate.promise; return base(id, options) })
+    const read = vi.spyOn(store, 'read').mockImplementation(async (id, options) => { await gate.promise; return base(id, options) })
     const controller = new AbortController()
     const running = finishOf(adapter.stream({ ...OPTIONS, signal: controller.signal }))
     const outcome = expect(running).rejects.toMatchObject({ code: 'ABORTED' })
-    await vi.waitFor(() => { expect(store.read).toHaveBeenCalled() })
+    await vi.waitFor(() => { expect(read).toHaveBeenCalled() })
     controller.abort(new Error('user abort'))
     gate.resolve(undefined)
     await outcome
     expect(server.requests).toEqual([])
-    vi.mocked(store.read).mockRestore()
+    read.mockRestore()
     idle(pool, 'account-1')
   })
 })
@@ -573,8 +574,8 @@ describe('fail-closed admission', () => {
 
   it('refuses a snapshot account that the pool no longer lists', async () => {
     const { adapter, profiles } = await rig([ok])
-    const snapshot = adapter['current']()
-    snapshot.accounts.delete('account-1')
+    const current = adapter['current']()
+    const snapshot = { ...current, accounts: new Map([...current.accounts].filter(([id]) => id !== 'account-1')) }
     const model = snapshot.models.getModel('anthropic', 'claude-haiku-4-5')!
     await expect(adapter['claimAccount'](snapshot, profiles.get('anthropic')!, model))
       .rejects.toMatchObject(unavailable)
