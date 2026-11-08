@@ -717,9 +717,13 @@ describe('task admission and package contracts', () => {
       await run.dispose()
     } else {
       await cleanupStarted.promise
-      expect(settled).toBe(false)
-      child.settle()
-      await checked
+      try {
+        await nextTask()
+        expect(settled).toBe(false)
+      } finally {
+        child.settle()
+        await checked
+      }
       expect(child.peer.hasMethod('turn/start')).toBe(false)
       expect(child.terminate).toHaveBeenCalledOnce()
       await expect(child.handle.waitForExit()).resolves.toBe(true)
