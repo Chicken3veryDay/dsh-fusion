@@ -91,7 +91,7 @@ describe('pi-ai login flows', () => {
     // else could ever configure it.
     expect(offered.find(entry => entry.key === CODEX)?.methods)
       .toEqual([{ id: 'oauth', label: expect.stringContaining('ChatGPT') as string }])
-    // A provider offering both keeps both, the subscription login first.
+    // Direct Anthropic requests collect a supported API key.
     expect(offered.find(entry => entry.key === recordKeyFor('anthropic'))?.methods.map(one => one.id))
       .toEqual(['api-key'])
     // A key-only provider still gets a flow, because pi-ai collects the key

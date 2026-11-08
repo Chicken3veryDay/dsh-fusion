@@ -29,7 +29,8 @@ const DEVICE_ID_OAUTH: ReadonlySet<string> = new Set(['openai'])
 /**
  * The login methods one catalog provider offers.
  *
- * A method appears only when pi-ai can actually run it: `oauth` carries a
+ * Direct Anthropic requests offer API keys only. Other methods appear when
+ * pi-ai can actually run them: `oauth` carries a
  * `login` that runs with the login options this module supplies, while an
  * api-key method has one only when the provider collects its key interactively
  * — which every installed one currently does, so a key is typed into pi-ai's

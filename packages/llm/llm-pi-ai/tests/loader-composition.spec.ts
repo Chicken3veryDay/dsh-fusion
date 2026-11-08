@@ -160,6 +160,17 @@ describe('llm-pi-ai real dormant composition', () => {
     // generates and stores itself, so the route offers it ahead of its key login.
     expect(methods('openai')).toEqual(['oauth', 'api-key'])
     expect(methods('anthropic')).toEqual(['api-key'])
+    const prompt = vi.fn(async (request: import('@deepseek-ai/dsh-authorization').AuthorizationPrompt) => {
+      expect(request.kind).toBe('secret')
+      return 'supported-anthropic-key'
+    })
+    expect(await ctx.authorization.begin({
+      key: LlmPiAi.recordKeyFor('anthropic'), method: 'api-key',
+      interaction: { notify: vi.fn(), prompt },
+    })).toEqual({ status: 'authorized' })
+    expect(prompt).toHaveBeenCalledOnce()
+    expect(await ctx.credentials.readRecord(LlmPiAi.recordKeyFor('anthropic')))
+      .toEqual({ kind: 'api-key', key: 'supported-anthropic-key' })
   })
 
   it('routes a provider the moment this installation signs in, and drops it on sign-out', async () => {

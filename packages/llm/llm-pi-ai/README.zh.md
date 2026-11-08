@@ -92,9 +92,13 @@ kind: "package-reference"
 
 ### 登录提供方
 
-pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。挂载会等待凭据存储中已有的登录，因此启动后的第一个请求就能看到它们；没有凭据存储时挂载不会等待，之后出现的存储会让路由随之生效。退出登录或移除凭据存储会移除自动激活的路由及其就绪状态，已配置的 profile 保持不变；路由会立即移除，在其存储被替换或撤回之后才完成的列表不会发布任何内容。每次列表读取只读取其绑定加载时挂载的那个存储，绝不读取替换后的存储。该存储被撤回或替换（包括挂载时的列表读取仍在运行时发生的撤回或替换），以及适配器或根开始释放，都会立即停止接纳新的列表读取，因此排在运行中读取之后的刷新永远不会读取任何存储。随后拆除会等待已经在运行的读取完成，存储或适配器才会结束卸载。因此列表读取永不完成的存储会使该拆除一直等待；应用列表时的失败会被记录，路由保持不变。替换提供方的已存储授权时，如果该提供方的模型供给取决于授权（例如 GitHub Copilot 按账户限定的模型），会通过 `llm/adapters-updated` 重新宣告供给，因此提供方 id 不变时，已打开的选择器和 ACP 会话也会刷新。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。适配器或 LLM 服务重新加载时会重建已登录路由，不会报告配置冲突。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
+pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。挂载会等待凭据存储中已有的登录，因此启动后的第一个请求就能看到它们；没有凭据存储时挂载不会等待，之后出现的存储会让路由随之生效。退出登录或移除凭据存储会移除自动激活的路由及其就绪状态，已配置的 profile 保持不变；路由会立即移除，在其存储被替换或撤回之后才完成的列表不会发布任何内容。每次列表读取只读取其绑定加载时挂载的那个存储，绝不读取替换后的存储。该存储被撤回或替换（包括挂载时的列表读取仍在运行时发生的撤回或替换），以及适配器或根开始释放，都会立即停止接纳新的列表读取，因此排在运行中读取之后的刷新永远不会读取任何存储。随后拆除会等待已经在运行的读取完成，存储或适配器才会结束卸载。因此列表读取永不完成的存储会使该拆除一直等待；应用列表时的失败会被记录，路由保持不变。替换提供方的已存储授权时，如果该提供方的模型供给取决于授权（例如 GitHub Copilot 按账户限定的模型），会通过 `llm/adapters-updated` 重新宣告供给，因此提供方 id 不变时，已打开的选择器和 ACP 会话也会刷新。Anthropic 直接登录仅提供 API 密钥；已有 Anthropic OAuth 记录保留在存储中，但无法认证 DSH 自行发送的请求，包括显式配置的路由。 适配器或 LLM 服务重新加载时会重建已登录路由，不会报告配置冲突。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
 
 OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存储在 `llm-pi-ai/installation-id`。退出登录会移除提供方授权，但保留该安装实例标识。
+
+`openai` ChatGPT 套餐路由使用 [公共 Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)，携带 OAuth bearer，并设置 `store: false` 和 `stream: true`；调用方提示词和工具保持不变。模型选项来自同一账户的 `GET /v1/models`，仅采用 `visibility: list` 条目，保留服务端顺序，以 `display_name` 显示标签，以 `slug` 发送请求。每次列表读取都使用当前授权；替换授权会重新宣告供给。请求能力与容量仍由已安装目录或显式模型 profile 提供，因此同时不存在于两者中的新 slug 需要先添加 `models` 条目再推理。API 密钥路由保留目录行为，`openai-codex` 保留为旧版 Codex 集成。
+
+ChatGPT 请求仅在收到 `response.completed` 后成功；不完整输出与中断流保留各自的终止结果。流内的套餐配额与可用性错误遵循 [OpenAI 恢复指南](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)。刷新失败保留已存储授权；如果退出登录先于认证解析完成，正在解析套餐授权的请求会拒绝改用环境中的 API 密钥。Anthropic 直接请求接受 API 密钥，拒绝作为密钥传入的订阅令牌，并从环境发现中排除 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN`；受支持的工作负载身份设置仍可用。Claude 订阅访问请使用 [官方 Claude Code 集成](../../subagent/subagent-claude-code/README.zh.md)，由它管理自己的登录与凭据。
 
 ### 解析模型目录
 
@@ -114,7 +118,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 从端点发现模型
 
-插件会回答「该提供方可以提供哪些模型？」，供配置界面正在编辑或起草的路由使用。已安装目录提供的路由直接由目录回答，不发网络请求，并将其 `input` 数组保留为发现结果的 `inputModalities`；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `cordis.patch.yml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`cordis.patch.yml` 仍然是决定路由服务内容的唯一事实。
+插件会回答「该提供方可以提供哪些模型？」，供配置界面正在编辑或起草的路由使用。除上文所述的 ChatGPT 套餐列表外，已安装目录提供的路由直接由目录回答，不发网络请求，并将其 `input` 数组保留为发现结果的 `inputModalities`；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `cordis.patch.yml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`cordis.patch.yml` 仍然是决定路由服务内容的唯一事实。
 
 ### 失败与恢复
 

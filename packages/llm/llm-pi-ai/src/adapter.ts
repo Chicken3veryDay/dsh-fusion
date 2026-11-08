@@ -345,7 +345,7 @@ export class PiAiAdapter extends LlmAdapter {
     return this.current().profiles.get(provider)?.retryPolicy
   }
 
-  /** Refuse subscription credentials for DSH-owned Anthropic requests before provider dispatch. */
+  /** Resolve plan or API-key authentication before dispatch, refusing unsupported subscription credentials. */
   private async requestApiKey(
     snapshot: PiAiSnapshot,
     provider: string,
@@ -354,10 +354,15 @@ export class PiAiAdapter extends LlmAdapter {
     signal?: AbortSignal,
   ): Promise<string | undefined> {
     const explicit = await this.config.resolveApiKey(provider, profile)
-    if (provider === 'openai' && api !== undefined && explicit === undefined
-      && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
-      if (api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
-      return chatgptAccessToken(snapshot.models, signal)
+    if (provider === 'openai' && explicit === undefined) {
+      const stored = await this.config.auth.credentials.read(provider)
+      if (profile.requiresStoredCredential && stored === undefined) {
+        throw new LlmError('ChatGPT sign-in was removed; sign in again or explicitly configure an API-key route. API-key billing was not selected.', 'AUTH')
+      }
+      if (api !== undefined && stored?.type === 'oauth') {
+        if (api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
+        return chatgptAccessToken(snapshot.models, signal)
+      }
     }
     if (provider !== 'anthropic' && api !== 'anthropic-messages') return explicit
     if (provider === 'anthropic' && explicit === undefined && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
@@ -391,7 +396,10 @@ export class PiAiAdapter extends LlmAdapter {
             return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(snapshot.models, signal) }
           },
         }))
-        return account.map(model => ({ ...model, name: model.name ?? model.id, provider }))
+        return account.map((model) => {
+          const known = snapshot.models.getModel(provider, model.id)
+          return { ...model, provider, ...known === undefined ? {} : { inputModalities: [...known.input] } }
+        })
       }
       const catalog = snapshot.models.getModels(provider)
       // A provider that narrows its catalog per credential (Copilot, by the
@@ -523,7 +531,7 @@ export class PiAiAdapter extends LlmAdapter {
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, model, reasoning, apiKey),
         ...wire === undefined ? {} : { fetch: wire.fetch },
-        ...wire === undefined || !['openai-codex-responses', 'openai-responses'].includes(model.api) ? {} : { onProviderStreamEvent: wire.onProviderStreamEvent },
+        ...wire === undefined || model.api !== 'openai-codex-responses' ? {} : { onProviderStreamEvent: wire.onProviderStreamEvent },
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },

@@ -238,6 +238,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const implied = Object.fromEntries([...signedIn].filter(provider => configured?.[provider] === undefined)
       .map(provider => [provider, {}]))
     const next = resolveProfiles({ ...implied, ...configured }, 'deferred')
+    for (const [provider, profile] of next) {
+      if (provider === 'openai' && provider in implied) profile.requiresStoredCredential = true
+    }
     lastRaw = raw
     lastSignedIn = signedIn
     memoized = next
@@ -415,9 +418,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => { unloaded = true })
   const mounted = (): boolean => !unloaded && ctx.fiber.uid !== null
   /**
-   * Whether a changed credential can change what its route offers. Only a
-   * catalog provider that narrows its models per credential (Copilot, by the
-   * account) can.
+   * Whether a credential change can alter account-specific model offers,
+   * including ChatGPT discovery and catalog-provider filters such as Copilot's.
    */
   const offersVaryByCredential = (provider: string): boolean =>
     (provider === 'openai' || catalogProvider(provider)?.filterModels !== undefined) && registration !== undefined

@@ -2,11 +2,10 @@
  * Answering "which models can this provider serve?" for the configuration
  * surface's "fetch available models" action.
  *
- * A route the installed pi-ai catalog ships is answered **from that catalog**,
- * with no network call at all: pi-ai's registry is the authoritative list for
- * its own providers, and it carries the capacities a listing endpoint would
- * not disclose. Only a route the catalog does not describe — a gateway, a
- * self-hosted server — is interrogated over the wire.
+ * Catalog routes use installed model metadata without a network request,
+ * except for a stored ChatGPT plan grant: its account-specific public listing
+ * supplies visible slugs and display names. Other endpoints are interrogated
+ * when the installed catalog does not describe them.
  *
  * Neither path is a catalog refresh. Nothing here is stored: the request
  * carries a draft the user is still editing, and the reply is candidate
@@ -25,7 +24,11 @@
 import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import z from '@deepseek-ai/schemastery'
 import { catalogModels } from './catalog.ts'
+
+/** Discovered rows always carry a display name, including id-based defaults. */
+type DiscoveredModel = LlmDiscoveredModel & { readonly name: string }
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -41,6 +44,9 @@ const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
   'openai-completions',
   'openai-responses',
 ])
+
+/** Visible ChatGPT entries use account-owned request slugs and display names. */
+const CHATGPT_MODEL = z.object({ slug: z.string().min(1).required(), display_name: z.string().min(1).required() })
 
 /** Stable API version required by Anthropic's model-listing endpoint. */
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -179,7 +185,7 @@ async function readBounded(response: Response, url: string): Promise<string> {
  * a working endpoint's catalog. Missing names fall back to the adopted id so
  * the Web form receives a complete human-readable row.
  */
-function readListing(body: unknown): LlmDiscoveredModel[] {
+function readListing(body: unknown): DiscoveredModel[] {
   const listing = body as { data?: unknown; models?: unknown } | null
   const data = listing?.data
   let listed: { readonly key?: string; readonly raw: unknown }[]
@@ -199,7 +205,7 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       .filter(([, raw]) => raw !== null && typeof raw === 'object' && !Array.isArray(raw))
       .map(([key, raw]) => ({ key, raw }))
   }
-  const models: LlmDiscoveredModel[] = []
+  const models: DiscoveredModel[] = []
   for (const { key, raw } of listed) {
     const entry = raw as ListingEntry | null
     const id = label(key, entry?.id)
@@ -264,16 +270,17 @@ export interface StoredModelDiscoveryProfile {
  * Interrogate one draft provider endpoint for the models it advertises.
  * @param request - the endpoint, protocol, and one-shot credential to use.
  * @param storedProfile - Host-owned headers and lazy credential resolution for
- *   the named route. It is read only on the path that reaches the network; the
- *   credential is resolved only when the draft carries none.
- * @returns the advertised models in endpoint order.
+ *   the named route. A stored ChatGPT grant selects account discovery before
+ *   the catalog shortcut; other credentials resolve only on the network path
+ *   when the draft carries none.
+ * @returns the advertised models with display names in endpoint order.
  * @throws LlmError when the protocol has no readable listing, the endpoint
  *   refuses or fails the request, or the reply is not a model listing.
  */
 export async function discoverModels(
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
-): Promise<readonly LlmDiscoveredModel[]> {
+): Promise<readonly DiscoveredModel[]> {
   let stored = request.provider === 'openai' ? storedProfile?.() : undefined
   const plan = request.provider === 'openai' && request.apiKey === undefined
     ? await stored?.chatgpt?.(request.signal) : undefined
@@ -305,7 +312,7 @@ export async function discoverModels(
   // the action from the case it exists for. The cost is a misdirected message
   // when the endpoint speaks something else (an Anthropic gateway answers 401,
   // which reads as a credential problem), and hand-entry remains the way out.
-  const api = request.api ?? 'openai-completions'
+  const api = plan === undefined ? request.api ?? 'openai-completions' : 'openai-responses'
   if (!LISTABLE_PROTOCOLS.has(api)) {
     throw new LlmError(
       `pi-ai protocol "${api}" has no model listing this build can read; enter this provider's models by hand`,
@@ -314,7 +321,7 @@ export async function discoverModels(
   }
   const url = listingUrl(baseURL, api)
   // A key typed into the form wins: it may replace the stored key that is
-  // failing. The stored profile is asked past the catalog and protocol checks,
+  // failing. Non-plan credentials resolve past the catalog and protocol checks,
   // and its credential resolver remains lazy so a typed key cannot fail over a
   // stored credential it supersedes. A route may still authenticate through a
   // deployment-owned Authorization header when neither key exists.
@@ -371,13 +378,14 @@ export async function discoverModels(
     if (typeof body !== 'object' || body === null || !('models' in body) || !Array.isArray(body.models)) {
       throw new LlmError(`${url} did not return a ChatGPT model listing`, 'DISCOVERY_FAILED')
     }
-    const models: LlmDiscoveredModel[] = []
-    for (const entry of body.models) {
-      if (typeof entry !== 'object' || entry === null || entry.visibility !== 'list') continue
-      if (typeof entry.slug !== 'string' || entry.slug.length === 0 || typeof entry.display_name !== 'string' || entry.display_name.length === 0) {
-        throw new LlmError(`${url} returned an invalid ChatGPT model entry`, 'DISCOVERY_FAILED')
-      }
-      models.push({ id: entry.slug, name: entry.display_name })
+    const models: DiscoveredModel[] = []
+    const rows: readonly unknown[] = body.models
+    for (const entry of rows) {
+      if (typeof entry !== 'object' || entry === null || !('visibility' in entry) || entry.visibility !== 'list') continue
+      let parsed: ReturnType<typeof CHATGPT_MODEL>
+      try { parsed = CHATGPT_MODEL(entry) }
+      catch (error) { throw new LlmError(`${url} returned an invalid ChatGPT model entry`, 'DISCOVERY_FAILED', { cause: error }) }
+      models.push({ id: parsed.slug, name: parsed.display_name })
     }
     return models
   }
