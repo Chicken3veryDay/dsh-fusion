@@ -63,7 +63,7 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-fs'
-import { credentialKeyScope } from '@deepseek-ai/dsh-credentials'
+import { credentialKeyId, credentialKeyScope } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom, RECORD_SCOPE } from './auth.ts'
@@ -146,7 +146,8 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedPiAiProviderPro
  * reference unset.
  * @param profiles - the currently resolved provider profiles.
  * @param settingsNs - Settings namespace owning the provider profiles.
- * @param signedIn - Catalog routes with stored credentials this adapter recognizes.
+ * @param signedIn - Catalog routes with stored credentials this adapter recognizes. A route
+ *   is reported as holding one only while its resolved profile names no credential of its own.
  * @returns the directory entries in catalog order, declared routes last.
  */
 function directoryEntries(
@@ -155,13 +156,17 @@ function directoryEntries(
   signedIn: ReadonlySet<string>,
 ): LlmConfigurableProvider[] {
   const entries = new Map<string, LlmConfigurableProvider>()
+  // A profile that names its own credential reference overrides the stored
+  // sign-in, so that sign-in is not what the route authenticates with.
+  const usesStoredCredential = (provider: string): boolean =>
+    signedIn.has(provider) && profiles.get(provider)?.apiKeyEnv === undefined
   const declare = (provider: string, displayName: string, error?: string): void => {
     const installed = catalogProvider(provider)
     entries.set(provider, {
       provider,
       displayName,
       settingsNs,
-      ...signedIn.has(provider) ? { hasStoredCredential: true } : {},
+      ...usesStoredCredential(provider) ? { hasStoredCredential: true } : {},
       settingsPath: ['providers', provider],
       // Membership of the installed catalog, not of the settings document:
       // narrowing a shipped provider's models stores a profile too, and that
@@ -180,7 +185,10 @@ function directoryEntries(
  * Register pi-ai routes from profiles and supported stored sign-ins.
  * @param ctx - Plugin context with the LLM registry and optional credential store.
  * @param config - Provider profiles and their request defaults.
- * @returns after stored sign-ins have been read for initial route registration.
+ * @returns after the credential store present at mount has been listed for initial route
+ *   registration; at once when no store exists yet. Its sign-in routes follow that store:
+ *   they leave when it is withdrawn and are re-read from a replacement. Disposal joins a
+ *   listing that has not settled, so a store whose listing never settles holds shutdown.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
@@ -368,9 +376,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // set follows the credential store, so a sign-in adds the route and a
   // sign-out removes it. Anthropic's subscription grant is not one: only its
   // API key activates an Anthropic route.
+  //
+  // Everything read from a store belongs to the binding to that store: when the
+  // store is withdrawn or replaced its sign-ins leave with it, and a listing
+  // still in flight from it can no longer publish.
   let disposed = false
   ctx.effect(() => () => { disposed = true })
-  const refreshSignedIn = async (): Promise<void> => {
+  /**
+   * Whether a changed credential can change what its route offers. Only a
+   * catalog provider that narrows its models per credential (Copilot, by the
+   * account) can.
+   */
+  const offersVaryByCredential = (provider: string): boolean =>
+    catalogProvider(provider)?.filterModels !== undefined && registration !== undefined
+  const refreshSignedIn = async (live: () => boolean, touched: string | undefined): Promise<void> => {
     let stored: Awaited<ReturnType<typeof auth.credentials.list>>
     try { stored = await auth.credentials.list() }
     catch (error) {
@@ -378,22 +397,43 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       ctx.logger.warn(error)
       return
     }
-    if (disposed) return
+    if (disposed || !live()) return
     const next = new Set(stored
       .filter(entry => catalogProvider(entry.providerId) !== undefined
         && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
       .map(entry => entry.providerId))
-    if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) return
+    if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) {
+      // The routes are the same, but a replaced credential can still change
+      // which models the route offers. The registry announces a route swap
+      // like any topology change, which is what open model pickers listen to.
+      if (touched !== undefined && offersVaryByCredential(touched)) registration?.replace([...profiles().keys()])
+      return
+    }
     signedIn = next
     reconcile()
   }
-  // Refreshes run one after another so a slow listing cannot overwrite a newer one.
-  let refreshing: Promise<void> = Promise.resolve()
-  const refresh = (): void => { refreshing = refreshing.then(refreshSignedIn) }
-  ctx.inject(['credentials'], refresh)
-  ctx.on('credentials/record-updated', (key) => {
-    if (credentialKeyScope(key) === RECORD_SCOPE) refresh()
+  const bindingFiber = ctx.inject(['credentials'], (binding) => {
+    let live = true
+    binding.effect(() => () => {
+      live = false
+      if (disposed || signedIn.size === 0) return
+      signedIn = new Set()
+      reconcile()
+    })
+    // Refreshes run one after another so a slow listing cannot overwrite a newer one.
+    let refreshing: Promise<void> = Promise.resolve()
+    const refresh = (touched?: string): Promise<void> => {
+      refreshing = refreshing.then(() => refreshSignedIn(() => live, touched))
+      return refreshing
+    }
+    binding.on('credentials/record-updated', (key) => {
+      if (credentialKeyScope(key) === RECORD_SCOPE) void refresh(credentialKeyId(key))
+    })
+    // Returned so the binding finishes loading, and the mount below settles, once the
+    // routes of a sign-in made in an earlier run exist.
+    return refresh()
   })
-  // The routes of a sign-in made in an earlier run exist before the first request.
-  await refreshing
+  // The routes of a sign-in made in an earlier run exist before the first request:
+  // a bare mount with no credential store has no binding to wait for and settles at once.
+  await bindingFiber
 }

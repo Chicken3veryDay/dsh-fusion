@@ -110,8 +110,11 @@ describe('stored sign-in directory metadata', () => {
     ctx.provide('credentials', { listRecords: () => { entered.resolve(undefined); return listing.promise } } as never)
     const mounting = ctx.plugin(LlmPiAi)
     await entered.promise
-    await ctx.fiber.dispose()
+    // Shutdown joins the mount's initial listing, so the listing is released
+    // before the disposal is awaited.
+    const disposing = ctx.fiber.dispose()
     listing.resolve([{ key: LlmPiAi.recordKeyFor('openai-codex'), kind: 'grant' }])
+    await disposing
     await mounting
     expect(llm.listProviders()).toEqual([])
   })

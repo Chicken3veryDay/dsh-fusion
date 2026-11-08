@@ -13,6 +13,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 
 import { describe, expect, it, vi, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
@@ -376,6 +377,30 @@ describe('Web session model selection', () => {
     await vi.waitFor(async () => { expect(await hasProviderApiKey(ctx)).toBe(true) })
     await ctx.credentials.deleteRecord(PiAi.recordKeyFor('openai-codex'))
     await vi.waitFor(async () => { expect(await hasProviderApiKey(ctx)).toBe(false) })
+  })
+
+  it('does not count a stored sign-in that the route’s explicit key reference overrides', async () => {
+    const { default: LocalCredentials } = await import('@deepseek-ai/dsh-credentials-local')
+    const PiAi = await import('@deepseek-ai/dsh-llm-pi-ai')
+    const root = await mkdtemp(join(tmpdir(), 'provider-readiness-explicit-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LocalCredentials, { path: join(root, 'credentials.yaml'), watch: false })
+    const profile = { apiKeyEnv: 'DSH_READINESS_EXPLICIT_UNSET_KEY' }
+    ctx.provide('settings', { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { 'openai-codex': profile } } }] } as never)
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+      kind: 'grant', payload: { type: 'oauth', access: 'synthetic', refresh: 'synthetic', expires: 4102444800000 },
+    }))
+    await ctx.plugin(PiAi, { providers: { 'openai-codex': profile } })
+
+    // The route refuses requests without its named key and offers no models, so readiness must agree.
+    expect(await ctx.llm.listModels('openai-codex')).toEqual([])
+    expect(await hasProviderApiKey(ctx)).toBe(false)
+
+    await ctx.credentials.set(credentialRef('DSH_READINESS_EXPLICIT_UNSET_KEY'), 'sk-configured')
+    expect(await hasProviderApiKey(ctx)).toBe(true)
   })
 
   it.each(['settings', 'credentials'] as const)('refuses account initialization without %s inspection', async (missing) => {
