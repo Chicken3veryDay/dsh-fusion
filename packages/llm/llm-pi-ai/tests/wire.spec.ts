@@ -17,6 +17,13 @@ import { isWireObservable, observeWire, providerRetryAfterMs } from '../src/wire
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 
+/** Failure codes the default normal retry policy treats as transient. */
+function defaultRetryableCodes(): readonly string[] {
+  const policy = resolveRetryPolicy(undefined, 'test')
+  if (policy.mode !== 'normal') throw new Error('the default retry policy is the normal policy')
+  return policy.retryableCodes
+}
+
 afterEach(async () => {
   await closeMockServers()
   vi.unstubAllEnvs()
@@ -294,7 +301,7 @@ describe('Codex Responses over a signed-in grant', () => {
     // so only the provider's structured code says the quota is exhausted.
     expect(finish).toMatchObject({ kind: 'error', failure: { code: 'QUOTA', status: 429, providerRetryAfterMs: 60_000 } })
     expect(finish).not.toHaveProperty('failure.providerCode')
-    expect(resolveRetryPolicy(undefined, 'test').retryableCodes).not.toContain('QUOTA')
+    expect(defaultRetryableCodes()).not.toContain('QUOTA')
     expect(server.paths).toEqual(['/codex/responses'])
     expect(server.headers[0]).toMatchObject({ 'chatgpt-account-id': 'acct_fixture' })
   })
@@ -312,7 +319,7 @@ describe('Codex Responses over a signed-in grant', () => {
 
     expect(finish).toMatchObject({ kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, providerRetryAfterMs: 2000 } })
     expect(finish).not.toHaveProperty('failure.providerCode')
-    expect(resolveRetryPolicy(undefined, 'test').retryableCodes).toContain('RATE_LIMIT')
+    expect(defaultRetryableCodes()).toContain('RATE_LIMIT')
   })
 
   it('never opens the WebSocket that would re-send a failed request over SSE', async () => {
