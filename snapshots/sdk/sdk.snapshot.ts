@@ -78,7 +78,7 @@ const SIGNIN_ACCESS = `h.${Buffer.from(JSON.stringify({
   'https://api.openai.com/auth': { chatgpt_account_id: 'acct_synthetic' },
 })).toString('base64url')}.s`
 
-const MINIMAL_SYSTEM_PROMPT ='You are the environment-selected minimal software engineer.'
+const MINIMAL_SYSTEM_PROMPT = 'You are the environment-selected minimal software engineer.'
 const MINIMAL_BASH_DESCRIPTION = `Run commands in a bash shell
 * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
 * You don't have access to the internet via this tool.
@@ -1633,18 +1633,19 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
       }
       if (scenario.name === 'direct-signin-script') {
         // The external endpoint was reached by the llm-pi-ai adapter with the stored grant, not by a replayed model.
-        const requests = modelRequests as unknown as {
-          authorization: string
-          body: { model: string; tools: { name: string }[]; input: { type: string; output?: string }[] }
-        }[]
+        const requests = modelRequests
         expect(requests).toHaveLength(2)
         for (const request of requests) {
-          expect(request.authorization).toBe(`Bearer ${SIGNIN_ACCESS}`)
-          expect(request.body.model).toBe('gpt-6.1-sol')
-          expect(request.body.tools.map(tool => tool.name)).toEqual(['run_code'])
+          expect(request).toMatchObject({
+            authorization: `Bearer ${SIGNIN_ACCESS}`,
+            body: { model: 'gpt-6.1-sol', tools: [{ name: 'run_code' }] },
+          })
         }
-        expect(requests[1]?.body.input.find(item => item.type === 'function_call_output')?.output)
-          .toContain('DSH_SCRIPT_EXECUTED')
+        expect(requests[1]).toMatchObject({
+          body: { input: expect.arrayContaining([
+            expect.objectContaining({ type: 'function_call_output', output: expect.stringContaining('DSH_SCRIPT_EXECUTED') }),
+          ]) },
+        })
         const events = results.flatMap(result => result.events)
         expect(events.filter(event => event.type === 'tool/call').map(event => event.data['name'])).toEqual(['run_code'])
         const toolResults = events.filter(event => event.type === 'tool/result')
@@ -1656,7 +1657,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         }
       }
       if (assertions.expectedFinalResponse !== undefined) {
-        const failures =results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')
+        const failures = results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')
         expect(results.at(-1)?.finalResponse, `${scenario.name}: final response; outcomes: ${JSON.stringify(failures)}`).toBe(assertions.expectedFinalResponse)
         const parent = ordered[0]
         if (parent === undefined) throw new Error(`${scenario.name}: no primary session log`)
