@@ -7,10 +7,19 @@ import { fileURLToPath } from 'node:url'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished } from 'vitest'
+import {
+  formatSystemPromptSnapshot, formatToolSchemasSnapshot, normalizedSystemPrompts, normalizedToolSchemas,
+  normalizeSessionSnapshots, reconcileCatalogCreationTimes, redactSessionSnapshotIds,
+  refreshFixtureReplacements, scrubSessionSnapshot, stabilizeFixtureMessageIds, stabilizeRefreshLog,
+  tokenizeSessionFixtureCwd,
+} from '@deepseek-ai/dsh-session-snapshot'
+import { prepareSessionSnapshotFixtureForComparison } from '@deepseek-ai/dsh-llm-replay'
+import type { WorkflowAgentInfo, WorkflowResultInfo, WorkflowRunInfo } from '@deepseek-ai/dsh-workflow'
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
-  fixtureUserPrompts, launchWebScaffold, rawSessionLog, readPersistedEvents, selectedSessionFixture, watchConsole, webSnapshotMode,
+  fixtureUserPrompts, launchWebScaffold, normalizeWebSessionVolatiles, rawSessionLog, readPersistedEvents,
+  selectedSessionFixture, watchConsole, webSnapshotMode,
   type WebScaffold,
 } from './scaffold.ts'
 import {
@@ -27,6 +36,11 @@ const PARENT_FIXTURE = join(SNAPSHOT_DIR, 'session.v4.jsonl')
 const CHILD_FIXTURE = join(SNAPSHOT_DIR, 'session.1.v4.jsonl')
 const CHILD_PROMPT = 'Reply with exactly the word WF_CHILD_OK and nothing else.'
 
+type ObservedWorkflowEvent =
+  | { type: 'workflow/start'; info: WorkflowRunInfo }
+  | { type: 'workflow/agent-start'; info: WorkflowRunInfo; child: WorkflowAgentInfo }
+  | { type: 'workflow/end'; info: WorkflowRunInfo; result: WorkflowResultInfo }
+
 describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () => {
   let scaffold: WebScaffold
   let browser: Browser
@@ -36,7 +50,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
   const releaseChild = Promise.withResolvers<undefined>()
   const childEntered = Promise.withResolvers<Session | undefined>()
   const sessions: Session[] = []
-  const workflowEvents: object[] = []
+  const workflowEvents: ObservedWorkflowEvent[] = []
   let parent: Session
   let stopStreams = (): void => {}
   let stopSessions = (): void => {}
@@ -71,6 +85,68 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     }
   }
 
+  const compareFamily = async (): Promise<void> => {
+    expect(sessions).toHaveLength(2)
+    const child = sessions[1]!
+    expect(child.header.parentSession).toBe(parent.id)
+    expect(child.header.origin).toBe('subagent')
+    expect(sessions.map(session => session.header.version)).toEqual([4, 4])
+    const paths = [selectedParent, selectedChild]
+    let expected = await Promise.all(paths.map(path => readFile(path, 'utf8')))
+    const actual = sessions.map(session => normalizeWebSessionVolatiles(rawSessionLog(session), parent.header.cwd))
+    const context = { sessionIds: sessions.map(session => String(session.id)), cwd: parent.header.cwd! }
+    if (MODE === 'refresh') {
+      const harvested = sessions.map((session, index) => ({
+        id: String(session.id), createdAt: session.header.createdAt, content: actual[index]!,
+        ...session.header.parentSession === undefined ? {} : { parentSession: String(session.header.parentSession) },
+      }))
+      const replacements = refreshFixtureReplacements(harvested, expected)
+      const fresh = actual.map((log, index) => scrubSessionSnapshot(prepareSessionSnapshotFixtureForComparison(
+        tokenizeSessionFixtureCwd(stabilizeRefreshLog(log, expected[index]!, replacements, context)),
+      )))
+      expected = redactSessionSnapshotIds(stabilizeFixtureMessageIds(
+        reconcileCatalogCreationTimes(fresh, 'preserve-headers'), expected,
+      ))
+      await Promise.all(paths.map((path, index) => writeFile(path, expected[index]!)))
+    }
+    expect(normalizeSessionSnapshots(actual, context)).toEqual(normalizeSessionSnapshots(expected, {
+      sessionIds: [], cwd: '{{cwd}}',
+    }))
+    const prompts = normalizedSystemPrompts(actual[0]!, context).map(value => value
+      .split(REPO_ROOT).join('{{sourceRoot}}')
+      .split(new URL(scaffold.authenticatedUrl).origin).join('{{webUrl}}'))
+    const schemas = normalizedToolSchemas(actual[0]!, context)
+    expect(schemas[0]!.map(schema => schema !== null && typeof schema === 'object' && 'name' in schema ? schema.name : undefined))
+      .toEqual(['run_code'])
+    const pins = [
+      ['system-prompt.expected.md', formatSystemPromptSnapshot(prompts[0]!, prompts.slice(1))],
+      ['tool-schemas.expected.json', formatToolSchemasSnapshot(schemas[0]!, schemas.slice(1))],
+    ] as const
+    for (const [name, content] of pins) {
+      const path = join(SNAPSHOT_DIR, name)
+      if (MODE === 'refresh') await writeFile(path, content)
+      expect(await readFile(path, 'utf8'), name).toBe(content)
+    }
+
+    const starts = workflowEvents.filter(event => event.type === 'workflow/start')
+    expect(starts).toHaveLength(1)
+    const info = starts[0]!.info
+    expect(workflowEvents.filter(event => event.type === 'workflow/end')).toEqual([
+      { type: 'workflow/end', info, result: { stopReason: 'completed', agentsStarted: 1 } },
+    ])
+    expect(parent.snapshotEvents().filter(event => event.type.startsWith('tool-workflow/')).map(event => [event.type, event.data]))
+      .toEqual([
+        ['tool-workflow/run-start', { runId: info.id, name: 'snapshot-flow' }],
+        ['tool-workflow/agent-start', {
+          runId: info.id, seq: 1, label: 'Reply with exactly the word WF_CHILD_OK and not…', phase: 'Run', childId: child.id,
+        }],
+        ['tool-workflow/agent-end', { runId: info.id, seq: 1, outcome: 'completed' }],
+        ['tool-workflow/run-end', { runId: info.id, stopReason: 'completed' }],
+      ])
+    expect(child.snapshotEvents().filter(event => event.type === 'assistant/message').flatMap(event => event.data.message.content))
+      .toContainEqual({ type: 'text', text: 'WF_CHILD_OK' })
+  }
+
   beforeAll(async () => {
     await mkdir(EVIDENCE, { recursive: true })
     selectedParent = await selectedSessionFixture(PARENT_FIXTURE)
@@ -81,7 +157,8 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     scaffold = await launchWebScaffold({
       replayFixture: selectedParent,
       replayChildFixtures: [selectedChild],
-      compareReplaySession: true,
+      // Complete family comparison below replaces the scaffold's parent-only comparison and preserves child identity.
+      compareReplaySession: false,
     })
     stopSessions = scaffold.ctx.on('session/created', (session) => { sessions.push(session) })
     scaffold.ctx.on('workflow/start', (info) => { workflowEvents.push({ type: 'workflow/start', info }) })
@@ -147,10 +224,9 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
 
     const child = await childEntered.promise
     expect(child?.header.parentSession).toBe(parent.id)
-    expect(workflowEvents.filter(event => 'type' in event && event.type === 'workflow/agent-start')).toHaveLength(1)
+    expect(workflowEvents.filter(event => event.type === 'workflow/agent-start')).toHaveLength(1)
     await captureSessions('active')
     await page.locator('[data-chat-flow-kind="tool-call"]').first().waitFor({ state: 'attached' })
-    await page.screenshot({ path: join(EVIDENCE, 'active.png'), fullPage: true })
 
     expect(parent.snapshotEvents().filter(event => event.type === 'tool-workflow/run-start'),
       'a real Script SDK workflow must publish its durable run-start').toHaveLength(1)
@@ -169,6 +245,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     expect(await phaseDisclosure.evaluate(element => getComputedStyle(element).cursor)).toBe('pointer')
     const member = page.getByRole('button', { name: /^Open Reply with exactly the word/ })
     await member.waitFor({ timeout: 15_000 })
+    await page.screenshot({ path: join(EVIDENCE, 'active.png'), fullPage: true })
 
     await phaseDisclosure.click()
     expect(await phaseDisclosure.getAttribute('aria-expanded')).toBe('false')
@@ -242,7 +319,8 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     const sessionTree = page.getByRole('tree', { name: 'Sessions' })
     await sessionTree.getByRole('treeitem', { name: /Use run_code exactly once to/ }).click()
     releaseChild.resolve(undefined)
-    await settled
+    expect(await settled).toBe(parent.id)
+    await compareFamily()
     await expandTurnProcesses(page)
     await page.locator('[data-workflow-run][data-run-status="completed"]').waitFor()
 
@@ -290,7 +368,7 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     expect(await page.locator('[data-composer-input][contenteditable="true"]').count()).toBe(1)
   }, 60_000)
 
-  it('stays clean and owns only its one golden', async () => {
+  it('stays clean and owns its Session pair and UI goldens', async () => {
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
     await assertFixtureInventory(SNAPSHOT_DIR, [

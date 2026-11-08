@@ -1,0 +1,16 @@
+- text: "Use run_code exactly once to call tools.workflow exactly once, with args omitted, meta set to { \"name\": \"snapshot-flow\", \"description\": \"one child for the snapshot\" }, and this EXACT script body (copy it verbatim): phase('Run') const reply = await agent('Reply with exactly the word WF_CHILD_OK and nothing else.') return { reply } After the workflow returns, reply with the single word WORKFLOW_DONE and stop. Do not call any other SDK tool. {{clock}}"
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [expanded]
+- button "Ran code and called tools" [expanded]
+- button "Think The user wants me to use the workflow tool exactly once with specific parameters. Let me carefully follow the instructions:"
+- button "Code Run workflow snapshot-flow"
+- button "Run workflow snapshot-flow"
+- button "snapshot-flow 1 member Completed"
+- button "Think The workflow returned successfully with the reply \"WF_CHILD_OK\". Now I need to reply with exactly \"WORKFLOW_DONE\" and stop."
+- paragraph: WORKFLOW_DONE
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}

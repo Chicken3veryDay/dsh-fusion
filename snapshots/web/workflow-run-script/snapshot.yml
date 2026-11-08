@@ -1,0 +1,8 @@
+version: 1
+scenario: workflow-run-script
+profile: web
+composition: web-workflow-script
+recording: authored
+header:
+  class: web-workflow-script
+  pin: true
