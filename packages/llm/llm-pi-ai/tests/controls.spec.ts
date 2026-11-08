@@ -10,6 +10,7 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options'
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { Model } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
 import { resolveProfiles } from '../src/config.ts'
@@ -201,26 +202,32 @@ describe('Anthropic Messages controls', () => {
     })
   })
 
+  const windowModel: Model<'anthropic-messages'> = {
+    id: 'windowless',
+    name: 'windowless',
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    baseUrl: 'https://no-network.invalid',
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: true,
+    contextWindow: 0,
+    maxTokens: 8_000,
+  }
+
   it('pins the reserve and minimum to the installed pi-ai clamp', () => {
-    const clamp = (contextWindow: number) => clampMaxTokensToContext({ contextWindow }, { messages: [] }, 1_000_000)
+    const clamp = (contextWindow: number) => clampMaxTokensToContext(
+      { ...windowModel, contextWindow },
+      normalizeContext({ messages: [] }),
+      1_000_000,
+    )
     expect(clamp(10_000)).toBe(10_000 - CONTEXT_RESERVE_TOKENS)
     expect(clamp(100)).toBe(MINIMUM_WIRE_TOKENS)
     expect(clamp(0)).toBe(1_000_000)
   })
 
   it('a model without a positive window reports no context clamp', () => {
-    const model: Model<'anthropic-messages'> = {
-      id: 'windowless',
-      name: 'windowless',
-      api: 'anthropic-messages',
-      provider: 'anthropic',
-      baseUrl: 'https://no-network.invalid',
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      reasoning: true,
-      contextWindow: 0,
-      maxTokens: 8_000,
-    }
+    const model = windowModel
     const profile = resolveProfiles({ anthropic: {} }).get('anthropic')
     expect(profile).toBeDefined()
     if (profile === undefined) return
