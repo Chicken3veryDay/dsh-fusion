@@ -1,0 +1,51 @@
+{
+  "final_response": "",
+  "finish_reason": "error",
+  "reason": {
+    "kind": "error",
+    "error": {
+      "message": "provider \"deepseek-official\" model \"deepseek-flash\" does not support temperature (reasoning-active)",
+      "code": "UNSUPPORTED_CONTROL",
+      "unsupportedControl": {
+        "control": "temperature",
+        "reason": "reasoning-active"
+      }
+    }
+  },
+  "event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "step/end",
+    "turn/end"
+  ],
+  "user_input": [
+    [
+      {
+        "type": "text",
+        "text": "Say hello."
+      }
+    ]
+  ],
+  "work_by_phase": {
+    "startup": [
+      {
+        "phase": "startup",
+        "kind": "credential",
+        "ref": "DEEPSEEK_API_KEY"
+      },
+      {
+        "phase": "startup",
+        "kind": "http",
+        "method": "GET",
+        "url": "https://api.deepseek.com/models",
+        "authenticated": true
+      }
+    ],
+    "refusal": []
+  }
+}
