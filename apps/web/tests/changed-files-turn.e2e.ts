@@ -9,18 +9,20 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vites
 import type {} from '@deepseek-ai/dsh-workspace-changes'
 import type { ChangesSummary } from '@deepseek-ai/dsh-client-ui-deliverables/src/changes.ts'
 import { deriveReplayScript, parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
-import { PartialArguments } from '@deepseek-ai/dsh-util-values'
 import {
   assertFinalWorkspaceSnapshot, captureExpandedTurnProcessAria, compareOrRefreshGolden,
-  fixtureUserPrompts, launchWebScaffold, recordFixture, watchConsole,
+  assertFixtureInventory, fixtureUserPrompts, launchWebScaffold, recordFixture, watchConsole,
   webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { openSettings, connectFreshWorkspaceZh, expandOwningTurnProcess, ZH_BROWSER_LOCALE } from './support.ts'
 
-const DIR = fileURLToPath(new URL('../../../snapshots/web/changed-files-turn', import.meta.url))
-const FIXTURE = join(DIR, 'session.v3.jsonl')
+const DIR = fileURLToPath(new URL('../../../snapshots/web/changed-files-turn-script', import.meta.url))
+const EXPECTED_DIR = fileURLToPath(new URL('./expected/changed-files-turn-script/', import.meta.url))
+// The native generations stay committed and owned; this scenario drives the Script default.
+const NATIVE_DIR = fileURLToPath(new URL('../../../snapshots/web/changed-files-turn', import.meta.url))
+const FIXTURE = join(DIR, 'session.v4.jsonl')
 const MODE = webSnapshotMode()
-const PROMPT = '不用先查看目录，直接做四件事：把 intro.md 里的标题「示例项目」改成「项目说明」，新建 src/util.ts 导出一个两数相加的 add 函数，新建 app.local 写一行 mode=demo，最后用 bash 在 notes.txt 末尾追加一行 done。'
+const PROMPT = '不用先查看目录，直接做四件事：把 intro.md 里的标题「示例项目」改成「项目说明」，新建 src/util.ts 导出一个两数相加的 add 函数，新建 app.local 写一行 mode=demo，最后用 bash 在 notes.txt 末尾追加一行 done。把这四件事放进一个 run_code 程序里完成。'
 
 /** Seed a committed repository so the turn's own edits are the only difference between its snapshots; `*.local` stays ignored. */
 async function seedRepository(cwd: string): Promise<void> {
@@ -109,76 +111,42 @@ describe('web e2e: a git workspace turn ends with its changed files', () => {
   it('records the edited, created, and shell-appended files with their line counts', async () => {
     if (MODE !== 'record') expect(fixtureUserPrompts(await readFile(FIXTURE, 'utf8'))).toEqual([PROMPT])
     const settled = scaffold.whenTurnSettled()
-    const preparations = ['edit', 'write'].map(name => ({
-      name, callId: '', args: new PartialArguments(), ready: Promise.withResolvers<{ callId: string }>(),
-      release: Promise.withResolvers<undefined>(), held: false,
-      contentField: name === 'write' ? 'content' : 'old_string',
-      contentReady: Promise.withResolvers<undefined>(), contentRelease: Promise.withResolvers<undefined>(),
-      contentHeld: false,
-    }))
-    const names = new Map<string, string>()
+    // Under Script the model streams one run_code call and the file tools run nested, so the streamed call is
+    // the only preparation to hold; the nested edit and write results are checked through the workspace below.
+    const preparation = { callId: '', ready: Promise.withResolvers<{ callId: string }>(), release: Promise.withResolvers<undefined>() }
     const dispose = scaffold.ctx.on('llm/stream', async function* (_options, next) {
       for await (const chunk of next()) {
         yield chunk
-        if (chunk.type !== 'tool-call-delta') continue
-        if (chunk.name !== undefined) names.set(chunk.id, chunk.name)
-        const preparation = preparations.find(value => value.name === names.get(chunk.id))
-        if (preparation === undefined || preparation.contentHeld || chunk.argumentsDelta.length === 0) continue
-        if (preparation.callId === '') preparation.callId = chunk.id
-        if (preparation.callId !== chunk.id) continue
-        preparation.args.append(chunk.argumentsDelta)
-        if (!preparation.held) {
-          if (!preparation.args.complete('file_path')) continue
-          preparation.held = true
-          preparation.ready.resolve({ callId: chunk.id })
-          await preparation.release.promise
-        }
-        if (!preparation.args.has(preparation.contentField) || preparation.args.complete(preparation.contentField)) continue
-        const length = preparation.args.stringLength(preparation.contentField)
-        if (length === undefined || length === 0) continue
-        preparation.contentHeld = true
-        preparation.contentReady.resolve(undefined)
-        await preparation.contentRelease.promise
+        if (chunk.type !== 'tool-call-delta' || preparation.callId !== '' || chunk.name !== 'run_code') continue
+        preparation.callId = chunk.id
+        preparation.ready.resolve({ callId: chunk.id })
+        await preparation.release.promise
       }
     }, { prepend: true })
     releasePreparations = () => {
-      for (const preparation of preparations) {
-        preparation.release.resolve(undefined)
-        preparation.contentRelease.resolve(undefined)
-      }
+      preparation.release.resolve(undefined)
       dispose()
     }
     const input = page.locator('[data-composer-input]').first()
     await input.fill(PROMPT)
     await input.press('Enter')
-    const observations = preparations.map(async (preparation) => {
+    const observation = (async () => {
       const { callId } = await Promise.race([
         preparation.ready.promise,
-        settled.then(() => { throw new Error(`No ${preparation.name} argument prefix was streamed`) }),
+        settled.then(() => { throw new Error('No run_code argument prefix was streamed') }),
       ])
       const row = page.locator(`[data-chat-call-id="${callId}"] [data-state="preparing"]`)
       await row.waitFor({ state: 'attached' })
       await expandOwningTurnProcess(page, row)
-      const argumentPath = preparation.args.text('file_path')
-      if (argumentPath === undefined) throw new Error('held preparation has no string file_path')
-      await row.getByText(argumentPath, { exact: true }).waitFor()
+      await row.getByText('正在准备调用', { exact: true }).waitFor()
+      expect(await row.getAttribute('data-tool')).toBe('run_code')
       expect(await row.getByRole('button').count()).toBe(0)
       expect(await row.locator('[aria-expanded]').count()).toBe(0)
       expect(await row.locator('pre').count()).toBe(0)
-      expect(await row.getByText(/^\d+KB$/).count()).toBe(0)
-      await compareOrRefreshGolden(join(DIR, `preparing-${preparation.name}.expected.md`), await row.ariaSnapshot(), MODE)
+      await compareOrRefreshGolden(join(EXPECTED_DIR, 'preparing-run-code.expected.md'), await row.ariaSnapshot(), MODE)
       preparation.release.resolve(undefined)
-      await Promise.race([
-        preparation.contentReady.promise,
-        settled.then(() => { throw new Error(`No open ${preparation.name} content prefix was streamed`) }),
-      ])
-      await row.getByText('1KB', { exact: true }).waitFor()
-      expect(await row.locator('[aria-expanded]').count()).toBe(0)
-      expect(await row.locator('pre').count()).toBe(0)
-      await compareOrRefreshGolden(join(DIR, `preparing-${preparation.name}-content.expected.md`), await row.ariaSnapshot(), MODE)
-      preparation.contentRelease.resolve(undefined)
-    })
-    const [sessionId] = await Promise.all([settled, ...observations]).finally(() => { releasePreparations?.() })
+    })()
+    const [sessionId] = await Promise.all([settled, observation]).finally(() => { releasePreparations?.() })
     const session = scaffold.ctx.agents.get(sessionId)?.session
     if (session?.header.cwd === undefined) throw new Error('changed-files Session has no workspace')
     cwd = session.header.cwd
@@ -300,7 +268,7 @@ describe('web e2e: a git workspace turn ends with its changed files', () => {
     await path.evaluate((element) => { element.style.maxWidth = '160px'; element.scrollLeft = 50 })
     expect(await path.evaluate(element => element.scrollLeft)).toBe(50)
     await path.evaluate((element) => { element.style.removeProperty('max-width') })
-    await compareOrRefreshGolden(join(DIR, 'hover.expected.md'), await preview.locator('[data-review-view]').ariaSnapshot(), MODE)
+    await compareOrRefreshGolden(join(EXPECTED_DIR, 'hover.expected.md'), await preview.locator('[data-review-view]').ariaSnapshot(), MODE)
     await preview.hover()
     await preview.locator('[data-review-view]').evaluate((element) => {
       const line = element.querySelector('[data-diff-line]')!
@@ -724,7 +692,19 @@ describe('web e2e: a git workspace turn ends with its changed files', () => {
   it.skipIf(MODE === 'record')('replays the workspace and the Chinese conversation', async () => {
     await assertFinalWorkspaceSnapshot(DIR, cwd, { ignoredRootEntries: ['.git'] })
     const aria = await captureExpandedTurnProcessAria(page, '[data-chat-flow]', scaffold.workspaceCwd)
-    await compareOrRefreshGolden(join(DIR, 'ui.expected.md'), aria, MODE)
+    await compareOrRefreshGolden(join(EXPECTED_DIR, 'ui.expected.md'), aria, MODE)
+  })
+
+  it.skipIf(MODE === 'record')('keeps the exact fixture inventory and the owned native generations', async () => {
+    await assertFixtureInventory(DIR, ['session.v4.jsonl', 'workspace.expected'])
+    await assertFixtureInventory(EXPECTED_DIR, [
+      'hover.expected.md', 'preparing-run-code.expected.md', 'ui.expected.md',
+    ])
+    await assertFixtureInventory(NATIVE_DIR, [
+      'hover.expected.md', 'preparing-edit-content.expected.md', 'preparing-edit.expected.md',
+      'preparing-write-content.expected.md', 'preparing-write.expected.md', 'session.v3.jsonl', 'session.v4.jsonl',
+      'ui.expected.md', 'workspace.expected',
+    ])
   })
 
   it('preserves filename endings when the review narrows and updates the fade after resizing or selecting another file', async () => {

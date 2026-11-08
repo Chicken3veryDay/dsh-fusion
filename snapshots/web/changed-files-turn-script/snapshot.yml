@@ -1,0 +1,9 @@
+version: 1
+scenario: changed-files-turn-script
+profile: web
+composition: web-script
+recording: authored
+header:
+  class: web-script
+workspace:
+  final: true

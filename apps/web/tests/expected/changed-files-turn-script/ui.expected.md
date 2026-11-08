@@ -1,0 +1,39 @@
+- text: 不用先查看目录，直接做四件事：把 intro.md 里的标题「示例项目」改成「项目说明」，新建 src/util.ts 导出一个两数相加的 add 函数，新建 app.local 写一行 mode=demo，最后用 bash 在 notes.txt 末尾追加一行 done。把这四件事放进一个 run_code 程序里完成。 {{clock}}
+- button "复制"
+- status: 已完成
+- button "已完成，用时 {{duration}}" [expanded]
+- button "已写入文件，运行了代码，已读取文件等" [expanded]
+- button "代码 Edit intro.md, create two files, append to notes.txt"
+- button "读取 intro.md":
+  - text: 读取
+  - button "intro.md"
+- button "编辑 intro.md 1KB":
+  - text: 编辑
+  - button "intro.md"
+  - text: 1KB
+- button "写入 src/util.ts 1KB":
+  - text: 写入
+  - button "src/util.ts"
+  - text: 1KB
+- button "写入 app.local 1KB":
+  - text: 写入
+  - button "app.local"
+  - text: 1KB
+- button "运行命令 Append done to notes.txt"
+- paragraph: 四件事全部完成：intro.md 标题已改为「项目说明」，新建了 src/util.ts 和 app.local，并在 notes.txt 末尾追加了 done。
+- button "在侧边栏查看本轮改动": 已编辑 4 个文件 +6 -1
+- list:
+  - listitem:
+    - button "查看 app.local 的改动": app.local +1 -0
+  - listitem:
+    - button "查看 intro.md 的改动": intro.md +1 -1
+  - listitem:
+    - button "查看 notes.txt 的改动": notes.txt +1 -0
+  - listitem:
+    - button "查看 src/util.ts 的改动": src/util.ts +3 -0
+- button "复制"
+- button "好的回答"
+- button "有问题的回答"
+- button "在新对话中分支"
+- button "用量 19.1K tok"
+- text: {{clock}}
