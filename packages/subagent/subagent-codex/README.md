@@ -41,6 +41,7 @@ The layer inserts Host rows only, so any profile can select it, including the sh
 |---|---|---|
 | `providerName` | `codex` | Non-empty registry name on `ctx.subagents`; each mounted instance needs a unique value |
 | `model` | native Codex settings | Optional non-empty model name fixed for every thread from this provider instance; omission sends no app-server override |
+| `modelProvider` | native Codex settings | Optional non-empty native provider name; applies only to this child process and requires matching thread confirmation before any turn |
 | `env` | `{}` | Explicit child environment layered over the credential-scrubbed parent environment |
 | `permissionMode` | `never` | Native non-interactive approval and sandbox mode fixed for every thread from this provider instance |
 | `disposeGraceMs` | `3000` | Grace between the shared managed-range owner's termination tiers |
@@ -51,7 +52,7 @@ The layer inserts Host rows only, so any profile can select it, including the sh
 | `approve-for-me` | `approvalPolicy: on-request`, `approvalsReviewer: auto_review`, `sandbox: workspace-write` | Route permission requests through Codex automatic review without a human |
 | `dangerously-bypass-approvals-and-sandbox` | `approvalPolicy: never`, `sandbox: danger-full-access` | Skip approval and sandbox enforcement; this value must be selected explicitly |
 
-The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-codex) is the exhaustive source for every accepted field and its JSDoc. A configured `model` passes unchanged on each ephemeral `thread/start`; omission leaves native model selection in force. The provider does not discover models, rewrite aliases, select `modelProvider` or `serviceTier`, or set a fallback. Credential-shaped ambient variables are removed before the explicit `env` overlay, so an API key intended for the child must be supplied there.
+The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-codex) is the exhaustive source for every accepted field and its JSDoc. A configured `model` passes unchanged on each ephemeral `thread/start`; omission leaves native model selection in force. An explicit `modelProvider` selects a native configured provider through a process-only TOML override; omission preserves the native launch arguments. Missing or mismatched thread confirmation fails startup before publication or inference and awaits managed child cleanup. Unknown native providers fail startup. Native configuration files and authentication remain unchanged. The provider does not discover models, rewrite aliases, select `serviceTier`, or set a fallback. Credential-shaped ambient variables are removed before the explicit `env` overlay, so an API key intended for the child must be supplied there.
 
 <a id="exposing-the-tool"></a>
 ### Exposing the tool
@@ -108,6 +109,8 @@ This section explains how the provider drives a real Codex app-server and where 
 ### Run flow
 
 A start accepts only a non-empty sequence of text blocks and uses the child cwd selected by the subagent service. It spawns the fixed command through the subprocess seam, performs the `initialize` → `initialized` handshake, maps the Profile-selected mode and optional model into official `thread/start` fields beside `{ cwd, ephemeral: true }`, and publishes the run only after Codex returns a valid ephemeral thread. The published result starts exactly one turn, accepts only notifications for that run's thread and turn, and waits for the authoritative `turn/completed` terminal. The latest `agentMessage` with `phase: "final_answer"` wins; without one, the latest `phase: "partial_answer"` message (stable answer text that later assistant output or tool calls may follow) is selected; when Codex emits neither explicit answer phase, the latest message with `phase: null` is the compatibility fallback. `commentary` messages are never selected, and any other phase fails the run. A successful turn with no nonblank answer settles as an error. Failed turns use the coarse categories `limit`, `access-policy`, `service`, `transport`, `product-error`, `invalid-result`, or `unknown`; an early app-server exit uses `process`, and applicable connection and stream failures retain a numeric `httpStatusCode`.
+
+The opt-in retained ChatGPT account smoke runs with `DSH_CODEX_ACCOUNT_SMOKE=1 pnpm run test:e2e packages/subagent/subagent-codex/tests/provider-selection.e2e.ts -t 'retained ChatGPT' --retry 0`. It requires native ChatGPT login and a listed `gpt-5.6-luna`, makes two nonce turns in fresh processes, and runs no parent model. Without the opt-in it skips before account I/O. Its account-mode and success receipts do not establish subscription billing or cost.
 
 </details>
 

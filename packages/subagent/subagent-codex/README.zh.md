@@ -41,6 +41,7 @@ kind: "package-bundle"
 |---|---|---|
 | `providerName` | `codex` | `ctx.subagents` 上的非空注册名称；每个已挂载实例都需要唯一值 |
 | `model` | Codex 原生设置 | 为本提供方实例的每个线程固定的可选非空模型名称；省略时不发送 app-server 覆盖 |
+| `modelProvider` | Codex 原生设置 | 可选非空原生提供方名称；仅作用于该子进程，任何轮次开始前都必须获得匹配的线程确认 |
 | `env` | `{}` | 叠加在已清理凭据的父环境之上的显式子进程环境 |
 | `permissionMode` | `never` | 为本提供方实例的每个线程固定的原生非交互审批与沙箱模式 |
 | `disposeGraceMs` | `3000` | 共享 managed-range owner 各终止层级之间的宽限 |
@@ -51,7 +52,7 @@ kind: "package-bundle"
 | `approve-for-me` | `approvalPolicy: on-request`、`approvalsReviewer: auto_review`、`sandbox: workspace-write` | 由 Codex 自动评审权限请求，不等待人工 |
 | `dangerously-bypass-approvals-and-sandbox` | `approvalPolicy: never`、`sandbox: danger-full-access` | 跳过审批与 sandbox；必须显式选择该值 |
 
-生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-codex)是每个受支持字段及其 JSDoc 的穷尽式真源。已配置的 `model` 会原样传给每个临时 `thread/start`；省略时保留原生模型选择。提供方不会发现模型、改写别名、选择 `modelProvider` 或 `serviceTier`，也不会设置 fallback。具有凭证特征的环境变量会在显式 `env` 覆盖生效前被移除，因此供子进程使用的 API 密钥必须在该配置中显式提供。
+生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-codex)是每个受支持字段及其 JSDoc 的穷尽式真源。已配置的 `model` 会原样传给每个临时 `thread/start`；省略时保留原生模型选择。显式 `modelProvider` 通过仅作用于进程的 TOML 覆盖选择已配置的原生提供方；省略时保留原生启动参数。线程确认缺失或不匹配会在发布和推理前终止启动，并等待托管子进程清理完成。未知原生提供方会导致启动失败。原生配置文件和认证保持不变。提供方不会发现模型、改写别名、选择 `serviceTier`，也不会设置 fallback。具有凭证特征的环境变量会在显式 `env` 覆盖生效前被移除，因此供子进程使用的 API 密钥必须在该配置中显式提供。
 
 <a id="exposing-the-tool"></a>
 ### 暴露工具
@@ -108,6 +109,8 @@ Bundle 将 `tool-subagent-codex` 作为 Host 条目插入，因此 `subagent_cod
 ### 运行流程
 
 一次启动只接受非空的文本块序列，并使用子代理服务选择的子级 cwd。它经子进程 seam spawn 固定命令，完成 `initialize` → `initialized` 握手，把 Profile 选择的模式与可选模型映射为官方 `thread/start` 字段并与 `{ cwd, ephemeral: true }` 一起发送，且仅在 Codex 返回有效的临时线程后发布运行。已发布的结果恰好启动一个轮次，只接受与此次运行的线程和轮次匹配的通知，并等待权威的 `turn/completed` 终态。以最后一条 `phase: "final_answer"` 的 `agentMessage` 为准；若没有，则选最后一条 `phase: "partial_answer"` 的消息（稳定的回答文本，其后仍可能有助手输出或工具调用）；若 Codex 两种明确的回答阶段都没有发出，则以最后一条 `phase: null` 的消息作为兼容性回退。`commentary` 消息绝不会被选中，其它任何阶段都会使运行失败。成功完成的轮次若没有非空白答案，结果也会判为错误。失败轮次使用粗粒度类别 `limit`、`access-policy`、`service`、`transport`、`product-error`、`invalid-result` 或 `unknown`；app-server 提前退出使用 `process`，适用的连接与 stream 失败保留数值 `httpStatusCode`。
+
+保留 ChatGPT 账户的可选冒烟测试通过 `DSH_CODEX_ACCOUNT_SMOKE=1 pnpm run test:e2e packages/subagent/subagent-codex/tests/provider-selection.e2e.ts -t 'retained ChatGPT' --retry 0` 运行。它要求原生 ChatGPT 登录及目录中列出的 `gpt-5.6-luna`，在两个新进程中分别执行随机数轮次，且不运行父模型。未显式启用时，它在任何账户 I/O 前跳过。账户模式与成功回执不能证明订阅计费方式或费用。
 
 </details>
 

@@ -3935,6 +3935,8 @@ export interface Config {
   providerName?: string
   /** Native Codex model fixed for this instance; omitted to inherit Codex settings. */
   model?: string
+  /** Native configured provider for this child only; omitted to inherit Codex settings. */
+  modelProvider?: string
   /**
    * Explicit environment entries layered over the subprocess seam's
    * credential-scrubbed parent environment.

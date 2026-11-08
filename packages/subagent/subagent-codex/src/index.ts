@@ -38,6 +38,8 @@ export interface Config {
   providerName?: string
   /** Native Codex model fixed for this instance; omitted to inherit Codex settings. */
   model?: string
+  /** Native configured provider for this child only; omitted to inherit Codex settings. */
+  modelProvider?: string
   /**
    * Explicit environment entries layered over the subprocess seam's
    * credential-scrubbed parent environment.
@@ -52,13 +54,14 @@ export interface Config {
 export const Config: z<Config> = z.object({
   providerName: z.string().min(1).default(DEFAULT_PROVIDER_NAME),
   model: z.string().min(1),
+  modelProvider: z.string().min(1),
   env: z.dict(z.string()).default({}),
   permissionMode: z.union([...CODEX_PERMISSION_MODES])
     .default(DEFAULT_CODEX_PERMISSION_MODE),
   disposeGraceMs: z.number().default(DEFAULT_DISPOSE_GRACE_MS),
 })
 
-type ResolvedConfig = Omit<Required<Config>, 'model'> & Pick<Config, 'model'>
+type ResolvedConfig = Omit<Required<Config>, 'model' | 'modelProvider'> & Pick<Config, 'model' | 'modelProvider'>
 
 class CodexProvider implements SubagentProvider {
   readonly capabilities: SubagentCapabilities = NO_START_CAPABILITIES
@@ -85,6 +88,7 @@ class CodexProvider implements SubagentProvider {
     const spec: CodexRunSpec = {
       cwd,
       ...this.config.model === undefined ? {} : { model: this.config.model },
+      ...this.config.modelProvider === undefined ? {} : { modelProvider: this.config.modelProvider },
       permissionMode: this.config.permissionMode,
       env: this.config.env,
       disposeGraceMs: this.config.disposeGraceMs,
@@ -108,6 +112,7 @@ export function apply(ctx: Context, config: Config): void {
   const resolved: ResolvedConfig = {
     providerName: config.providerName ?? DEFAULT_PROVIDER_NAME,
     ...config.model === undefined ? {} : { model: config.model },
+    ...config.modelProvider === undefined ? {} : { modelProvider: config.modelProvider },
     env: config.env as Record<string, string>,
     permissionMode: config.permissionMode ?? DEFAULT_CODEX_PERMISSION_MODE,
     disposeGraceMs: config.disposeGraceMs as number,

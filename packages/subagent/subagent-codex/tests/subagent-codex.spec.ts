@@ -124,6 +124,10 @@ class ProtocolPeer {
     }
   }
 
+  hasMethod(method: string): boolean {
+    return this.frames.some(frame => frame.method === method)
+  }
+
   nextMethod(method: string): Promise<JsonObject> {
     return this.next(frame => frame.method === method)
   }
@@ -483,6 +487,7 @@ describe('task admission and package contracts', () => {
     const safeFiber = await ctx.plugin(codex, {
       providerName: 'codex-safe',
       model: 'codex-safe-model',
+      modelProvider: 'openai',
       env: { DSH_CODEX_INSTANCE: 'safe' },
       permissionMode: 'never',
       disposeGraceMs: 11,
@@ -514,8 +519,11 @@ describe('task admission and package contracts', () => {
       expect(threadStart.params).toMatchObject({ model })
       child.peer.respond(threadStart, {
         thread: { id: 'thread-1', ephemeral: true },
+        modelProvider: child === safeChild ? 'openai' : 'native-default',
       })
     }
+    expect(spawnSpecs[0]?.argv).toEqual(codexAppServerArgv('openai'))
+    expect(spawnSpecs[1]?.argv).toEqual(codexAppServerArgv())
     const [safeRun, bypassRun] = await Promise.all([
       safeStarting,
       bypassStarting,
@@ -665,6 +673,57 @@ describe('task admission and package contracts', () => {
     child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
     await starting
     wire.close()
+  })
+
+  it('encodes an instance provider as one TOML value in the fixed launch', () => {
+    expect(codexAppServerArgv('openai')).toEqual([
+      ...codexAppServerArgv().slice(0, 2),
+      '--config', 'model_provider="openai"', 'app-server', '--stdio',
+    ])
+    expect(codexAppServerArgv('quote"\\line')).toContain(
+      `model_provider=${JSON.stringify('quote"\\line')}`,
+    )
+    expect(codex.Config({ modelProvider: 'openai' }).modelProvider).toBe('openai')
+    expect(() => codex.Config({ modelProvider: '' })).toThrow()
+  })
+
+  it.each(['openai', 'other', undefined])('requires explicit provider confirmation before publication: %s', async (selected) => {
+    const child = fakeChild({ exitOnTerminate: selected === 'openai' })
+    const cleanupStarted = Promise.withResolvers<boolean>()
+    vi.spyOn(child.handle, 'waitForExit').mockImplementation(async () => {
+      cleanupStarted.resolve(true)
+      await child.handle.done
+      return true
+    })
+    let settled = false
+    const spawn = vi.fn((_spec: SubprocessSpawnSpec) => child.handle)
+    const starting = startCodexRun(request(), runSpec(child, { modelProvider: 'openai', spawn }))
+    void starting.then(() => { settled = true }, () => { settled = true })
+    const checked = selected === 'openai'
+      ? starting
+      : expect(starting).rejects.toThrow('stage: thread-start')
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, {})
+    await child.peer.nextMethod('initialized')
+    const threadStart = await child.peer.nextMethod('thread/start')
+    child.peer.respond(threadStart, {
+      thread: { id: 'thread-1', ephemeral: true },
+      ...selected === undefined ? {} : { modelProvider: selected },
+    })
+    expect(spawn.mock.calls[0]?.[0].argv).toEqual(codexAppServerArgv('openai'))
+    if (selected === 'openai') {
+      const run = await starting
+      await child.peer.nextMethod('turn/start')
+      await run.dispose()
+    } else {
+      await cleanupStarted.promise
+      expect(settled).toBe(false)
+      child.settle()
+      await checked
+      expect(child.peer.hasMethod('turn/start')).toBe(false)
+      expect(child.terminate).toHaveBeenCalledOnce()
+      await expect(child.handle.waitForExit()).resolves.toBe(true)
+    }
   })
 
   it('sends an explicit model on each ephemeral thread', async () => {

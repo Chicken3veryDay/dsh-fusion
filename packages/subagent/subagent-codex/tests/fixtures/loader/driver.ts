@@ -11,6 +11,13 @@ if (configPath === undefined) {
   throw new Error('subagent-codex Loader composition driver requires a config path')
 }
 
+const selectionMode = process.argv[3]
+if (selectionMode !== undefined) {
+  const { runProviderSelection } = await import('./provider-selection.ts')
+  await runProviderSelection(configPath, selectionMode)
+  process.exit(0)
+}
+
 let starts = 0
 const ctx = await bootProductionProfile({
   binName: 'subagent-codex-loader-composition',

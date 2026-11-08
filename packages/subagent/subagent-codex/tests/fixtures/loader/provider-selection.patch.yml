@@ -1,0 +1,31 @@
+- id: headless-startup
+  disabled: true
+- id: headless-runner
+  disabled: true
+- insert:
+    - id: fixture
+      name: './fixture.ts'
+    - id: subagent-codex
+      name: '@deepseek-ai/dsh-subagent-codex'
+      config:
+        modelProvider: !!js process.env.DSH_CODEX_TEST_PROVIDER || undefined
+        model: !!js process.env.DSH_CODEX_TEST_MODEL
+        env: !!js >-
+          process.env.DSH_CODEX_TEST_KEYLESS === '1' ? { OPENAI_API_KEY: 'dsh-fixture-key' } : {}
+        permissionMode: never
+        disposeGraceMs: 1000
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: codex
+        toolName: subagent_codex
+        maxDepth: provider-managed
+- id: sandbox-policy
+  inject: []
+  config:
+    mode: read-only
+    workspaceRoot: !!js process.cwd()
+- id: tool-executor-ptc
+  disabled: true
+- id: tool-executor-native
+  disabled: false

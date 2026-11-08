@@ -226,6 +226,7 @@ export class CodexAppServerWire {
     output: Writable,
     private readonly permissionMode: CodexPermissionMode,
     private readonly model?: string,
+    private readonly modelProvider?: string,
   ) {
     this.transport = new JsonRpcLineTransport(input, output)
     // Fatal protocol state can arrive after the current guarded operation has
@@ -297,6 +298,9 @@ export class CodexAppServerWire {
     const id = string(thread.id, 'thread/start thread id')
     if (thread.ephemeral !== true) {
       throw new Error('subagent-codex: app-server did not create an ephemeral thread')
+    }
+    if (this.modelProvider !== undefined && response.modelProvider !== this.modelProvider) {
+      throw new Error('subagent-codex: app-server did not confirm the requested native provider; no turn started')
     }
     this.threadId = id
   }
