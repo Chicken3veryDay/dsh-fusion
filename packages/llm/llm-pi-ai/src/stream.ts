@@ -78,12 +78,17 @@ function classifyPiAiError(message: string): string {
  * 429 that is an exhausted quota rather than a request-rate limit.
  * @param status - HTTP status of the rejected response.
  * @param message - pi-ai's flattened error text.
+ * @param providerCode - the provider's structured 429 error code, when the body carried one.
  * @returns the harness failure code.
  */
-function classifyWireStatus(status: number, message: string): string {
+function classifyWireStatus(status: number, message: string, providerCode: string | undefined): string {
   if (status === 401 || status === 403) return 'AUTH'
   if (status === 402) return QUOTA_EXCEEDED_CODE
-  if (status === 429) return isQuotaExceededError(message) ? QUOTA_EXCEEDED_CODE : 'RATE_LIMIT'
+  if (status === 429) {
+    // pi-ai renders a Codex `usage_limit_reached` as generic limit text, so the
+    // structured code decides before the text does.
+    return isQuotaExceededError(`${providerCode ?? ''} ${message}`) ? QUOTA_EXCEEDED_CODE : 'RATE_LIMIT'
+  }
   if (status === 408) return 'TIMEOUT'
   if (status === 400 || status === 413 || status === 422) return 'INVALID_REQUEST'
   if (status >= 500) return 'SERVER'
@@ -108,6 +113,17 @@ function signInFailure(text: string): LlmFailure | undefined {
   const code = classifyPiAiError(text)
   if (code !== 'INVALID_REQUEST' && code !== 'AUTH') return undefined
   return { message: `${text}; sign in to ${provider} again in the Models settings`, code: 'AUTH' }
+}
+
+/**
+ * Build the structured failure of a rejected response.
+ * @param wire - the facts observed below pi-ai.
+ * @param text - pi-ai's flattened error text.
+ * @returns the failure with status, delay, and request id; the provider code only informs `code`.
+ */
+function wireFailure(wire: WireFailure, text: string): LlmFailure {
+  const { providerCode, ...facts } = wire
+  return { ...facts, message: text, code: classifyWireStatus(wire.status, text, providerCode) }
 }
 
 /**
@@ -174,7 +190,7 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number,
         kind: 'error',
         failure: wire === undefined
           ? { message: text, code: classifyPiAiError(text) }
-          : { ...wire, message: text, code: classifyWireStatus(wire.status, text) },
+          : wireFailure(wire, text),
       }
     }
   }

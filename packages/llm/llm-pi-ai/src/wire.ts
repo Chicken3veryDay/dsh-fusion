@@ -23,6 +23,13 @@ export interface WireFailure {
   readonly providerRetryAfterMs?: number
   /** The provider's request identifier, when its headers carried one. */
   readonly requestId?: ProviderRequestId
+  /**
+   * The structured `error.code` or `error.type` of a 429 body. pi-ai flattens
+   * that body to display text, so this is the only record of whether a 429 is
+   * an exhausted quota or a transient rate limit. Classification input only:
+   * it never becomes a persisted failure field.
+   */
+  readonly providerCode?: string
 }
 
 /** One request's observer: the `fetch` to hand pi-ai and the facts it saw. */
@@ -71,12 +78,83 @@ export function providerRetryAfterMs(headers: Headers): number | undefined {
   return Number.isFinite(delay) && delay > 0 ? delay : undefined
 }
 
+/** Most of a 429 body inspected for its structured error code. */
+const ERROR_BODY_LIMIT_BYTES = 16 * 1024
+
+/**
+ * A body read that failed or a cancel that found nothing to release: the clone
+ * only feeds classification, so either leaves the status-only classification.
+ * @param _error - the stream failure, intentionally unused.
+ * @returns undefined, the "no usable body" marker.
+ */
+const unreadable = (_error: unknown): undefined => undefined
+
+/**
+ * Read a rejected response's clone up to {@link ERROR_BODY_LIMIT_BYTES}.
+ * @param response - the rejected response; its own body stays readable.
+ * @returns the decoded text, or undefined when the body is absent, unreadable, or larger than the limit.
+ */
+async function readBoundedErrorBody(response: Response): Promise<string | undefined> {
+  const reader = response.clone().body?.getReader()
+  if (reader === undefined) return undefined
+  const decoder = new TextDecoder()
+  let text = ''
+  let bytes = 0
+  try {
+    for (;;) {
+      const chunk = await reader.read().catch(unreadable)
+      if (chunk === undefined) return undefined
+      if (chunk.done) return text + decoder.decode()
+      bytes += chunk.value.byteLength
+      if (bytes > ERROR_BODY_LIMIT_BYTES) return undefined
+      text += decoder.decode(chunk.value, { stream: true })
+    }
+  } finally {
+    // Not awaited: a tee branch's cancel settles only after the other branch,
+    // which pi-ai still reads, is cancelled or drained too.
+    void reader.cancel().catch(unreadable)
+  }
+}
+
+/**
+ * Parse an error body as JSON.
+ * @param text - the bounded body text.
+ * @returns the parsed value, or undefined when the text is not JSON.
+ */
+function parseJson(text: string): unknown {
+  try { return JSON.parse(text) }
+  catch (error) {
+    // A body that is not JSON carries no structured code, and the caller reads its absence.
+    void error
+    return undefined
+  }
+}
+
+/**
+ * Read the structured error code of a rate-limit response from a clone, so the
+ * body pi-ai reads is untouched.
+ * @param response - the rejected response.
+ * @returns `error.code` or `error.type` from a bounded JSON body, or undefined for any other body.
+ */
+async function providerErrorCode(response: Response): Promise<string | undefined> {
+  const text = await readBoundedErrorBody(response)
+  const parsed = text === undefined ? undefined : parseJson(text)
+  const failure: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'error') : undefined
+  if (typeof failure !== 'object' || failure === null) return undefined
+  for (const field of ['code', 'type']) {
+    const value: unknown = Reflect.get(failure, field)
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return undefined
+}
+
 /**
  * Observe the HTTP responses of one provider request.
  *
  * The observer resolves `globalThis.fetch` on each call, so a proxy dispatcher
  * or test double installed after construction still applies, and it returns the
- * response untouched: nothing here retries, delays, or reads a body.
+ * response untouched: nothing here retries or delays. A 429 body is read from a
+ * clone, bounded to {@link ERROR_BODY_LIMIT_BYTES}, to keep its structured code.
  * @returns the observer for exactly one request; do not share it between requests.
  */
 export function observeWire(): WireObserver {
@@ -87,10 +165,12 @@ export function observeWire(): WireObserver {
       if (response.ok) return response
       const retryAfterMs = providerRetryAfterMs(response.headers)
       const id = response.headers.get('x-request-id') ?? response.headers.get('request-id')
+      const providerCode = response.status === 429 ? await providerErrorCode(response) : undefined
       seen = {
         status: response.status,
         ...retryAfterMs === undefined ? {} : { providerRetryAfterMs: retryAfterMs },
         ...id === null || id === '' ? {} : { requestId: ProviderRequestId(id) },
+        ...providerCode === undefined ? {} : { providerCode },
       }
       return response
     },

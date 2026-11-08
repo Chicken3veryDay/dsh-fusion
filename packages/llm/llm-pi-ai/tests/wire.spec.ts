@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
-import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { FinishReason } from '@deepseek-ai/dsh-llm'
 import * as PiAi from '../src/index.ts'
 import type { Usage as PiUsage } from '@earendil-works/pi-ai'
@@ -87,6 +87,63 @@ describe('observeWire', () => {
     expect(wire.failure()).toEqual({ status: 500, requestId: 'abc' })
     await wire.fetch('http://x.invalid')
     expect(wire.failure()).toEqual({ status: 500 })
+  })
+
+  describe('429 error code', () => {
+    const rejected = async (body: BodyInit | null, status = 429): Promise<{ response: Response; code: unknown }> => {
+      const response = new Response(body, { status })
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response)
+      const wire = observeWire()
+      await wire.fetch('http://x.invalid')
+      return { response, code: (wire.failure() as { providerCode?: string } | undefined)?.providerCode }
+    }
+
+    it('keeps error.code from a clone and leaves the original body readable', async () => {
+      const { response, code } = await rejected('{"error":{"code":"usage_limit_reached","type":"x"}}')
+
+      expect(code).toBe('usage_limit_reached')
+      expect(await response.text()).toBe('{"error":{"code":"usage_limit_reached","type":"x"}}')
+    })
+
+    it('falls back to error.type', async () => {
+      expect((await rejected('{"error":{"type":"insufficient_quota"}}')).code).toBe('insufficient_quota')
+    })
+
+    it('reads a code split across chunks', async () => {
+      const encoder = new TextEncoder()
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('{"error":{"code":"usage_li'))
+          controller.enqueue(encoder.encode('mit_reached"}}'))
+          controller.close()
+        },
+      })
+
+      expect((await rejected(body)).code).toBe('usage_limit_reached')
+    })
+
+    it.each([
+      ['an absent body', null],
+      ['a non-JSON body', 'slow down'],
+      ['a JSON body without an error object', '{"error":"slow down"}'],
+      ['a non-object JSON body', '3'],
+      ['an error object without a code', '{"error":{"message":"m","code":""}}'],
+      ['a body over the limit', JSON.stringify({ error: { code: 'usage_limit_reached', pad: 'x'.repeat(20_000) } })],
+    ])('records no code for %s', async (_name, body) => {
+      expect((await rejected(body)).code).toBeUndefined()
+    })
+
+    it('records no code when the clone body fails mid-read', async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(new Error('socket reset')) },
+      })
+
+      expect((await rejected(body)).code).toBeUndefined()
+    })
+
+    it('reads no body for a status that is not 429', async () => {
+      expect((await rejected('{"error":{"code":"usage_limit_reached"}}', 503)).code).toBeUndefined()
+    })
   })
 
   it('lets a transport failure through without recording anything', async () => {
@@ -233,9 +290,29 @@ describe('Codex Responses over a signed-in grant', () => {
 
     const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
 
-    expect(finish).toMatchObject({ kind: 'error', failure: { status: 429, providerRetryAfterMs: 60_000 } })
+    // pi-ai flattens this rejection to "You have hit your ChatGPT usage limit.",
+    // so only the provider's structured code says the quota is exhausted.
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'QUOTA', status: 429, providerRetryAfterMs: 60_000 } })
+    expect(finish).not.toHaveProperty('failure.providerCode')
+    expect(resolveRetryPolicy(undefined, 'test').retryableCodes).not.toContain('QUOTA')
     expect(server.paths).toEqual(['/codex/responses'])
     expect(server.headers[0]).toMatchObject({ 'chatgpt-account-id': 'acct_fixture' })
+  })
+
+  it('keeps a transient Codex 429 a retryable rate limit', async () => {
+    const server = await mockServer([{
+      status: 429,
+      body: JSON.stringify({ error: { code: 'rate_limit_exceeded', resets_in_seconds: 2 } }),
+      headers: { 'retry-after': '2' },
+    }])
+    const ctx = await codex(server.url)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+
+    const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
+
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'RATE_LIMIT', status: 429, providerRetryAfterMs: 2000 } })
+    expect(finish).not.toHaveProperty('failure.providerCode')
+    expect(resolveRetryPolicy(undefined, 'test').retryableCodes).toContain('RATE_LIMIT')
   })
 
   it('never opens the WebSocket that would re-send a failed request over SSE', async () => {
