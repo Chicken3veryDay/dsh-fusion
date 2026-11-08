@@ -771,7 +771,7 @@ export class LlmRuntime extends TypertRemoteService {
    * @param signal - optional cancellation for an adapter lookup.
    * @returns whether the adapter lets the interface select the model.
    */
-  canSelectModel(provider: string, model: string, signal?: AbortSignal): Promise<boolean> {
+  async canSelectModel(provider: string, model: string, signal?: AbortSignal): Promise<boolean> {
     return this.registration(provider).adapter.canSelectModel(provider, model, signal)
   }
 

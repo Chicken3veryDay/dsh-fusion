@@ -99,6 +99,16 @@ describe('ACP model configuration control', () => {
     })
   })
 
+  it('offers only the models the provider lists and refuses a slug it withheld', async () => {
+    const listModels = vi.fn(() => Promise.resolve([{ provider: 'mock', id: 'mock', name: 'Mock' }]))
+    const { control } = await createControl(llmRuntime({ listModels }), { provider: 'mock', model: 'mock' })
+
+    const [model] = await control.options()
+
+    expect(model).toMatchObject({ options: [{ group: 'mock', options: [{ name: 'Mock' }] }] })
+    await expect(control.set('model', JSON.stringify(['mock', 'withheld']))).rejects.toThrow()
+  })
+
   it('rejects an unadvertised reasoning effort and accepts a later valid change', async () => {
     const { control, session } = await createControl(llmRuntime(), { provider: 'mock', model: 'mock' })
 

@@ -976,6 +976,21 @@ it('initializes the account model without reasoning metadata and rejects an empt
   })
 })
 
+it('accepts a selection its adapter resolves locally while the provider catalog is unreachable', async () => {
+  const { ctx } = await harness()
+  const { modelAvailable } = await import('../src/catalog.ts')
+  const listing = vi.fn(() => Promise.reject(new Error('models returned 503')))
+  ctx.llm.registerAdapter(['account'], new class extends CatalogAdapter {
+    override listModels(): Promise<readonly LlmModelInfo[]> { return listing() }
+    override canSelectModel(_provider: string, model: string): Promise<boolean> { return Promise.resolve(model === 'registered') }
+  }('Account', []))
+  try {
+    await expect(modelAvailable(ctx, { provider: 'account', model: 'registered' })).resolves.toBe(true)
+    await expect(modelAvailable(ctx, { provider: 'account', model: 'other' })).resolves.toBe(false)
+    expect(listing).not.toHaveBeenCalled()
+  } finally { await ctx.fiber.dispose() }
+})
+
 it.each([new Error('catalog disconnected'), 'catalog disconnected'])('reports catalog rejection as an unavailable selection: %s', async (failure) => {
   const { ctx } = await harness()
   const { modelAvailable } = await import('../src/catalog.ts')
