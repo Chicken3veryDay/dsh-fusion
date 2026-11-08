@@ -9,3 +9,4 @@ environment:
 header:
   class: sdk-unsupported-control-refusal
   pin: true
+  requests: 0

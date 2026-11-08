@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { expect, it } from 'vitest'
+import { parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
 import {
   assertSessionFixtureVersion,
   captureExpectedWorkspaceSnapshot,
@@ -158,20 +159,32 @@ it('keeps every recorded session owned, pinned, redacted, and header-scrubbed', 
     }
 
     if (manifest.header.pin === true) {
-      const promptSource = byKey.get(referencedScenario(scenario, manifest.header.systemPromptSource ?? scenario.name))
-      const schemaSource = byKey.get(referencedScenario(scenario, manifest.header.toolSchemasSource ?? scenario.name))
-      expect(promptSource, `${key}: system-prompt source`).toBeDefined()
-      expect(schemaSource, `${key}: tool-schema source`).toBeDefined()
-      expect(existsSync(join((promptSource as Scenario).dir, 'system-prompt.expected.md')), `${key}: system-prompt sidecar`).toBe(true)
-      expect(existsSync(join((schemaSource as Scenario).dir, 'tool-schemas.expected.json')), `${key}: tool-schema sidecar`).toBe(true)
-      for (const [field, source] of [
-        ['system-prompt.expected.md', promptSource],
-        ['tool-schemas.expected.json', schemaSource],
-      ] as const) {
-        const local = join(dir, field)
-        if (!existsSync(local) || !(await lstat(local)).isSymbolicLink()) continue
-        expect(await realpath(local), `${key}: ${field} symlink follows its manifest source`)
-          .toBe(await realpath(join((source as Scenario).dir, field)))
+      if (manifest.header.requests === 0) {
+        const paths = manifest.session === undefined
+          ? sessionFixtureNames(localEntries).map(name => join(dir, name))
+          : [resolve(dir, manifest.session.source)]
+        for (const path of paths) {
+          expect(parseSessionLog(await readFile(path, 'utf8')).filter(event => event.type === 'request/header'),
+            `${key}: empty request pin contains a request header`).toEqual([])
+        }
+        expect(existsSync(join(dir, 'system-prompt.expected.md')), `${key}: empty request pin owns a system-prompt sidecar`).toBe(false)
+        expect(existsSync(join(dir, 'tool-schemas.expected.json')), `${key}: empty request pin owns a tool-schema sidecar`).toBe(false)
+      } else {
+        const promptSource = byKey.get(referencedScenario(scenario, manifest.header.systemPromptSource ?? scenario.name))
+        const schemaSource = byKey.get(referencedScenario(scenario, manifest.header.toolSchemasSource ?? scenario.name))
+        expect(promptSource, `${key}: system-prompt source`).toBeDefined()
+        expect(schemaSource, `${key}: tool-schema source`).toBeDefined()
+        expect(existsSync(join((promptSource as Scenario).dir, 'system-prompt.expected.md')), `${key}: system-prompt sidecar`).toBe(true)
+        expect(existsSync(join((schemaSource as Scenario).dir, 'tool-schemas.expected.json')), `${key}: tool-schema sidecar`).toBe(true)
+        for (const [field, source] of [
+          ['system-prompt.expected.md', promptSource],
+          ['tool-schemas.expected.json', schemaSource],
+        ] as const) {
+          const local = join(dir, field)
+          if (!existsSync(local) || !(await lstat(local)).isSymbolicLink()) continue
+          expect(await realpath(local), `${key}: ${field} symlink follows its manifest source`)
+            .toBe(await realpath(join((source as Scenario).dir, field)))
+        }
       }
     }
 

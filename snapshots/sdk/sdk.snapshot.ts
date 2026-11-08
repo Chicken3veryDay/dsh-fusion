@@ -607,6 +607,9 @@ function modelFromSession(scenario: CorpusScenario, log: string): { provider: st
       return { provider: config.provider, model: config.model }
     }
   }
+  if (scenario.manifest.header.requests !== 0) {
+    throw new Error(`${scenario.name}: SDK snapshot session has no request model and does not declare header.requests: 0`)
+  }
   const { DSH_SNAPSHOT_PROVIDER: provider, DSH_SNAPSHOT_MODEL: model } = scenario.manifest.environment ?? {}
   if (provider !== undefined && model !== undefined) return { provider, model }
   throw new Error(`${scenario.name}: SDK snapshot session has no request model and its manifest declares no route`)
@@ -1041,7 +1044,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
           result = outcome
         }
         results.push(result)
-        if (scenario.name === 'unsupported-control-refusal') {
+        if (scenario.manifest.header.requests === 0) {
           expect(result.events.filter(event => event.type === 'request/header'),
             'refusal must settle without request admission before waiting for trailing events').toEqual([])
         }
@@ -1141,8 +1144,15 @@ async function writeHeaderSidecars(
   ctx: NormalizeContext,
 ): Promise<void> {
   const pinned = ordered[0]
-  // A pinned scenario whose primary log never reached a request has no header, prompt or schema to snapshot.
-  if (scenario.manifest.header.pin === true && pinned !== undefined && normalizedHeaders(pinned.content, ctx).length > 0) {
+  if (scenario.manifest.header.requests === 0) {
+    for (const [index, log] of ordered.entries()) {
+      expect(normalizedHeaders(log.content, ctx), `${scenario.name}: session ${index} logged a request header`).toEqual([])
+    }
+    return
+  }
+  if (scenario.manifest.header.pin === true) {
+    if (pinned === undefined) throw new Error(`${scenario.name}: no primary header to snapshot`)
+    expect(normalizedHeaders(pinned.content, ctx), `${scenario.name}: request pin has no request header`).not.toEqual([])
     const primary = pinned
     const prompts = normalizedSystemPrompts(primary.content, ctx)
     const schemas = normalizedToolSchemas(primary.content, ctx)
@@ -1194,13 +1204,14 @@ async function verifyHeaders(
     sessionIds: [],
     cwd: typeof pinHeader.cwd === 'string' ? pinHeader.cwd : '\0no-cwd\0',
   })
-  if (pinned.length === 0) {
-    // The pin's fixture never reached a request, so no sidecar exists; no persisted log may log one either.
+  if (pin.manifest.header.requests === 0) {
+    expect(pinned, `${scenario.name}: empty request pin contains a request header`).toEqual([])
     for (const [logIndex, log] of ordered.entries()) {
       expect(normalizedHeaders(log.content, ctx), `${scenario.name}: session ${logIndex} logged a request header`).toEqual([])
     }
     return
   }
+  expect(pinned, `${scenario.name}: request pin has no request header`).not.toEqual([])
   const promptOwner = sourceScenario(pin, pin.manifest.header.systemPromptSource)
   const schemaOwner = sourceScenario(pin, pin.manifest.header.toolSchemasSource)
   const prompt = await readFile(join(promptOwner.dir, 'system-prompt.expected.md'), 'utf8')

@@ -135,6 +135,34 @@ describe('snapshot manifest', () => {
     })
   })
 
+  it.each(['sdk', 'sdk-minimal'])('pins an explicitly empty request sequence for %s', (profile) => {
+    expect(parseSnapshotManifest(`version: 1\nprofile: ${profile}\nheader:\n  class: refusal\n  pin: true\n  requests: 0\n`).header)
+      .toEqual({ class: 'refusal', pin: true, requests: 0 })
+  })
+
+  it.each(['headless', 'acp', 'web'])('refuses empty request declarations on %s', (profile) => {
+    expect(() => parseSnapshotManifest(`version: 1\nprofile: ${profile}\nheader:\n  class: refusal\n  pin: true\n  requests: 0\n`))
+      .toThrow('manifest.header.requests requires an SDK profile')
+  })
+
+  it.each([-1, 1, true, '0'])('rejects invalid empty request declarations: %s', (value) => {
+    expect(() => parseSnapshotManifest(`version: 1\nprofile: sdk\nheader:\n  class: refusal\n  pin: true\n  requests: ${JSON.stringify(value)}\n`))
+      .toThrow('manifest.header.requests must equal 0 when present')
+  })
+
+  it('requires empty request sequences to own their pin', () => {
+    expect(() => parseSnapshotManifest('version: 1\nprofile: sdk\nheader:\n  class: refusal\n  requests: 0\n'))
+      .toThrow('manifest.header.requests requires pin: true')
+  })
+
+  it.each([
+    'systemPromptSource: other', 'toolSchemasSource: other',
+    'childSystemPrompts: [1]', 'childToolSchemas: [1]',
+  ])('refuses sidecar declarations for empty requests: %s', (field) => {
+    expect(() => parseSnapshotManifest(`version: 1\nprofile: sdk\nheader:\n  class: refusal\n  pin: true\n  requests: 0\n  ${field}\n`))
+      .toThrow('manifest.header.requests cannot declare parent or child sidecar sources')
+  })
+
   it('parses independently optional header and input fields', () => {
     expect(parseSnapshotManifest([
       'version: 1',

@@ -15,6 +15,8 @@ export interface SnapshotHeaderManifest {
   class: string
   /** Whether this scenario owns the class's tokenized header sequence. */
   pin?: true
+  /** SDK-only pin for selected Sessions with no model requests or prompt/schema sidecars. */
+  requests?: 0
   /** Scenario that owns the readable system-prompt sidecar. */
   systemPromptSource?: string
   /** Scenario that owns the readable tool-schema sidecar. */
@@ -250,6 +252,7 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       exactKeys(value, [
         'class',
         'pin',
+        'requests',
         'systemPromptSource',
         'toolSchemasSource',
         'childSystemPrompts',
@@ -260,6 +263,19 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       if (value.pin !== undefined && value.pin !== true) {
         throw new Error('manifest.header.pin must equal true when present')
       }
+      if (value.requests !== undefined && value.requests !== 0) {
+        throw new Error('manifest.header.requests must equal 0 when present')
+      }
+      if (value.requests === 0) {
+        if (root.profile !== 'sdk' && root.profile !== 'sdk-minimal') {
+          throw new Error('manifest.header.requests requires an SDK profile')
+        }
+        if (value.pin !== true) throw new Error('manifest.header.requests requires pin: true')
+        if (['systemPromptSource', 'toolSchemasSource', 'childSystemPrompts', 'childToolSchemas']
+          .some(field => value[field] !== undefined)) {
+          throw new Error('manifest.header.requests cannot declare parent or child sidecar sources')
+        }
+      }
       for (const field of ['changes', 'promptChanges'] as const) {
         if (value[field] !== undefined && (!Number.isInteger(value[field]) || Number(value[field]) < 0)) {
           throw new Error(`manifest.header.${field} must be a non-negative integer`)
@@ -268,6 +284,7 @@ export function parseSnapshotManifest(source: string, path = 'snapshot.yml'): Sn
       header = {
         class: name(value.class, 'manifest.header.class'),
         ...(value.pin === true ? { pin: true as const } : {}),
+        ...(value.requests === 0 ? { requests: 0 as const } : {}),
         ...(value.systemPromptSource === undefined
           ? {}
           : { systemPromptSource: scenarioSource(value.systemPromptSource, 'manifest.header.systemPromptSource') }),
