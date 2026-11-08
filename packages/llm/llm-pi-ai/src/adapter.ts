@@ -49,6 +49,7 @@ import {
 import type {
   GenerateOptions,
   ImageAttachmentAccess,
+  LlmFailure,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -60,6 +61,8 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
+import { observeAccountStream } from './account-pool.ts'
+import type { AccountLease, AccountPool } from './account-pool.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
@@ -89,6 +92,58 @@ interface PiAiSnapshot {
   profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>
   /** Providers for exactly those profiles; never mutated once published. */
   models: Models
+  /** The account pool this snapshot was built with, when a route configures accounts. */
+  pool: AccountPool | undefined
+  /**
+   * One collection per pooled account, each over that account's own credential
+   * store. A pooled request authenticates only through one of these, never
+   * through `models`, whose store is the shared sign-in document.
+   */
+  accounts: ReadonlyMap<string, Models>
+}
+
+/** One authentication resolution of a request: the explicit key and the checked result. */
+interface AuthBinding {
+  readonly apiKey: string | undefined
+  readonly checked?: CheckedAuth
+}
+
+/** The collection and credential store one authentication resolution reads. */
+interface AuthScope {
+  readonly models: Models
+  readonly credentials: CredentialStore
+}
+
+/**
+ * What a pooled request claimed: an account with its authentication, an
+ * account whose authentication failed in a way the stream reports, or the
+ * failure that every signed-in account is cooling.
+ */
+type PoolClaim =
+  | { readonly kind: 'cooling'; readonly failure: LlmFailure }
+  | {
+    readonly kind: 'bound'
+    readonly pool: AccountPool
+    readonly lease: AccountLease
+    readonly fingerprint: string
+    readonly binding: AuthBinding
+  }
+  | {
+    readonly kind: 'failed'
+    readonly pool: AccountPool
+    readonly lease: AccountLease
+    readonly fingerprint: string
+    readonly error: unknown
+  }
+
+/** A stream whose only chunk is the terminal failure of a request that never reached a provider. */
+async function* failedStream(failure: LlmFailure): AsyncGenerator<StreamChunk> {
+  yield { type: 'finish', reason: { kind: 'error', failure } }
+}
+
+/** A stream that reports a failure the request already met before streaming. */
+async function* throwingStream(error: unknown): AsyncGenerator<StreamChunk> {
+  throw error
 }
 
 /**
@@ -134,6 +189,14 @@ export interface PiAiAdapterOptions {
    * @returns headers to pass to pi-ai after applying Harness attribution.
    */
   prepareHeaders?: (request: PiAiRequestHeaderContext, headers: Headers) => Headers
+  /**
+   * The current account pool of a route that configures `accounts`; called
+   * once per operation. A pooled route whose profile and pool facts disagree
+   * (a reconfiguration still being applied) fails closed with
+   * `ACCOUNT_POOL_UNAVAILABLE` instead of authenticating through the shared
+   * sign-in document.
+   */
+  accountPool?: () => AccountPool | undefined
   /** Resolve the optional durable attachment service at request time. */
   resolveAttachments?: () => AttachmentStore | undefined
   /** Bridge one attachment reference into the current model-tool execution world. */
@@ -328,13 +391,39 @@ export class PiAiAdapter extends LlmAdapter {
    */
   private current(): PiAiSnapshot {
     const profiles = this.config.profiles()
-    if (this.snapshot?.profiles === profiles) return this.snapshot
-    const models: MutableModels = createModels(this.config.auth)
-    for (const profile of profiles.values()) {
-      if (profile.piProvider !== undefined) models.setProvider(profile.piProvider)
+    const pool = this.config.accountPool?.()
+    if (this.snapshot?.profiles === profiles && this.snapshot.pool === pool) return this.snapshot
+    const build = (auth: PiAiAuthInjection): MutableModels => {
+      const models = createModels(auth)
+      for (const profile of profiles.values()) {
+        if (profile.piProvider !== undefined) models.setProvider(profile.piProvider)
+      }
+      return models
     }
-    this.snapshot = { profiles, models }
+    const accounts = new Map<string, Models>()
+    if (pool !== undefined) {
+      for (const account of pool.accounts) {
+        accounts.set(account, build({ credentials: pool.store(account), authContext: this.config.auth.authContext }))
+      }
+    }
+    this.snapshot = { profiles, models: build(this.config.auth), pool, accounts }
     return this.snapshot
+  }
+
+  /**
+   * The pool a pooled route's snapshot holds, or the failure that the route
+   * cannot authenticate: the pool is missing, or was built for another
+   * configuration than the profile's.
+   */
+  private poolOf(snapshot: PiAiSnapshot, profile: ResolvedPiAiProviderProfile): AccountPool {
+    const { pool } = snapshot
+    if (pool === undefined || pool.facts !== profile.accountPool?.facts) {
+      throw new LlmError(
+        'The Claude account pool is not ready for this configuration; retry shortly. The shared sign-in and API-key billing were not used.',
+        'ACCOUNT_POOL_UNAVAILABLE',
+      )
+    }
+    return pool
   }
 
   /** The profile for one route within one snapshot, or the not-owned failure. */
@@ -389,6 +478,9 @@ export class PiAiAdapter extends LlmAdapter {
    *   the credential store also receives.
    * @param headers - the request headers this call will send.
    * @param preparing - stop after each cancelled await before publishing preparation.
+   * @param scope - the collection and store of the pooled account this call
+   *   authenticates as. A route that configures an account pool refuses a call
+   *   without one, so no path reaches the shared sign-in document by omission.
    * @returns the explicit credential to pass as the request's `apiKey`, if any,
    *   and the checked resolution when one was made.
    */
@@ -400,7 +492,15 @@ export class PiAiAdapter extends LlmAdapter {
     signal?: AbortSignal,
     headers: Readonly<Record<string, string>> = {},
     preparing = false,
-  ): Promise<{ apiKey: string | undefined; checked?: CheckedAuth }> {
+    scope?: AuthScope,
+  ): Promise<AuthBinding> {
+    if (profile.accountPool !== undefined && scope === undefined) {
+      throw new LlmError(
+        `The "${provider}" route pools several accounts; authentication needs a selected account. The shared sign-in was not used.`,
+        'ACCOUNT_POOL_UNAVAILABLE',
+      )
+    }
+    const { models, credentials } = scope ?? { models: snapshot.models, credentials: this.config.auth.credentials }
     // A lookup stops at the first wait that outlives its bounds; a request
     // leaves its caller's abort to the dispatch, which reports an aborted finish.
     const lookup = model === undefined || preparing ? signal : undefined
@@ -408,7 +508,7 @@ export class PiAiAdapter extends LlmAdapter {
     lookup?.throwIfAborted()
     const messages = model?.api === 'anthropic-messages'
     const stored = explicit === undefined && (provider === 'openai' || provider === 'anthropic' || profile.requiresStoredCredential === true)
-      ? await this.config.auth.credentials.read(provider, lookup === undefined ? undefined : { signal: lookup })
+      ? await credentials.read(provider, lookup === undefined ? undefined : { signal: lookup })
       : undefined
     lookup?.throwIfAborted()
     if (explicit === undefined && profile.requiresStoredCredential === true && stored === undefined) {
@@ -418,7 +518,7 @@ export class PiAiAdapter extends LlmAdapter {
     }
     if (provider === 'openai' && model !== undefined && stored?.type === 'oauth') {
       if (model.api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
-      return { apiKey: undefined, checked: { ok: true, result: structuredClone(await chatgptAuth(snapshot.models, signal, model)) } }
+      return { apiKey: undefined, checked: { ok: true, result: structuredClone(await chatgptAuth(models, signal, model)) } }
     }
     if (provider !== 'anthropic' && !messages && !(provider === 'openai' && model?.api === 'openai-responses')) return { apiKey: explicit }
     if (provider === 'anthropic' && stored?.type === 'oauth') {
@@ -442,8 +542,8 @@ export class PiAiAdapter extends LlmAdapter {
     }
     try {
       resolved = await (model === undefined
-        ? snapshot.models.getAuth(provider, authOptions)
-        : snapshot.models.getAuth(model, authOptions))
+        ? models.getAuth(provider, authOptions)
+        : models.getAuth(model, authOptions))
     }
     catch (error) {
       if (error instanceof ModelsError) return { apiKey: explicit, checked: { ok: false, error } }
@@ -529,6 +629,18 @@ export class PiAiAdapter extends LlmAdapter {
     profile: ResolvedPiAiProviderProfile,
     signal: AbortSignal,
   ): Promise<readonly LlmModelInfo[]> {
+    if (profile.accountPool !== undefined) {
+      // A listing selects no account and refreshes no grant: it reads each
+      // account's own store and offers the catalog while any account is signed in.
+      if (!await this.poolOf(snapshot, profile).hasGrant(signal)) return []
+      signal.throwIfAborted()
+      return snapshot.models.getModels(provider).map(model => ({
+        provider,
+        id: model.id,
+        name: model.name,
+        inputModalities: [...model.input],
+      }))
+    }
     let apiKey: string | undefined
     try { ({ apiKey } = await this.requestAuth(snapshot, provider, profile, undefined, signal)) }
     catch (error) {
@@ -602,6 +714,9 @@ export class PiAiAdapter extends LlmAdapter {
       const snapshot = this.current()
       const profile = this.profileOf(snapshot, provider)
       return this.lookup(profile, signal, async (bounded) => {
+        if (profile.accountPool !== undefined) {
+          return (await this.offers(snapshot, provider, profile, bounded)).some(entry => entry.id === model)
+        }
         let apiKey: string | undefined
         try { ({ apiKey } = await this.requestAuth(snapshot, provider, profile, undefined, bounded)) }
         catch (error) {
@@ -653,12 +768,15 @@ export class PiAiAdapter extends LlmAdapter {
     return Promise.resolve().then(() => {
       const profile = this.profileOf(snapshot, provider)
       const piModel = structuredClone(this.modelOf(snapshot, provider, model))
-      const stream = (options: GenerateOptions) => this.streamWithSnapshot(options, snapshot, undefined, piModel)
+      const stream = (options: GenerateOptions) => this.streamOf(options, snapshot, piModel)
       return {
         model: this.modelInfo(snapshot, provider, model),
         assessControls: controls => assessPiAiControls(piModel, profile, controls),
         finalizeControls: async (controls, caller) => {
           const assessment = assessPiAiControls(piModel, profile, controls)
+          if (profile.accountPool !== undefined) {
+            return this.finalizePooled(snapshot, profile, piModel, assessment, caller)
+          }
           const anthropic = piModel.provider === 'anthropic' && piModel.api === 'anthropic-messages'
           const openai = piModel.provider === 'openai' && piModel.api === 'openai-responses'
             && (controls.temperature !== undefined || controls.maxTokens !== undefined)
@@ -708,7 +826,168 @@ export class PiAiAdapter extends LlmAdapter {
   }
 
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    return this.streamWithSnapshot(options, this.current())
+    return this.streamOf(options, this.current())
+  }
+
+  /**
+   * One unbound stream call: a pooled route claims its own account first, every
+   * other route resolves its authentication inside the stream as before.
+   */
+  private streamOf(options: GenerateOptions, snapshot: PiAiSnapshot, model?: Model<Api>): AsyncIterable<StreamChunk> {
+    return snapshot.profiles.get(options.provider)?.accountPool === undefined
+      ? this.streamWithSnapshot(options, snapshot, undefined, model)
+      : this.pooledStream(options, snapshot, model)
+  }
+
+  private async * pooledStream(options: GenerateOptions, snapshot: PiAiSnapshot, captured?: Model<Api>): AsyncIterable<StreamChunk> {
+    const profile = this.profileOf(snapshot, options.provider)
+    const model = captured ?? this.modelOf(snapshot, options.provider, options.model)
+    let claim: PoolClaim
+    try { claim = await this.claimAccount(snapshot, profile, model, options.signal) }
+    catch (error) {
+      if (options.signal?.aborted) throw new LlmError('pi-ai request aborted by caller', 'ABORTED', { cause: error })
+      throw error
+    }
+    yield * this.streamClaim(claim, options, snapshot, model)
+  }
+
+  /** The stream of one claim: the account's request, its stored failure, or the cooling report. */
+  private streamClaim(
+    claim: PoolClaim,
+    options: GenerateOptions,
+    snapshot: PiAiSnapshot,
+    model: Model<Api>,
+  ): AsyncIterable<StreamChunk> {
+    if (claim.kind === 'cooling') return failedStream(claim.failure)
+    const inner = claim.kind === 'failed'
+      ? throwingStream(claim.error)
+      : this.streamWithSnapshot(options, snapshot, claim.binding, model)
+    return observeAccountStream(claim.pool, claim.lease, claim.fingerprint, inner)
+  }
+
+  /**
+   * Prepare a pooled call: claim one account and authenticate as it, once, for
+   * this call. Aborting or failing here releases the claim; an unstreamed
+   * prepared call's claim stops counting as load when its reservation expires.
+   */
+  private async finalizePooled(
+    snapshot: PiAiSnapshot,
+    profile: ResolvedPiAiProviderProfile,
+    piModel: Model<Api>,
+    assessment: ReturnType<typeof assessPiAiControls>,
+    caller: AbortSignal | undefined,
+  ): Promise<{ assessment: ReturnType<typeof assessPiAiControls>; systemPromptPrefix: string; stream: PreparedAdapterCall['stream'] }> {
+    const signal = AbortSignal.any([caller, this.config.lifetime].filter(entry => entry !== undefined))
+    const settled = Promise.withResolvers<PoolClaim>()
+    const release = (claim: PoolClaim): void => { if (claim.kind !== 'cooling') claim.pool.release(claim.lease) }
+    const onAbort = (): void => { settled.reject(new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      if (signal.aborted) onAbort()
+      else {
+        this.claimAccount(snapshot, profile, piModel, signal).then((claim) => {
+          // An abort that won the race left nobody to own this claim.
+          if (signal.aborted) release(claim)
+          else settled.resolve(claim)
+        }, settled.reject)
+      }
+      let claim: PoolClaim
+      try { claim = await settled.promise }
+      catch (error) {
+        if (signal.aborted) throw new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })
+        throw error
+      }
+      if (signal.aborted) {
+        release(claim)
+        throw new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })
+      }
+      return {
+        assessment,
+        systemPromptPrefix: ANTHROPIC_OAUTH_SYSTEM_PREFIX,
+        stream: options => this.streamClaim(claim, options, snapshot, piModel),
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /**
+   * Claim the best eligible account and authenticate as it. An account whose
+   * grant is missing, revoked or rejected is marked signed out and skipped; a
+   * failure that is not about the grant stays with the claim so the stream
+   * reports it to the retry owner. When no account is eligible the result is
+   * the earliest cooling reset, or a terminal AUTH when every account is signed
+   * out. Every path that throws has released the claim it took.
+   */
+  private async claimAccount(
+    snapshot: PiAiSnapshot,
+    profile: ResolvedPiAiProviderProfile,
+    model: Model<Api>,
+    signal?: AbortSignal,
+  ): Promise<PoolClaim> {
+    const pool = this.poolOf(snapshot, profile)
+    if (model.api !== 'anthropic-messages') {
+      throw new LlmError('The Claude account pool requires the anthropic-messages protocol.', 'INVALID_CONFIG')
+    }
+    await pool.readmit(signal)
+    for (;;) {
+      signal?.throwIfAborted()
+      const lease = pool.acquire()
+      if (lease === undefined) {
+        const reset = pool.earliestReset()
+        if (reset === undefined) throw pool.signedOutError()
+        return { kind: 'cooling', failure: pool.coolingFailure(reset) }
+      }
+      try {
+        const outcome = await this.authenticateAccount(snapshot, profile, model, pool, lease.account, signal)
+        signal?.throwIfAborted()
+        if (outcome.kind === 'rejected') {
+          pool.release(lease)
+          pool.markSignedOut(lease.account, outcome.fingerprint)
+          continue
+        }
+        return { ...outcome, pool, lease }
+      } catch (error) {
+        pool.release(lease)
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Authenticate as one account, reading and refreshing only that account's
+   * own credentials document. The grant fingerprint is read after the attempt,
+   * so a refresh the attempt performed does not look like a later change.
+   */
+  private async authenticateAccount(
+    snapshot: PiAiSnapshot,
+    profile: ResolvedPiAiProviderProfile,
+    model: Model<Api>,
+    pool: AccountPool,
+    account: string,
+    signal?: AbortSignal,
+  ): Promise<
+    | { readonly kind: 'rejected'; readonly fingerprint: string }
+    | { readonly kind: 'bound'; readonly fingerprint: string; readonly binding: AuthBinding }
+    | { readonly kind: 'failed'; readonly fingerprint: string; readonly error: unknown }
+  > {
+    const models = snapshot.accounts.get(account)
+    if (models === undefined) throw new LlmError(`The Claude account "${account}" has no collection in this configuration.`, 'ACCOUNT_POOL_UNAVAILABLE')
+    const scope: AuthScope = { models, credentials: pool.store(account) }
+    let binding: AuthBinding
+    try { binding = await this.requestAuth(snapshot, model.provider, profile, model, signal, {}, true, scope) }
+    catch (error) {
+      signal?.throwIfAborted()
+      const fingerprint = await pool.fingerprint(account, signal)
+      return error instanceof LlmError && ['AUTH', 'MISSING_CREDENTIAL'].includes(error.code)
+        ? { kind: 'rejected', fingerprint }
+        : { kind: 'failed', fingerprint, error }
+    }
+    const fingerprint = await pool.fingerprint(account, signal)
+    if (binding.checked?.ok === false && classifyPiAiError(binding.checked.error.message) === 'AUTH') {
+      return { kind: 'rejected', fingerprint }
+    }
+    return { kind: 'bound', fingerprint, binding }
   }
 
   private async * streamWithSnapshot(

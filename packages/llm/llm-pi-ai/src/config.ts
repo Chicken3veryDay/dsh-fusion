@@ -12,6 +12,7 @@
  *
  * @module dsh-llm-pi-ai/config
  */
+import { isAbsolute, resolve as resolvePath } from 'node:path'
 import type { Volatile } from '@deepseek-ai/cordis'
 
 import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
@@ -203,11 +204,63 @@ export interface PiAiProviderProfile {
   requestImageMaxBytes?: number
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
+  /**
+   * Claude subscription accounts this `anthropic` route chooses between for
+   * each request. Every entry names one credentials document that keeps its own
+   * grant, refresh token and refresh lock. The route authenticates only through
+   * these documents (never `$DSH_HOME/.credentials.yaml`, an API key or the
+   * environment); an empty list is the same as omitting the field. Only the
+   * `anthropic` route accepts it, and not beside `apiKeyEnv`.
+   */
+  accounts?: PiAiAccountProfile[]
+  /** Fallback cooldown in milliseconds for an account whose rate limit named no delay (default 300000). Only with `accounts`. */
+  accountRateLimitCooldownMs?: number
+  /** Fallback cooldown in milliseconds for an account whose quota failure named no delay (default 3600000). Only with `accounts`. */
+  accountQuotaCooldownMs?: number
+  /**
+   * How long a prepared call that never starts streaming keeps its account
+   * counted as busy, in milliseconds (default 30000). Only with `accounts`.
+   */
+  accountReservationMs?: number
+}
+
+/** One Claude subscription account of a pooled `anthropic` route. */
+export interface PiAiAccountProfile {
+  /** Stable lowercase hyphenated name; appears in diagnostics, never in requests. */
+  id: string
+  /** Absolute path of this account's credentials document, readable only by its owner. */
+  credentialsPath: string
+}
+
+/** Default cooldown of an account whose rate limit named no delay. */
+export const DEFAULT_ACCOUNT_RATE_LIMIT_COOLDOWN_MS = 300_000
+
+/** Default cooldown of an account whose quota failure named no delay. */
+export const DEFAULT_ACCOUNT_QUOTA_COOLDOWN_MS = 3_600_000
+
+/** Default lifetime of an account reservation whose prepared call never streams. */
+export const DEFAULT_ACCOUNT_RESERVATION_MS = 30_000
+
+/** The validated account pool of one `anthropic` route, with every default resolved. */
+export interface ResolvedAccountPool {
+  /** Accounts in configuration order; ids and resolved paths are unique. */
+  readonly accounts: readonly Readonly<PiAiAccountProfile>[]
+  /** Cooldown applied to a rate-limited account that named no delay. */
+  readonly rateLimitCooldownMs: number
+  /** Cooldown applied to a quota-exhausted account that named no delay. */
+  readonly quotaCooldownMs: number
+  /** Lifetime of a reservation whose prepared call never streams. */
+  readonly reservationMs: number
+  /** Stable identity of the above; two pools with equal facts are interchangeable. */
+  readonly facts: string
 }
 
 /** Validated profile with its route stamped and every adapter-owned default resolved. */
 export interface ResolvedPiAiProviderProfile
-  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'retryPolicy' | 'models' | 'displayName' | 'signInOnly'> {
+  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'retryPolicy' | 'models' | 'displayName' | 'signInOnly'
+    | 'accounts' | 'accountRateLimitCooldownMs' | 'accountQuotaCooldownMs' | 'accountReservationMs'> {
+  /** The account pool this route chooses from; present only for a pooled `anthropic` route. */
+  accountPool?: ResolvedAccountPool
   /** Harness route key and the `Models` collection key (the configuration dict key). */
   provider: string
   /**
@@ -378,6 +431,13 @@ const profile = z.object({
   requestImagePixelBudget: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET),
   requestImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
   retryPolicy: RetryPolicySchema,
+  accounts: z.array(z.object({
+    id: z.string().required(),
+    credentialsPath: z.string().required(),
+  })),
+  accountRateLimitCooldownMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS),
+  accountQuotaCooldownMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS),
+  accountReservationMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS),
 })
 
 /** Runtime schema for {@link Config}. */
@@ -415,6 +475,69 @@ function rejectRemovedFields(provider: string, source: PiAiProviderProfile): voi
       + ' compose agent recovery with dsh-llm-retry',
     )
   }
+}
+
+/** Account ids are lowercase hyphenated words, safe to print in diagnostics. */
+const ACCOUNT_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * Validate and resolve a route's account pool.
+ * @param provider - the route key.
+ * @param source - the unresolved profile.
+ * @returns the resolved pool, or undefined when the route names no accounts.
+ * @throws Error naming the route and the field that cannot be served.
+ */
+function resolveAccountPool(provider: string, source: PiAiProviderProfile): ResolvedAccountPool | undefined {
+  const { accounts } = source
+  const tunables = ['accountRateLimitCooldownMs', 'accountQuotaCooldownMs', 'accountReservationMs'] as const
+  if (accounts === undefined || accounts.length === 0) {
+    const stray = tunables.find(name => source[name] !== undefined)
+    if (stray !== undefined) throw new Error(`llm-pi-ai: provider "${provider}" sets ${stray} without accounts`)
+    return undefined
+  }
+  if (provider !== 'anthropic') {
+    throw new Error(`llm-pi-ai: provider "${provider}" sets accounts; only the "anthropic" route chooses between subscription accounts`)
+  }
+  if (source.apiKeyEnv !== undefined) {
+    throw new Error('llm-pi-ai: provider "anthropic" sets accounts beside apiKeyEnv; a subscription pool never falls back to an API key')
+  }
+  const ids = new Set<string>()
+  const paths = new Set<string>()
+  for (const account of accounts) {
+    if (!ACCOUNT_ID.test(account.id)) {
+      throw new Error(`llm-pi-ai: provider "anthropic" account id ${JSON.stringify(account.id)} must be lowercase words joined by hyphens`)
+    }
+    if (!isAbsolute(account.credentialsPath)) {
+      throw new Error(`llm-pi-ai: provider "anthropic" account "${account.id}" credentialsPath must be an absolute path`)
+    }
+    const path = resolvePath(account.credentialsPath)
+    if (ids.has(account.id)) throw new Error(`llm-pi-ai: provider "anthropic" repeats account id "${account.id}"`)
+    if (paths.has(path)) {
+      throw new Error(`llm-pi-ai: provider "anthropic" account "${account.id}" repeats a credentials document another account uses`)
+    }
+    ids.add(account.id)
+    paths.add(path)
+  }
+  const rateLimitCooldownMs = source.accountRateLimitCooldownMs ?? DEFAULT_ACCOUNT_RATE_LIMIT_COOLDOWN_MS
+  const quotaCooldownMs = source.accountQuotaCooldownMs ?? DEFAULT_ACCOUNT_QUOTA_COOLDOWN_MS
+  const reservationMs = source.accountReservationMs ?? DEFAULT_ACCOUNT_RESERVATION_MS
+  for (const [name, value] of [
+    ['accountRateLimitCooldownMs', rateLimitCooldownMs],
+    ['accountQuotaCooldownMs', quotaCooldownMs],
+    ['accountReservationMs', reservationMs],
+  ] as const) {
+    if (!Number.isFinite(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
+      throw new Error(`llm-pi-ai: provider "anthropic" ${name} must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`)
+    }
+  }
+  const resolvedAccounts = accounts.map(account => Object.freeze({ id: account.id, credentialsPath: resolvePath(account.credentialsPath) }))
+  return Object.freeze({
+    accounts: Object.freeze(resolvedAccounts),
+    rateLimitCooldownMs,
+    quotaCooldownMs,
+    reservationMs,
+    facts: JSON.stringify([resolvedAccounts, rateLimitCooldownMs, quotaCooldownMs, reservationMs]),
+  })
 }
 
 /** Reject a profile header that Fetch cannot put on a provider request. */
@@ -458,6 +581,7 @@ export function resolveProfiles(
       throw new Error(`llm-pi-ai: provider "${provider}" has an empty displayName`)
     }
     assertValidHeaders(provider, source.headers)
+    const accountPool = resolveAccountPool(provider, source)
     const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
     if (!Number.isFinite(streamIdleTimeoutMs)
       || streamIdleTimeoutMs <= 0
@@ -525,13 +649,18 @@ export function resolveProfiles(
       if (validation === 'strict' || !(error instanceof PiAiCatalogError)) throw error
       catalogError ??= error.message
     }
-    const { apiKeyEnv, retryPolicy, signInOnly, models: _models, displayName: _displayName, ...rest } = source
+    const {
+      apiKeyEnv, retryPolicy, signInOnly, models: _models, displayName: _displayName,
+      accounts: _accounts, accountRateLimitCooldownMs: _rateLimit, accountQuotaCooldownMs: _quota,
+      accountReservationMs: _reservation, ...rest
+    } = source
     resolved.set(provider, {
       ...rest,
       provider,
       displayName,
       ...apiKeyEnv === undefined ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },
-      ...signInOnly === true ? { requiresStoredCredential: true } : {},
+      ...signInOnly === true || accountPool !== undefined ? { requiresStoredCredential: true } : {},
+      ...accountPool === undefined ? {} : { accountPool },
       streamIdleTimeoutMs,
       modelListTimeoutMs,
       maxRequestImageBytes,

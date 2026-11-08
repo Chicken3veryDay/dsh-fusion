@@ -39,6 +39,12 @@
       "path": "../../credentials/authorization"
     },
     {
+      "path": "../../credentials/credentials-local"
+    },
+    {
+      "path": "../../core/agent"
+    },
+    {
       "path": "../../util/timeout"
     },
     {

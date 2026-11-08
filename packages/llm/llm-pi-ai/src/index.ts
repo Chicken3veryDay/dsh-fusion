@@ -57,16 +57,26 @@
 import type {} from '@deepseek-ai/dsh-settings'
 
 import type {} from '@deepseek-ai/cordis-plugin-loader'
+import type {} from '@deepseek-ai/dsh-agent'
 
+import type { CredentialStore } from '@earendil-works/pi-ai'
 import { symbols } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
+import {
+  ACCOUNT_QUOTA_EXCEEDED_CODE,
+  assertUsableApiKey,
+  LlmError,
+  QUOTA_EXCEEDED_CODE,
+  resolveImageAttachmentAccess,
+} from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-fs'
 import { credentialKeyId, credentialKeyScope } from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import { LocalCredentialProvider } from '@deepseek-ai/dsh-credentials-local'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
+import { AccountPool } from './account-pool.ts'
 import { PiAiAdapter } from './adapter.ts'
 import { chatgptAccessToken, authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE, recordKeyFor } from './auth.ts'
 import { catalogProvider, catalogProviderIds } from './catalog.ts'
@@ -121,6 +131,9 @@ declare module '@deepseek-ai/cordis' {
 
 const NS = 'llm-pi-ai'
 
+/** Failure codes after which another eligible account of the pool may serve the same step. */
+const FAILOVER_CODES: ReadonlySet<string> = new Set(['RATE_LIMIT', 'AUTH', QUOTA_EXCEEDED_CODE, ACCOUNT_QUOTA_EXCEEDED_CODE])
+
 /**
  * The registry captures these per route; a change here must re-register.
  * Sorted by provider so a settings document that merely reorders its keys is
@@ -161,8 +174,10 @@ function directoryEntries(
   const entries = new Map<string, LlmConfigurableProvider>()
   // A profile that names its own credential reference overrides the stored
   // sign-in, so that sign-in is not what the route authenticates with.
+  // A pooled route authenticates from its own accounts' documents, never the shared one.
   const usesStoredCredential = (provider: string): boolean =>
     signedIn.has(provider) && profiles.get(provider)?.apiKeyEnv === undefined
+    && profiles.get(provider)?.accountPool === undefined
   const declare = (provider: string, displayName: string, error?: string): void => {
     const installed = catalogProvider(provider)
     entries.set(provider, {
@@ -292,10 +307,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const lifetime = new AbortController()
   ctx.effect(() => () => { lifetime.abort(new Error('llm-pi-ai: adapter unloaded')) })
   const reportedWithheld = new Map<string, string>()
+  // The selection state of the route that configures `accounts`; undefined
+  // until its account documents are mounted, and while a changed account list
+  // is being applied, which the adapter treats as unavailable rather than
+  // falling back to the shared sign-in.
+  let pool: AccountPool | undefined
   const adapter = new PiAiAdapter({
     profiles,
     resolveApiKey,
     auth,
+    accountPool: () => pool,
     lifetime: lifetime.signal,
     onUnofferedAccountModels: ({ provider, models }) => {
       const key = models.join('\n')
@@ -552,6 +573,82 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // routes of a sign-in made in an earlier run exist.
     return refresh()
   })
+
+  /** Mounted account documents of the current pool, torn down when the account list changes. */
+  let retirePool: (() => Promise<void>) | undefined
+  /**
+   * Make the pool match the profiles: mount one credentials provider per
+   * account over that account's own document, then publish the selection state.
+   * The previous pool is withdrawn first, so a request during the swap fails
+   * closed. A mount failure (an unreadable or group-readable document) is
+   * logged and leaves the route unavailable; it never falls back.
+   */
+  const applyPool = async (): Promise<void> => {
+    if (!mounted()) return
+    const spec = profiles().get('anthropic')?.accountPool
+    if (spec?.facts === pool?.facts) return
+    const previous = retirePool
+    pool = undefined
+    retirePool = undefined
+    await previous?.()
+    if (spec === undefined) return
+    const fibers: { dispose: () => Promise<unknown> }[] = []
+    const retire = async (): Promise<void> => { await Promise.allSettled(fibers.map(fiber => fiber.dispose())) }
+    const stores = new Map<string, CredentialStore>()
+    try {
+      for (const account of spec.accounts) {
+        const scope = ctx.isolate('credentials')
+        const fiber = scope.plugin(LocalCredentialProvider, { path: account.credentialsPath, watch: true })
+        fibers.push(fiber)
+        await fiber
+        stores.set(account.id, credentialStoreFrom(scope))
+      }
+    } catch (error) {
+      await retire()
+      ctx.logger.error('llm-pi-ai: could not mount the Claude account credential documents; the pooled route stays unavailable')
+      ctx.logger.error(error)
+      return
+    }
+    if (!mounted()) {
+      await retire()
+      return
+    }
+    retirePool = retire
+    pool = new AccountPool(spec, stores)
+  }
+  // Applications run one after another, so a slow mount cannot publish over a newer list.
+  let applying: Promise<void> = Promise.resolve()
+  const reconcilePool = (): Promise<void> => {
+    applying = applying.then(applyPool)
+    return applying
+  }
+  ctx.on('loader/volatile-update', () => { void reconcilePool() })
+  ctx.effect(() => async () => {
+    unloaded = true
+    await applying
+    pool = undefined
+    await retirePool?.()
+  })
+
+  // A limited or rejected account has already been taken out of selection when
+  // the failed attempt's stream finished, so a request that still has an
+  // eligible account retries at once on that one. Only the pool decides this
+  // retry: it replays no tool or history (the loop re-prepares the same step),
+  // and it is capped per step so two failing accounts cannot bounce forever.
+  // Everything else, including an exhausted pool, flows on to the retry policy.
+  const failovers = new WeakMap<object, { turn: number; step: number; count: number }>()
+  ctx.on('agent/request-error', async ({ agent, turn, step, provider, failure, signal }, next) => {
+    const active = pool
+    if (active === undefined || signal.aborted || !FAILOVER_CODES.has(failure.code)
+      || profiles().get(provider)?.accountPool?.facts !== active.facts || !active.hasEligible()) return next()
+    const previous = failovers.get(agent)
+    const count = previous?.turn === turn && previous.step === step ? previous.count : 0
+    if (count >= active.accounts.length) return next()
+    failovers.set(agent, { turn, step, count: count + 1 })
+    return { kind: 'retry' }
+  }, true)
+
+  await reconcilePool()
   // The routes of a sign-in made in an earlier run exist before the first request:
   // a bare mount with no credential store has no binding to wait for and settles at once.
   await bindingFiber
