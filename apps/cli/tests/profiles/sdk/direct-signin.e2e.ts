@@ -45,13 +45,20 @@ it.each([true, false])('uses a stored sign-in through the Script-default SDK pro
     cwd: root, env: { ...launch.env, DSH_HOME: home, DSH_SIGNIN_REQUESTS: requestsFile,
       DSH_PERMISSION_MODE: 'danger-full-access', DSH_TELEMETRY_DISABLED: '1',
       DEEPSEEK_API_KEY: undefined, OPENAI_API_KEY: undefined },
-    timeout: 60_000, killSignal: 'SIGKILL', reject: false,
+    // The e2e lane leaves 20 seconds for teardown after this process deadline.
+    timeout: 100_000, killSignal: 'SIGKILL', reject: false,
   })
   onTestFinished(async () => { child.kill('SIGKILL'); await child })
   const lines = createInterface({ input: child.stdout })
   onTestFinished(() => { lines.close() })
   const messages: Record<string, unknown>[] = []
   const changed = new Set<() => void>()
+  let exited = false
+  const settled = (): void => {
+    exited = true
+    for (const notify of changed) notify()
+  }
+  void child.then(settled, settled)
   let stderr = ''
   child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
   lines.on('line', (line) => {
@@ -63,13 +70,14 @@ it.each([true, false])('uses a stored sign-in through the Script-default SDK pro
       const timer = setTimeout(() => {
         changed.delete(check)
         reject(new Error(`SDK response deadline; stderr=${stderr}`))
-      }, 55_000)
+      }, 90_000)
       const check = (): void => {
         const found = messages.find(predicate)
-        if (found === undefined) return
+        if (found === undefined && !exited) return
         clearTimeout(timer)
         changed.delete(check)
-        resolve(found)
+        if (found === undefined) reject(new Error(`SDK exited before the expected response; stderr=${stderr}`))
+        else resolve(found)
       }
       changed.add(check)
       check()
@@ -139,4 +147,4 @@ it.each([true, false])('uses a stored sign-in through the Script-default SDK pro
     for (const header of headers) expect(header.data.header.config).toMatchObject({ provider: 'openai-codex', model })
     expect(JSON.stringify(events.filter(event => event.type === 'tool/result'))).toContain('DSH_SCRIPT_EXECUTED')
   }
-}, 75_000)
+})
