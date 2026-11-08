@@ -4,7 +4,7 @@ import { attributionHeaders, LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, ImageAttachmentAccessResolver, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { DeepSeekLlmApiExtensionRequest, DeepSeekLlmApiJson } from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
-import { modelInfo } from './model-info.ts'
+import { assessControls, modelInfo } from './model-info.ts'
 import type { DeepSeekAdapterOptions, DeepSeekConnectionOptions as Connection } from './types.ts'
 import { DeepSeekFileStore } from './file-store.ts'
 import { MESSAGES_FILES_BETA, MESSAGES_TOOL_CHANGES_BETA, messagesApiRoot } from './messages-api.ts'
@@ -50,7 +50,7 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     const connection = await this.connection(signal)
     this.dependencies.admit?.(connection, model)
-    return { model: modelInfo(connection, provider, model), stream: options => this.generate(options, connection) }
+    return { model: modelInfo(connection, provider, model), assessControls, stream: options => this.generate(options, connection) }
   }
   stream(options: GenerateOptions<string>): AsyncIterable<StreamChunk> {
     const connection = this.dependencies.options()

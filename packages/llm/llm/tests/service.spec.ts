@@ -13,6 +13,7 @@ import LlmRuntime, {
   ReasoningEffortId,
   resolveRetryPolicy,
   StreamChunk,
+  undeclaredControlAssessment,
   createMessage,
   createDeveloperMessage,
   createUserMessage,
@@ -1290,6 +1291,7 @@ describe('LlmRuntime', () => {
               efforts: [{ id: ReasoningEffortId(captured), name: captured }],
             },
           },
+          assessControls: undeclaredControlAssessment,
           stream: (options: GenerateOptions) => {
             dispatched = captured
             return super.stream(options)

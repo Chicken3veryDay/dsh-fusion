@@ -6,7 +6,7 @@
  * @module dsh-llm/call-config
  */
 
-import type { GenerateOptions, LlmResolvedModelInfo } from './types.ts'
+import type { GenerateOptions, LlmControlName, LlmResolvedModelInfo, UnsupportedControlReason } from './types.ts'
 import type { ReasoningEffortId } from './brand.ts'
 
 /** Process-local identities of request objects assembled by dsh-agent-loop. */
@@ -46,6 +46,67 @@ export type ConfigureCall = (
   controls: Readonly<LlmCallControls>,
   model: Readonly<LlmResolvedModelInfo>,
 ) => LlmCallControls
+
+/**
+ * How an adapter generation turns a supplied control into a different wire
+ * value. `add-thinking-allowance`: `maxTokens` is an answer allowance and the
+ * wire ceiling becomes `maxTokens + thinkingTokens`, with `answerReserve`
+ * tokens of that ceiling kept for the answer.
+ */
+export type ControlTranslation =
+  | { readonly kind: 'add-thinking-allowance'; readonly thinkingTokens: number; readonly answerReserve: number }
+
+/**
+ * One adapter generation's verdict on one supplied control. `unverified` means
+ * the generation cannot establish support from its captured facts; it is
+ * neither refused nor advertised as supported.
+ */
+export type ControlDisposition =
+  | { readonly kind: 'supported' }
+  | { readonly kind: 'translated'; readonly translations: readonly ControlTranslation[] }
+  | { readonly kind: 'unsupported'; readonly reason: UnsupportedControlReason }
+  | { readonly kind: 'unverified'; readonly reason: 'account-mode-unresolved' | 'protocol-unverified' | 'adapter-undeclared' }
+
+/** Process-local verdicts on the controls one prepared call supplied; never persisted. */
+export interface CallControlAssessment {
+  /** One entry per supplied control (a field whose value is not `undefined`). */
+  readonly fields: Readonly<Partial<Record<LlmControlName, ControlDisposition>>>
+}
+
+/** Every control name, checked against both {@link LlmControlName} and {@link LlmCallControls}. */
+const CONTROL_NAME_SET = {
+  reasoningEffort: true,
+  temperature: true,
+  maxTokens: true,
+  stop: true,
+} as const satisfies Record<LlmControlName, true> & Record<keyof LlmCallControls, true>
+
+/**
+ * Build an assessment with one entry per supplied control, so an adapter
+ * cannot omit a supplied field and be read as supporting it.
+ * @param controls - controls after `ConfigureCall` and model defaults.
+ * @param decide - the adapter's verdict for one supplied control.
+ * @returns a deep-frozen assessment covering exactly the supplied controls.
+ */
+export function assessSuppliedControls(
+  controls: Readonly<LlmCallControls>,
+  decide: (control: LlmControlName) => ControlDisposition,
+): CallControlAssessment {
+  const fields: Partial<Record<LlmControlName, ControlDisposition>> = {}
+  for (const control of Object.keys(CONTROL_NAME_SET) as LlmControlName[]) {
+    if (controls[control] !== undefined) fields[control] = Object.freeze(decide(control))
+  }
+  return Object.freeze({ fields: Object.freeze(fields) })
+}
+
+/**
+ * Assessment of an adapter that declares nothing about request controls.
+ * @param controls - controls after `ConfigureCall` and model defaults.
+ * @returns every supplied control `unverified` as `adapter-undeclared`.
+ */
+export function undeclaredControlAssessment(controls: Readonly<LlmCallControls>): CallControlAssessment {
+  return assessSuppliedControls(controls, () => ({ kind: 'unverified', reason: 'adapter-undeclared' }))
+}
 
 /**
  * Effective config fields supplied by exact-model adapter resolution rather

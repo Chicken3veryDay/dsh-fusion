@@ -63,6 +63,7 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
+import { assessPiAiControls } from './controls.ts'
 import { carriesSubscriptionToken, chatgptAccessToken, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
 import { discoverModels, withinBounds } from './discovery.ts'
 import { toStreamChunks } from './stream.ts'
@@ -629,9 +630,14 @@ export class PiAiAdapter extends LlmAdapter {
 
   override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
     const snapshot = this.current()
-    return Promise.resolve({
-      model: this.modelInfo(snapshot, provider, model),
-      stream: options => this.streamWithSnapshot(options, snapshot),
+    return Promise.resolve().then(() => {
+      const profile = this.profileOf(snapshot, provider)
+      const piModel = this.modelOf(snapshot, provider, model)
+      return {
+        model: this.modelInfo(snapshot, provider, model),
+        assessControls: controls => assessPiAiControls(piModel, profile, controls),
+        stream: options => this.streamWithSnapshot(options, snapshot),
+      }
     })
   }
 
@@ -643,9 +649,6 @@ export class PiAiAdapter extends LlmAdapter {
     options: GenerateOptions,
     snapshot: PiAiSnapshot,
   ): AsyncIterable<StreamChunk> {
-    if (options.stop !== undefined) {
-      throw new LlmError('llm-pi-ai does not support GenerateOptions.stop', 'UNSUPPORTED_OPTION')
-    }
     // One capture per stream call, taken before any await: the profile, the
     // model descriptor, and the collection all come from the same immutable
     // snapshot, and the credential freezes with them. A configuration change
