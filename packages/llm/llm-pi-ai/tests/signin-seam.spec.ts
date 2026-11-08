@@ -152,7 +152,11 @@ describe('account offers are exactly what the same configuration can resolve', (
 })
 
 describe('selection on routes that are not the signed-in account', () => {
-  const gateway = { api: 'openai-completions', baseURL: 'https://unused.invalid', models: [{ id: 'gw-1', contextWindow: 1000, maxTokens: 100 }] } as const
+  const gateway: PiAi.PiAiProviderProfile = {
+    api: 'openai-completions',
+    baseURL: 'https://unused.invalid',
+    models: [{ id: 'gw-1', contextWindow: 1000, maxTokens: 100 }],
+  }
 
   it('uses the advertised catalog for a configured route', async () => {
     const ctx = await mounted({ providers: { gw: gateway } }, undefined)

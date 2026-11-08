@@ -315,7 +315,7 @@ const SUBSCRIPTION_TOKEN_MARKER = 'sk-ant-oat'
  * @param values - API key and header values a Messages request or listing would carry.
  * @returns true when a value contains the subscription-token marker.
  */
-export function carriesSubscriptionToken(values: Iterable<string | undefined>): boolean {
+export function carriesSubscriptionToken(values: Iterable<string | null | undefined>): boolean {
   for (const value of values) {
     if (value?.includes(SUBSCRIPTION_TOKEN_MARKER) === true) return true
   }

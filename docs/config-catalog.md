@@ -2191,7 +2191,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:224`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2280,6 +2280,21 @@ export interface PiAiProviderProfile {
   websocketConnectTimeoutMs?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
+  /**
+   * Deadline in milliseconds for one network model listing of this route (an
+   * account's models, or a draft endpoint's interrogation), covering connection,
+   * headers, and body. A listing that misses it fails with `TIMEOUT` and its
+   * connection is closed; other routes' catalogs are unaffected.
+   */
+  modelListTimeoutMs?: number
+  /**
+   * Authenticate this route only through its stored sign-in. With no sign-in
+   * stored, a request fails with `AUTH` instead of reading the provider's
+   * ambient API key, so signing out never silently selects API billing. The
+   * Models page records it when it saves a profile for a signed-in route; a
+   * profile naming `apiKeyEnv` is an explicit API-key selection and wins.
+   */
+  signInOnly?: boolean
   /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text

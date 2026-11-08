@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/supported-provider-signin/guide.md
 /:
-  en: 4e2cdc6f01b65684
-  zh: 2b843ead39f88f7a
+  en: 4ee08e4f59084386
+  zh: 36dbe8ab71069112
 /supported-provider-sign-in:
   en: 967f684cbe37a2b9
   zh: e7c802a049ad1a61
 /supported-provider-sign-in/change:
-  en: cc6db94e5f3a5ae5
-  zh: 37a7f7d16605e865
+  en: a9bfbd4d26cd0457
+  zh: ec307ead5401cb2c
 /supported-provider-sign-in/migration:
-  en: d0ae2ae5d9b14520
-  zh: b389dbbe0623ba57
+  en: f43f7ffeae122f53
+  zh: 8d3c45df886dc222

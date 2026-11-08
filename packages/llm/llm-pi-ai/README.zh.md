@@ -83,6 +83,8 @@ kind: "package-reference"
 | `compat` | 目录检测 | 无法识别端点的协议兼容开关 |
 | `defaultContextWindow` | `1,000,000` | 未描述模型的容量回退 |
 | `defaultMaxTokens` | `128,000` | 未描述模型的输出上限回退 |
+| `modelListTimeoutMs` | `15,000` | 账户路由每次网络模型列表读取以及任意路由草稿发现的期限（毫秒）；未在期限内应答的读取以 `TIMEOUT` 失败并关闭其连接 |
+| `signInOnly` | 无 | 模型页面为仅有已存登录的路由创建 profile 时写入；该路由随后要求这一登录，退出登录后绝不回退到环境中的 API 密钥计费 |
 | `requestImagePixelBudget` | `4,194,304` | 每张确定性请求图片的总像素预算 |
 | `requestImageMaxBytes` | `1 MiB` | 每张请求图片在 base64 扩展前的编码字节目标 |
 | `maxRequestImageBytes` | `20 MiB` | base64 图片载荷总上限，保留图片超过时请求以 `IMAGE_OFFLOAD_REQUIRED` 失败 |
@@ -96,9 +98,9 @@ pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程�
 
 OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存储在 `llm-pi-ai/installation-id`。退出登录会移除提供方授权，但保留该安装实例标识。
 
-`openai` ChatGPT 套餐路由使用 [公共 Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)，携带 OAuth bearer，并设置 `store: false` 和 `stream: true`；调用方提示词和工具保持不变。模型选项来自同一账户的 `GET /v1/models`，仅采用 `visibility: list` 条目，保留服务端顺序，以 `display_name` 显示标签，以 `slug` 发送请求。每次列表读取都使用当前授权；替换授权会重新宣告供给。请求能力与容量仍由已安装目录或显式模型 profile 提供，因此同时不存在于两者中的新 slug 需要先添加 `models` 条目再推理。API 密钥路由保留目录行为，`openai-codex` 保留为旧版 Codex 集成。
+`openai` ChatGPT 套餐路由使用 [公共 Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)，携带 OAuth bearer，并设置 `store: false` 和 `stream: true`；调用方提示词和工具保持不变。模型选项来自同一账户的 `GET /v1/models`，仅采用 `visibility: list` 条目，保留服务端顺序，以 `display_name` 显示标签，以 `slug` 发送请求，并限定为同一配置能够解析的模型：显式 `models` 列表会收窄供给；已安装目录和 profile 都没有元数据的 slug 不会进入供给，并且每组不同的 slug 只告警一次，因为选择它只会失败。容量从不猜测；添加带 `contextWindow` 与 `maxTokens` 的 `models` 条目即可供给该 slug。每个供给的模型都能在同一份已捕获的配置中解析。选择已注册模型无需列表请求，因此目录端点返回 `503` 不会阻止选择或运行已注册模型；每次列表读取都受 `modelListTimeoutMs` 限制，在插件卸载时终止，并在所有路径上释放连接。每次列表读取都使用当前授权。已存登录改变时，替换授权会重新宣告供给；仅轮换同一登录令牌的刷新则不会。请求能力与容量仍由已安装目录或显式模型 profile 提供。API 密钥路由保留目录行为，`openai-codex` 保留为旧版 Codex 集成。
 
-ChatGPT 请求仅在收到 `response.completed` 后成功；不完整输出与中断流保留各自的终止结果。流内的套餐配额与可用性错误遵循 [OpenAI 恢复指南](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)。刷新失败保留已存储授权；如果退出登录先于认证解析完成，正在解析套餐授权的请求会拒绝改用环境中的 API 密钥。Anthropic 直接请求接受 API 密钥，拒绝作为密钥传入的订阅令牌，并从环境发现中排除 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN`；受支持的工作负载身份设置仍可用。Claude 订阅访问请使用 [官方 Claude Code 集成](../../subagent/subagent-claude-code/README.zh.md)，由它管理自己的登录与凭据。
+ChatGPT 请求仅在收到 `response.completed` 后成功；不完整输出与中断流保留各自的终止结果。流内的套餐配额与可用性错误遵循 [OpenAI 恢复指南](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)。刷新失败保留已存储授权；如果退出登录先于认证解析完成，正在解析套餐授权的请求会拒绝改用环境中的 API 密钥。Anthropic 直接请求接受 API 密钥，拒绝作为密钥传入的订阅令牌，并从环境发现中排除 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN`；受支持的工作负载身份设置仍可用。每条使用 Anthropic Messages 协议的路由都在任何出站 I/O 之前应用同一规则，无论该路由是 Anthropic 本身、被覆盖为 `anthropic-messages` 的目录路由还是自定义路由，也无论凭据来自哪个来源：显式、环境或已存密钥、提供方原生认证，或来自 profile、钩子或请求的有效标头。会携带 `sk-ant-oat` 订阅令牌的请求以结构化 `AUTH` 错误失败，且不会构造伪装请求；普通密钥、显式计费选择与提供方自带的原生登录保留其解析后的基础 URL、标头与环境。Claude 订阅访问请使用 [官方 Claude Code 集成](../../subagent/subagent-claude-code/README.zh.md)，由它管理自己的登录与凭据。
 
 ### 解析模型目录
 
@@ -118,7 +120,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 从端点发现模型
 
-插件会回答「该提供方可以提供哪些模型？」，供配置界面正在编辑或起草的路由使用。除上文所述的 ChatGPT 套餐列表外，已安装目录提供的路由直接由目录回答，不发网络请求，并将其 `input` 数组保留为发现结果的 `inputModalities`；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `cordis.patch.yml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`cordis.patch.yml` 仍然是决定路由服务内容的唯一事实。
+插件会回答「该提供方可以提供哪些模型？」，供配置界面正在编辑或起草的路由使用。除上文所述的 ChatGPT 套餐列表外，已安装目录提供的路由直接由目录回答，不发网络请求，并将其 `input` 数组保留为发现结果的 `inputModalities`；只有目录未描述的路由才会经网络询问，受 `modelListTimeoutMs` 限制，并适用与推理相同的订阅令牌规则。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `cordis.patch.yml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`cordis.patch.yml` 仍然是决定路由服务内容的唯一事实。
 
 ### 失败与恢复
 
@@ -257,6 +259,8 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 
 这些限制说明适配器在哪里停止、由未来工作接续。它们是当前包约束，不是通用 pi-ai 对比或任务积压。
 
+- **新列出的账户 slug 没有元数据就不会被供给**——ChatGPT 套餐列表可能包含已安装目录未知的模型；在 `models` 条目补全其容量之前，路由会不予供给，因此选择器可能落后于账户自身的列表。
+- **订阅令牌检查与分派分别解析凭据**——检查在任何 I/O 之前解析同一批来源，pi-ai 在发送时再解析一次，因此两者之间变化的凭据只按检查时的视图判断；已存的 Anthropic OAuth 记录不会到达分派。
 - **`maxRequestImageBytes` 只计算 base64 图片载荷**，文本、工具、描述符与 JSON 结构在该上限之外，因此它必须留有余量地低于网关请求体上限。
 - **登录只存在于发起它的进程中**——授权尝试不持久，因此登录中途刷新页面会放弃它，用户需要重新开始。退出登录是对已存储记录执行 `deleteRecord`，只在本地忘记它，不会告知签发方。
 - **提供方原生发现经本插件的 ambient context 回答**——不点名凭据的路由交由目录提供方自身解析，它会询问环境值（`AZURE_OPENAI_API_KEY`、`AWS_PROFILE` 及各提供方自有集合）与本地凭据文件。两个问题都在这里得到回答：凭据 seam 先于进程环境被查询，文件存在性则针对宿主进程的文件系统以 `~` 展开后检查。它做不到的是*读取*凭据文件内容——自行解析 `~/.aws/credentials` 的提供方会直接读取，不经该 seam。

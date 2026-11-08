@@ -409,7 +409,11 @@ export class PiAiAdapter extends LlmAdapter {
       ...explicit === undefined ? {} : { apiKey: explicit },
       ...signal === undefined ? {} : { signal },
     }
-    try { resolved = await snapshot.models.getAuth(model ?? provider, authOptions) }
+    try {
+      resolved = await (model === undefined
+        ? snapshot.models.getAuth(provider, authOptions)
+        : snapshot.models.getAuth(model, authOptions))
+    }
     catch (error) {
       if (error instanceof ModelsError) return explicit
       throw error
