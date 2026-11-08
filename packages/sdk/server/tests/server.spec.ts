@@ -1021,6 +1021,32 @@ describe('HarnessSdkJsonRpcServer', () => {
     }
   })
 
+  it('tells an SDK client whose provider is available but not signed in how to set it up', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-signed-out-'))
+    const ctx = await makeHarness(storageDir)
+    ctx.llm.registerConfigurableProviders([
+      { provider: 'openai-codex', displayName: 'ChatGPT', settingsNs: 'llm', settingsPath: ['providers', 'openai-codex'] },
+    ])
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.initialize({ cwd: storageDir, provider: 'openai-codex', model: 'gpt-5' }))
+        .rejects.toThrow('sign in or add its credential in the Models settings')
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a provider when no LLM service is mounted at all', async () => {
+    const ctx = new Context()
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.initialize({ cwd: '/tmp', provider: 'private', model: 'm' }))
+        .rejects.toThrow('no adapter registered for provider "private"')
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it('rejects a missing non-DeepSeek provider when an LLM service already exists', async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-new-llm-'))
     const ctx = await makeHarness(storageDir)

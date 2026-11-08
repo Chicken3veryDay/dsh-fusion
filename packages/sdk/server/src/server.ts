@@ -241,7 +241,11 @@ export class HarnessSdkJsonRpcServer {
       ? undefined
       : ReasoningEffortId(params.reasoningEffort)
     if (!this.hasAdapterFor(provider)) {
-      if (provider !== 'deepseek-official') throw new Error(`no adapter registered for provider "${provider}"`)
+      if (provider !== 'deepseek-official') {
+        // Rejects with the setup advice when the provider is available but has no route (signed out).
+        await this.ctx.get('llm')?.listModels(provider)
+        throw new Error(`no adapter registered for provider "${provider}"`)
+      }
       this.llmFiber = await this.ctx.plugin(LlmDeepSeek)
     }
     // Adapter presence was read from this service above; a successful fallback mount also requires it.
