@@ -781,14 +781,7 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade, updates.systemPromptUpdate === 'in-history')
-      if (anthropicOAuth) {
-        // The loop already logged this prefix. Let pi-ai encode its one mandatory
-        // prefix block, without also sending it inside the caller's system block.
-        if (context.systemPrompt === ANTHROPIC_OAUTH_SYSTEM_PREFIX) delete context.systemPrompt
-        else if (context.systemPrompt?.startsWith(`${ANTHROPIC_OAUTH_SYSTEM_PREFIX}\n\n`)) {
-          context.systemPrompt = context.systemPrompt.slice(ANTHROPIC_OAUTH_SYSTEM_PREFIX.length + 2)
-        }
-      }
+      stripOAuthPrefix(context, anthropicOAuth)
       // pi-ai flattens a rejected response into error text; the observer keeps
       // its status, Retry-After, and request id for the failure chunk. Codex alone
       // drops an in-band failure frame's code the same way, so only it is handed
@@ -836,6 +829,16 @@ export class PiAiAdapter extends LlmAdapter {
       throw error
     } finally {
       consumer.abort('pi-ai stream consumer stopped')
+    }
+  }
+}
+
+/** Let the maintained transport encode its mandatory prefix once when the caller already supplied it. */
+function stripOAuthPrefix(context: { systemPrompt?: string }, anthropicOAuth: boolean): void {
+  if (anthropicOAuth) {
+    if (context.systemPrompt === ANTHROPIC_OAUTH_SYSTEM_PREFIX) delete context.systemPrompt
+    else if (context.systemPrompt?.startsWith(`${ANTHROPIC_OAUTH_SYSTEM_PREFIX}\n\n`)) {
+      context.systemPrompt = context.systemPrompt.slice(ANTHROPIC_OAUTH_SYSTEM_PREFIX.length + 2)
     }
   }
 }

@@ -9,7 +9,7 @@ description: "Anthropic 登录使用已存储的订阅 OAuth，ChatGPT 套餐模
 
 ## 变更
 
-Anthropic 登录通过维护中的 pi-ai Messages 传输提供订阅 OAuth。DSH 负责代理循环、工具、提示词组装和持久化，不启动 Claude Code 后端。自动登录路由及设置了 `signInOnly: true` 的 profile 必须使用已存储的 OAuth，拒绝 API 密钥替代及环境 API 密钥回退。传输提供必需的兼容标头和身份前缀；该前缀记录在 `system/message` 中。通过 API 密钥或认证标头覆盖提供的订阅令牌仍会被拒绝。显式配置的 API 密钥路由独立存在，仍可使用。环境中的 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN` 不会导入订阅登录。
+Anthropic 登录通过维护中的 pi-ai Messages 传输提供订阅 OAuth。DSH 负责代理循环、工具、提示词组装和持久化，不启动 Claude Code 后端。自动登录路由及设置了 `signInOnly: true` 的 profile 必须使用已存储的 OAuth，拒绝 API 密钥替代及环境 API 密钥回退。传输提供必需的兼容标头和身份前缀；代理循环请求将该前缀记录在 `system/message` 中。通过 API 密钥或认证标头覆盖提供的订阅令牌仍会被拒绝。显式配置的 API 密钥路由独立存在，仍可使用。环境中的 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN` 不会导入订阅登录。
 
 `openai` ChatGPT 套餐路由从公共模型端点列出已登录账户的可见模型。供给限定为同一配置能够解析的模型：显式 `models` 列表会收窄供给，没有目录或 profile 元数据的已列出 slug 不会进入供给（记录一次日志），直到 `models` 条目补全其容量。无论在模型选择器中还是通过 ACP `session/set_config_option`，选择已注册模型都不再需要实时列表请求；每次模型查询（包括其凭据读取）都受新的 `modelListTimeoutMs` profile 字段限制（默认 15,000 毫秒）。ACP 模型变更现在返回最近一次列出目录的选项状态，而不再次列表。API 密钥路由保留已安装目录，`openai-codex` 继续作为旧版 Codex 集成可用。
 
