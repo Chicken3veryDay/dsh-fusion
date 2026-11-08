@@ -400,8 +400,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Everything read from a store belongs to the binding to that store: when the
   // store is withdrawn or replaced its sign-ins leave with it, and a listing
   // still in flight from it can no longer publish.
-  /** False from the moment disposal of this adapter begins, before Cordis unloads it. */
-  const mounted = (): boolean => ctx.fiber.uid !== null
+  // Reload unloads this apply instance without disposing its fiber.
+  let unloaded = false
+  ctx.effect(() => () => { unloaded = true })
+  const mounted = (): boolean => !unloaded && ctx.fiber.uid !== null
   /**
    * Whether a changed credential can change what its route offers. Only a
    * catalog provider that narrows its models per credential (Copilot, by the

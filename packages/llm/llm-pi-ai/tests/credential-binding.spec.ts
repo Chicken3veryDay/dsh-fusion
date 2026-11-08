@@ -73,6 +73,37 @@ async function runtime(): Promise<Context> {
 
 afterEach(() => { vi.restoreAllMocks() })
 
+describe('signed-in adapter restart', () => {
+  it.each(['adapter', 'llm'] as const)('restores its routes without configuration errors after %s restart', async (owner) => {
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    const llm = await ctx.plugin(LlmRuntime)
+    const store = gatedStore([grant('openai-codex')])
+    ctx.provide('credentials', store.service as never)
+    const errors = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    const adapter = await ctx.plugin(PiAi)
+    let restarting: Promise<void> | undefined
+    try {
+      await store.entered()
+      expect(routes(ctx)).toEqual(['openai-codex'])
+      restarting = (owner === 'adapter' ? adapter : llm).restart()
+      await store.entered()
+      store.release([grant('openai-codex')])
+      await restarting
+
+      await vi.waitFor(() => { expect(routes(ctx)).toEqual(['openai-codex']) })
+      expect(store.calls()).toBe(2)
+      expect(errors).not.toHaveBeenCalled()
+      await adapter.dispose()
+      expect(routes(ctx)).toEqual([])
+      expect(errors).not.toHaveBeenCalled()
+    } finally {
+      store.drain()
+      await restarting
+    }
+  })
+})
+
 describe('initial stored sign-in listing', () => {
   it('holds the mount until the existing store has been listed', async () => {
     const ctx = await runtime()
