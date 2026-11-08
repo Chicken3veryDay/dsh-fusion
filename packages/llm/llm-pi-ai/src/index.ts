@@ -187,8 +187,12 @@ function directoryEntries(
  * @param config - Provider profiles and their request defaults.
  * @returns after the credential store present at mount has been listed for initial route
  *   registration; at once when no store exists yet. Its sign-in routes follow that store:
- *   they leave when it is withdrawn and are re-read from a replacement. Disposal joins a
- *   listing that has not settled, so a store whose listing never settles holds shutdown.
+ *   they leave when it is withdrawn and are re-read from a replacement. Every listing, initial
+ *   or event-triggered, belongs to the binding to the store. Teardown of the store, the adapter,
+ *   or the root closes admission first (a queued listing never reads the store), withdraws the
+ *   routes, then joins the listing already running while the store is still mounted. A store
+ *   whose listing never settles therefore holds that teardown. Listing and publication failures
+ *   are logged, never rejected.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
@@ -389,41 +393,62 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
    */
   const offersVaryByCredential = (provider: string): boolean =>
     catalogProvider(provider)?.filterModels !== undefined && registration !== undefined
+  /**
+   * One refresh of the signed-in set from the store this binding is bound to. Never
+   * rejects: a failure is logged and leaves the routes as they were, so a refresh
+   * started from an event has no caller to report to and cannot go unhandled.
+   */
   const refreshSignedIn = async (live: () => boolean, touched: string | undefined): Promise<void> => {
-    let stored: Awaited<ReturnType<typeof auth.credentials.list>>
-    try { stored = await auth.credentials.list() }
-    catch (error) {
-      ctx.logger.warn('llm-pi-ai: could not list stored credentials; signed-in routes are unchanged')
-      ctx.logger.warn(error)
-      return
+    try {
+      let stored: Awaited<ReturnType<typeof auth.credentials.list>>
+      try { stored = await auth.credentials.list() }
+      catch (error) {
+        ctx.logger.warn('llm-pi-ai: could not list stored credentials; signed-in routes are unchanged')
+        ctx.logger.warn(error)
+        return
+      }
+      // The listing was admitted before teardown began; its result is dropped.
+      if (disposed || !live()) return
+      const next = new Set(stored
+        .filter(entry => catalogProvider(entry.providerId) !== undefined
+          && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
+        .map(entry => entry.providerId))
+      if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) {
+        // The routes are the same, but a replaced credential can still change
+        // which models the route offers. The registry announces a route swap
+        // like any topology change, which is what open model pickers listen to.
+        if (touched !== undefined && offersVaryByCredential(touched)) registration?.replace([...profiles().keys()])
+        return
+      }
+      signedIn = next
+      reconcile()
+    } catch (error) {
+      ctx.logger.error('llm-pi-ai: could not apply the stored credential listing; signed-in routes are unchanged')
+      ctx.logger.error(error)
     }
-    if (disposed || !live()) return
-    const next = new Set(stored
-      .filter(entry => catalogProvider(entry.providerId) !== undefined
-        && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
-      .map(entry => entry.providerId))
-    if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) {
-      // The routes are the same, but a replaced credential can still change
-      // which models the route offers. The registry announces a route swap
-      // like any topology change, which is what open model pickers listen to.
-      if (touched !== undefined && offersVaryByCredential(touched)) registration?.replace([...profiles().keys()])
-      return
-    }
-    signedIn = next
-    reconcile()
   }
   const bindingFiber = ctx.inject(['credentials'], (binding) => {
+    // Admission: a refresh reads the store only while the binding is live. Teardown closes
+    // it first, so a queued refresh never starts against a retired store or, through this
+    // binding, against its replacement.
     let live = true
-    binding.effect(() => () => {
-      live = false
-      if (disposed || signedIn.size === 0) return
-      signedIn = new Set()
-      reconcile()
-    })
     // Refreshes run one after another so a slow listing cannot overwrite a newer one.
+    // The chain never rejects (`refreshSignedIn` contains its failures), so joining it is safe.
     let refreshing: Promise<void> = Promise.resolve()
+    binding.effect(() => async () => {
+      live = false
+      // Withdraw the sign-in routes now; the store is still mounted, because Cordis
+      // unloads this binding before the service provider it depends on.
+      if (!disposed && signedIn.size > 0) {
+        signedIn = new Set()
+        reconcile()
+      }
+      // Quiescence: the admitted listing, if any, settles before the store or this
+      // plugin may finish unloading. Queued refreshes see `live === false` and skip the store.
+      await refreshing
+    })
     const refresh = (touched?: string): Promise<void> => {
-      refreshing = refreshing.then(() => refreshSignedIn(() => live, touched))
+      refreshing = refreshing.then(() => live ? refreshSignedIn(() => live, touched) : undefined)
       return refreshing
     }
     binding.on('credentials/record-updated', (key) => {
