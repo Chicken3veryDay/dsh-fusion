@@ -1041,6 +1041,10 @@ async function runScenario(scenario: CorpusScenario): Promise<{
           result = outcome
         }
         results.push(result)
+        if (scenario.name === 'unsupported-control-refusal') {
+          expect(result.events.filter(event => event.type === 'request/header'),
+            'refusal must settle without request admission before waiting for trailing events').toEqual([])
+        }
         if (titleSubscription !== undefined) {
           const expected = expectedTitles[results.length - 1]?.data as JsonObject | undefined
           expect(expected, 'each turn has a recorded provider title').toBeDefined()
