@@ -1,0 +1,29 @@
+# TypeScript SDK snapshot patch over `dsh --profile sdk` with the shipped DeepSeek
+# API-key route untouched: official origin, built-in catalog following the model
+# listing, default high reasoning. An extension proposes a `temperature` that the
+# official service ignores in thinking mode, so preparation must refuse it with no
+# credential read, header or HTTP request after the final control selection. Every
+# outbound request and credential read is traced by phase in `deepseek-work.jsonl`.
+
+# The fixture corpus must not depend on the developer's personal skill roots.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    includeDefaultRoots: false
+
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js dshHomePath('sessions')
+    compression: !!js "process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"
+
+# The process-local clock is deterministic; native timers remain live.
+- insert:
+    - id: snapshot-clock
+      name: './clock.mjs'
+    - id: refusal-fixture
+      name: './refusal-fixture.mjs'
+
+- id: time-context
+  config:
+    timeZone: UTC

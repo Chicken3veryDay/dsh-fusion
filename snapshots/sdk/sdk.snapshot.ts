@@ -289,6 +289,9 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'deepseek-default-refusal': {
+    modelRequestsFile: 'deepseek-work.jsonl',
+  },
   'ptc-turn': {
     patches: [fileURLToPath(new URL('./ptc-turn/runtime.cordis.yml', import.meta.url))],
     expectedFinalResponse: 'CODE_ONE+CODE_TWO',
@@ -1762,6 +1765,30 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
           expect(notificationsText).not.toContain(secret)
           expect(ordered.map(log => log.content).join('')).not.toContain(secret)
         }
+      }
+      if (scenario.name === 'deepseek-default-refusal') {
+        // `modelRequests` is the fixture's work trace: credential reads and HTTP requests tagged by phase. The
+        // `refusal` phase starts when the final control selection returns; nothing may follow it.
+        // Session startup legitimately follows the official model listing once with the synthetic key before the
+        // agent request exists. This baseline is pinned, not a claim about the whole process.
+        expect(modelRequests.filter(work => work['phase'] === 'startup'), 'startup discovery baseline').toEqual([
+          { phase: 'startup', kind: 'credential', ref: 'DEEPSEEK_API_KEY' },
+          { phase: 'startup', kind: 'http', method: 'GET', url: 'https://api.deepseek.com/models', authenticated: true },
+        ])
+        expect(modelRequests.filter(work => work['phase'] === 'refusal'), 'work after the final control selection').toEqual([])
+        expect(modelRequests.filter(work => work['phase'] !== 'startup' && work['phase'] !== 'refusal')).toEqual([])
+        expect(modelRequests.filter(work => work['kind'] === 'http' && work['method'] !== 'GET'), 'inference request').toEqual([])
+        const events = results.flatMap(result => result.events)
+        const turnEnds = events.filter(event => event.type === 'turn/end')
+        expect(turnEnds, JSON.stringify(turnEnds)).toHaveLength(1)
+        expect(turnEnds[0]?.data['reason']).toMatchObject({
+          kind: 'error',
+          error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason: 'reasoning-active' } },
+        })
+        for (const type of ['request/header', 'request/context', 'assistant/attempt', 'assistant/message', 'llm/retry']) {
+          expect(events.filter(event => event.type === type), `${type} was logged for a refused call`).toEqual([])
+        }
+        expect(results.at(-1)?.finishReason).toBe('error')
       }
       if (scenario.name === 'unsupported-control-refusal' || scenario.name === 'account-control-refusal') {
         // The real adapter refuses during preparation; diagnostic input remains without admitting a request.

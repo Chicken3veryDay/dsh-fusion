@@ -1,0 +1,12 @@
+version: 1
+scenario: deepseek-default-refusal
+profile: sdk
+composition: sdk-deepseek-default-refusal
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: deepseek-official
+  DSH_SNAPSHOT_MODEL: deepseek-flash
+header:
+  class: sdk-deepseek-default-refusal
+  pin: true
+  requests: 0
