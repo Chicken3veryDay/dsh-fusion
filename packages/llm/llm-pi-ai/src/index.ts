@@ -172,7 +172,12 @@ function directoryEntries(
   return [...entries.values()]
 }
 
-/** Register one generic pi-ai adapter for all configured provider routes. */
+/**
+ * Register pi-ai routes from profiles and supported stored sign-ins.
+ * @param ctx - Plugin context with the LLM registry and optional credential store.
+ * @param config - Provider profiles and their request defaults.
+ * @returns after stored sign-ins have been read for initial route registration.
+ */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
   const settingsNs = ctx.fiber.entry?.options.id ?? NS
