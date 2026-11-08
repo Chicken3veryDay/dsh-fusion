@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/request-temperature/guide.md
+/:
+  en: ce0b039a5639b165
+  zh: 28abace81e4444fc
+/official-deepseek-refuses-temperature-with-reasoning:
+  en: 40d4c6e673567ea1
+  zh: 347867a0f780078e
+/official-deepseek-refuses-temperature-with-reasoning/change:
+  en: d6bc948879db6997
+  zh: 256825e115f3cfe2
+/official-deepseek-refuses-temperature-with-reasoning/migration:
+  en: d552e5000388a291
+  zh: d53875b99580595f
