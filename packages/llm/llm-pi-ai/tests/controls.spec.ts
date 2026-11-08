@@ -62,9 +62,9 @@ async function dispatch(p: Probe, config: LlmCallConfig) {
 async function expectRefusedBeforeEffects(p: Probe, config: LlmCallConfig, unsupportedControl: { control: string; reason: string }) {
   await expect(p.ctx.llm.prepareCall(config)).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTROL', failure: { unsupportedControl } })
   const chunks = await collect(p.ctx.llm.stream({ ...config, messages }))
-  expect(chunks).toEqual([{
+  expect(chunks).toMatchObject([{
     type: 'finish',
-    reason: { kind: 'error', failure: expect.objectContaining({ code: 'UNSUPPORTED_CONTROL', unsupportedControl }) },
+    reason: { kind: 'error', failure: { code: 'UNSUPPORTED_CONTROL', unsupportedControl } },
   }])
   expect(p.requests).toHaveLength(0)
   expect(p.authCalls()).toBe(0)

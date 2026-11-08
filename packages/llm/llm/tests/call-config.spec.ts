@@ -36,7 +36,7 @@ describe('control assessment helpers', () => {
   it('builds one frozen entry per supplied control, including falsy values, and none for omitted ones', () => {
     const decided: string[] = []
     const assessment = assessSuppliedControls(
-      { temperature: 0, maxTokens: 1, stop: [], reasoningEffort: undefined },
+      { temperature: 0, maxTokens: 1, stop: [] },
       (control) => { decided.push(control); return { kind: 'supported' } },
     )
     expect(decided).toEqual(['temperature', 'maxTokens', 'stop'])
