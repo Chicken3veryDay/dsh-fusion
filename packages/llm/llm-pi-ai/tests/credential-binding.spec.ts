@@ -214,6 +214,25 @@ describe('credential store lifecycle', () => {
     } finally { store.drain() }
   })
 
+  it('publishes nothing when the store is retired while the ChatGPT login is being read', async () => {
+    const { ctx, store, source } = await mountOver([grant('openai-codex')])
+    const reading = Promise.withResolvers<undefined>()
+    const read = Promise.withResolvers<undefined>()
+    Object.assign(store.service, { readRecord: () => { reading.resolve(undefined); return read.promise } })
+    try {
+      ctx.emit('credentials/record-updated', PiAi.recordKeyFor('openai'))
+      await store.entered()
+      store.release([grant('openai')])
+      await reading.promise
+      const removing = source.dispose()
+      read.resolve(undefined)
+      await removing
+      await nextTurn()
+
+      expect(routes(ctx)).toEqual([])
+    } finally { store.drain(); read.resolve(undefined) }
+  })
+
   it('follows the replacement store, which the retired store\'s binding never reads', async () => {
     const { ctx, store: retired, source } = await mountOver([grant('openai-codex')])
     const replacement = gatedStore([grant('github-copilot')])

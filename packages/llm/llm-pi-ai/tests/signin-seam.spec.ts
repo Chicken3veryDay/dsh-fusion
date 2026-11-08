@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage, LlmError } from '@deepseek-ai/dsh-llm'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Provider } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
@@ -129,6 +129,18 @@ describe('account offers are exactly what the same configuration can resolve', (
     expect(server.paths).toEqual([])
   })
 
+  it('reports each withheld set once and withholds a model whose configured metadata is invalid', async () => {
+    const server = await mockServer([{ body: listing('gpt-5.4', 'gpt-future-unlisted') }, { body: listing('gpt-5.4', 'gpt-future-unlisted') }])
+    const ctx = await mounted({ providers: { openai: { baseURL: `${server.url}/v1`, models: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }] } } })
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+    expect((await ctx.llm.listModels('openai')).map(({ id }) => id)).toEqual([])
+    await ctx.llm.listModels('openai')
+    const reports = warn.mock.calls.filter(([message]) => String(message).includes('gpt-future-unlisted'))
+    expect(reports).toHaveLength(1)
+    expect(await ctx.llm.canSelectModel('openai', 'gpt-5.4')).toBe(false)
+    expect(await ctx.llm.canSelectModel('openai', 'gpt-5.4-mini')).toBe(true)
+  })
+
   it('selects a registered model while the listing answers 503 and the same grant still infers', async () => {
     const server = await mockServer([{ status: 503, body: '{}' }, { events: completed }])
     const ctx = await mounted({ providers: { openai: { baseURL: `${server.url}/v1` } } })
@@ -136,6 +148,31 @@ describe('account offers are exactly what the same configuration can resolve', (
     expect(await ctx.llm.canSelectModel('openai', 'gpt-5.4')).toBe(true)
     expect((await assemble(ctx, request)).finish).toEqual({ kind: 'stop' })
     expect(server.paths).toEqual(['/v1/models', '/v1/responses'])
+  })
+})
+
+describe('selection on routes that are not the signed-in account', () => {
+  const gateway = { api: 'openai-completions', baseURL: 'https://unused.invalid', models: [{ id: 'gw-1', contextWindow: 1000, maxTokens: 100 }] } as const
+
+  it('uses the advertised catalog for a configured route', async () => {
+    const ctx = await mounted({ providers: { gw: gateway } }, undefined)
+    expect(await ctx.llm.canSelectModel('gw', 'gw-1')).toBe(true)
+    expect(await ctx.llm.canSelectModel('gw', 'gw-2')).toBe(false)
+  })
+
+  /** An adapter over a hand-built profile whose key resolution fails as the plugin's does. */
+  function failingKey(failure: Error): PiAiAdapter {
+    const profiles = resolveProfiles({ gw: gateway })
+    return new PiAiAdapter({ profiles: () => profiles, resolveApiKey: () => Promise.reject(failure), auth: memoryAuth() })
+  }
+
+  it('does not offer a model while the route\'s named credential is missing', async () => {
+    const missing = failingKey(new LlmError('no key', 'MISSING_CREDENTIAL'))
+    expect(await missing.canSelectModel('gw', 'gw-1')).toBe(false)
+  })
+
+  it('reports any other key-resolution failure instead of answering', async () => {
+    await expect(failingKey(new LlmError('store down', 'AUTH')).canSelectModel('gw', 'gw-1')).rejects.toMatchObject({ code: 'AUTH' })
   })
 })
 
@@ -270,7 +307,12 @@ describe('Messages subscription restriction through every credential source', ()
   })
 
   /** A native provider whose auth returns more than a key, as pi-ai's own OAuth providers do. */
-  function nativeRoute(server: { url: string }, headers: Record<string, string>, apiKey: string): PiAiAdapter {
+  function nativeRoute(
+    server: { url: string },
+    headers: Record<string, string>,
+    apiKey: string,
+    resolve: () => Promise<never> = () => Promise.resolve({ source: 'native', auth: { apiKey, baseUrl: server.url, headers } }) as Promise<never>,
+  ): PiAiAdapter {
     const base = catalogProvider('openrouter')
     if (base === undefined) throw new Error('openrouter catalog missing')
     const profiles = resolveProfiles({ openrouter: { api: 'anthropic-messages', baseURL: 'https://unused.invalid', models: [{ id: 'claude-test', contextWindow: 1000, maxTokens: 100 }] } })
@@ -278,14 +320,14 @@ describe('Messages subscription restriction through every credential source', ()
     if (profile?.piProvider === undefined) throw new Error('profile did not build')
     const piProvider: Provider = {
       ...profile.piProvider,
-      auth: { apiKey: { name: 'native', resolve: () => Promise.resolve({ source: 'native', auth: { apiKey, baseUrl: server.url, headers } }) } },
+      auth: { apiKey: { name: 'native', resolve } },
     }
     profiles.set('openrouter', { ...profile, piProvider })
     return new PiAiAdapter({ profiles: () => profiles, resolveApiKey: () => Promise.resolve(undefined), auth: memoryAuth() })
   }
-  const drain = async (adapter: PiAiAdapter): Promise<StreamChunk[]> => {
+  const drain = async (adapter: PiAiAdapter, signal?: AbortSignal): Promise<StreamChunk[]> => {
     const chunks: StreamChunk[] = []
-    for await (const chunk of adapter.stream({ ...messages })) chunks.push(chunk)
+    for await (const chunk of adapter.stream({ ...messages, ...signal === undefined ? {} : { signal } })) chunks.push(chunk)
     return chunks
   }
 
@@ -294,6 +336,34 @@ describe('Messages subscription restriction through every credential source', ()
     const chunks = await drain(nativeRoute(server, { 'x-native-routing': 'native-value' }, 'ordinary-native-key'))
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
     expect(server.headers[0]?.['x-native-routing']).toBe('native-value')
+  })
+
+  it('passes the caller signal through and leaves a native auth failure to the dispatch', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const live = new AbortController()
+    const chunks: StreamChunk[] = []
+    for await (const chunk of nativeRoute(server, {}, 'ordinary-native-key').stream({ ...messages, signal: live.signal })) chunks.push(chunk)
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    const failed = await drain(nativeRoute(server, {}, 'ordinary-native-key', () => Promise.reject(new Error('native lookup failed'))))
+    expect(failed.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'error', failure: { message: expect.stringContaining('native lookup failed') } } })
+    expect(server.paths).toEqual(['/v1/messages?beta=true'])
+  })
+
+  it('keeps the caller\'s abort from being swallowed by the credential check', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const aborted = new AbortController()
+    aborted.abort(new Error('caller gave up'))
+    await expect(drain(nativeRoute(server, {}, 'ordinary-native-key'), aborted.signal)).rejects.toThrow()
+    expect(server.paths).toEqual([])
+  })
+
+  it('names the route when a non-OpenAI sign-in-only profile has lost its sign-in', async () => {
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const ctx = await mounted(routed(server, { signInOnly: true }), undefined)
+    await ctx.credentials.set(credentialRef('OPENROUTER_API_KEY'), 'ambient-must-not-be-used')
+    const result = await assemble(ctx, messages)
+    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'AUTH', message: expect.stringContaining('"openrouter" sign-in was removed') } })
+    expect(server.paths).toEqual([])
   })
 
   it('refuses a subscription credential that only native auth metadata carries', async () => {
@@ -345,5 +415,17 @@ describe('plan intent survives an automatic-route edit', () => {
     await ctx.credentials.deleteRecord(PiAi.recordKeyFor('openai'))
     expect((await assemble(ctx, request)).finish).toEqual({ kind: 'stop' })
     expect(server.headers[0]?.authorization).toBe('Bearer deliberate-ambient-key')
+  })
+})
+
+describe('model listing deadline configuration', () => {
+  it.each([0, -1, Number.POSITIVE_INFINITY, Number.NaN, 2 ** 31])('rejects a modelListTimeoutMs of %s when profiles resolve', (timeout) => {
+    expect(() => resolveProfiles({ openai: { modelListTimeoutMs: timeout } }))
+      .toThrow(/modelListTimeoutMs must be a positive finite number/)
+  })
+
+  it('resolves the documented default and an explicit value', () => {
+    expect(resolveProfiles({ openai: {} }).get('openai')?.modelListTimeoutMs).toBe(15_000)
+    expect(resolveProfiles({ openai: { modelListTimeoutMs: 2_500 } }).get('openai')?.modelListTimeoutMs).toBe(2_500)
   })
 })
