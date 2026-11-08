@@ -1,5 +1,5 @@
 /** The early control hook: when the runtime consults it, what it may refuse, and what it never shows an adapter. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, {
   assessSuppliedControls, createUserMessage, LlmAdapter, LlmError, ReasoningEffortId, undeclaredControlAssessment,
@@ -54,6 +54,7 @@ class EarlyAdapter extends LlmAdapter {
 
 async function runtime(adapter: LlmAdapter): Promise<Context> {
   const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
   await ctx.plugin(LlmRuntime)
   ctx.llm.registerAdapter([ROUTE], adapter)
   return ctx
@@ -197,16 +198,16 @@ describe('an unprepared ctx.llm.stream', () => {
     expect(adapter.events).toEqual(['preassess', 'prepareCall'])
   })
 
-  it('leaves an already-aborted stream to the preparation classification and skips the hook', async () => {
+  it('stops an already-aborted stream before the hook or adapter preparation', async () => {
     const adapter = new EarlyAdapter(() => unsupported('temperature'))
     const ctx = await runtime(adapter)
     const output = await drain(ctx.llm.stream(request({ temperature: 1, signal: AbortSignal.abort(new Error('gone')) })))
     expect(output.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'aborted' } })
     expect(output.at(-1)).not.toMatchObject({ reason: { failure: { code: 'UNSUPPORTED_CONTROL' } } })
-    expect(adapter.events).not.toContain('preassess')
+    expect(adapter.events).toEqual([])
   })
 
-  it('keeps ABORTED when the caller leaves while the adapter is still preparing', async () => {
+  it('finishes as aborted when the caller leaves while the adapter is still preparing', async () => {
     const adapter = new EarlyAdapter()
     const gate = Promise.withResolvers<undefined>()
     adapter.prepareGate = gate.promise

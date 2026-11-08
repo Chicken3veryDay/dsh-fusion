@@ -1239,8 +1239,8 @@ export class LlmRuntime extends TypertRemoteService {
       let resolvedConfig: LlmCallConfig
       let dispatch: (options: GenerateOptions) => AsyncIterable<StreamChunk>
       if (prepared === undefined) {
-        // An aborted caller keeps the cancellation classification of preparation below.
-        if (options.signal?.aborted !== true) this.refuseEarly(adapter, options)
+        if (options.signal?.aborted) throw new LlmError('LLM preparation aborted', 'ABORTED', { cause: options.signal.reason })
+        this.refuseEarly(adapter, options)
         const adapterCall = await adapter.prepareCall(options.provider, options.model, options.signal)
         modelInfo = this.normalizeModelInfo(registration, options.model, adapterCall.model)
         resolvedConfig = this.resolveCallWithInfo(options, modelInfo).config

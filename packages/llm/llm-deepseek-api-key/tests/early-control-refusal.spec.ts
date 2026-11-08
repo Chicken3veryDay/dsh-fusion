@@ -293,6 +293,8 @@ describe('cancellation', () => {
     const result = await run(h, 'stream', { temperature: 0.2 }, { signal: AbortSignal.abort(new Error('caller gone')) })
     expect(result).toMatchObject({ ok: false, kind: 'aborted' })
     expect(result).not.toMatchObject({ code: 'UNSUPPORTED_CONTROL' })
+    expect(h.credentialReads()).toBe(0)
+    expect(h.requests).toEqual([])
     expect(h.requests.filter(request => request.startsWith('POST'))).toEqual([])
   })
 })
