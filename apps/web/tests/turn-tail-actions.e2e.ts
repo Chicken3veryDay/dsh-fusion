@@ -18,26 +18,29 @@ import type { ReplayOverrideDoc } from '@deepseek-ai/dsh-llm-replay'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   acknowledgeReloadConnectionLoss, assertFixtureInventory, captureStableAria, compareOrRefreshGolden, fixtureUserPrompts,
-  launchWebScaffold, recordFixture, seedSession, watchConsole, webSnapshotMode, type WebScaffold,
+  launchWebScaffold, recordFixture, ScaffoldClosedError, seedSession, watchConsole, webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { createChatScrollFixture } from './chat-scroll-fixture.ts'
 import { openSettings, connectFreshWorkspace, expandOwningTurnProcess, newEnglishPage, saveFailureShot, WEB_FIXTURE_TIME } from './support.ts'
 
-const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/turn-tail-actions', import.meta.url))
-const FIXTURE = join(SNAPSHOT_DIR, 'session.v3.jsonl')
+const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/turn-tail-actions-script', import.meta.url))
+const EXPECTED_DIR = fileURLToPath(new URL('./expected/turn-tail-actions-script/', import.meta.url))
+// The native generations stay committed and owned; this scenario drives the Script default.
+const NATIVE_SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/turn-tail-actions', import.meta.url))
+const FIXTURE = join(SNAPSHOT_DIR, 'session.v4.jsonl')
 // Three goldens for the same message: parked mid-turn, aborted, and completed.
-const RUNNING_EXPECTED = join(SNAPSHOT_DIR, 'running.expected.md')
-const SETTLED_EXPECTED = join(SNAPSHOT_DIR, 'settled.expected.md')
-const USAGE_EXPANDED_EXPECTED = join(SNAPSHOT_DIR, 'usage-expanded.expected.md')
-const COMPLETED_EXPECTED = join(SNAPSHOT_DIR, 'completed.expected.md')
-const FOCUSED_EXPECTED = join(SNAPSHOT_DIR, 'focused.expected.md')
+const RUNNING_EXPECTED = join(EXPECTED_DIR, 'running.expected.md')
+const SETTLED_EXPECTED = join(EXPECTED_DIR, 'settled.expected.md')
+const USAGE_EXPANDED_EXPECTED = join(EXPECTED_DIR, 'usage-expanded.expected.md')
+const COMPLETED_EXPECTED = join(EXPECTED_DIR, 'completed.expected.md')
+const FOCUSED_EXPECTED = join(EXPECTED_DIR, 'focused.expected.md')
 const MODE = webSnapshotMode()
 
 // The recording must carry text in the SAME assistant message as the tool
 // call; a Think-only step would leave nothing for the footer to attach to and
 // the scenario would pass against either implementation.
 const NARRATION = 'Reading the workspace now.'
-const PROMPT = `Begin your reply with the plain sentence "${NARRATION}" as text, and in that same message call the bash tool with the command "echo alpha". After the tool result, reply with the single word DONE and stop.`
+const PROMPT = `Begin your reply with the plain sentence "${NARRATION}" as text, and in that same message call run_code with one program that runs bash "echo alpha" with the description "Print alpha to stdout". After the tool result, reply with the single word DONE and stop.`
 
 /**
  * Focus the Copy IconAction and wait for the tooltip the running golden records.
@@ -338,14 +341,39 @@ describe('web e2e: assistant IconActions wait for the turn to end', () => {
     expect(tripwire.warnings).toEqual([])
   }, 60_000)
 
+  it.skipIf(MODE === 'record')('releases an armed settled waiter at close without an unhandled rejection', async () => {
+    // Failure injection: the scenario stops after arming the barrier, as a failed assertion would, and nothing
+    // awaits the waiter while the scaffold tears down the parked turn.
+    const unhandled: unknown[] = []
+    const record = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', record)
+    onTestFinished(() => { process.off('unhandledRejection', record) })
+    let marker = ''
+    await launch((sidecarHome) => {
+      marker = join(sidecarHome, '.hang-ready')
+      return { patches: [{ at: 1, entry: { kind: 'hang', readyFile: marker } }] }
+    })
+    const { settled } = await sendPrompt(120_000)
+    await expect.poll(() => existsSync(marker), { timeout: 20_000 }).toBe(true)
+    const closing = scaffold!
+    scaffold = undefined
+    await closing.close()
+    // Unhandled rejections surface after the microtask queue drains, so give the loop a full turn.
+    await new Promise<void>(resolveTurn => setImmediate(resolveTurn))
+    expect(unhandled).toEqual([])
+    // The abandoned barrier still tells a late awaiter why it never settled.
+    await expect(settled).rejects.toBeInstanceOf(ScaffoldClosedError)
+  }, 60_000)
+
   it.skipIf(MODE === 'record')('keeps a closed fixture inventory', async () => {
-    await assertFixtureInventory(
-      SNAPSHOT_DIR,
-      [
-        'completed.expected.md', 'focused.expected.md', 'running.expected.md', 'session.v3.jsonl',
-        'settled.expected.md', 'usage-expanded.expected.md',
-      ],
-    )
+    await assertFixtureInventory(SNAPSHOT_DIR, ['session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json'])
+    await assertFixtureInventory(EXPECTED_DIR, [
+      'completed.expected.md', 'focused.expected.md', 'running.expected.md', 'settled.expected.md', 'usage-expanded.expected.md',
+    ])
+    await assertFixtureInventory(NATIVE_SNAPSHOT_DIR, [
+      'completed.expected.md', 'focused.expected.md', 'running.expected.md', 'session.v2.jsonl', 'session.v3.jsonl',
+      'session.v4.jsonl', 'settled.expected.md', 'usage-expanded.expected.md',
+    ])
   })
 })
 

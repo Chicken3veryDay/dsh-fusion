@@ -1,0 +1,8 @@
+version: 1
+scenario: turn-tail-actions-script
+profile: web
+composition: web-script
+recording: authored
+header:
+  class: web-script
+  pin: true

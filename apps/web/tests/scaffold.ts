@@ -944,6 +944,8 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     if (process.cwd() !== originalCwd) process.chdir(originalCwd)
   }
 
+  /** Armed `whenTurnSettled` barriers that close() abandons. */
+  const abandonSettleWaiters = new Set<() => void>()
   return {
     harnessHome,
     mode,
@@ -961,22 +963,38 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // explicit flush makes the transcript durable, and the caller's browser
     // settled-poll comes last because host completion strictly precedes render.
     whenTurnSettled(timeoutMs = mode === 'record' ? 180_000 : 30_000): Promise<SessionId> {
-      return new Promise<SessionId>((resolveSettled, reject) => {
-        const timer = setTimeout(() => {
-          off()
-          reject(new Error(`no turn/end within ${timeoutMs}ms`))
-        }, timeoutMs)
-        const off = ctx.on('session/event', (session: Session, event: SessionEvent) => {
-          if (event.type !== 'turn/end') return
+      const waiter = new Promise<SessionId>((resolveSettled, reject) => {
+        let off = (): void => undefined
+        const release = (): void => {
           clearTimeout(timer)
           off()
+          abandonSettleWaiters.delete(abandon)
+        }
+        // Reached only from close(): a barrier the scenario never awaited must not outlive its sessions.
+        const abandon = (): void => {
+          release()
+          // Pre-handled so an unawaited barrier is no unhandled rejection; a late awaiter still receives the error.
+          waiter.catch(() => undefined)
+          reject(new ScaffoldClosedError())
+        }
+        const timer = setTimeout(() => {
+          release()
+          reject(new Error(`no turn/end within ${timeoutMs}ms`))
+        }, timeoutMs)
+        abandonSettleWaiters.add(abandon)
+        off = ctx.on('session/event', (session: Session, event: SessionEvent) => {
+          if (event.type !== 'turn/end') return
+          release()
           ctx.sessions.flush(session)
             .then(() => { resolveSettled(session.id) }, reject)
         })
       })
+      return waiter
     },
     async close(): Promise<void> {
       const failures: unknown[] = []
+      // Detach armed barriers before sessions dispose: the disposal's own turn/end must not flush a closed handle.
+      for (const abandon of [...abandonSettleWaiters]) abandon()
       if (mode !== 'record'
         && replayFixture !== undefined
         && options.replayProvidersOnly !== true
@@ -1020,6 +1038,14 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       }
       if (failures.length > 0) throw new AggregateError(failures, 'web scaffold teardown failed')
     },
+  }
+}
+
+/** Rejection a pending `whenTurnSettled` barrier receives when its scaffold closes before any `turn/end` arrived. */
+export class ScaffoldClosedError extends Error {
+  constructor() {
+    super('web scaffold closed before the awaited turn/end')
+    this.name = 'ScaffoldClosedError'
   }
 }
 
