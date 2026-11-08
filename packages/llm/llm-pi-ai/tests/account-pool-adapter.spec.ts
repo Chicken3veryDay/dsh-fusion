@@ -350,6 +350,103 @@ describe('a rejection belongs to the grant the call authenticated with', () => {
   })
 })
 
+describe('rejections of different grants settling in either order', () => {
+  const NEWER = 'sk-ant-oat-also-rejected-new'
+  const NEXT = 'sk-ant-oat-next-valid'
+
+  /** Prepare a call with the seeded grant and one with `NEWER`, both before either is sent. */
+  async function twoGrantsInFlight(script: Script) {
+    const r = await rig(script, { ids: ['account-1'] })
+    const ctx = await r.runtime()
+    const old = await prepared(ctx)
+    r.accounts.get('account-1')!.stored.set('anthropic', oauth(NEWER))
+    const newer = await prepared(ctx)
+    return { ...r, ctx, old, newer }
+  }
+
+  it.each([
+    ['after', ['newer', 'old'], [`Bearer ${NEWER}`, bearer('account-1')]],
+    ['before', ['old', 'newer'], [bearer('account-1'), `Bearer ${NEWER}`]],
+  ] as const)('keeps the stored rejected grant out when the older grant\'s rejection settles %s it', async (_order, order, sent) => {
+    const r = await twoGrantsInFlight([rejectedBearer, rejectedBearer, ok])
+    for (const which of order) expect(await r[which].finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(bearers(r.server)).toEqual(sent)
+    expect(r.accounts.get('account-1')!.stored.get('anthropic')).toEqual(oauth(NEWER))
+    // The stored grant is unchanged and was rejected: neither path sends it again.
+    await expect(r.ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'AUTH' })
+    await expect(finishOf(r.adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    expect(r.server.requests).toHaveLength(2)
+    // A genuinely new grant re-admits the account and is the bearer sent.
+    r.accounts.get('account-1')!.stored.set('anthropic', oauth(NEXT))
+    expect(await (await prepared(r.ctx)).finish()).toEqual({ kind: 'stop' })
+    expect(bearers(r.server)).toEqual([...sent, `Bearer ${NEXT}`])
+  })
+
+  it('keeps the stored grant out whatever order three rejected grants settle in', async () => {
+    const { runtime, accounts, server } = await rig([rejectedBearer, rejectedBearer, rejectedBearer, ok], { ids: ['account-1'] })
+    const ctx = await runtime()
+    const calls = []
+    for (const access of ['sk-ant-oat-first', 'sk-ant-oat-second', 'sk-ant-oat-third']) {
+      accounts.get('account-1')!.stored.set('anthropic', oauth(access))
+      calls.push(await prepared(ctx))
+    }
+    for (const index of [2, 0, 1]) expect(await calls[index]!.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    await expect(ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'AUTH' })
+    expect(server.requests).toHaveLength(3)
+    accounts.get('account-1')!.stored.set('anthropic', oauth(NEXT))
+    expect(await (await prepared(ctx)).finish()).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual(['Bearer sk-ant-oat-third', 'Bearer sk-ant-oat-first', 'Bearer sk-ant-oat-second', `Bearer ${NEXT}`])
+  })
+
+  /** Make the account store's next read run `action` before reading normally. */
+  function beforeNextRead(r: Rig, action: () => Promise<void>) {
+    const store = r.accounts.get('account-1')!.credentials
+    const base = store.read.bind(store)
+    let pending = true
+    return vi.spyOn(store, 'read').mockImplementation(async (id, options) => {
+      if (pending) {
+        pending = false
+        await action()
+      }
+      return base(id, options)
+    })
+  }
+
+  it('does not send a rejected grant when the comparison read fails but the authentication read succeeds', async () => {
+    const r = await twoGrantsInFlight([rejectedBearer, rejectedBearer, ok])
+    expect(await r.newer.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(await r.old.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    beforeNextRead(r, () => Promise.reject(new Error('store briefly unavailable')))
+    await expect(r.ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'AUTH' })
+    expect(r.server.requests).toHaveLength(2)
+    expect(r.pool!['states'].get('account-1')!.leases.size).toBe(0)
+  })
+
+  it('reports a store that cannot be read from the stream, releases the claim, and still refuses the rejected grant afterwards', async () => {
+    const r = await twoGrantsInFlight([rejectedBearer, rejectedBearer, ok])
+    expect(await r.newer.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(await r.old.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    const read = vi.spyOn(r.accounts.get('account-1')!.credentials, 'read').mockRejectedValue(new Error('store unavailable'))
+    await expect(finishOf(r.adapter.stream(OPTIONS))).rejects.toThrow('store unavailable')
+    expect(r.pool!['states'].get('account-1')!.leases.size).toBe(0)
+    read.mockRestore()
+    await expect(r.ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'AUTH' })
+    expect(r.server.requests).toHaveLength(2)
+  })
+
+  it('keeps the rejected grant out after a preparation aborted during the comparison read', async () => {
+    const r = await twoGrantsInFlight([rejectedBearer, rejectedBearer, ok])
+    expect(await r.newer.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(await r.old.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    const controller = new AbortController()
+    beforeNextRead(r, async () => { controller.abort(new Error('user abort')) })
+    await expect(r.ctx.llm.prepareCall(CALL, controller.signal)).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(r.pool!['states'].get('account-1')!.leases.size).toBe(0)
+    await expect(r.ctx.llm.prepareCall(CALL)).rejects.toMatchObject({ code: 'AUTH' })
+    expect(r.server.requests).toHaveLength(2)
+  })
+})
+
 describe('refresh through an intercepted token endpoint', () => {
   const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 

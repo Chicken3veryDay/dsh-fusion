@@ -14,6 +14,9 @@
  * spreads concurrent requests by the number of calls each account carries. An
  * account a provider limit put on cooldown, or whose grant the provider
  * rejected, is skipped until the cooldown ends or its stored grant changes.
+ * Rejections of different grants can settle in any order, so the account
+ * remembers each rejected grant until a read shows it is no longer stored, and
+ * a call never proceeds with a grant the provider already rejected.
  * The state lives in this process only: another DSH process learns about a
  * limited account by hitting the limit itself, and a restart forgets cooldowns.
  *
@@ -63,8 +66,15 @@ interface AccountState {
   readonly leases: Set<AccountLease>
   /** Set while a provider limit keeps the account out of selection. */
   cooling?: { until: number; code: string }
-  /** Set while the provider rejected the grant whose fingerprint is stored. */
-  signedOut?: { fingerprint: string }
+  /** Whether a rejection keeps the account out until a read shows a grant outside {@link rejected}. */
+  signedOut: boolean
+  /**
+   * Fingerprints of the grants the provider rejected that may still be stored.
+   * Replaced, never mutated, on each rejection; {@link AccountPool.readmit}
+   * narrows it to the stored grant, so it holds at most the rejections that
+   * settled since the last successful read.
+   */
+  rejected: ReadonlySet<string>
 }
 
 /** Whether a failure code is a provider limit on the account rather than on the request. */
@@ -158,7 +168,7 @@ export class AccountPool {
     for (const { id } of config.accounts) {
       const store = stores.get(id)
       if (store === undefined) throw new Error(`llm-pi-ai: no credential store for account "${id}"`)
-      this.states.set(id, { store, leases: new Set() })
+      this.states.set(id, { store, leases: new Set(), signedOut: false, rejected: new Set() })
     }
   }
 
@@ -214,22 +224,44 @@ export class AccountPool {
   }
 
   /**
-   * Re-admit every signed-out account whose stored grant changed since it was
-   * rejected, which is how a new sign-in or an external edit takes effect
-   * without a restart.
+   * Re-admit every signed-out account whose stored grant is none of the grants
+   * the provider rejected, which is how a new sign-in or an external edit takes
+   * effect without a restart. A stored grant that was rejected keeps the
+   * account out whichever rejection settled last. A rejection that settles
+   * during the read leaves the account out until the next readmission. An
+   * unreadable store re-admits the account so that its authentication reports
+   * the failure; {@link isRejected} still refuses a rejected grant that
+   * authentication then reads.
    * @param signal - cancellation of the credential reads.
    */
   async readmit(signal?: AbortSignal): Promise<void> {
     await Promise.all(this.accounts.map(async (account) => {
       const state = this.state(account)
-      const rejected = state.signedOut
-      if (rejected === undefined) return
-      if (await this.fingerprint(account, signal) !== rejected.fingerprint && state.signedOut === rejected) delete state.signedOut
+      if (!state.signedOut) return
+      const { rejected } = state
+      const stored = await this.fingerprint(account, signal)
+      if (state.rejected !== rejected) return
+      if (stored === 'unreadable') state.signedOut = false
+      else if (rejected.has(stored)) state.rejected = new Set([stored])
+      else {
+        state.signedOut = false
+        state.rejected = new Set()
+      }
     }))
   }
 
+  /**
+   * Whether the provider rejected this grant of the account, and the grant may still be stored.
+   * @param account - an id from {@link accounts}.
+   * @param fingerprint - the identity of the grant a call authenticated with.
+   * @returns true when a call must not use that grant.
+   */
+  isRejected(account: string, fingerprint: string): boolean {
+    return this.state(account).rejected.has(fingerprint)
+  }
+
   private eligible(state: AccountState, at: number): boolean {
-    return state.signedOut === undefined && (state.cooling === undefined || state.cooling.until <= at)
+    return !state.signedOut && (state.cooling === undefined || state.cooling.until <= at)
   }
 
   /** Calls the account carries now: started streams plus unexpired claims. */
@@ -285,7 +317,9 @@ export class AccountPool {
    * @param fingerprint - the identity of the grant the request used, from {@link GrantObserver.observed}.
    */
   markSignedOut(account: string, fingerprint: string): void {
-    this.state(account).signedOut = { fingerprint }
+    const state = this.state(account)
+    state.rejected = new Set([...state.rejected, fingerprint])
+    state.signedOut = true
   }
 
   /**
@@ -306,7 +340,7 @@ export class AccountPool {
     let earliest: { readonly delayMs: number; readonly code: string } | undefined
     for (const account of this.accounts) {
       const { cooling, signedOut } = this.state(account)
-      if (signedOut !== undefined || cooling === undefined || cooling.until <= at) continue
+      if (signedOut || cooling === undefined || cooling.until <= at) continue
       const delayMs = Math.ceil(cooling.until - at)
       if (earliest === undefined || delayMs < earliest.delayMs) earliest = { delayMs, code: cooling.code }
     }

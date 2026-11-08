@@ -925,7 +925,8 @@ export class PiAiAdapter extends LlmAdapter {
 
   /**
    * Claim the best eligible account and authenticate as it. An account whose
-   * grant is missing, revoked or rejected is marked signed out and skipped; a
+   * grant is missing, revoked or rejected, or whose authentication used a grant
+   * the provider already rejected, is marked signed out and skipped; a
    * failure that is not about the grant stays with the claim so the stream
    * reports it to the retry owner. When no account is eligible the result is
    * the earliest cooling reset, or a terminal AUTH when every account is signed
@@ -953,7 +954,8 @@ export class PiAiAdapter extends LlmAdapter {
       try {
         const outcome = await this.authenticateAccount(snapshot, profile, model, pool, lease.account, signal)
         signal?.throwIfAborted()
-        if (outcome.kind === 'rejected') {
+        // A grant rejected by another call is refused before it reaches the provider again.
+        if (outcome.kind === 'rejected' || (outcome.kind === 'bound' && pool.isRejected(lease.account, outcome.fingerprint))) {
           pool.release(lease)
           pool.markSignedOut(lease.account, outcome.fingerprint)
           continue

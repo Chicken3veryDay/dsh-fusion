@@ -1,7 +1,7 @@
 /** Account pool configuration and in-process selection state, with a manual clock and fixed randomness. */
 
 import { resolve as resolvePath } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Credential, CredentialStore } from '@earendil-works/pi-ai'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { AccountPool, grantFingerprint, observeAccountStream, observeGrant } from '../src/account-pool.ts'
@@ -237,6 +237,46 @@ describe('account availability', () => {
     await readmitting
     expect(pool.hasEligible()).toBe(true)
     expect([claim(pool).account]).toEqual(['account-2'])
+  })
+
+  it.each([
+    ['after', ['replacement', 'original']],
+    ['before', ['original', 'replacement']],
+  ] as const)('keeps a stored rejected grant out when an older grant\'s rejection settles %s it', async (_order, order) => {
+    const { pool, auth } = makePool({ ids: ['account-1'] })
+    const fingerprints = { original: await pool.fingerprint('account-1'), replacement: grantFingerprint(grant('replacement')) }
+    auth.get('account-1')?.stored.set('anthropic', grant('replacement'))
+    for (const which of order) pool.settle('account-1', fingerprints[which], { code: 'AUTH' })
+    await pool.readmit()
+    expect(pool.hasEligible()).toBe(false)
+    // The read narrows the remembered rejections to the stored grant.
+    expect(pool.isRejected('account-1', fingerprints.replacement)).toBe(true)
+    expect(pool.isRejected('account-1', fingerprints.original)).toBe(false)
+    auth.get('account-1')?.stored.set('anthropic', grant('next'))
+    await pool.readmit()
+    expect(pool.hasEligible()).toBe(true)
+    expect(pool.isRejected('account-1', fingerprints.replacement)).toBe(false)
+  })
+
+  it('keeps the stored rejected grant out after an older rejection settles during the comparison read', async () => {
+    const { pool, auth } = makePool({ ids: ['account-1'] })
+    auth.get('account-1')?.stored.set('anthropic', grant('replacement'))
+    pool.markSignedOut('account-1', grantFingerprint(grant('replacement')))
+    const readmitting = pool.readmit()
+    pool.markSignedOut('account-1', 'older-fingerprint')
+    await readmitting
+    await pool.readmit()
+    expect(pool.hasEligible()).toBe(false)
+  })
+
+  it('re-admits an account whose store cannot be read, but still knows the rejected grant', async () => {
+    const { pool, auth } = makePool({ ids: ['account-1'] })
+    const rejected = await pool.fingerprint('account-1')
+    pool.markSignedOut('account-1', rejected)
+    vi.spyOn(auth.get('account-1')!.credentials, 'read').mockRejectedValueOnce(new Error('denied'))
+    await pool.readmit()
+    expect(pool.hasEligible()).toBe(true)
+    expect(pool.isRejected('account-1', rejected)).toBe(true)
   })
 
   it('fingerprints a missing grant as absent and an unreadable store as unreadable', async () => {
