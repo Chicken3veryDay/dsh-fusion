@@ -4,6 +4,9 @@
  * catalog injection, unavailable-model refusals, and the prompt-assembly
  * boundary for a running selection change.
  */
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AgentModel, modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -350,24 +353,29 @@ describe('Web session model selection', () => {
     } finally { await ctx.fiber.dispose() }
   })
 
-  it('counts a stored sign-in for a routed provider, and nothing else, as a configured credential', async () => {
+  it('counts only the route owner’s stored sign-in, including when another owner uses the same id', async () => {
+    const { default: LocalCredentials } = await import('@deepseek-ai/dsh-credentials-local')
+    const { credentialKey } = await import('@deepseek-ai/dsh-credentials')
+    const PiAi = await import('../../../llm/llm-pi-ai/src/index.ts')
+    const root = await mkdtemp(join(tmpdir(), 'provider-readiness-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
     const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
     await ctx.plugin(LlmRuntime)
-    const records = vi.fn(async () => [] as Array<{ key: string; kind: 'api-key' | 'grant' }>)
-    ctx.provide('credentials', { describe: vi.fn(), listRecords: records } as never)
+    await ctx.plugin(LocalCredentials, { path: join(root, 'credentials.yaml'), watch: false })
     ctx.provide('settings', { describe: () => [] } as never)
-    ctx.effect(() => ctx.llm.registerAdapter(['deepseek-account', 'openai-codex'], new CatalogAdapter('Routes', [])))
-    try {
-      expect(await hasProviderApiKey(ctx)).toBe(false)
-      // A record for a provider that has no route, and the installation record, are not a sign-in.
-      records.mockResolvedValue([{ key: 'llm-pi-ai/groq', kind: 'grant' }, { key: 'llm-pi-ai/installation-id', kind: 'grant' }])
-      expect(await hasProviderApiKey(ctx)).toBe(false)
-      // The DeepSeek account's own record does not count as another provider.
-      records.mockResolvedValue([{ key: 'deepseek-account-platform/deepseek-account', kind: 'grant' }])
-      expect(await hasProviderApiKey(ctx)).toBe(false)
-      records.mockResolvedValue([{ key: 'llm-pi-ai/openai-codex', kind: 'grant' }])
-      expect(await hasProviderApiKey(ctx)).toBe(true)
-    } finally { await ctx.fiber.dispose() }
+    await ctx.plugin(PiAi, { providers: { 'openai-codex': {} } })
+    expect(await hasProviderApiKey(ctx)).toBe(false)
+    await ctx.credentials.modifyRecord(credentialKey('unrelated-owner', 'openai-codex'), () => Promise.resolve({
+      kind: 'grant', payload: { access: 'unrelated' },
+    }))
+    expect(await hasProviderApiKey(ctx)).toBe(false)
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+      kind: 'grant', payload: { type: 'oauth', access: 'synthetic', refresh: 'synthetic', expires: 4102444800000 },
+    }))
+    await vi.waitFor(async () => { expect(await hasProviderApiKey(ctx)).toBe(true) })
+    await ctx.credentials.deleteRecord(PiAi.recordKeyFor('openai-codex'))
+    await vi.waitFor(async () => { expect(await hasProviderApiKey(ctx)).toBe(false) })
   })
 
   it.each(['settings', 'credentials'] as const)('refuses account initialization without %s inspection', async (missing) => {

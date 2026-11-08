@@ -184,6 +184,8 @@ describe('llm-pi-ai real dormant composition', () => {
     const { ctx } = await loadComposition(grantRecord('openai-codex'))
 
     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai-codex'])
+    expect(ctx.llm.listConfigurableProviders().find(provider => provider.provider === 'openai-codex'))
+      .toMatchObject({ hasStoredCredential: true })
   })
 
   it('never activates an Anthropic subscription grant, only its API key', async () => {

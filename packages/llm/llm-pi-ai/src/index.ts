@@ -145,11 +145,14 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedPiAiProviderPro
  * editor shows while the profile leaves the endpoint or the credential
  * reference unset.
  * @param profiles - the currently resolved provider profiles.
+ * @param settingsNs - Settings namespace owning the provider profiles.
+ * @param signedIn - Catalog routes with stored credentials this adapter recognizes.
  * @returns the directory entries in catalog order, declared routes last.
  */
 function directoryEntries(
   profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>,
   settingsNs: string,
+  signedIn: ReadonlySet<string>,
 ): LlmConfigurableProvider[] {
   const entries = new Map<string, LlmConfigurableProvider>()
   const declare = (provider: string, displayName: string, error?: string): void => {
@@ -158,6 +161,7 @@ function directoryEntries(
       provider,
       displayName,
       settingsNs,
+      ...signedIn.has(provider) ? { hasStoredCredential: true } : {},
       settingsPath: ['providers', provider],
       // Membership of the installed catalog, not of the settings document:
       // narrowing a shipped provider's models stores a profile too, and that
@@ -282,7 +286,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let directory: DirectoryRegistrationHandle | undefined
   let directoryFacts: unknown
   const ensureDirectory = (): void => {
-    const entries = directoryEntries(profiles(), settingsNs)
+    const entries = directoryEntries(profiles(), settingsNs, signedIn)
     if (deepEqualJson(entries, directoryFacts)) return
     // Atomic replace, never dispose-then-register: a route another adapter
     // family already declares (a profile keyed `deepseek-official`) would

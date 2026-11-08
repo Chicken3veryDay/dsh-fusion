@@ -1,11 +1,11 @@
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { credentialRef, type CredentialKey } from '@deepseek-ai/dsh-credentials'
 import { LocalCredentialProvider } from '@deepseek-ai/dsh-credentials-local'
 import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
@@ -72,6 +72,48 @@ describe('login flows in a real composition', () => {
     // else this plugin does still works.
     expect(ctx.get('authorization')).toBeUndefined()
     expect(ctx.llm.listConfigurableProviders().length).toBeGreaterThan(0)
+  })
+})
+
+describe('stored sign-in directory metadata', () => {
+  it('retains owner metadata on repeated updates and reports unreadable storage without replacing routes', async () => {
+    const ctx = await boot(await home(), {})
+    const key = LlmPiAi.recordKeyFor('openai-codex')
+    const record = { kind: 'grant', payload: { type: 'oauth', access: 'synthetic', refresh: 'r', expires: 4102444800000 } } as const
+    await ctx.credentials.modifyRecord(key, () => Promise.resolve(record))
+    await vi.waitFor(() => {
+      expect(ctx.llm.listConfigurableProviders().find(entry => entry.provider === 'openai-codex'))
+        .toMatchObject({ hasStoredCredential: true })
+    })
+    const list = vi.spyOn(ctx.credentials, 'listRecords')
+    onTestFinished(() => { list.mockRestore() })
+    ctx.emit('credentials/record-updated', key)
+    await vi.waitFor(() => { expect(list).toHaveBeenCalledOnce() })
+    const failure = new Error('synthetic storage failure')
+    list.mockRejectedValueOnce(failure)
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
+    onTestFinished(() => { warn.mockRestore() })
+    ctx.emit('credentials/record-updated', key)
+    await vi.waitFor(() => { expect(warn).toHaveBeenCalledWith(failure) })
+    expect(ctx.llm.listProviders().map(entry => entry.id)).toEqual(['openai-codex'])
+    expect(ctx.llm.listConfigurableProviders().find(entry => entry.provider === 'openai-codex'))
+      .toMatchObject({ hasStoredCredential: true })
+  })
+
+  it('does not publish a credential listing that settles after disposal', async () => {
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    const llm = ctx.llm
+    const listing = Promise.withResolvers<readonly { key: CredentialKey; kind: 'grant' }[]>()
+    const entered = Promise.withResolvers<undefined>()
+    ctx.provide('credentials', { listRecords: () => { entered.resolve(undefined); return listing.promise } } as never)
+    const mounting = ctx.plugin(LlmPiAi)
+    await entered.promise
+    await ctx.fiber.dispose()
+    listing.resolve([{ key: LlmPiAi.recordKeyFor('openai-codex'), kind: 'grant' }])
+    await mounting
+    expect(llm.listProviders()).toEqual([])
   })
 })
 
