@@ -1,7 +1,7 @@
 /** Shared projection of the live LLM registry into the browser model catalog. */
 
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { credentialKeyId, credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
@@ -91,9 +91,12 @@ export async function modelAvailable(ctx: Context, selection: ModelSelection): P
 }
 
 /**
- * Check configured provider API-key references independently of model availability.
+ * Check for a credential the user configured for a provider other than the DeepSeek account,
+ * independently of model availability: an API-key reference a settings profile names, or a stored
+ * sign-in (subscription grant or key) for a provider the registry currently routes. A stored
+ * record is matched to a route by its id, which is the provider route key.
  * @param ctx - Host registry, settings, and credential services.
- * @returns whether any API-key provider has a configured credential.
+ * @returns whether any other provider has a configured credential.
  */
 export async function hasProviderApiKey(ctx: Context): Promise<boolean> {
   const settings = ctx.get('settings')
@@ -113,5 +116,7 @@ export async function hasProviderApiKey(ctx: Context): Promise<boolean> {
     if (typeof ref === 'string' && ref.length > 0
       && (await credentials.describe(credentialRef(ref))).configured) return true
   }
-  return false
+  const routed = new Set(ctx.llm.listProviders().map(provider => provider.id))
+  routed.delete('deepseek-account')
+  return (await credentials.listRecords()).some(entry => routed.has(credentialKeyId(entry.key)))
 }

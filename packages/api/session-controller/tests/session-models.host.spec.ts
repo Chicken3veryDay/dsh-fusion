@@ -350,6 +350,26 @@ describe('Web session model selection', () => {
     } finally { await ctx.fiber.dispose() }
   })
 
+  it('counts a stored sign-in for a routed provider, and nothing else, as a configured credential', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    const records = vi.fn(async () => [] as Array<{ key: string; kind: 'api-key' | 'grant' }>)
+    ctx.provide('credentials', { describe: vi.fn(), listRecords: records } as never)
+    ctx.provide('settings', { describe: () => [] } as never)
+    ctx.effect(() => ctx.llm.registerAdapter(['deepseek-account', 'openai-codex'], new CatalogAdapter('Routes', [])))
+    try {
+      expect(await hasProviderApiKey(ctx)).toBe(false)
+      // A record for a provider that has no route, and the installation record, are not a sign-in.
+      records.mockResolvedValue([{ key: 'llm-pi-ai/groq', kind: 'grant' }, { key: 'llm-pi-ai/installation-id', kind: 'grant' }])
+      expect(await hasProviderApiKey(ctx)).toBe(false)
+      // The DeepSeek account's own record does not count as another provider.
+      records.mockResolvedValue([{ key: 'deepseek-account-platform/deepseek-account', kind: 'grant' }])
+      expect(await hasProviderApiKey(ctx)).toBe(false)
+      records.mockResolvedValue([{ key: 'llm-pi-ai/openai-codex', kind: 'grant' }])
+      expect(await hasProviderApiKey(ctx)).toBe(true)
+    } finally { await ctx.fiber.dispose() }
+  })
+
   it.each(['settings', 'credentials'] as const)('refuses account initialization without %s inspection', async (missing) => {
     const ctx = new Context()
     if (missing !== 'settings') ctx.provide('settings', {} as never)
@@ -368,7 +388,7 @@ describe('Web session model selection', () => {
       { provider: 'deepseek-account', id: 'second-model', name: 'Second' },
     ], REASONING)))
     const describe = vi.fn(async () => ({ configured: configuredKey, writable: true }))
-    ctx.provide('credentials', { describe } as never)
+    ctx.provide('credentials', { describe, listRecords: async () => [] } as never)
     ctx.effect(() => ctx.llm.registerConfigurableProviders([
       { provider: 'deepseek-account', displayName: 'Account', settingsNs: 'account', settingsPath: [] },
       { provider: 'removed-model-provider', displayName: 'Custom', settingsNs: 'first', settingsPath: ['providers', 'custom'] },
@@ -908,7 +928,7 @@ it('initializes the account model without reasoning metadata and rejects an empt
   const { configurationFixture } = await import('../../../settings/settings/tests/configuration-fixture.ts')
   const configured = await configurationFixture({ hmr: false })
   const { ctx } = await harness(undefined, configured.ctx)
-  ctx.provide('credentials', { describe: vi.fn() } as never)
+  ctx.provide('credentials', { describe: vi.fn(), listRecords: async () => [] } as never)
   const dispose = ctx.llm.registerAdapter(['deepseek-account'], new CatalogAdapter('Account', [
     { provider: 'deepseek-account', id: 'basic', name: 'Basic' },
   ]))
