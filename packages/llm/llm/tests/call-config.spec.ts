@@ -33,6 +33,24 @@ describe('callConfigEquals', () => {
 })
 
 describe('control assessment helpers', () => {
+  it('detaches and freezes nested translations without freezing the adapter-owned values', () => {
+    const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256 }
+    const translations = [translation]
+    const expected = structuredClone(translations)
+    const assessment = assessSuppliedControls({ maxTokens: 777 }, () => ({ kind: 'translated', translations }))
+    const disposition = assessment.fields.maxTokens
+    if (disposition?.kind !== 'translated') throw new Error('expected translated allowance')
+    translation.thinkingTokens = 7
+    translations.push({ ...translation })
+    expect(disposition.translations).toEqual(expected)
+    expect(Object.isFrozen(translations)).toBe(false)
+    expect(Object.isFrozen(translation)).toBe(false)
+    expect(Object.isFrozen(disposition.translations)).toBe(true)
+    expect(Object.isFrozen(disposition.translations[0])).toBe(true)
+    expect(Reflect.set(disposition.translations[0]!, 'thinkingTokens', 9)).toBe(false)
+    expect(() => Reflect.apply(Array.prototype.push, disposition.translations, [translation])).toThrow(TypeError)
+  })
+
   it('builds one frozen entry per supplied control, including falsy values, and none for omitted ones', () => {
     const decided: string[] = []
     const assessment = assessSuppliedControls(

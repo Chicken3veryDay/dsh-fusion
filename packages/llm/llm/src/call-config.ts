@@ -6,6 +6,7 @@
  * @module dsh-llm/call-config
  */
 
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type { GenerateOptions, LlmControlName, LlmResolvedModelInfo, UnsupportedControlReason } from './types.ts'
 import type { ReasoningEffortId } from './brand.ts'
 
@@ -86,7 +87,7 @@ const CONTROL_NAME_SET = {
  * cannot omit a supplied field and be read as supporting it.
  * @param controls - controls after `ConfigureCall` and model defaults.
  * @param decide - the adapter's verdict for one supplied control.
- * @returns a deep-frozen assessment covering exactly the supplied controls.
+ * @returns a detached, deeply frozen assessment covering exactly the supplied controls.
  */
 export function assessSuppliedControls(
   controls: Readonly<LlmCallControls>,
@@ -94,7 +95,7 @@ export function assessSuppliedControls(
 ): CallControlAssessment {
   const fields: Partial<Record<LlmControlName, ControlDisposition>> = {}
   for (const control of Object.keys(CONTROL_NAME_SET) as LlmControlName[]) {
-    if (controls[control] !== undefined) fields[control] = Object.freeze(decide(control))
+    if (controls[control] !== undefined) fields[control] = deepFreeze(structuredClone(decide(control)))
   }
   return Object.freeze({ fields: Object.freeze(fields) })
 }

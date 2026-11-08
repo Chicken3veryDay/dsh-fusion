@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, {
@@ -1276,6 +1276,34 @@ describe('LlmRuntime', () => {
       expect(Object.isFrozen(prepared.assessment)).toBe(true)
       expect(Object.isFrozen(prepared.assessment.fields)).toBe(true)
       expect(Object.isFrozen(prepared.assessment.fields.maxTokens)).toBe(true)
+    })
+
+    it('keeps prepared translations immutable after the adapter changes its retained values', async () => {
+      const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256 }
+      const translations = [translation]
+      const expected = structuredClone(translations)
+      const adapter = new class extends RecordingAdapter {
+        override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+          return {
+            ...await super.prepareCall(provider, model, signal),
+            assessControls: () => ({ fields: { maxTokens: { kind: 'translated' as const, translations } } }),
+          }
+        }
+      }(SCRIPT)
+      const ctx = new Context()
+      onTestFinished(() => ctx.fiber.dispose())
+      await ctx.plugin(LlmRuntime)
+      ctx.llm.registerAdapter(['route'], adapter)
+      const prepared = await ctx.llm.prepareCall({ provider: 'route', model: 'model', maxTokens: 777 })
+      const disposition = prepared.assessment.fields.maxTokens
+      if (disposition?.kind !== 'translated') throw new Error('expected translated allowance')
+      translation.thinkingTokens = 7
+      translations.push({ ...translation })
+      expect(disposition.translations).toEqual(expected)
+      expect(Object.isFrozen(disposition.translations)).toBe(true)
+      expect(Reflect.set(disposition.translations[0]!, 'thinkingTokens', 9)).toBe(false)
+      expect(await collect(prepared.stream({ ...prepared.config, messages: [] }))).toEqual(SCRIPT)
+      expect(adapter.lastOptions?.maxTokens).toBe(777)
     })
 
     it('normalizes the same refusal to the terminal failure on the direct stream path before any dispatch', async () => {
