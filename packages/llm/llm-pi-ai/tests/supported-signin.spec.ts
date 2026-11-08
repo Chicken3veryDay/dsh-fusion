@@ -281,7 +281,7 @@ describe('ambient credentials and directory offers', () => {
   })
 
   it('uses the public model endpoint for an automatic OpenAI route and notifies pickers of an account change', async () => {
-    const server = await mockServer([{ body: JSON.stringify({ models: [{ slug: 'account-only', display_name: 'Account only', visibility: 'list' }] }) }, { body: JSON.stringify({ models: [] }) }])
+    const server = await mockServer([{ body: JSON.stringify({ models: [{ slug: 'gpt-5.4', display_name: 'Account only', visibility: 'list' }] }) }, { body: JSON.stringify({ models: [] }) }])
     const transport = globalThis.fetch
     vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input)
@@ -305,7 +305,7 @@ describe('ambient credentials and directory offers', () => {
     await ctx.credentials.set(credentialRef('OPENAI_API_KEY'), 'other-api-billing')
     await ctx.plugin(PiAi)
     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
-    expect(await ctx.llm.listModels('openai')).toEqual([{ provider: 'openai', id: 'account-only', name: 'Account only' }])
+    expect(await ctx.llm.listModels('openai')).toEqual([{ provider: 'openai', id: 'gpt-5.4', name: 'Account only', inputModalities: expect.arrayContaining(['text']) }])
     const updated = new Promise<void>((resolve) => { ctx.on('llm/adapters-updated', () => { resolve() }) })
     await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai'), () => Promise.resolve({ ...grant, payload: { ...grant.payload, access: 'new-account' } }))
     await updated

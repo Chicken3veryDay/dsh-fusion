@@ -262,6 +262,20 @@ export abstract class LlmAdapter {
   }
 
   /**
+   * Decide whether a catalog-driven interface may select one exact model. The
+   * default asks the advertised catalog. An adapter whose catalog costs a
+   * network round trip overrides it with a local answer, so choosing a model
+   * never depends on that round trip.
+   * @param provider - one provider route owned by this adapter.
+   * @param model - exact model id the interface would select.
+   * @param _signal - cancellation for a default catalog lookup.
+   * @returns whether the model may be selected.
+   */
+  async canSelectModel(provider: string, model: string, _signal?: AbortSignal): Promise<boolean> {
+    return (await this.listModels(provider)).some(entry => entry.id === model)
+  }
+
+  /**
    * Resolve all metadata available for one exact model. This query is
    * independent of the advisory catalog and does not validate request routing.
    * @param provider - one provider route owned by this adapter.
@@ -746,6 +760,19 @@ export class LlmRuntime extends TypertRemoteService {
         },
       }
     })
+  }
+
+  /**
+   * Whether a catalog-driven interface may select one exact model. Adapters
+   * decide through {@link LlmAdapter.canSelectModel}; the answer is advisory
+   * for core routing, which accepts unlisted ids.
+   * @param provider - registered provider route to inspect.
+   * @param model - exact model id the interface would select.
+   * @param signal - optional cancellation for an adapter lookup.
+   * @returns whether the adapter lets the interface select the model.
+   */
+  canSelectModel(provider: string, model: string, signal?: AbortSignal): Promise<boolean> {
+    return this.registration(provider).adapter.canSelectModel(provider, model, signal)
   }
 
   /**

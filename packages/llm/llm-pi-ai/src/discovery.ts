@@ -25,6 +25,7 @@ import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
 import z from '@deepseek-ai/schemastery'
+import { carriesSubscriptionToken, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
 import { catalogModels } from './catalog.ts'
 
 /** Discovered rows always carry a display name, including id-based defaults. */
@@ -328,6 +329,12 @@ export async function discoverModels(
   stored ??= storedProfile?.()
   const supplied = plan?.accessToken ?? request.apiKey ?? await stored?.resolveApiKey()
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
+  // The listing carries the key and deployment headers to whatever endpoint the
+  // draft names, so a Claude subscription token is refused here exactly as the
+  // request path refuses it, before anything is sent.
+  if (api === 'anthropic-messages' && carriesSubscriptionToken([apiKey, ...Object.values(stored?.headers ?? {})])) {
+    throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
+  }
   let response: Response
   try {
     const headers = new Headers(stored?.headers === undefined ? undefined : Object.entries(stored.headers))
@@ -390,4 +397,46 @@ export async function discoverModels(
     return models
   }
   return readListing(body)
+}
+
+/** The two bounds every network model listing runs under. */
+export interface DiscoveryBounds {
+  /** Validated deadline in milliseconds for the whole lookup, body included. */
+  readonly timeoutMs: number
+  /** Owner lifetime; its abort cancels the lookup and releases the connection. */
+  readonly lifetime: AbortSignal | undefined
+}
+
+/**
+ * Run {@link discoverModels} under a deadline and its owner's lifetime. One
+ * signal covers the credential lookup, the request, and the body read, so a
+ * listing that never answers, or stalls mid-body, settles and closes its
+ * connection instead of holding its caller. The deadline timer is cleared when
+ * the lookup settles.
+ * @param bounds - the deadline and owner lifetime.
+ * @param request - the draft or route to interrogate.
+ * @param storedProfile - Host-owned headers and credential resolution.
+ * @returns the advertised models in endpoint order.
+ * @throws LlmError `TIMEOUT` when the deadline passes first; `ABORTED` for the
+ *   caller's or the owner's cancellation; otherwise what {@link discoverModels} throws.
+ */
+export async function discoverModelsWithin(
+  bounds: DiscoveryBounds,
+  request: LlmModelDiscoveryOperation,
+  storedProfile?: () => StoredModelDiscoveryProfile | undefined,
+): Promise<readonly DiscoveredModel[]> {
+  const deadline = new AbortController()
+  const timer = setTimeout(() => { deadline.abort() }, bounds.timeoutMs)
+  const signals = [deadline.signal, bounds.lifetime, request.signal].filter(signal => signal !== undefined)
+  try {
+    return await discoverModels({ ...request, signal: AbortSignal.any(signals) }, storedProfile)
+  } catch (error: unknown) {
+    const cancelled = bounds.lifetime?.aborted === true || request.signal?.aborted === true
+    if (deadline.signal.aborted && !cancelled) {
+      throw new LlmError(`model listing did not finish within ${String(bounds.timeoutMs)}ms`, 'TIMEOUT', { cause: error })
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }

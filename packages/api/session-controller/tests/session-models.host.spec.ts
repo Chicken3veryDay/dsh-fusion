@@ -979,7 +979,7 @@ it('initializes the account model without reasoning metadata and rejects an empt
 it.each([new Error('catalog disconnected'), 'catalog disconnected'])('reports catalog rejection as an unavailable selection: %s', async (failure) => {
   const { ctx } = await harness()
   const { modelAvailable } = await import('../src/catalog.ts')
-  const read = vi.spyOn(ctx.llm, 'listModels').mockRejectedValueOnce(failure)
+  const read = vi.spyOn(ctx.llm, 'canSelectModel').mockRejectedValueOnce(failure)
   try {
     await expect(modelAvailable(ctx, { provider: 'deepseek-official', model: 'deepseek-chat' }))
       .rejects.toMatchObject({ code: 'session/model-unavailable', message: 'catalog disconnected' })

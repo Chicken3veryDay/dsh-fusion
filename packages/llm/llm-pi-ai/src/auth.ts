@@ -305,6 +305,27 @@ export function authContextFrom(ctx: Context): AuthContext {
   }
 }
 
+/** Marker of a Claude subscription token, which pi-ai's Messages protocol answers by impersonating Claude Code. */
+const SUBSCRIPTION_TOKEN_MARKER = 'sk-ant-oat'
+
+/**
+ * Whether any effective credential-bearing value is a Claude subscription token.
+ * Direct requests use API keys; subscription access belongs to the official
+ * Claude Code integration.
+ * @param values - API key and header values a Messages request or listing would carry.
+ * @returns true when a value contains the subscription-token marker.
+ */
+export function carriesSubscriptionToken(values: Iterable<string | undefined>): boolean {
+  for (const value of values) {
+    if (value?.includes(SUBSCRIPTION_TOKEN_MARKER) === true) return true
+  }
+  return false
+}
+
+/** The refusal for a subscription token offered as a direct Messages credential. */
+export const SUBSCRIPTION_TOKEN_REFUSAL =
+  'Direct Anthropic requests require an API key, not a Claude subscription token; use the official Claude Code integration for subscription access.'
+
 /**
  * Resolve a ChatGPT plan credential without accepting an ambient API-key replacement.
  * @param models - Request-owned pi-ai collection, using the harness credential store.

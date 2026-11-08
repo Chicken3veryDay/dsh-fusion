@@ -26,6 +26,7 @@
  * @module dsh-llm-pi-ai/adapter
  */
 
+import { ModelsError } from '@earendil-works/pi-ai/utils/models-error'
 import type {
   Api,
   AuthContext,
@@ -61,8 +62,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
-import { chatgptAccessToken } from './auth.ts'
-import { discoverModels } from './discovery.ts'
+import { carriesSubscriptionToken, chatgptAccessToken, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
+import { discoverModelsWithin } from './discovery.ts'
 import { toStreamChunks } from './stream.ts'
 import { isWireObservable, observeWire } from './wire.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
@@ -124,6 +125,17 @@ export interface PiAiAdapterOptions {
   resolveAttachments?: () => AttachmentStore | undefined
   /** Bridge one attachment reference into the current model-tool execution world. */
   resolveImageAccess?: (attachments: AttachmentStore, ref: ImageAttachmentRef) => ImageAttachmentAccess | undefined
+  /**
+   * Lifetime of the owner (the plugin instance). Its abort cancels every network
+   * model listing in flight and closes the connections; omission leaves only each
+   * caller's own cancellation and the route's `modelListTimeoutMs`.
+   */
+  lifetime?: AbortSignal
+  /**
+   * Observe account-listed models withheld from the offers because the captured
+   * configuration cannot resolve them; the owner decides how to report them.
+   */
+  onUnofferedAccountModels?: (detail: { provider: string; models: readonly string[] }) => void
   /**
    * Observe one assistant history message degrading to provider-neutral
    * conversion because its stored replay state is unusable by this build.
@@ -345,35 +357,68 @@ export class PiAiAdapter extends LlmAdapter {
     return this.current().profiles.get(provider)?.retryPolicy
   }
 
-  /** Resolve plan or API-key authentication before dispatch, refusing unsupported subscription credentials. */
+  /**
+   * Resolve plan or API-key authentication before dispatch, refusing
+   * unsupported subscription credentials.
+   *
+   * The returned key is the explicit one (or the ChatGPT plan bearer); every
+   * other source resolves again, natively, inside pi-ai, which also applies the
+   * resolved base URL, headers and environment. A Messages request therefore
+   * first asks the same collection for the complete effective authentication
+   * and refuses a Claude subscription token found in any of it.
+   * @param snapshot - the captured configuration.
+   * @param provider - the route.
+   * @param profile - the route's resolved profile.
+   * @param model - the exact model about to be requested; omitted by a catalog listing.
+   * @param signal - caller cancellation.
+   * @param headers - the request headers this call will send.
+   * @returns the explicit credential to pass as the request's `apiKey`, if any.
+   */
   private async requestApiKey(
     snapshot: PiAiSnapshot,
     provider: string,
     profile: ResolvedPiAiProviderProfile,
-    api?: string,
+    model?: Model<Api>,
     signal?: AbortSignal,
+    headers: Readonly<Record<string, string>> = {},
   ): Promise<string | undefined> {
     const explicit = await this.config.resolveApiKey(provider, profile)
-    if (provider === 'openai' && explicit === undefined) {
-      const stored = await this.config.auth.credentials.read(provider)
-      if (profile.requiresStoredCredential && stored === undefined) {
-        throw new LlmError('ChatGPT sign-in was removed; sign in again or explicitly configure an API-key route. API-key billing was not selected.', 'AUTH')
-      }
-      if (api !== undefined && stored?.type === 'oauth') {
-        if (api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
-        return chatgptAccessToken(snapshot.models, signal)
-      }
+    const messages = model?.api === 'anthropic-messages'
+    const stored = explicit === undefined && (provider === 'openai' || provider === 'anthropic' || profile.requiresStoredCredential === true)
+      ? await this.config.auth.credentials.read(provider)
+      : undefined
+    if (explicit === undefined && profile.requiresStoredCredential === true && stored === undefined) {
+      throw new LlmError(provider === 'openai'
+        ? 'ChatGPT sign-in was removed; sign in again or explicitly configure an API-key route. API-key billing was not selected.'
+        : `The "${provider}" sign-in was removed; sign in again or explicitly configure an API-key route. API-key billing was not selected.`, 'AUTH')
     }
-    if (provider !== 'anthropic' && api !== 'anthropic-messages') return explicit
-    if (provider === 'anthropic' && explicit === undefined && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
+    if (provider === 'openai' && model !== undefined && stored?.type === 'oauth') {
+      if (model.api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
+      return chatgptAccessToken(snapshot.models, signal)
+    }
+    if (provider !== 'anthropic' && !messages) return explicit
+    if (provider === 'anthropic' && stored?.type === 'oauth') {
       throw new LlmError('Direct Anthropic requests require an API key; configure ANTHROPIC_API_KEY or use the official Claude Code integration for subscription access. The saved sign-in is unchanged.', 'AUTH')
     }
-    const key = explicit ?? (provider === 'anthropic' || (await this.config.auth.credentials.read(provider))?.type === 'api_key'
-      ? (await snapshot.models.getAuth(provider))?.auth.apiKey : undefined)
-    if (key?.includes('sk-ant-oat')) {
-      throw new LlmError('Direct Anthropic requests require an API key, not a Claude subscription token; use the official Claude Code integration for subscription access.', 'AUTH')
+    let resolved: Awaited<ReturnType<Models['getAuth']>>
+    // The same resolution Models.applyAuth performs at dispatch, minus the
+    // network: it yields the key, base URL, headers and environment pi-ai will
+    // actually use. A resolution failure is not this guard's to report; the
+    // dispatch repeats it and classifies it as every other authentication failure.
+    const authOptions = {
+      ...explicit === undefined ? {} : { apiKey: explicit },
+      ...signal === undefined ? {} : { signal },
     }
-    return key
+    try { resolved = await snapshot.models.getAuth(model ?? provider, authOptions) }
+    catch (error) {
+      if (error instanceof ModelsError) return explicit
+      throw error
+    }
+    const resolvedCredentials = [resolved?.auth.apiKey, ...Object.values(resolved?.auth.headers ?? {})]
+    if (carriesSubscriptionToken([explicit, ...resolvedCredentials, ...Object.values(headers)])) {
+      throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
+    }
+    return explicit
   }
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
@@ -387,20 +432,7 @@ export class PiAiAdapter extends LlmAdapter {
         if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return []
         throw error
       }
-      if (provider === 'openai' && apiKey === undefined
-        && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
-        const account = await discoverModels({ provider }, () => ({
-          headers: profile.headers,
-          resolveApiKey: this.config.resolveApiKey.bind(undefined, provider, profile),
-          chatgpt: async (signal) => {
-            return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(snapshot.models, signal) }
-          },
-        }))
-        return account.map((model) => {
-          const known = snapshot.models.getModel(provider, model.id)
-          return { ...model, provider, ...known === undefined ? {} : { inputModalities: [...known.input] } }
-        })
-      }
+      if (await this.offersByAccount(provider, apiKey)) return this.accountOffers(snapshot, provider, profile)
       const catalog = snapshot.models.getModels(provider)
       // A provider that narrows its catalog per credential (Copilot, by the
       // signed-in account) is asked with the effective credential, so the picker
@@ -419,6 +451,62 @@ export class PiAiAdapter extends LlmAdapter {
         inputModalities: [...model.input],
       }))
     })
+  }
+
+  /** Whether this route's offers come from the signed-in account's own listing. */
+  private async offersByAccount(provider: string, apiKey: string | undefined): Promise<boolean> {
+    return provider === 'openai' && apiKey === undefined
+      && (await this.config.auth.credentials.read(provider))?.type === 'oauth'
+  }
+
+  /**
+   * The signed-in account's list-visible models, in the server's order and with
+   * its display names, limited to the models the captured configuration can
+   * resolve. A slug the account lists but the configuration has no metadata for
+   * is withheld rather than offered: choosing it could only fail.
+   */
+  private async accountOffers(
+    snapshot: PiAiSnapshot,
+    provider: string,
+    profile: ResolvedPiAiProviderProfile,
+  ): Promise<LlmModelInfo[]> {
+    const account = await discoverModelsWithin(
+      { timeoutMs: profile.modelListTimeoutMs, lifetime: this.config.lifetime },
+      { provider },
+      () => ({
+        headers: profile.headers,
+        resolveApiKey: this.config.resolveApiKey.bind(undefined, provider, profile),
+        chatgpt: async (signal) => {
+          return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(snapshot.models, signal) }
+        },
+      }),
+    )
+    const offers: LlmModelInfo[] = []
+    const withheld: string[] = []
+    for (const row of account) {
+      const known = profile.modelErrors.has(row.id) ? undefined : snapshot.models.getModel(provider, row.id)
+      if (known === undefined) withheld.push(row.id)
+      else offers.push({ ...row, provider, inputModalities: [...known.input] })
+    }
+    if (withheld.length > 0) this.config.onUnofferedAccountModels?.({ provider, models: withheld })
+    return offers
+  }
+
+  override async canSelectModel(provider: string, model: string, signal?: AbortSignal): Promise<boolean> {
+    const snapshot = this.current()
+    const profile = this.profileOf(snapshot, provider)
+    let apiKey: string | undefined
+    try { apiKey = await this.requestApiKey(snapshot, provider, profile) }
+    catch (error) {
+      if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return false
+      throw error
+    }
+    // The account listing needs the network, and choosing a registered model must not.
+    // The account still decides at inference whether the grant may use it.
+    if (await this.offersByAccount(provider, apiKey)) {
+      return !profile.modelErrors.has(model) && snapshot.models.getModel(provider, model) !== undefined
+    }
+    return super.canSelectModel(provider, model, signal)
   }
 
   override resolveModel(
@@ -491,7 +579,8 @@ export class PiAiAdapter extends LlmAdapter {
       model,
       options.reasoningEffort ?? profile.reasoning,
     )
-    const apiKey = await this.requestApiKey(snapshot, options.provider, profile, model.api, options.signal)
+    const headers = requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders)
+    const apiKey = await this.requestApiKey(snapshot, options.provider, profile, model, options.signal, headers)
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -536,7 +625,7 @@ export class PiAiAdapter extends LlmAdapter {
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
-        headers: requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders),
+        headers,
       })
       const iterator = toStreamChunks(
         events, model.contextWindow, options.signal, model.id, wire,
