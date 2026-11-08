@@ -178,7 +178,8 @@ describe('minimal agent preset', () => {
 })
 
 describe('minimal manual compaction', () => {
-  const snapshotDir = fileURLToPath(new URL('../../../snapshots/web/minimal-compact', import.meta.url))
+  const snapshotDir = fileURLToPath(new URL('../../../snapshots/web/minimal-compact-script', import.meta.url))
+  const expectedDir = fileURLToPath(new URL('./expected/minimal-compact-script/', import.meta.url))
   let scaffold: WebScaffold
   let handle: AgentHandle
   let browser: Browser | undefined
@@ -280,7 +281,7 @@ describe('minimal manual compaction', () => {
     const card = page.getByRole('button', { name: /^compact Compacted / })
     await card.click()
     await expect.poll(() => card.getAttribute('aria-expanded')).toBe('true')
-    await compareOrRefreshGolden(join(snapshotDir, 'ui.expected.md'),
+    await compareOrRefreshGolden(join(expectedDir, 'ui.expected.md'),
       await captureStableAria(page, '[class*="centerCol"]', scaffold.workspaceCwd), MODE)
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
@@ -288,7 +289,7 @@ describe('minimal manual compaction', () => {
 
   it('keeps its snapshot inventory closed', async () => {
     await assertFixtureInventory(snapshotDir, [
-      'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json', 'ui.expected.md',
+      'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json',
     ])
   })
 })
