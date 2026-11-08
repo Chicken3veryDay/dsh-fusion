@@ -8,3 +8,5 @@ workspace:
 header:
   class: sdk-chatgpt-plan-script
   pin: true
+  systemPromptSource: direct-signin-script
+  toolSchemasSource: direct-signin-script
