@@ -528,3 +528,22 @@ describe('minimal image reading', () => {
     ])
   })
 })
+
+describe('minimal native generations', () => {
+  const nativeDir = (name: string): string => fileURLToPath(new URL(`../../../snapshots/web/${name}`, import.meta.url))
+
+  // The Script scenarios above succeed these committed native generations, which stay owned and unmodified.
+  it('keeps the committed native scenario inventories', async () => {
+    await assertFixtureInventory(nativeDir('minimal-preset'), [
+      'session.v2.jsonl', 'session.v3.jsonl', 'session.v4.jsonl', 'system-prompt.expected.md',
+      'tool-schemas.expected.json', 'ui.expected.md',
+    ])
+    await assertFixtureInventory(nativeDir('minimal-compact'), [
+      'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json', 'ui.expected.md',
+    ])
+    await assertFixtureInventory(nativeDir('minimal-read-image'), [
+      'missing-image.expected.md', 'session.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json',
+      'ui.expected.md',
+    ])
+  })
+})
