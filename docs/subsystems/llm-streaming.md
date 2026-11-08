@@ -227,7 +227,7 @@ Process-local `agent/assistant-stream` frames carry live presentation. Durable r
 
 ## `LlmFailure`
 
-Every thrown or in-band final-adapter failure normalizes to one serializable provider-neutral payload. `providerRetryAfterMs` is a validated positive delay requested by the provider, not a retry decision; `ProviderRequestId` is an opaque branded string for diagnostics.
+Every thrown or in-band final-adapter failure normalizes to one serializable provider-neutral payload. `providerRetryAfterMs` is a validated positive delay requested by the provider, not a retry decision; `ProviderRequestId` is an opaque branded string for diagnostics. `UNSUPPORTED_CONTROL` failures carry `unsupportedControl` with the refused control and a closed reason; consumers route on those fields, not on `message`.
 
 ```ts type-equiv
 /** Serializable provider or transport failure facts; policy decides whether they are retryable. */
@@ -249,6 +249,35 @@ interface LlmFailure {
    * selected occurrences in an `image/offload` event and retries the step.
    */
   readonly offloadImages?: number
+  /**
+   * With code `UNSUPPORTED_CONTROL`: the request control the captured adapter
+   * generation refused and why. Route on these fields, never on `message`.
+   */
+  readonly unsupportedControl?: LlmUnsupportedControl
+}
+```
+
+```ts type-equiv
+/** Request-control names an adapter assesses; one per field of `LlmCallControls`. */
+type LlmControlName = 'reasoningEffort' | 'temperature' | 'maxTokens' | 'stop'
+```
+
+```ts type-equiv
+/**
+ * Why a captured adapter generation refuses a supplied control: the adapter
+ * never sends it (`adapter-rejects`), the active reasoning mode cannot carry it
+ * (`reasoning-active`), or the exact model forbids it (`model-forbids`).
+ */
+type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids'
+```
+
+```ts type-equiv
+/** The control and reason carried by an `UNSUPPORTED_CONTROL` failure. */
+interface LlmUnsupportedControl {
+  /** The refused request control. */
+  readonly control: LlmControlName
+  /** Why the adapter generation refuses it. */
+  readonly reason: UnsupportedControlReason
 }
 ```
 
@@ -868,7 +897,7 @@ The [wire reference](../deepseek-llm-api-wire-extensions.md) defines the exact r
 
 ## Service and provider contracts
 
-`LlmAdapter` is the provider contract: subclass, implement `stream()`, and register one adapter instance with `ctx.llm.registerAdapter(providers, adapter)`. `GenerateOptions.provider` selects the registered adapter; `GenerateOptions.model` is passed to that adapter and need not be registered at lifecycle start. Duplicate provider routes fail atomically. Optional `providerRetryPolicy()` is captured per route with normal defaults, while `providerInfo()` and asynchronous `listModels()` feed `LlmRuntime.listProviders()` / `listModels()` with detached selector metadata. That catalog is advisory rather than a request whitelist: the adapter remains authoritative and may accept unlisted model ids. One asynchronous `resolveModel()` query returns exact model identity plus optional correctness-sensitive context capacity, an adapter-configured `defaultMaxTokens`, and ordered model-owned reasoning ids with an optional deployment default; absent fields mean unavailable metadata or provider-owned behavior, not invalid catalog membership. The resolver receives optional cancellation and must settle promptly after abort. `LlmRuntime.resolveModelInfo()` validates and detaches the aggregate. At the final adapter boundary, `resolveCallConfig()` materializes the output default only when `maxTokens` is absent and validates and materializes reasoning, so direct calls cannot bypass either configured behavior; direct dispatch captures one registration before awaiting that resolution. The agent loop instead uses `prepareCall()` to keep the same registration across model resolution, durable header logging, and dispatch, retain detached context metadata from that exact lookup, and report which config fields the adapter defaulted. Adapter lookup happens at the terminal continuation of the `llm/stream` waterfall, so a listener may short-circuit the call or route a mutable one-shot request before lookup. AgentLoop observes a request attempt once the outer waterfall returns a stream handle; that limited boundary does not prove a lazy terminal adapter was constructed or began provider I/O. The `block-start` / `block-end` `index` correlation and the assembler together mean an adapter only has to emit well-formed chunks — block reassembly is not each adapter's problem. [architecture.md](../architecture.md#turn-flow) shows where `ctx.llm.stream()` and the `llm/stream` waterfall sit in one turn.
+`LlmAdapter` is the provider contract: subclass, implement `stream()`, and register one adapter instance with `ctx.llm.registerAdapter(providers, adapter)`. `GenerateOptions.provider` selects the registered adapter; `GenerateOptions.model` is passed to that adapter and need not be registered at lifecycle start. Duplicate provider routes fail atomically. Optional `providerRetryPolicy()` is captured per route with normal defaults, while `providerInfo()` and asynchronous `listModels()` feed `LlmRuntime.listProviders()` / `listModels()` with detached selector metadata. That catalog is advisory rather than a request whitelist: the adapter remains authoritative and may accept unlisted model ids. One asynchronous `resolveModel()` query returns exact model identity plus optional correctness-sensitive context capacity, an adapter-configured `defaultMaxTokens`, and ordered model-owned reasoning ids with an optional deployment default; absent fields mean unavailable metadata or provider-owned behavior, not invalid catalog membership. The resolver receives optional cancellation and must settle promptly after abort. `LlmRuntime.resolveModelInfo()` validates and detaches the aggregate. At the final adapter boundary, `resolveCallConfig()` materializes the output default only when `maxTokens` is absent and validates and materializes reasoning, so direct calls cannot bypass either configured behavior; direct dispatch captures one registration before awaiting that resolution. The agent loop instead uses `prepareCall()` to keep the same registration across model resolution, durable header logging, and dispatch, retain detached context metadata from that exact lookup, and report which config fields the adapter defaulted. After `ConfigureCall` and the materialized defaults, both `prepareCall()` and the unprepared direct-stream path call the captured generation's synchronous, pure `assessControls()` once. Each supplied control (a field whose value is not `undefined`, including a defaulted reasoning effort or output cap) receives `supported`, `translated`, `unsupported`, or `unverified`; a generation that declares nothing is `unverified` (`adapter-undeclared`), never supported. A declared `unsupported` control fails with `LlmError` code `UNSUPPORTED_CONTROL` before credential resolution, HTTP, or dispatch, and a direct stream normalizes the same refusal into the terminal `error` finish. `PreparedLlmCall.assessment` exposes the verdicts process-locally; they are never persisted, and dispatch of a prepared call does not assess again. Adapter lookup happens at the terminal continuation of the `llm/stream` waterfall, so a listener may short-circuit the call or route a mutable one-shot request before lookup. AgentLoop observes a request attempt once the outer waterfall returns a stream handle; that limited boundary does not prove a lazy terminal adapter was constructed or began provider I/O. The `block-start` / `block-end` `index` correlation and the assembler together mean an adapter only has to emit well-formed chunks — block reassembly is not each adapter's problem. [architecture.md](../architecture.md#turn-flow) shows where `ctx.llm.stream()` and the `llm/stream` waterfall sit in one turn.
 
 ```ts type-equiv
 /** One model call whose config and adapter registration were resolved together. */
@@ -887,6 +916,12 @@ interface PreparedLlmCall {
   readonly toolUpdate?: ToolUpdate
   /** Config fields materialized by the captured adapter rather than proposed by the caller. */
   readonly adapterDefaults: LlmCallConfigAdapterDefaults
+  /**
+   * The captured adapter generation's verdict on every control in {@link config},
+   * including materialized defaults. Process-local and never persisted; a
+   * control the generation declared unsupported already failed preparation.
+   */
+  readonly assessment: CallControlAssessment
   /**
    * Dispatch this call once through the registration captured during
    * preparation. The request's call-config fields must match {@link config};
@@ -972,13 +1007,15 @@ declare abstract class LlmAdapter {
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo>;
   /**
-   * Bind exact model metadata and the eventual request dispatch to one adapter generation.
-   * Dynamic adapters override this so settings changes between preparation and
-   * dispatch cannot combine one generation's capabilities with another's endpoint.
+   * Bind exact model metadata, control assessment and the eventual request dispatch
+   * to one adapter generation. Dynamic adapters override this so settings changes
+   * between preparation and dispatch cannot combine one generation's capabilities
+   * with another's endpoint. The default declares no control support: every
+   * supplied control is `unverified`.
    * @param provider - registered provider route.
    * @param model - exact model id.
    * @param signal - cancellation for model resolution.
-   * @returns model metadata and a one-generation stream entry point.
+   * @returns model metadata, control assessment and a one-generation stream entry point.
    */
   async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall>;
   /**
