@@ -28,6 +28,7 @@
         maxVersionsPerArtifact: 64
         maxTotalBytes: 104857600
         maxContextPacketBytes: 65536
+        maxSnapshotBytes: 1048576
         maxToolTextBytes: 65536
 
     - id: tool-ticket

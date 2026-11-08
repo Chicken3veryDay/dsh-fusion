@@ -34,26 +34,28 @@ describe('Workstream panel overlay', () => {
   })
 })
 
-/** Seed one Workstream with a planned Ticket, an open question, an attention item, and one evidence file. */
+/** Seed the Workstream's Ticket, question, attention and evidence using the registered initiating Agent. */
 async function seedWorkstream(scaffold: WebScaffold, agent: Agent): Promise<TicketView> {
   const { ctx } = scaffold
-  await ctx.workstreams.open(agent, { operationId: WorkstreamOperationId('panel-e2e'), title: 'Panel release' })
-  const created = await ctx.workstreams.createTicket(agent, agent.id, { subject: 'Ship release', description: 'Publish the 2.0 packages' })
-  const asked = await ctx.tickets.ask(agent.session, {
-    ticketId: created.id, expectedRevision: created.revision, actorId: agent.id, question: 'Which branch ships?',
+  return ctx.agents.withInitiator(agent, async () => {
+    await ctx.workstreams.open(agent, { operationId: WorkstreamOperationId('panel-e2e'), title: 'Panel release' })
+    const created = await ctx.workstreams.createTicket(agent, agent.id, { subject: 'Ship release', description: 'Publish the 2.0 packages' })
+    const asked = await ctx.tickets.ask(agent.session, {
+      ticketId: created.id, expectedRevision: created.revision, actorId: agent.id, question: 'Which branch ships?',
+    })
+    const attended = await ctx.tickets.attention(agent.session, {
+      ticketId: asked.id, expectedRevision: asked.revision, actorId: agent.id, kind: 'decision', message: 'Pick the release date',
+    })
+    const planned = await ctx.tickets.planMission(agent.session, {
+      ticketId: attended.id, expectedRevision: attended.revision, actorId: agent.id,
+      missionId: MissionId('launch'), expectedPlanRevision: 0, title: 'Launch', milestones: [{ title: 'Beta', ticketIds: [created.id] }],
+    })
+    await ctx.workstreamEvidence.publish(agent, agent.id, {
+      operationId: WorkstreamEvidenceOperationId('notes-1'), artifactId: WorkstreamEvidenceArtifactId('notes'),
+      name: 'release-notes.md', expectedVersion: 1, content: '# Release notes\n',
+    })
+    return planned
   })
-  const attended = await ctx.tickets.attention(agent.session, {
-    ticketId: asked.id, expectedRevision: asked.revision, actorId: agent.id, kind: 'decision', message: 'Pick the release date',
-  })
-  const planned = await ctx.tickets.planMission(agent.session, {
-    ticketId: attended.id, expectedRevision: attended.revision, actorId: agent.id,
-    missionId: MissionId('launch'), expectedPlanRevision: 0, title: 'Launch', milestones: [{ title: 'Beta', ticketIds: [created.id] }],
-  })
-  await ctx.workstreamEvidence.publish(agent, agent.id, {
-    operationId: WorkstreamEvidenceOperationId('notes-1'), artifactId: WorkstreamEvidenceArtifactId('notes'),
-    name: 'release-notes.md', expectedVersion: 1, content: '# Release notes\n',
-  })
-  return planned
 }
 
 describe('web e2e: Workstream panel', () => {
@@ -138,7 +140,7 @@ describe('web e2e: Workstream panel', () => {
     await panel.getByRole('tab', { name: /^Changes/u }).click()
     await panel.getByRole('button', { name: 'Reload' }).waitFor()
     if (scaffold.ctx.get('forgeSession') === undefined) {
-      await panel.locator('[data-incomplete]').getByText(/Forge session service is not mounted/u).waitFor()
+      await panel.locator('[data-incomplete]').getByText('This list may be incomplete: the code hosting service is unavailable', { exact: true }).waitFor()
     }
     await panel.getByText('No change requests are bound to this Workstream.').waitFor()
 
