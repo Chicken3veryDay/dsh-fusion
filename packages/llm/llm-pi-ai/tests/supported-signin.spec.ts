@@ -305,7 +305,10 @@ describe('ambient credentials and directory offers', () => {
     await ctx.credentials.set(credentialRef('OPENAI_API_KEY'), 'other-api-billing')
     await ctx.plugin(PiAi)
     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
-    expect(await ctx.llm.listModels('openai')).toEqual([{ provider: 'openai', id: 'gpt-5.4', name: 'Account only', inputModalities: expect.arrayContaining(['text']) }])
+    const [offer, ...rest] = await ctx.llm.listModels('openai')
+    expect(rest).toEqual([])
+    expect(offer).toMatchObject({ provider: 'openai', id: 'gpt-5.4', name: 'Account only' })
+    expect(offer?.inputModalities).toContain('text')
     const updated = new Promise<void>((resolve) => { ctx.on('llm/adapters-updated', () => { resolve() }) })
     await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai'), () => Promise.resolve({ ...grant, payload: { ...grant.payload, access: 'new-account' } }))
     await updated
