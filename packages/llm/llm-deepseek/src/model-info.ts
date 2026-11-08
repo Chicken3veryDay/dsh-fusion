@@ -1,8 +1,11 @@
 /** Protocol-independent model capabilities and reasoning choices. */
 import { assessSuppliedControls, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { CallControlAssessment, LlmCallControls, LlmModelBadge, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import type { CallControlAssessment, ControlDisposition, LlmCallControls, LlmModelBadge, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import { PUBLIC_BASE_URL } from './config.ts'
 import type { DeepSeekCatalogModel, DeepSeekConnectionOptions } from './types.ts'
 
+/** Origin of the official API, the only endpoint whose documented request behavior this adapter asserts. */
+const OFFICIAL_ORIGIN = new URL(PUBLIC_BASE_URL).origin
 const OFF_REASONING_EFFORT = ReasoningEffortId('off')
 const LOW_REASONING_EFFORT = ReasoningEffortId('low')
 const HIGH_REASONING_EFFORT = ReasoningEffortId('high')
@@ -101,12 +104,33 @@ export function modelInfo(
   }
 }
 
-/** Assess request controls against the Messages serializer, which sends every one of them.
- * Reasoning effort is validated against {@link modelInfo} before assessment, and a sampling
- * temperature or stop list is forwarded with thinking enabled or disabled.
+/**
+ * Assess request controls against one captured connection. The serializer forwards every
+ * supplied control, so wire presence is not support: `temperature` is judged by its effect.
+ * Reasoning effort is validated against {@link modelInfo} before assessment.
+ *
+ * The official DeepSeek origin fixes the sampling temperature in thinking mode (Messages guide:
+ * "takes effect in non-thinking mode", "fixed at 1.0" in thinking), so a supplied `temperature`
+ * with reasoning enabled is `unsupported` as `reasoning-active`. A gateway at any other origin
+ * is not known to follow that behavior, so the same call is `unverified` as `protocol-unverified`
+ * and still dispatches. With reasoning `off` the field is sent and honored, so it is `supported`.
+ * The reasoning mode is the call's effort, falling back to the connection default exactly as
+ * the serializer does.
+ * @param connection - the captured connection facts of the prepared call's adapter generation.
  * @param controls - the call's controls with model defaults materialized.
- * @returns every supplied control as supported.
+ * @returns one disposition for each supplied control.
  */
-export function assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment {
-  return assessSuppliedControls(controls, () => ({ kind: 'supported' }))
+export function assessControls(connection: DeepSeekConnectionOptions, controls: Readonly<LlmCallControls>): CallControlAssessment {
+  return assessSuppliedControls(controls, (control): ControlDisposition => {
+    if (control !== 'temperature' || !reasoningEnabled(connection, controls)) return { kind: 'supported' }
+    return new URL(connection.baseURL).origin === OFFICIAL_ORIGIN
+      ? { kind: 'unsupported', reason: 'reasoning-active' }
+      : { kind: 'unverified', reason: 'protocol-unverified' }
+  })
+}
+
+/** Whether the serializer sends `thinking.type: enabled` for these controls on this connection. */
+function reasoningEnabled(connection: DeepSeekConnectionOptions, controls: Readonly<LlmCallControls>): boolean {
+  const { defaults } = connection
+  return (controls.reasoningEffort ?? defaults.reasoningEffort ?? (defaults.thinking === 'disabled' ? 'off' : 'high')) !== OFF_REASONING_EFFORT
 }

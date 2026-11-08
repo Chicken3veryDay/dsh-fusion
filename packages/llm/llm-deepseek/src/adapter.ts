@@ -50,7 +50,11 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     const connection = await this.connection(signal)
     this.dependencies.admit?.(connection, model)
-    return { model: modelInfo(connection, provider, model), assessControls, stream: options => this.generate(options, connection) }
+    return {
+      model: modelInfo(connection, provider, model),
+      assessControls: controls => assessControls(connection, controls),
+      stream: options => this.generate(options, connection),
+    }
   }
   stream(options: GenerateOptions<string>): AsyncIterable<StreamChunk> {
     const connection = this.dependencies.options()

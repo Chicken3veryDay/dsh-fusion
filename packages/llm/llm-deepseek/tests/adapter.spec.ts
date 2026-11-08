@@ -210,7 +210,10 @@ describe('direct Messages HTTP', () => {
     expect(second.requests[0]).toMatchObject({ headers: { 'x-api-key': 'second' }, body: { max_tokens: 20 } })
   })
 
-  it('supports temperature and stop beside enabled reasoning, and sends them, through the real runtime', async () => {
+  // Rationale for the changed expectation: the loopback endpoint is not the official origin, so its
+  // temperature with thinking is `unverified` (was `supported`); the wire assertions below are unchanged,
+  // and the official-origin refusal is pinned in effective-temperature.spec.ts.
+  it('sends temperature and stop beside enabled reasoning to a custom endpoint, reporting the temperature unverified, through the real runtime', async () => {
     const http = await endpoint()
     const ctx = new Context()
     cleanup.push(() => ctx.fiber.dispose())
@@ -221,7 +224,7 @@ describe('direct Messages HTTP', () => {
     })
     expect(prepared.assessment.fields).toEqual({
       reasoningEffort: { kind: 'supported' },
-      temperature: { kind: 'supported' },
+      temperature: { kind: 'unverified', reason: 'protocol-unverified' },
       maxTokens: { kind: 'supported' },
       stop: { kind: 'supported' },
     })
