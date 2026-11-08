@@ -24,6 +24,8 @@ State-sensitive cases use Workspace, admission, attachment, and model-stream bar
 
 [Changed-files coverage](changed-files-turn.e2e.ts) executes the default Script scenario and compares its current Session and complete workspace. A secondary native-executor overlay renders the highest historical native recording to check edit/write path and incomplete-content prefixes against the four original goldens. That rendering check consumes the replay and compares the complete workspace, but does not compare current persisted event ordering or refresh historical output. Vitest owns its cleanup so a teardown failure cannot replace the original assertion failure.
 
+[Workflow coverage](workflow-run.e2e.ts) calls `tools.workflow` through the default Script SDK and uses the real worker and local child Session. The scenario compares the complete current parent/child family with shared identity normalization, rereads both persisted event logs, and retains live member navigation, layout, completion, and reload/history assertions. Model output is authored replay. UI-only ARIA goldens live under `expected/workflow-run-script/`; historical Workflow recordings and goldens remain immutable.
+
 [Idle-submission handoff](idle-submission-handoff.e2e.ts) waits up to the scaffold's 30-second turn-completion budget for Host frames and browser placement. Vitest owns scaffold teardown so a replay-consumption error does not replace the failed scenario assertion.
 
 Plugin-manager and HMR lifecycle switches wait up to `PLUGIN_TOGGLE_SETTLE_MS` (10 seconds) for the Host's profile write and the store's follow-up inventory read, the two steps that republish `aria-checked`; that constant's JSDoc records the measured chain.

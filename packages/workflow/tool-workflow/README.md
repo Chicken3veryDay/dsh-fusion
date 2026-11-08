@@ -75,7 +75,7 @@ A background call registers the run through `jobs.start` inside the job starter,
 
 ### Durable session records
 
-For a root transport execution (`exec.parent` absent), the tool projects the run into the calling Agent's Session with four log-only events: run-start after `start()` returns, member starts and endings filtered by `run.id`, then run-end only after the result is available and disposal reaches quiescence. Nested transport calls execute normally but write no record. The first failed Session append disables later recording for that run with one warning, leaving either no record or a legal continuous prefix without changing the tool result or cleanup.
+Every Agent-owned call, including `tools.workflow(...)` inside `run_code`, projects its run into the calling Agent's Session with four log-only events: run-start after `start()` returns, member starts and endings filtered by `run.id`, then run-end only after the result is available and disposal reaches quiescence. Transport nesting does not change recording eligibility. A failed disposal leaves the record open; a background job still reports its settled execution outcome and warns about the cleanup failure. The first failed Session append disables later recording for that run with one warning, leaving either no record or a legal continuous prefix without changing the tool result or cleanup. Unloading or restarting the tool plugin stops recording for its admitted runs; their execution and job outcomes remain unchanged, and their records can remain open.
 
 The engine's `workflow/phase` and `workflow/log` events have no per-line durable surface from this tool: the session log deliberately records run and member lifecycle only, and the Web transcript derives from those records. A background run's lines reach a human through the job observation record instead, which is transient by design.
 
@@ -170,7 +170,7 @@ These limits define what the tool does not yet support. They are current constra
 - **A background run reports no intermediate value to the model** — `job_output` before settlement returns status only; the return value arrives whole at completion, and cancellation still discards partial output.
 - **`args` must be an object and Native result text is bounded** — callers wrap top-level arrays and scalars in a field; the canonical workflow result stays complete, while JSON beyond `maxResultChars` is truncated in the model-facing projection rather than stored behind a retrieval handle.
 - **Workflow policy is fixed per tool registration** — provider selection, caps, and tool name are deployment config, not model-call arguments.
-- **Durable records are top-level and observational** — nested PTC mode dispatches are not recorded, and a recording failure intentionally degrades to an incomplete prefix rather than changing execution.
+- **Durable records are observational** — direct and Script SDK calls record in their calling Agent Session, and a recording failure intentionally degrades to an incomplete prefix rather than changing execution.
 - **No recorded-session scenario replays a background run yet** — unit and real-engine composition suites cover the path; the snapshot tree pins only the schema and prompt text.
 
 <a id="dev-note"></a>
@@ -181,6 +181,6 @@ These limits define what the tool does not yet support. They are current constra
 
 This Dev Note is working context for maintainers: open directions that are not decided. It is explicitly non-authoritative — shipped behavior, limits, and accepted rationale live in the sections above, the package code, and the linked Agent Notes.
 
-Open directions: storing truncated JSON behind a retrieval handle instead of clipping the projection; recording nested dispatches beyond the top level; a recorded-session scenario for the background path.
+Open directions: storing truncated JSON behind a retrieval handle instead of clipping the projection; a recorded-session scenario for the background path.
 
 </details>

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/workflow-sdk-records/guide.md
+/:
+  en: 89225c7581ae4c8f
+  zh: 9f2afe5ef4b2a5ca
+/workflow-records-for-script-sdk-calls:
+  en: 527deeb3a9488942
+  zh: 4e84352e5fd54e5e
+/workflow-records-for-script-sdk-calls/change:
+  en: 3d0b59b81ca7400c
+  zh: 616cd1a11ac6bf61
+/workflow-records-for-script-sdk-calls/migration:
+  en: 3550ae1f9a80a74b
+  zh: bca18a2525153775

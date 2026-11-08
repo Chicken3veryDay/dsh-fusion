@@ -24,6 +24,8 @@ pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps 
 
 [改动文件覆盖](changed-files-turn.e2e.ts)执行默认 Script 场景，比较当前 Session 与完整工作区。另一个原生执行器 overlay 渲染最高版本的历史原生录制，根据四份原始 golden 检查 edit/write 的路径与未完成内容前缀。此渲染检查会消费 replay 并比较完整工作区，但不比较当前持久化事件顺序，也不刷新历史输出。Vitest 负责其清理，使清理失败不会替换原始断言失败。
 
+[Workflow 覆盖](workflow-run.e2e.ts)通过默认 Script SDK 调用 `tools.workflow`，使用真实 worker 和本地子 Session。场景使用共享身份规范化比较完整的当前父子 Session，重新读取两者的持久事件日志，并保留实时成员导航、布局、完成状态和重载历史断言。模型输出采用人工编写的 replay。仅含 UI 的 ARIA golden 位于 `expected/workflow-run-script/`；历史 Workflow 录制与 golden 保持不可变。
+
 [空闲提交交接](idle-submission-handoff.e2e.ts)对 Host 帧和浏览器中的消息归位的等待使用 scaffold 的 30 秒 Turn 完成预算。Vitest 负责 scaffold 清理，使 replay 消耗检查错误不会覆盖场景中失败的断言。
 
 插件管理器和 HMR 生命周期场景中的开关为 Host 的 profile 写入与 store 随后的 inventory 读取预留 `PLUGIN_TOGGLE_SETTLE_MS`（10 秒），这两步完成后才会重新发布 `aria-checked`；链路的实测值记录在该常量的 JSDoc 中。
