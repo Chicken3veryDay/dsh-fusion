@@ -20,15 +20,19 @@ import type { WireFailure } from './wire.ts'
  * Map pi-ai usage (reasoning folded into output by pi-ai).
  * @param usage - cumulative usage from the terminal pi-ai event.
  * @returns harness counts with pi-ai's exact total; cache fields appear only
- *   when non-zero (pi-ai reports zeros, not absence).
+ *   when non-zero (pi-ai reports zeros, not absence). `reasoningTokens` follows
+ *   pi-ai's reasoning breakdown on the same terms, and is also left out when it
+ *   exceeds the output count it is a subset of.
  */
 export function mapUsage(usage: PiUsage): TokenUsage {
+  const reasoning = usage.reasoning ?? 0
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
     totalTokens: usage.totalTokens,
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
+    ...reasoning > 0 && reasoning <= usage.output ? { reasoningTokens: reasoning } : {},
   }
 }
 
