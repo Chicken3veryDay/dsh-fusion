@@ -248,6 +248,15 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'direct-signin-quota': {
+    patches: [fileURLToPath(new URL('./direct-signin-quota/runtime.cordis.yml', import.meta.url))],
+    modelRequestsFile: 'codex-requests.jsonl',
+    storedCredentials: {
+      'llm-pi-ai/openai-codex': { kind: 'grant', payload: {
+        type: 'oauth', access: SIGNIN_ACCESS, refresh: 'synthetic-refresh', expires: 4102444800000,
+      } },
+    },
+  },
   'ptc-turn': {
     patches: [fileURLToPath(new URL('./ptc-turn/runtime.cordis.yml', import.meta.url))],
     expectedFinalResponse: 'CODE_ONE+CODE_TWO',
@@ -1655,6 +1664,19 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         for (const header of events.filter(event => event.type === 'request/header')) {
           expect(header.data['header']).toMatchObject({ config: { provider: 'openai-codex', model: 'gpt-6.1-sol' } })
         }
+      }
+      if (scenario.name === 'direct-signin-quota') {
+        // A quota failure inside a successful Codex stream ends the turn after one outbound request:
+        // the frame's code, not its generic message, classifies it, and QUOTA is never retried.
+        expect(modelRequests).toHaveLength(1)
+        expect(modelRequests[0]).toMatchObject({ authorization: `Bearer ${SIGNIN_ACCESS}`, body: { model: 'gpt-6.1-sol' } })
+        const events = results.flatMap(result => result.events)
+        const turnEnds = events.filter(event => event.type === 'turn/end')
+        expect(turnEnds, JSON.stringify(turnEnds)).toHaveLength(1)
+        expect(turnEnds[0]?.data['reason']).toMatchObject({ kind: 'error', error: { code: 'QUOTA', message: 'You have hit your usage limit.' } })
+        expect(turnEnds[0]?.data['reason']).not.toHaveProperty('error.status')
+        expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
+        expect(JSON.stringify(events)).not.toContain('usage_limit_reached')
       }
       if (assertions.expectedFinalResponse !== undefined) {
         const failures = results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')

@@ -1,0 +1,4 @@
+# The synthetic Codex endpoint reports an exhausted subscription quota inside a successful stream.
+- id: codex-endpoint-fixture
+  config:
+    inBandFailure: usage_limit_reached

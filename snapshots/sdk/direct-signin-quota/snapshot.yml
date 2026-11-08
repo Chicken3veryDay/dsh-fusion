@@ -1,0 +1,7 @@
+version: 1
+scenario: direct-signin-quota
+profile: sdk
+composition: sdk-direct-signin-script
+recording: authored
+header:
+  class: sdk-direct-signin-script
