@@ -8,6 +8,8 @@
 
 <a id="content-blocks-and-messages"></a>
 
+准备后的调用可提供与认证绑定的 `systemPromptPrefix`。AgentLoop 会在现有 `system/message` 事件中将其记录在组装后的系统提示词之前；完整呈现覆盖也会保留该前缀。适配器通过维护中的传输仅编码一次已记录的前缀。该前缀是进程内的调用准备元数据，不是已保存提示词，也不是新的 Session 字段。
+
 ## 内容块与消息
 
 一段对话由 `Message` 组成；一条消息是一个类型化**内容块**的数组。块的联合类型从 `ContentBlockMap` 派生。

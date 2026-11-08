@@ -69,6 +69,46 @@ function send(agent: Agent, text: string) {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
 }
 
+it('records a bound provider prefix and removes it when the next call no longer requires it', async () => {
+  const adapter = new class extends MockAdapter {
+    prefix: string | undefined = 'Required transport context.'
+
+    override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+      const prepared = await super.prepareCall(provider, model, signal)
+      const prefix = this.prefix
+      return {
+        ...prepared,
+        finalizeControls: async (controls: Parameters<typeof prepared.assessControls>[0]) => ({
+          assessment: prepared.assessControls(controls),
+          stream: (options: GenerateOptions) => prepared.stream(options),
+          ...prefix === undefined ? {} : { systemPromptPrefix: prefix },
+        }),
+      }
+    }
+  }([textResponse('one'), textResponse('two')])
+  const ctx = await harness(adapter)
+  onTestFinished(() => ctx.fiber.dispose())
+  const agent = await ctx.agentLoop.create(SessionId('provider-prefix'), { provider: 'mock', model: 'mock' })
+  let idle = waitForIdle(ctx, agent)
+  send(agent, 'first')
+  await idle
+  const first = adapter.requests[0]?.messages[0]
+  expect(first?.role).toBe('system')
+  expect(first?.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringMatching(/^Required transport context\.\n\n/) })])
+  const firstEvent = agent.session.snapshotEvents().find(event => event.type === 'system/message')
+  expect(firstEvent?.type === 'system/message' && firstEvent.data.message.content).toEqual(first?.content)
+
+  adapter.prefix = undefined
+  idle = waitForIdle(ctx, agent)
+  send(agent, 'second')
+  await idle
+  expect(adapter.requests).toHaveLength(2)
+  expect(JSON.stringify(adapter.requests[1]?.messages[0])).not.toContain('Required transport context.')
+  const systems = agent.session.snapshotEvents().filter(event => event.type === 'system/message')
+  expect(systems).toHaveLength(2)
+  expect(systems[1]?.data.message.content).toEqual(adapter.requests[1]?.messages[0]?.content)
+})
+
 /** Assert `previous` is a strict value-prefix of `current`. */
 function expectPrefixExtension(previous: GenerateOptions, current: GenerateOptions) {
   expect(current.messages.length).toBeGreaterThan(previous.messages.length)

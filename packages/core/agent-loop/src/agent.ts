@@ -712,7 +712,10 @@ export class ReactLoopAgent implements Agent {
     const { turn, step } = position
     let system: SessionSeq | undefined
     let runtime: SessionSeq | undefined
-    const renderedPrompt = renderPrompt(assembly)
+    const assembledPrompt = renderPrompt(assembly)
+    const renderedPrompt = preparedCall?.systemPromptPrefix === undefined
+      ? assembledPrompt
+      : preparedCall.systemPromptPrefix + (assembledPrompt.length === 0 ? '' : `\n\n${assembledPrompt}`)
     const sections = renderContextSections(assembly)
     const context = this.runtimeContext.project(joinContextSections(sections), sections)
     signal.throwIfAborted()

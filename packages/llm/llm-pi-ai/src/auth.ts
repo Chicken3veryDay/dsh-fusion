@@ -305,13 +305,13 @@ export function authContextFrom(ctx: Context): AuthContext {
   }
 }
 
-/** Marker of a Claude subscription token, which pi-ai's Messages protocol answers by impersonating Claude Code. */
+/** Marker used by the maintained Anthropic subscription transport. */
 const SUBSCRIPTION_TOKEN_MARKER = 'sk-ant-oat'
 
 /**
  * Whether any effective credential-bearing value is a Claude subscription token.
- * Direct requests use API keys; subscription access belongs to the official
- * Claude Code integration.
+ * Subscription credentials are accepted only from the stored OAuth flow;
+ * key references and header overrides cannot import a subscription grant.
  * @param values - API key and header values a Messages request or listing would carry.
  * @returns true when a value contains the subscription-token marker.
  */
@@ -324,7 +324,7 @@ export function carriesSubscriptionToken(values: Iterable<string | null | undefi
 
 /** The refusal for a subscription token offered as a direct Messages credential. */
 export const SUBSCRIPTION_TOKEN_REFUSAL =
-  'Direct Anthropic requests require an API key, not a Claude subscription token; use the official Claude Code integration for subscription access.'
+  'A Claude subscription token cannot be supplied as an API key or header override; sign in through DSH\'s Anthropic OAuth flow.'
 
 /**
  * Resolve a ChatGPT plan credential without accepting an ambient API-key replacement.

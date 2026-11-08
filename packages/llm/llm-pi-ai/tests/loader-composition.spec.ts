@@ -151,7 +151,7 @@ describe('llm-pi-ai real dormant composition', () => {
     expect(server.headers[0]?.authorization).toBe('Bearer key-from-store')
   })
 
-  it('offers OpenAI sign-in with ChatGPT before its API key, while direct Anthropic offers API keys', async () => {
+  it('offers Anthropic subscription OAuth and ChatGPT before OpenAI API-key sign-in', async () => {
     const { ctx } = await loadComposition()
     const methods = (provider: string): string[] | undefined => ctx.authorization.list()
       .find(entry => entry.key === LlmPiAi.recordKeyFor(provider))?.methods.map(method => method.id)
@@ -159,18 +159,19 @@ describe('llm-pi-ai real dormant composition', () => {
     // pi-ai's Sign in with ChatGPT needs an installation ID, which the harness
     // generates and stores itself, so the route offers it ahead of its key login.
     expect(methods('openai')).toEqual(['oauth', 'api-key'])
-    expect(methods('anthropic')).toEqual(['api-key'])
+    expect(methods('anthropic')).toEqual(['oauth'])
+    expect(methods('deepseek')).toEqual(['api-key'])
     const prompt = vi.fn(async (request: import('@deepseek-ai/dsh-authorization').AuthorizationPrompt) => {
       expect(request.kind).toBe('secret')
-      return 'supported-anthropic-key'
+      return 'supported-api-key'
     })
     expect(await ctx.authorization.begin({
-      key: LlmPiAi.recordKeyFor('anthropic'), method: 'api-key',
+      key: LlmPiAi.recordKeyFor('deepseek'), method: 'api-key',
       interaction: { notify: vi.fn(), prompt },
     })).toEqual({ status: 'authorized' })
     expect(prompt).toHaveBeenCalledOnce()
-    expect(await ctx.credentials.readRecord(LlmPiAi.recordKeyFor('anthropic')))
-      .toEqual({ kind: 'api-key', key: 'supported-anthropic-key' })
+    expect(await ctx.credentials.readRecord(LlmPiAi.recordKeyFor('deepseek')))
+      .toEqual({ kind: 'api-key', key: 'supported-api-key' })
   })
 
   it('routes a provider the moment this installation signs in, and drops it on sign-out', async () => {
@@ -199,16 +200,16 @@ describe('llm-pi-ai real dormant composition', () => {
       .toMatchObject({ hasStoredCredential: true })
   })
 
-  it('never activates an Anthropic subscription grant, only its API key', async () => {
+  it('activates Anthropic subscription grants and withdraws an API-key replacement', async () => {
     const { ctx } = await loadComposition(grantRecord('anthropic'))
-    expect(ctx.llm.listProviders()).toEqual([])
+    expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['anthropic'])
 
     await ctx.credentials.modifyRecord(LlmPiAi.recordKeyFor('anthropic'), () => Promise.resolve({
       kind: 'api-key',
       key: 'sk-ant-test',
     }))
     await vi.waitFor(() => {
-      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['anthropic'])
+      expect(ctx.llm.listProviders()).toEqual([])
     }, { timeout: 5000 })
   })
 

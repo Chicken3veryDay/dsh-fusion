@@ -29,8 +29,8 @@ const DEVICE_ID_OAUTH: ReadonlySet<string> = new Set(['openai'])
 /**
  * The login methods one catalog provider offers.
  *
- * Direct Anthropic requests offer API keys only. Other methods appear when
- * pi-ai can actually run them: `oauth` carries a
+ * Anthropic sign-in offers subscription OAuth only; API-key routes remain
+ * explicit configuration. Other methods appear when pi-ai can run them: `oauth` carries a
  * `login` that runs with the login options this module supplies, while an
  * api-key method has one only when the provider collects its key interactively
  * — which every installed one currently does, so a key is typed into pi-ai's
@@ -41,7 +41,8 @@ const DEVICE_ID_OAUTH: ReadonlySet<string> = new Set(['openai'])
 function loginMethods(provider: Provider | undefined): AuthorizationMethod[] {
   const methods: AuthorizationMethod[] = []
   const oauth = provider?.auth.oauth
-  if (provider?.id !== 'anthropic' && oauth !== undefined) methods.push({ id: 'oauth', label: oauth.loginLabel ?? oauth.name })
+  if (oauth !== undefined) methods.push({ id: 'oauth', label: oauth.loginLabel ?? oauth.name })
+  if (provider?.id === 'anthropic') return methods
   const apiKey = provider?.auth.apiKey
   if (apiKey?.login !== undefined) methods.push({ id: 'api-key', label: apiKey.name })
   return methods

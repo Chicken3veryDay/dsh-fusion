@@ -109,8 +109,9 @@ export interface ProviderSpec {
 /**
  * The auth one route resolves its credential through.
  *
- * Anthropic direct routes omit subscription OAuth and subscription environment
- * tokens; API keys and workload identity keep the installed resolver.
+ * Anthropic preserves the maintained OAuth flow while excluding ambient
+ * subscription-token variables. Account grants come through the credential store;
+ * explicitly configured API keys and workload identity keep their resolver.
  * Other catalog routes keep the installed provider's own auth, which is what
  * preserves provider-native ambient discovery for a profile naming no
  * credential. That holds even when the profile repoints the protocol: which
@@ -133,7 +134,7 @@ export interface ProviderSpec {
 function routeAuth(spec: ProviderSpec, catalog: Provider | undefined): Provider['auth'] {
   if (spec.provider === 'anthropic' && catalog?.auth.apiKey !== undefined) {
     const apiKey = catalog.auth.apiKey
-    return { apiKey: {
+    return { ...catalog.auth, apiKey: {
       ...apiKey,
       resolve: ({ ctx, ...request }) => apiKey.resolve({
         ...request,

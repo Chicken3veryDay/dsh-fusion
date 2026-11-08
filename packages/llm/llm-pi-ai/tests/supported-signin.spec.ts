@@ -91,17 +91,20 @@ describe('supported sign-in requests', () => {
     expect(server.headers.map(headers => headers.authorization)).toEqual(['Bearer synthetic-access', 'Bearer second-account'])
   })
 
-  it('refuses a saved Anthropic grant on an explicit keyless route without I/O or deleting it', async () => {
+  it('uses a saved Anthropic OAuth grant on the direct route without replacing it', async () => {
     const server = await mockServer([{ events: anthropicTextEvents }])
     const ctx = await signedIn('anthropic', server.url)
+    const subscription = { ...grant, payload: { ...grant.payload, access: 'sk-ant-oat-synthetic' } }
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('anthropic'), () => Promise.resolve(subscription))
     const finish = (await assemble(ctx, { provider: 'anthropic', model: 'claude-sonnet-4-5', messages: [] })).finish
-    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
-    if (finish.kind === 'error') expect(finish.failure.message).toContain('API key')
-    expect(server.paths).toEqual([])
-    expect(await ctx.credentials.readRecord(PiAi.recordKeyFor('anthropic'))).toEqual(grant)
+    expect(finish).toEqual({ kind: 'stop' })
+    expect(server.paths).toEqual(['/v1/messages?beta=true'])
+    expect(server.headers[0]?.authorization).toBe('Bearer sk-ant-oat-synthetic')
+    expect(server.headers[0]).not.toHaveProperty('x-api-key')
+    expect(await ctx.credentials.readRecord(PiAi.recordKeyFor('anthropic'))).toEqual(subscription)
   })
 
-  it('refuses an OAuth token configured as an Anthropic API key before impersonation', async () => {
+  it('refuses an OAuth token supplied through an API-key reference instead of stored sign-in', async () => {
     const server = await mockServer([{ events: anthropicTextEvents }])
     const ctx = await signedIn('anthropic', server.url, { apiKeyEnv: 'SYNTHETIC_ANTHROPIC_KEY' })
     await ctx.credentials.set(credentialRef('SYNTHETIC_ANTHROPIC_KEY'), 'sk-ant-oat-synthetic')

@@ -80,6 +80,9 @@ const ANTHROPIC_TOOL_UPDATE_PLACEHOLDER: ToolSchema = {
   parameters: { type: 'object', properties: {} },
 }
 
+/** Mandatory identity text added by the pinned pi-ai Anthropic OAuth transport. */
+const ANTHROPIC_OAUTH_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+
 /** One resolution's frozen view: the profiles and the collection built from them. */
 interface PiAiSnapshot {
   /** The resolved profiles this collection was built from, used as its identity. */
@@ -419,7 +422,14 @@ export class PiAiAdapter extends LlmAdapter {
     }
     if (provider !== 'anthropic' && !messages && !(provider === 'openai' && model?.api === 'openai-responses')) return { apiKey: explicit }
     if (provider === 'anthropic' && stored?.type === 'oauth') {
-      throw new LlmError('Direct Anthropic requests require an API key; configure ANTHROPIC_API_KEY or use the official Claude Code integration for subscription access. The saved sign-in is unchanged.', 'AUTH')
+      if (model !== undefined && model.api !== 'anthropic-messages') {
+        throw new LlmError('Anthropic subscription sign-in requires the anthropic-messages protocol.', 'AUTH')
+      }
+      if (Object.keys(headers).some(name => /^(authorization|x-api-key)$/i.test(name))) {
+        throw new LlmError('Anthropic subscription authentication cannot be overridden by request auth headers.', 'AUTH')
+      }
+    } else if (provider === 'anthropic' && profile.requiresStoredCredential === true) {
+      throw new LlmError('Anthropic subscription sign-in is unavailable; sign in again. API-key billing was not selected.', 'AUTH')
     }
     let resolved: Awaited<ReturnType<Models['getAuth']>>
     // The same resolution Models.applyAuth performs at dispatch, minus the
@@ -440,6 +450,12 @@ export class PiAiAdapter extends LlmAdapter {
       throw error
     }
     lookup?.throwIfAborted()
+    if (provider === 'anthropic' && stored?.type === 'oauth') {
+      if (resolved?.source !== 'OAuth' || resolved.auth.apiKey === undefined) {
+        throw new LlmError('Anthropic subscription sign-in was removed or replaced; sign in again. API-key billing was not selected.', 'AUTH')
+      }
+      return { apiKey: undefined, checked: { ok: true, result: structuredClone(resolved) } }
+    }
     const resolvedCredentials = [resolved?.auth.apiKey, ...Object.values(resolved?.auth.headers ?? {})]
     if ((provider === 'anthropic' || messages) && carriesSubscriptionToken([explicit, ...resolvedCredentials, ...Object.values(headers)])) {
       throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
@@ -643,8 +659,10 @@ export class PiAiAdapter extends LlmAdapter {
         assessControls: controls => assessPiAiControls(piModel, profile, controls),
         finalizeControls: async (controls, caller) => {
           const assessment = assessPiAiControls(piModel, profile, controls)
-          if (piModel.provider !== 'openai' || piModel.api !== 'openai-responses'
-            || (controls.temperature === undefined && controls.maxTokens === undefined)) {
+          const anthropic = piModel.provider === 'anthropic' && piModel.api === 'anthropic-messages'
+          const openai = piModel.provider === 'openai' && piModel.api === 'openai-responses'
+            && (controls.temperature !== undefined || controls.maxTokens !== undefined)
+          if (!anthropic && !openai) {
             return { assessment, stream }
           }
           const signal = AbortSignal.any([caller, this.config.lifetime].filter(entry => entry !== undefined))
@@ -662,7 +680,7 @@ export class PiAiAdapter extends LlmAdapter {
               // Authentication I/O failures belong to the request stream and its retry owner.
               // This operation must never resolve authentication again.
               return {
-                assessment: finalizeOpenAiControls(piModel, controls, assessment, undefined),
+                assessment: openai ? finalizeOpenAiControls(piModel, controls, assessment, undefined) : assessment,
                 stream: async function* () { await settled.promise },
               }
             }
@@ -676,7 +694,8 @@ export class PiAiAdapter extends LlmAdapter {
               auth: { ...resolved.auth, ...binding.apiKey === undefined ? {} : { apiKey: binding.apiKey } },
             }
             return {
-              assessment: finalizeOpenAiControls(piModel, controls, assessment, effective),
+              assessment: openai ? finalizeOpenAiControls(piModel, controls, assessment, effective) : assessment,
+              ...anthropic && resolved?.source === 'OAuth' ? { systemPromptPrefix: ANTHROPIC_OAUTH_SYSTEM_PREFIX } : {},
               stream: options => this.streamWithSnapshot(options, snapshot, binding, piModel),
             }
           } finally {
@@ -721,6 +740,14 @@ export class PiAiAdapter extends LlmAdapter {
     )
     const headers = requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders)
     const { apiKey, checked } = binding ?? await this.requestAuth(snapshot, options.provider, profile, model, options.signal, headers)
+    if (model.provider === 'anthropic' && checked?.ok === true && checked.result?.source === 'OAuth') {
+      if (Object.keys(headers).some(name => /^(authorization|x-api-key)$/i.test(name))) {
+        throw new LlmError('Anthropic subscription authentication cannot be overridden by request auth headers.', 'AUTH')
+      }
+      // The maintained OAuth transport supplies its compatibility User-Agent.
+      // Other Harness attribution remains; no native backend is involved.
+      delete headers['user-agent']
+    }
     const dispatch = this.dispatchModels(snapshot, model, checked)
 
     const consumer = new AbortController()
@@ -753,6 +780,14 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade, updates.systemPromptUpdate === 'in-history')
+      if (model.provider === 'anthropic' && checked?.ok === true && checked.result?.source === 'OAuth') {
+        // The loop already logged this prefix. Let pi-ai encode its one mandatory
+        // prefix block, without also sending it inside the caller's system block.
+        if (context.systemPrompt === ANTHROPIC_OAUTH_SYSTEM_PREFIX) delete context.systemPrompt
+        else if (context.systemPrompt?.startsWith(`${ANTHROPIC_OAUTH_SYSTEM_PREFIX}\n\n`)) {
+          context.systemPrompt = context.systemPrompt.slice(ANTHROPIC_OAUTH_SYSTEM_PREFIX.length + 2)
+        }
+      }
       // pi-ai flattens a rejected response into error text; the observer keeps
       // its status, Retry-After, and request id for the failure chunk. Codex alone
       // drops an in-band failure frame's code the same way, so only it is handed

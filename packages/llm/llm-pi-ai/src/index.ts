@@ -239,7 +239,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       .map(provider => [provider, {}]))
     const next = resolveProfiles({ ...implied, ...configured }, 'deferred')
     for (const [provider, profile] of next) {
-      if (provider === 'openai' && provider in implied) profile.requiresStoredCredential = true
+      if ((provider === 'openai' || provider === 'anthropic') && provider in implied) profile.requiresStoredCredential = true
     }
     lastRaw = raw
     lastSignedIn = signedIn
@@ -482,7 +482,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (!admitted()) return
       const next = new Set(stored
         .filter(entry => catalogProvider(entry.providerId) !== undefined
-          && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
+          && (entry.providerId !== 'anthropic' || entry.type === 'oauth'))
         .map(entry => entry.providerId))
       const login = next.has('openai') ? await loginOf(store) : undefined
       if (!admitted()) return

@@ -92,7 +92,7 @@ turn/start
      agent/step-accepted
      step/start
      agent/request -> prepareCall (cancellation commits neither system nor users)
-     collect pending context; reconcile system/message using the prepared call capability
+     collect pending context; record the prepared provider prefix and assembled prompt in system/message
      append entered and pending messages as user/message; reconcile retained runtime context
      readmit tools; compare captured inputs -> reassemble and reconcile if changed
      log request/header, tool-registry messages, and request/context as needed

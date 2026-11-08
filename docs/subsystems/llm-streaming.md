@@ -8,6 +8,8 @@ Source: [`packages/llm/llm/src/types.ts`](../../packages/llm/llm/src/types.ts)
 
 <a id="content-blocks-and-messages"></a>
 
+A prepared call may expose an authentication-bound `systemPromptPrefix`. AgentLoop records it before the assembled system prompt in the existing `system/message` event; it remains present even with a complete presentation override. The adapter encodes that recorded prefix once using its maintained transport. The prefix is process-local preparation metadata, not a saved prompt or a new Session field.
+
 ## Content blocks and messages
 
 A conversation is `Message`s; a message is an array of typed **content blocks**. The block union derives from `ContentBlockMap`.

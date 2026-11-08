@@ -191,6 +191,8 @@ export interface PreparedLlmCall {
   readonly systemPromptUpdate?: SystemPromptUpdate
   /** Exact model tool update mode captured with the adapter dispatch generation. */
   readonly toolUpdate?: ToolUpdate
+  /** Captured provider-required prefix; the loop records it before the assembled system prompt. */
+  readonly systemPromptPrefix?: string
   /** Config fields materialized by the captured adapter rather than proposed by the caller. */
   readonly adapterDefaults: LlmCallConfigAdapterDefaults
   /**
@@ -239,7 +241,12 @@ export interface PreparedAdapterCall {
   finalizeControls?(
     controls: Readonly<LlmCallControls>,
     signal?: AbortSignal,
-  ): Promise<{ readonly assessment: CallControlAssessment; readonly stream: PreparedAdapterCall['stream'] }>
+  ): Promise<{
+    readonly assessment: CallControlAssessment
+    readonly stream: PreparedAdapterCall['stream']
+    /** Provider-required system text, bound to the same authentication as dispatch. */
+    readonly systemPromptPrefix?: string
+  }>
   /** Dispatch through that generation without re-reading dynamic connection facts. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 }
@@ -1090,11 +1097,15 @@ export class LlmRuntime extends TypertRemoteService {
     const { provider: _provider, model: _model, ...controls } = config
     const assessment = this.assessCall(config, adapterCall.assessControls(controls))
     if (adapterCall.finalizeControls === undefined) {
-      return { assessment, stream: (options: GenerateOptions) => adapterCall.stream(options) }
+      return { assessment, stream: (options: GenerateOptions) => adapterCall.stream(options), systemPromptPrefix: undefined }
     }
     const finalized = await adapterCall.finalizeControls(deepFreeze(structuredClone(controls)), signal)
     signal?.throwIfAborted()
-    return { assessment: this.assessCall(config, finalized.assessment), stream: finalized.stream }
+    return {
+      assessment: this.assessCall(config, finalized.assessment),
+      stream: finalized.stream,
+      systemPromptPrefix: finalized.systemPromptPrefix,
+    }
   }
 
   /**
@@ -1145,6 +1156,7 @@ export class LlmRuntime extends TypertRemoteService {
       retryPolicy: registration.retryPolicy,
       adapterDefaults,
       assessment: finalized.assessment,
+      ...finalized.systemPromptPrefix === undefined ? {} : { systemPromptPrefix: finalized.systemPromptPrefix },
       ...context === undefined ? {} : { context },
       ...modelInfo.inputModalities === undefined
         ? {}
