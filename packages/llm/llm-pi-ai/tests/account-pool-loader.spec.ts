@@ -4,6 +4,7 @@
  * hot replacement, mount failure, disposal, and the failover listener.
  */
 
+import { execFileSync } from 'node:child_process'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -222,6 +223,31 @@ describe('mounting the account documents', () => {
     expect(server.requests).toEqual([])
     // With no pool published, failover has nothing to offer.
     expect(await offer(ctx, 'RATE_LIMIT')).toBeUndefined()
+  })
+
+  it('mounts nothing for an update that arrives while an unload waits on a mount', async () => {
+    const server = await mockServer([ok])
+    const { ctx, settingsPath } = await loadComposition()
+    const first = await document('account-1')
+    // A named pipe holds the second mount open until the test writes the document: the mount is stuck mid-way.
+    const second = join(root!, 'account-2.credentials.yaml')
+    execFileSync('mkfifo', ['-m', '600', second])
+    let firstMounted: (() => void) | undefined
+    const mountedFirst = new Promise<void>((resolve) => { firstMounted = resolve })
+    onAccountWatcher = (path) => { if (path.endsWith('account-1.credentials.yaml')) firstMounted?.() }
+    await writeFile(settingsPath, settings(server.url, { 'account-1': first, 'account-2': second }))
+    await mountedFirst
+
+    const disposing = disposeComposition()
+    // The unload has begun and waits for the mount. A settings update now queues a second application.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100) })
+    ctx.emit('loader/volatile-update', [])
+    await writeFile(second, [
+      'version: 1', 'records:', '  llm-pi-ai/anthropic:', '    kind: grant',
+      `    payload: { type: oauth, access: ${token('account-2')}, refresh: r, expires: 4102444800000 }`, '',
+    ].join('\n'))
+    await disposing
+    expect(openWatchers.size).toBe(0)
   })
 
   it('withdraws the pool and releases its watchers when settings drop the accounts', async () => {
