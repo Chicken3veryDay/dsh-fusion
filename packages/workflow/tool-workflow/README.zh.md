@@ -75,7 +75,7 @@ kind: "package-reference"
 
 ### 持久会话记录
 
-每个 Agent 拥有的调用，包括 `run_code` 内的 `tools.workflow(...)`，都会用四个 log-only 事件把运行投影到调用方 Agent 的会话：`start()` 返回后写 run-start，只记录 `run.id` 匹配的成员开始与结束，并且只在结果可用且 dispose 完全停稳后写 run-end。transport 嵌套不影响记录资格。dispose 失败时记录保持未结束；后台任务仍报告已结算的执行结果，并对清理失败发出告警。会话追加操作首次失败后，本运行会停止后续记录并只告警一次，留下空记录或合法连续前缀，同时不改变工具结果和清理。
+每个 Agent 拥有的调用，包括 `run_code` 内的 `tools.workflow(...)`，都会用四个 log-only 事件把运行投影到调用方 Agent 的会话：`start()` 返回后写 run-start，只记录 `run.id` 匹配的成员开始与结束，并且只在结果可用且 dispose 完全停稳后写 run-end。transport 嵌套不影响记录资格。dispose 失败时记录保持未结束；后台任务仍报告已结算的执行结果，并对清理失败发出告警。会话追加操作首次失败后，本运行会停止后续记录并只告警一次，留下空记录或合法连续前缀，同时不改变工具结果和清理。卸载或重启工具插件会停止记录其已受理的运行；这些运行的执行结果与任务结果保持不变，记录可能保持未结束。
 
 引擎的 `workflow/phase` 与 `workflow/log` 事件在本工具没有逐行的持久面：会话日志刻意只记录 run 与成员生命周期，Web transcript 由这些记录派生。后台运行的这些行改经任务观察 record 抵达人类，而 record 的瞬态是设计使然。
 

@@ -9,7 +9,7 @@ English | [中文](guide.zh.md)
 
 ## Change
 
-Agent-owned `tools.workflow(...)` calls inside `run_code` now emit the same four `tool-workflow/*` Session event types as direct Workflow calls. Consumers that assume nested Workflow calls have no durable run records must handle these events. A run receives its terminal record only after disposal succeeds; a background job can report a settled execution result while a cleanup failure leaves its Workflow record open. Existing event payloads and committed Session generations are unchanged.
+Agent-owned `tools.workflow(...)` calls inside `run_code` now emit the same four `tool-workflow/*` Session event types as direct Workflow calls. Consumers that assume nested Workflow calls have no durable run records must handle these events. A run receives its terminal record only after disposal succeeds; a background job can report a settled execution result while a cleanup failure leaves its Workflow record open. Unloading or restarting the tool plugin also stops further recording for its admitted runs, leaving their execution outcomes unchanged and their records potentially open. Existing event payloads and committed Session generations are unchanged.
 
 ## Migration
 

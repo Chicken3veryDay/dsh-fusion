@@ -92,6 +92,7 @@ function renderRecordingError(error: unknown): string {
  */
 function createWorkflowRecorder(ctx: Context): WorkflowRecorder {
   const active = new Map<WorkflowRunId, Session>()
+  ctx.effect(() => () => { active.clear() })
   const append = <Type extends keyof ToolWorkflowRecordEventMap>(
     session: Session,
     type: Type,

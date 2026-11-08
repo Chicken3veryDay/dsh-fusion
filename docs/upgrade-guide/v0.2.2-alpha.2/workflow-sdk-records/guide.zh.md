@@ -9,7 +9,7 @@ description: "通过 Script SDK 发起的 Workflow 调用会在调用方 Agent �
 
 ## 变更
 
-Agent 拥有的 `run_code` 内 `tools.workflow(...)` 调用现在会生成与直接 Workflow 调用相同的四种 `tool-workflow/*` 会话事件。假定嵌套 Workflow 调用没有持久运行记录的消费方必须处理这些事件。只有 dispose 成功后才写入运行终态记录；清理失败时，后台任务可以报告已结算的执行结果，而 Workflow 记录保持未结束。现有事件载荷和已提交的会话代次保持不变。
+Agent 拥有的 `run_code` 内 `tools.workflow(...)` 调用现在会生成与直接 Workflow 调用相同的四种 `tool-workflow/*` 会话事件。假定嵌套 Workflow 调用没有持久运行记录的消费方必须处理这些事件。只有 dispose 成功后才写入运行终态记录；清理失败时，后台任务可以报告已结算的执行结果，而 Workflow 记录保持未结束。卸载或重启工具插件也会停止记录其已受理的运行；这些运行的执行结果保持不变，记录可能保持未结束。现有事件载荷和已提交的会话代次保持不变。
 
 ## 迁移
 
