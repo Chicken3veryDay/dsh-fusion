@@ -112,7 +112,7 @@ function signInFailure(text: string): LlmFailure | undefined {
   if (provider === undefined) return undefined
   const code = classifyPiAiError(text)
   if (code !== 'INVALID_REQUEST' && code !== 'AUTH') return undefined
-  return { message: `${text}; sign in to ${provider} again in the Models settings`, code: 'AUTH' }
+  return { message: `${text}; sign in to ${provider} again`, code: 'AUTH' }
 }
 
 /**

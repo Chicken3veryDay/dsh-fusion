@@ -1030,7 +1030,58 @@ describe('HarnessSdkJsonRpcServer', () => {
     try {
       const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
       await expect(server.initialize({ cwd: storageDir, provider: 'openai-codex', model: 'gpt-5' }))
-        .rejects.toThrow('sign in or add its credential in the Models settings')
+        .rejects.toThrow('sign in or add its credential, or select another model')
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('words the setup advice for every client, not only the Web page', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-setup-text-'))
+    const ctx = await makeHarness(storageDir)
+    ctx.llm.registerConfigurableProviders([
+      { provider: 'openai-codex', displayName: 'ChatGPT', settingsNs: 'llm', settingsPath: ['providers', 'openai-codex'] },
+    ])
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.initialize({ cwd: storageDir, provider: 'openai-codex', model: 'gpt-5' }))
+        .rejects.not.toThrow(/Models (?:settings|page)/)
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('lets the resolver refuse a missing route, without listing models for its exception', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-resolver-refusal-'))
+    const ctx = await makeHarness(storageDir)
+    const listModels = vi.spyOn(ctx.llm, 'listModels')
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.initialize({ cwd: storageDir, provider: 'private', model: 'm' }))
+        .rejects.toMatchObject({ code: 'NO_ADAPTER' })
+      expect(listModels).not.toHaveBeenCalled()
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('serves a route that registered after the first presence check', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-late-route-'))
+    const ctx = await makeHarness(storageDir)
+    ctx.llm.registerAdapter(['mock'], new MockAdapter([]))
+    // The presence check sees the registry before the route appears; the resolver sees it after.
+    vi.spyOn(ctx.llm, 'listProviders').mockReturnValueOnce([])
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await expect(server.initialize({ cwd: storageDir, provider: 'mock', model: 'mock' })).resolves.toMatchObject({
+        serverInfo: { name: 'deepseek-harness-sdk-runtime' },
+      })
       await server.shutdown()
     } finally {
       await ctx.fiber.dispose()

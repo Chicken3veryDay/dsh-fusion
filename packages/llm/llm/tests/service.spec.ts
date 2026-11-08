@@ -435,7 +435,7 @@ describe('LlmRuntime', () => {
 
     await expect(ctx.llm.listModels('signed-out')).rejects.toMatchObject({
       code: 'NO_ADAPTER',
-      message: expect.stringContaining('sign in or add its credential in the Models settings') as string,
+      message: expect.stringMatching(/not set up: sign in or add its credential, or select another model$/) as string,
     })
     // A name no adapter could ever serve gets no setup advice.
     await expect(ctx.llm.listModels('typo')).rejects.toMatchObject({

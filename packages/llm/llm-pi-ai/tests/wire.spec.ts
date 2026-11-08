@@ -366,7 +366,7 @@ describe('Codex Responses with an expired sign-in', () => {
 
     expect(finish).toMatchObject({
       kind: 'error',
-      failure: { code: 'AUTH', message: expect.stringContaining('sign in to openai-codex again in the Models settings') as string },
+      failure: { code: 'AUTH', message: expect.stringMatching(/; sign in to openai-codex again$/) as string },
     })
   })
 })
