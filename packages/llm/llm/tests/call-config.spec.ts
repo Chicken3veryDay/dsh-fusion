@@ -34,7 +34,7 @@ describe('callConfigEquals', () => {
 
 describe('control assessment helpers', () => {
   it('detaches and freezes nested translations without freezing the adapter-owned values', () => {
-    const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256 }
+    const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256, zeroBudgetSends: 1_024 }
     const translations = [translation]
     const expected = structuredClone(translations)
     const assessment = assessSuppliedControls({ maxTokens: 777 }, () => ({ kind: 'translated', translations }))
@@ -49,6 +49,25 @@ describe('control assessment helpers', () => {
     expect(Object.isFrozen(disposition.translations[0])).toBe(true)
     expect(Reflect.set(disposition.translations[0]!, 'thinkingTokens', 9)).toBe(false)
     expect(() => Reflect.apply(Array.prototype.push, disposition.translations, [translation])).toThrow(TypeError)
+  })
+
+  it.each(['supported', 'translated'] as const)('detaches and freezes the constraints of a %s disposition', (kind) => {
+    const constraint = { kind: 'context-window-clamp' as const, contextWindow: 5_000, reserveTokens: 4_096, minimumTokens: 1 }
+    const constraints = [constraint]
+    const expected = structuredClone(constraints)
+    const assessment = assessSuppliedControls({ maxTokens: 777 }, () => kind === 'supported'
+      ? { kind, constraints }
+      : { kind, translations: [], constraints })
+    const disposition = assessment.fields.maxTokens
+    if (disposition?.kind !== kind) throw new Error(`expected ${kind} allowance`)
+    constraint.contextWindow = 7
+    constraints.push({ ...constraint })
+    expect(disposition.constraints).toEqual(expected)
+    expect(Object.isFrozen(constraints)).toBe(false)
+    expect(Object.isFrozen(disposition.constraints)).toBe(true)
+    expect(Object.isFrozen(disposition.constraints?.[0])).toBe(true)
+    expect(Reflect.set(disposition.constraints?.[0] ?? {}, 'contextWindow', 9)).toBe(false)
+    expect(() => Reflect.apply(Array.prototype.push, disposition.constraints, [constraint])).toThrow(TypeError)
   })
 
   it('builds one frozen entry per supplied control, including falsy values, and none for omitted ones', () => {

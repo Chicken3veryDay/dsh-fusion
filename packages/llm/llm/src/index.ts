@@ -59,7 +59,7 @@ export {
   assessSuppliedControls, callConfigEquals, isAgentLoopRequest, markAgentLoopRequest, undeclaredControlAssessment,
 } from './call-config.ts'
 export type {
-  CallControlAssessment, ConfigureCall, ControlDisposition, ControlTranslation, LlmCallConfig,
+  CallControlAssessment, ConfigureCall, ControlConstraint, ControlDisposition, ControlTranslation, LlmCallConfig,
   LlmCallConfigAdapterDefaults, LlmCallControls,
 } from './call-config.ts'
 

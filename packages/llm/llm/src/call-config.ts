@@ -51,20 +51,54 @@ export type ConfigureCall = (
 /**
  * How an adapter generation turns a supplied control into a different wire
  * value. `add-thinking-allowance`: `maxTokens` is an answer allowance and the
- * wire ceiling becomes `maxTokens + thinkingTokens`, with `answerReserve`
- * tokens of that ceiling kept for the answer.
+ * requested wire ceiling is `maxTokens + thinkingTokens`; the thinking budget
+ * actually sent is the smaller of `thinkingTokens` and the final ceiling minus
+ * `answerReserve`; a result of 0 is sent as `zeroBudgetSends`, which can
+ * exceed the final ceiling. The requested ceiling is the value before any
+ * {@link ControlConstraint} on the same disposition.
  */
 export type ControlTranslation =
-  | { readonly kind: 'add-thinking-allowance'; readonly thinkingTokens: number; readonly answerReserve: number }
+  | {
+    readonly kind: 'add-thinking-allowance'
+    readonly thinkingTokens: number
+    readonly answerReserve: number
+    readonly zeroBudgetSends: number
+  }
+
+/**
+ * A bound the adapter generation's serializer may apply to a control's wire
+ * value. A constraint is a condition, not a result: `context-window-clamp`
+ * depends on the messages, which do not exist at preparation, so the exact
+ * wire value is known only when the request is serialized.
+ *
+ * - `model-output-ceiling`: the wire ceiling never exceeds `maxTokens`.
+ * - `context-window-clamp`: the wire ceiling never exceeds what is left of
+ *   `contextWindow` after the estimated input and `reserveTokens`, and never
+ *   falls below `minimumTokens`, so a long input can lower an allowance.
+ */
+export type ControlConstraint =
+  | { readonly kind: 'model-output-ceiling'; readonly maxTokens: number }
+  | {
+    readonly kind: 'context-window-clamp'
+    readonly contextWindow: number
+    readonly reserveTokens: number
+    readonly minimumTokens: number
+  }
 
 /**
  * One adapter generation's verdict on one supplied control. `unverified` means
  * the generation cannot establish support from its captured facts; it is
- * neither refused nor advertised as supported.
+ * neither refused nor advertised as supported. `constraints` lists the
+ * bounds the generation knows from its captured facts; the value in the
+ * serialized request remains authoritative.
  */
 export type ControlDisposition =
-  | { readonly kind: 'supported' }
-  | { readonly kind: 'translated'; readonly translations: readonly ControlTranslation[] }
+  | { readonly kind: 'supported'; readonly constraints?: readonly ControlConstraint[] }
+  | {
+    readonly kind: 'translated'
+    readonly translations: readonly ControlTranslation[]
+    readonly constraints?: readonly ControlConstraint[]
+  }
   | { readonly kind: 'unsupported'; readonly reason: UnsupportedControlReason }
   | { readonly kind: 'unverified'; readonly reason: 'account-mode-unresolved' | 'protocol-unverified' | 'adapter-undeclared' }
 

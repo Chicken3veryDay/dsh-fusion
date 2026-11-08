@@ -9,8 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options'
+import type { Model } from '@earendil-works/pi-ai'
 import { PiAiAdapter } from '../src/adapter.ts'
 import { resolveProfiles } from '../src/config.ts'
+import { assessPiAiControls, CONTEXT_RESERVE_TOKENS, MINIMUM_WIRE_TOKENS, ZERO_BUDGET_SENDS } from '../src/controls.ts'
 import { memoryAuth } from './auth-double.ts'
 import { anthropicTextEvents, closeMockServers, mockServer } from './mock-server.ts'
 import type { PiAiProviderProfile } from '../src/config.ts'
@@ -48,12 +51,22 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
   return chunks
 }
 
+/** One user message of `chars` characters; pi-ai estimates 3.5 characters per token. */
+function inputOf(chars: number) {
+  return [createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'a'.repeat(chars) }] })]
+}
+
+/** The context clamp every Anthropic allowance carries for a model with this window. */
+function contextClamp(contextWindow: number) {
+  return { kind: 'context-window-clamp', contextWindow, reserveTokens: 4096, minimumTokens: 1 }
+}
+
 /** Prepare, assert nothing ran, dispatch, and return the single request body. */
-async function dispatch(p: Probe, config: LlmCallConfig) {
+async function dispatch(p: Probe, config: LlmCallConfig, input = messages) {
   const prepared = await p.ctx.llm.prepareCall(config)
   expect(p.requests).toHaveLength(0)
   expect(p.authCalls()).toBe(0)
-  await collect(prepared.stream({ ...prepared.config, messages }))
+  await collect(prepared.stream({ ...prepared.config, messages: input }))
   expect(p.requests).toHaveLength(1)
   return { prepared, body: p.requests[0] }
 }
@@ -81,13 +94,13 @@ describe('Anthropic Messages controls', () => {
       expect(prepared.assessment.fields).toEqual({
         reasoningEffort: { kind: 'supported' },
         temperature: { kind: 'supported' },
-        maxTokens: { kind: 'supported' },
+        maxTokens: { kind: 'supported', constraints: [contextClamp(200_000)] },
       })
       expect(body).toMatchObject({ max_tokens: 777, temperature: 0.2, thinking: { type: 'disabled' } })
     } finally { await p.dispose() }
   })
 
-  it('budget-based reasoning: the legacy allowance is explicitly translated and keeps total 17161', async () => {
+  it('budget-based reasoning in normal context: the legacy allowance is translated and still sends 17161', async () => {
     const p = await probe('anthropic', {})
     try {
       const { prepared, body } = await dispatch(p, {
@@ -95,7 +108,8 @@ describe('Anthropic Messages controls', () => {
       })
       expect(prepared.assessment.fields.maxTokens).toEqual({
         kind: 'translated',
-        translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 16_384, answerReserve: 1_024 }],
+        translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 16_384, answerReserve: 1_024, zeroBudgetSends: 1_024 }],
+        constraints: [{ kind: 'model-output-ceiling', maxTokens: 64_000 }, contextClamp(200_000)],
       })
       expect(body).toMatchObject({ max_tokens: 17_161, thinking: { type: 'enabled', budget_tokens: 16_137 } })
       expect(body).not.toHaveProperty('temperature')
@@ -109,19 +123,111 @@ describe('Anthropic Messages controls', () => {
         provider: 'anthropic', model: 'claude-sonnet-4-5', maxTokens: 777, reasoningEffort: ReasoningEffortId('high'),
       })
       expect(prepared.assessment.fields.maxTokens).toMatchObject({ translations: [{ thinkingTokens: 4_096 }] })
-      expect(body).toMatchObject({ max_tokens: 777 + 4_096 })
+      expect(body).toMatchObject({ max_tokens: 777 + 4_096, thinking: { budget_tokens: 3_849 } })
     } finally { await p.dispose() }
   })
 
-  it('adaptive reasoning: the allowance is supported unchanged and stays 777', async () => {
+  it('adaptive reasoning in normal context: the allowance is supported and still sends 777', async () => {
     const p = await probe('anthropic', {})
     try {
       const { prepared, body } = await dispatch(p, {
         provider: 'anthropic', model: 'claude-sonnet-4-6', maxTokens: 777, reasoningEffort: ReasoningEffortId('high'),
       })
-      expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'supported' })
+      expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'supported', constraints: [contextClamp(1_000_000)] })
       expect(body).toMatchObject({ max_tokens: 777, thinking: { type: 'adaptive' } })
     } finally { await p.dispose() }
+  })
+
+  describe('model and context constraints reach the wire', () => {
+    const budget = { provider: 'anthropic', model: 'claude-sonnet-4-5', maxTokens: 777, reasoningEffort: ReasoningEffortId('high') }
+
+    it('a finite model output ceiling caps the sum and lowers the thinking budget: total 10000, not the predicted 17161', async () => {
+      const p = await probe('anthropic', { modelOverrides: { 'claude-sonnet-4-5': { maxTokens: 10_000 } } })
+      try {
+        const { prepared, body } = await dispatch(p, budget)
+        expect(prepared.assessment.fields.maxTokens).toEqual({
+          kind: 'translated',
+          translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 16_384, answerReserve: 1_024, zeroBudgetSends: 1_024 }],
+          constraints: [{ kind: 'model-output-ceiling', maxTokens: 10_000 }, contextClamp(200_000)],
+        })
+        expect(777 + 16_384).toBe(17_161)
+        expect(body).toMatchObject({ max_tokens: 10_000, thinking: { type: 'enabled', budget_tokens: 8_976 } })
+      } finally { await p.dispose() }
+    })
+
+    it('adaptive thinking: a window of 5000 with a fitting 1600-character input lowers the 777 allowance to 446', async () => {
+      const p = await probe('anthropic', { modelOverrides: { 'claude-sonnet-4-6': { contextWindow: 5_000 } } })
+      try {
+        const { prepared, body } = await dispatch(p, { ...budget, model: 'claude-sonnet-4-6' }, inputOf(1_600))
+        expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'supported', constraints: [contextClamp(5_000)] })
+        expect(5_000 - Math.ceil(1_600 / 3.5) - 4_096).toBe(446)
+        expect(body).toMatchObject({ max_tokens: 446, thinking: { type: 'adaptive' } })
+      } finally { await p.dispose() }
+    })
+
+    it('adaptive thinking: the same window with a short input leaves the allowance unchanged', async () => {
+      const p = await probe('anthropic', { modelOverrides: { 'claude-sonnet-4-6': { contextWindow: 5_000 } } })
+      try {
+        const { body } = await dispatch(p, { ...budget, model: 'claude-sonnet-4-6' })
+        expect(body).toMatchObject({ max_tokens: 777 })
+      } finally { await p.dispose() }
+    })
+
+    it('budget thinking: the context clamp lowers the ceiling to 446 and the zero thinking budget is sent as 1024', async () => {
+      const p = await probe('anthropic', { modelOverrides: { 'claude-sonnet-4-5': { contextWindow: 5_000 } } })
+      try {
+        const { prepared, body } = await dispatch(p, budget, inputOf(1_600))
+        expect(prepared.assessment.fields.maxTokens).toMatchObject({ constraints: [{ kind: 'model-output-ceiling' }, contextClamp(5_000)] })
+        expect(body).toMatchObject({ max_tokens: 446, thinking: { type: 'enabled', budget_tokens: ZERO_BUDGET_SENDS } })
+      } finally { await p.dispose() }
+    })
+
+    it('a thinking budget that does not fit beside the answer reserve is lowered: custom budget 1024 sends 1801 with thinking 777', async () => {
+      const p = await probe('anthropic', { thinkingBudgets: { high: 1_024 } })
+      try {
+        const { prepared, body } = await dispatch(p, budget)
+        expect(prepared.assessment.fields.maxTokens).toMatchObject({ translations: [{ thinkingTokens: 1_024, answerReserve: 1_024 }] })
+        expect(body).toMatchObject({ max_tokens: 1_801, thinking: { type: 'enabled', budget_tokens: 777 } })
+      } finally { await p.dispose() }
+    })
+
+    it('reasoning off sends an allowance above the model output ceiling, so no ceiling is claimed', async () => {
+      const p = await probe('anthropic', { modelOverrides: { 'claude-sonnet-4-5': { maxTokens: 10_000 } } })
+      try {
+        const { prepared, body } = await dispatch(p, { ...budget, maxTokens: 20_000, reasoningEffort: ReasoningEffortId('off') })
+        expect(prepared.assessment.fields.maxTokens).toEqual({ kind: 'supported', constraints: [contextClamp(200_000)] })
+        expect(body).toMatchObject({ max_tokens: 20_000, thinking: { type: 'disabled' } })
+      } finally { await p.dispose() }
+    })
+  })
+
+  it('pins the reserve and minimum to the installed pi-ai clamp', () => {
+    const clamp = (contextWindow: number) => clampMaxTokensToContext({ contextWindow }, { messages: [] }, 1_000_000)
+    expect(clamp(10_000)).toBe(10_000 - CONTEXT_RESERVE_TOKENS)
+    expect(clamp(100)).toBe(MINIMUM_WIRE_TOKENS)
+    expect(clamp(0)).toBe(1_000_000)
+  })
+
+  it('a model without a positive window reports no context clamp', () => {
+    const model: Model<'anthropic-messages'> = {
+      id: 'windowless',
+      name: 'windowless',
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      baseUrl: 'https://no-network.invalid',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      reasoning: true,
+      contextWindow: 0,
+      maxTokens: 8_000,
+    }
+    const profile = resolveProfiles({ anthropic: {} }).get('anthropic')
+    expect(profile).toBeDefined()
+    if (profile === undefined) return
+    const allowance = (reasoningEffort: ReasoningEffortId) =>
+      assessPiAiControls(model, profile, { maxTokens: 9, reasoningEffort }).fields.maxTokens
+    expect(allowance(ReasoningEffortId('off'))).toEqual({ kind: 'supported' })
+    expect(allowance(ReasoningEffortId('high'))).toMatchObject({ constraints: [{ kind: 'model-output-ceiling', maxTokens: 8_000 }] })
   })
 
   it.each(['claude-sonnet-4-5', 'claude-sonnet-4-6'])('temperature with active reasoning on %s is refused before any effect', async (model) => {

@@ -1226,7 +1226,7 @@ describe('LlmRuntime', () => {
             return assessSuppliedControls(controls, (control): ControlDisposition => control === 'temperature' && controls.reasoningEffort === 'high'
               ? { kind: 'unsupported', reason: 'reasoning-active' }
               : control === 'maxTokens'
-                ? { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256 }] }
+                ? { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256, zeroBudgetSends: 1_024 }] }
                 : { kind: 'supported' })
           },
         }
@@ -1270,7 +1270,7 @@ describe('LlmRuntime', () => {
       const prepared = await ctx.llm.prepareCall({ provider: 'route', model: 'model', stop: ['END'] })
       expect(prepared.assessment.fields).toEqual({
         reasoningEffort: { kind: 'supported' },
-        maxTokens: { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256 }] },
+        maxTokens: { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256, zeroBudgetSends: 1_024 }] },
         stop: { kind: 'supported' },
       })
       expect(Object.isFrozen(prepared.assessment)).toBe(true)
@@ -1279,14 +1279,16 @@ describe('LlmRuntime', () => {
     })
 
     it('keeps prepared translations immutable after the adapter changes its retained values', async () => {
-      const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256 }
+      const translation = { kind: 'add-thinking-allowance' as const, thinkingTokens: 1_024, answerReserve: 256, zeroBudgetSends: 1_024 }
       const translations = [translation]
       const expected = structuredClone(translations)
+      const constraint = { kind: 'model-output-ceiling' as const, maxTokens: 10_000 }
+      const constraints = [constraint]
       const adapter = new class extends RecordingAdapter {
         override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
           return {
             ...await super.prepareCall(provider, model, signal),
-            assessControls: () => ({ fields: { maxTokens: { kind: 'translated' as const, translations } } }),
+            assessControls: () => ({ fields: { maxTokens: { kind: 'translated' as const, translations, constraints } } }),
           }
         }
       }(SCRIPT)
@@ -1299,9 +1301,14 @@ describe('LlmRuntime', () => {
       if (disposition?.kind !== 'translated') throw new Error('expected translated allowance')
       translation.thinkingTokens = 7
       translations.push({ ...translation })
+      constraint.maxTokens = 7
+      constraints.push({ ...constraint })
       expect(disposition.translations).toEqual(expected)
+      expect(disposition.constraints).toEqual([{ kind: 'model-output-ceiling', maxTokens: 10_000 }])
       expect(Object.isFrozen(disposition.translations)).toBe(true)
+      expect(Object.isFrozen(disposition.constraints)).toBe(true)
       expect(Reflect.set(disposition.translations[0]!, 'thinkingTokens', 9)).toBe(false)
+      expect(Reflect.set(disposition.constraints?.[0] ?? {}, 'maxTokens', 9)).toBe(false)
       expect(await collect(prepared.stream({ ...prepared.config, messages: [] }))).toEqual(SCRIPT)
       expect(adapter.lastOptions?.maxTokens).toBe(777)
     })
