@@ -9,9 +9,10 @@ import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vites
 import type {} from '@deepseek-ai/dsh-workspace-changes'
 import type { ChangesSummary } from '@deepseek-ai/dsh-client-ui-deliverables/src/changes.ts'
 import { deriveReplayScript, parseSessionLog } from '@deepseek-ai/dsh-llm-replay'
+import { PartialArguments } from '@deepseek-ai/dsh-util-values'
 import {
   assertFinalWorkspaceSnapshot, captureExpandedTurnProcessAria, compareOrRefreshGolden,
-  assertFixtureInventory, fixtureUserPrompts, launchWebScaffold, recordFixture, watchConsole,
+  assertFixtureInventory, fixtureUserPrompts, launchWebScaffold, recordFixture, selectedSessionFixture, watchConsole,
   webSnapshotMode, type WebScaffold,
 } from './scaffold.ts'
 import { openSettings, connectFreshWorkspaceZh, expandOwningTurnProcess, ZH_BROWSER_LOCALE } from './support.ts'
@@ -35,6 +36,123 @@ async function seedRepository(cwd: string): Promise<void> {
   git('add', '-A')
   git('commit', '-q', '-m', 'seed')
 }
+
+it.skipIf(MODE === 'record')('renders native edit and write argument prefixes from the historical recording', async () => {
+  const replayRoot = await mkdtemp(join(tmpdir(), 'dsh-native-preparation-'))
+  let scaffold: WebScaffold | undefined
+  let browser: Browser | undefined
+  let releasePreparations: (() => void) | undefined
+  try {
+    const fixture = await selectedSessionFixture(join(NATIVE_DIR, 'session.v4.jsonl'))
+    const transcript = await readFile(fixture, 'utf8')
+    const prompts = fixtureUserPrompts(transcript)
+    expect(prompts).toHaveLength(1)
+    const replayOverride = join(replayRoot, 'replay.override.json')
+    const cwdToken = '{{fromRequest:Current working directory: "([^"]+)"}}'
+    await writeFile(replayOverride, JSON.stringify(deriveReplayScript(parseSessionLog(transcript)))
+      .replaceAll('{{cwd}}', JSON.stringify(cwdToken).slice(1, -1)))
+    scaffold = await launchWebScaffold({
+      developerTools: false,
+      replayFixture: fixture,
+      replayOverride,
+      // Historical title ordering differs; this read-only rendering check owns only prefix UI and file effects.
+      compareReplaySession: false,
+      extraOverlayPath: fileURLToPath(new URL('./native-tool-preparation.overlay.yml', import.meta.url)),
+    })
+    await seedRepository(join(scaffold.workspaceCwd, 'workspace'))
+    browser = await chromium.launch()
+    const context = await browser.newContext({
+      viewport: { width: 1680, height: 1000 }, locale: ZH_BROWSER_LOCALE, timezoneId: 'Asia/Shanghai',
+    })
+    const page = await context.newPage()
+    const tripwire = watchConsole(page)
+    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    await page.waitForSelector('[class*="frame"]')
+    await connectFreshWorkspaceZh(page, scaffold.workspaceCwd)
+    const settled = scaffold.whenTurnSettled()
+    const preparations = ['edit', 'write'].map(name => ({
+      name, callId: '', args: new PartialArguments(), ready: Promise.withResolvers<string>(),
+      release: Promise.withResolvers<undefined>(), held: false,
+      contentField: name === 'write' ? 'content' : 'old_string',
+      contentReady: Promise.withResolvers<undefined>(), contentRelease: Promise.withResolvers<undefined>(), contentHeld: false,
+    }))
+    const names = new Map<string, string>()
+    const dispose = scaffold.ctx.on('llm/stream', async function* (_options, next) {
+      for await (const chunk of next()) {
+        yield chunk
+        if (chunk.type !== 'tool-call-delta') continue
+        if (chunk.name !== undefined) names.set(chunk.id, chunk.name)
+        const preparation = preparations.find(value => value.name === names.get(chunk.id))
+        if (preparation === undefined || preparation.contentHeld || chunk.argumentsDelta.length === 0) continue
+        if (preparation.callId === '') preparation.callId = chunk.id
+        if (preparation.callId !== chunk.id) continue
+        preparation.args.append(chunk.argumentsDelta)
+        if (!preparation.held) {
+          if (!preparation.args.complete('file_path')) continue
+          preparation.held = true
+          preparation.ready.resolve(chunk.id)
+          await preparation.release.promise
+        }
+        if (!preparation.args.has(preparation.contentField) || preparation.args.complete(preparation.contentField)) continue
+        const length = preparation.args.stringLength(preparation.contentField)
+        if (length === undefined || length === 0) continue
+        preparation.contentHeld = true
+        preparation.contentReady.resolve(undefined)
+        await preparation.contentRelease.promise
+      }
+    }, { prepend: true })
+    releasePreparations = () => {
+      for (const preparation of preparations) {
+        preparation.release.resolve(undefined)
+        preparation.contentRelease.resolve(undefined)
+      }
+      dispose()
+    }
+    const input = page.locator('[data-composer-input]').first()
+    await input.fill(prompts[0]!)
+    await input.press('Enter')
+    const observations = preparations.map(async (preparation) => {
+      const callId = await Promise.race([
+        preparation.ready.promise,
+        settled.then(() => { throw new Error(`No ${preparation.name} argument prefix was streamed`) }),
+      ])
+      const row = page.locator(`[data-chat-call-id="${callId}"] [data-state="preparing"]`)
+      await row.waitFor({ state: 'attached' })
+      await expandOwningTurnProcess(page, row)
+      const path = preparation.args.text('file_path')
+      if (path === undefined) throw new Error('held preparation has no string file_path')
+      await row.getByText(path, { exact: true }).waitFor()
+      expect(await row.getByRole('button').count()).toBe(0)
+      expect(await row.locator('[aria-expanded]').count()).toBe(0)
+      expect(await row.locator('pre').count()).toBe(0)
+      expect(await row.getByText(/^\d+KB$/).count()).toBe(0)
+      await compareOrRefreshGolden(join(NATIVE_DIR, `preparing-${preparation.name}.expected.md`), await row.ariaSnapshot(), 'replay')
+      preparation.release.resolve(undefined)
+      await Promise.race([
+        preparation.contentReady.promise,
+        settled.then(() => { throw new Error(`No open ${preparation.name} content prefix was streamed`) }),
+      ])
+      await row.getByText('1KB', { exact: true }).waitFor()
+      expect(await row.locator('[aria-expanded]').count()).toBe(0)
+      expect(await row.locator('pre').count()).toBe(0)
+      await compareOrRefreshGolden(join(NATIVE_DIR, `preparing-${preparation.name}-content.expected.md`), await row.ariaSnapshot(), 'replay')
+      preparation.contentRelease.resolve(undefined)
+    })
+    const [sessionId] = await Promise.all([settled, ...observations]).finally(releasePreparations)
+    const session = scaffold.ctx.agents.get(sessionId)?.session
+    if (session?.header.cwd === undefined) throw new Error('native preparation Session has no workspace')
+    await assertFinalWorkspaceSnapshot(NATIVE_DIR, session.header.cwd, { ignoredRootEntries: ['.git'] })
+    expect(tripwire.pageErrors).toEqual([])
+    expect(tripwire.warnings).toEqual([])
+  } finally {
+    releasePreparations?.()
+    try { await browser?.close() }
+    finally {
+      try { await scaffold?.close() }
+      finally { await rm(replayRoot, { recursive: true, force: true }) }
+    }
+  }
+})
 
 /** Sample the real opacity transition at its midpoint without depending on wall-clock scheduling. */
 function hoverOpacityTransition(page: Page, closing: boolean): Promise<{ duration: number; opacity: number }> {

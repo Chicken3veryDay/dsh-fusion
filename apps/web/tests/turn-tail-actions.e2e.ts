@@ -377,6 +377,55 @@ describe('web e2e: assistant IconActions wait for the turn to end', () => {
   })
 })
 
+it.each(['success', 'failure'] as const)('drains an admitted %s flush before disposing the scaffold', async (outcome) => {
+  const scaffold = await launchWebScaffold({})
+  const entered = Promise.withResolvers<undefined>()
+  const release = Promise.withResolvers<undefined>()
+  const failure = new Error('injected durability failure')
+  const unhandled: unknown[] = []
+  const record = (reason: unknown): void => { unhandled.push(reason) }
+  process.on('unhandledRejection', record)
+  const session = scaffold.ctx.sessions.create()
+  const off = scaffold.ctx.on('session/flush', async () => {
+    entered.resolve(undefined)
+    await release.promise
+    if (outcome === 'failure') throw failure
+  })
+  const waiter = scaffold.whenTurnSettled()
+  let closing: Promise<void> | undefined
+  const dispose = vi.spyOn(scaffold.ctx.fiber, 'dispose')
+  try {
+    session.append('turn/start', { turn: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    await entered.promise
+    closing = scaffold.close()
+    // Without the join, close synchronously starts root disposal before returning its promise.
+    expect(dispose).not.toHaveBeenCalled()
+    expect(existsSync(scaffold.workspaceCwd)).toBe(true)
+    await expect(scaffold.whenTurnSettled()).rejects.toBeInstanceOf(ScaffoldClosedError)
+    release.resolve(undefined)
+    if (outcome === 'failure') {
+      await expect(closing).rejects.toMatchObject({ errors: [failure] })
+    } else {
+      await closing
+    }
+    // Leave the caller unawaited until rejection bookkeeping has run for a full event-loop turn.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(unhandled).toEqual([])
+    if (outcome === 'failure') await expect(waiter).rejects.toBe(failure)
+    else await expect(waiter).resolves.toBe(session.id)
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(existsSync(scaffold.workspaceCwd)).toBe(false)
+  } finally {
+    release.resolve(undefined)
+    off()
+    await waiter.catch(() => undefined)
+    await (closing ?? scaffold.close()).catch(() => undefined)
+    dispose.mockRestore()
+    process.off('unhandledRejection', record)
+  }
+})
+
 it('keeps copy tooltips hidden during a WebKit touch copy', async () => {
   const scaffold = await launchWebScaffold({})
   const browserPromise = webkit.launch()

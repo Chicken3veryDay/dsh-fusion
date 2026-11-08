@@ -293,12 +293,13 @@ export interface WebScaffold {
   harnessHome: string
   /** Send a browser-equivalent Host request with this scaffold's authenticated cookie. */
   hostFetch(path: string, init?: RequestInit): Promise<Response>
-  /** Await a settled turn end: in-process turn/end, then the agent's idle flip (which follows the persistence flush). */
+  /** Await the next turn/end and its durability flush; closing rejects armed waiters and drains admitted flushes. */
   whenTurnSettled(timeoutMs?: number): Promise<SessionId>
   /**
    * Tear everything down; asserts the replay fixture was fully consumed first
    * (replay/refresh), unless booted with replayProvidersOnly (whose fixture
-   * is validated call-free at boot).
+   * is validated call-free at boot). Waits for admitted durability flushes and
+   * includes their failures in the teardown error; their callers retain the original outcome.
    */
   close(): Promise<void>
 }
@@ -944,8 +945,10 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     if (process.cwd() !== originalCwd) process.chdir(originalCwd)
   }
 
-  /** Armed `whenTurnSettled` barriers that close() abandons. */
+  /** Pending callers remain owned through their durability flush. */
   const abandonSettleWaiters = new Set<() => void>()
+  const settleFlushes = new Set<Promise<SessionId>>()
+  let closing = false
   return {
     harnessHome,
     mode,
@@ -963,18 +966,24 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // explicit flush makes the transcript durable, and the caller's browser
     // settled-poll comes last because host completion strictly precedes render.
     whenTurnSettled(timeoutMs = mode === 'record' ? 180_000 : 30_000): Promise<SessionId> {
+      if (closing) return Promise.reject(new ScaffoldClosedError())
       const waiter = new Promise<SessionId>((resolveSettled, reject) => {
         let off = (): void => undefined
-        const release = (): void => {
+        let flushing = false
+        const detach = (): void => {
           clearTimeout(timer)
           off()
-          abandonSettleWaiters.delete(abandon)
         }
-        // Reached only from close(): a barrier the scenario never awaited must not outlive its sessions.
+        const release = (): void => {
+          detach()
+          abandonSettleWaiters.delete(abandon)
+          settleFlushes.delete(waiter)
+        }
         const abandon = (): void => {
+          // Close observes abandoned callers without replacing an admitted flush's outcome.
+          void waiter.catch(() => undefined)
+          if (flushing) return
           release()
-          // Pre-handled so an unawaited barrier is no unhandled rejection; a late awaiter still receives the error.
-          waiter.catch(() => undefined)
           reject(new ScaffoldClosedError())
         }
         const timer = setTimeout(() => {
@@ -984,17 +993,24 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         abandonSettleWaiters.add(abandon)
         off = ctx.on('session/event', (session: Session, event: SessionEvent) => {
           if (event.type !== 'turn/end') return
-          release()
+          detach()
+          flushing = true
+          settleFlushes.add(waiter)
           ctx.sessions.flush(session)
             .then(() => { resolveSettled(session.id) }, reject)
+            .finally(release)
         })
       })
       return waiter
     },
     async close(): Promise<void> {
+      closing = true
       const failures: unknown[] = []
       // Detach armed barriers before sessions dispose: the disposal's own turn/end must not flush a closed handle.
       for (const abandon of [...abandonSettleWaiters]) abandon()
+      for (const result of await Promise.allSettled([...settleFlushes])) {
+        if (result.status === 'rejected') failures.push(result.reason)
+      }
       if (mode !== 'record'
         && replayFixture !== undefined
         && options.replayProvidersOnly !== true

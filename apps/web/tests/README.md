@@ -20,6 +20,10 @@ Same-day message goldens use the shared `WEB_FIXTURE_TIME`: seeded transcripts p
 
 State-sensitive cases use Workspace, admission, attachment, and model-stream barriers to separate visible intermediate states from completed operations. Model-picker persistence assertions wait for the saved default, independently of menu closure. Details close waits for frame transitions; archive verification assigns an explicit title to the seeded Session and follows that identity across reload. The [CI test reliability workflow](../../../.agents/skills/dsh-ci-test-reliability/SKILL.md#synchronize-on-state) owns these synchronization rules.
 
+`whenTurnSettled` waits for `turn/end` and its durability flush. Closing the scaffold refuses new waiters, rejects armed waiters with `ScaffoldClosedError`, and joins admitted flushes before disposing sessions or deleting their workspace. A flush failure enters the teardown error and remains available unchanged to its original caller, including a late awaiter.
+
+[Changed-files coverage](changed-files-turn.e2e.ts) executes the default Script scenario and compares its current Session and complete workspace. A secondary native-executor overlay renders the highest historical native recording to check edit/write path and incomplete-content prefixes against the four original goldens. That rendering check consumes the replay and compares the complete workspace, but does not compare current persisted event ordering or refresh historical output.
+
 [Idle-submission handoff](idle-submission-handoff.e2e.ts) waits up to the scaffold's 30-second turn-completion budget for Host frames and browser placement. Vitest owns scaffold teardown so a replay-consumption error does not replace the failed scenario assertion.
 
 Plugin-manager and HMR lifecycle switches wait up to `PLUGIN_TOGGLE_SETTLE_MS` (10 seconds) for the Host's profile write and the store's follow-up inventory read, the two steps that republish `aria-checked`; that constant's JSDoc records the measured chain.

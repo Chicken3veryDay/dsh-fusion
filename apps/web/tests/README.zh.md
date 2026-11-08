@@ -20,6 +20,10 @@ pnpm --filter @deepseek-ai/dsh-web-frontend exec playwright install --with-deps 
 
 依赖状态的用例使用 Workspace、接纳、附件和模型流屏障，区分可见中间状态与已完成操作。模型选择器的持久化断言等待默认设置保存完成，不以菜单关闭作为完成信号。详情关闭等待框架过渡结束；归档验证为 seed Session 设置显式标题，并跨重载跟踪该身份。[CI 测试可靠性工作流](../../../.agents/skills/dsh-ci-test-reliability/SKILL.md#synchronize-on-state)负责这些同步规则。
 
+`whenTurnSettled` 等待 `turn/end` 及其持久化刷新。关闭 scaffold 时，拒绝新增等待者，以 `ScaffoldClosedError` 拒绝尚未收到事件的等待者，并等待已接纳的刷新结束后再释放 Session 或删除工作区。刷新失败会计入清理错误，同时原始调用者（包括稍后才等待的调用者）仍会收到原来的错误。
+
+[改动文件覆盖](changed-files-turn.e2e.ts)执行默认 Script 场景，比较当前 Session 与完整工作区。另一个原生执行器 overlay 渲染最高版本的历史原生录制，根据四份原始 golden 检查 edit/write 的路径与未完成内容前缀。此渲染检查会消费 replay 并比较完整工作区，但不比较当前持久化事件顺序，也不刷新历史输出。
+
 [空闲提交交接](idle-submission-handoff.e2e.ts)对 Host 帧和浏览器中的消息归位的等待使用 scaffold 的 30 秒 Turn 完成预算。Vitest 负责 scaffold 清理，使 replay 消耗检查错误不会覆盖场景中失败的断言。
 
 插件管理器和 HMR 生命周期场景中的开关为 Host 的 profile 写入与 store 随后的 inventory 读取预留 `PLUGIN_TOGGLE_SETTLE_MS`（10 秒），这两步完成后才会重新发布 `aria-checked`；链路的实测值记录在该常量的 JSDoc 中。
