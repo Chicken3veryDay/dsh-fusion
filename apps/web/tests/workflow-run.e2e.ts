@@ -1,8 +1,7 @@
 // Keyless shipped-Web acceptance for the durable workflow Conversation Node.
-// Reuses the existing recorded workflow parent/child model fixtures; the real
-// workflow tool, worker, subagent provider, Session log, browser plugin graph,
-// and navigation all execute during replay.
-import { readFile } from 'node:fs/promises'
+// Authored model output calls the real workflow through the default Script SDK.
+// The worker, local child, persistence, browser graph, and navigation stay real.
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Browser, Page } from 'playwright'
@@ -11,19 +10,21 @@ import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished
 import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import {
   assertFixtureInventory, captureStableAria, compareOrRefreshGolden,
-  fixtureUserPrompts, launchWebScaffold, watchConsole, webSnapshotMode,
+  fixtureUserPrompts, launchWebScaffold, rawSessionLog, readPersistedEvents, selectedSessionFixture, watchConsole, webSnapshotMode,
   type WebScaffold,
 } from './scaffold.ts'
 import {
   connectFreshWorkspace, expandOwningTurnProcess, expandTurnProcesses, newEnglishPage, REPO_ROOT, saveFailureShot,
 } from './support.ts'
 
+const EVIDENCE = join(REPO_ROOT, '.artifacts/workflow-run-script')
 const MODE = webSnapshotMode()
-const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/workflow-run', import.meta.url))
-const UI_LIVE_EXPECTED = join(SNAPSHOT_DIR, 'ui-live.expected.md')
-const UI_EXPECTED = join(SNAPSHOT_DIR, 'ui.expected.md')
-const PARENT_FIXTURE = join(REPO_ROOT, 'snapshots/session/workflow-run/session.v4.jsonl')
-const CHILD_FIXTURE = join(REPO_ROOT, 'snapshots/session/workflow-run/session.1.v4.jsonl')
+const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/workflow-run-script', import.meta.url))
+const EXPECTED_DIR = fileURLToPath(new URL('./expected/workflow-run-script/', import.meta.url))
+const UI_LIVE_EXPECTED = join(EXPECTED_DIR, 'ui-live.expected.md')
+const UI_EXPECTED = join(EXPECTED_DIR, 'ui.expected.md')
+const PARENT_FIXTURE = join(SNAPSHOT_DIR, 'session.v4.jsonl')
+const CHILD_FIXTURE = join(SNAPSHOT_DIR, 'session.1.v4.jsonl')
 const CHILD_PROMPT = 'Reply with exactly the word WF_CHILD_OK and nothing else.'
 
 describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () => {
@@ -33,33 +34,66 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
   let tripwire: ReturnType<typeof watchConsole>
   let prompt: string
   const releaseChild = Promise.withResolvers<undefined>()
+  const childEntered = Promise.withResolvers<Session | undefined>()
+  const sessions: Session[] = []
+  const workflowEvents: object[] = []
+  let parent: Session
+  let stopStreams = (): void => {}
+  let stopSessions = (): void => {}
+  let stopSettlement = (): void => {}
+  let finishSettlement = (): void => {}
+  let selectedParent: string
+  let selectedChild: string
 
-  const waitForParentSettlement = (): Promise<SessionId> => new Promise((resolve, reject) => {
-    let dispose = (): void => {}
-    dispose = scaffold.ctx.on('session/event', (session: Session, event: SessionEvent) => {
-      if (event.type !== 'turn/end' || session.header.origin === 'subagent') return
-      dispose()
-      void (async () => {
-        await scaffold.ctx.agents.get(session.id)?.whenIdle()
-        await scaffold.ctx.sessions.flush(session)
-        resolve(session.id)
-      })().catch(reject)
+  const waitForParentSettlement = (): Promise<SessionId | undefined> => {
+    const boundary = Promise.withResolvers<SessionId | undefined>()
+    finishSettlement = () => { boundary.resolve(undefined) }
+    stopSettlement = scaffold.ctx.on('session/event', (session: Session, event: SessionEvent) => {
+      if (event.type !== 'turn/end' || session.id !== parent.id) return
+      stopSettlement()
+      boundary.resolve(session.id)
     })
-  })
+    return boundary.promise.then(async (id) => {
+      if (id === undefined) return undefined
+      await scaffold.ctx.agents.get(id)?.whenIdle()
+      await scaffold.ctx.sessions.flush(parent)
+      return id
+    })
+  }
+
+  const captureSessions = async (checkpoint: string): Promise<void> => {
+    await writeFile(join(EVIDENCE, `${checkpoint}-sessions.json`), JSON.stringify({
+      workflowEvents,
+      sessions: sessions.map(session => ({ header: session.header, events: session.snapshotEvents() })),
+    }, null, 2))
+    for (const [index, session] of sessions.entries()) {
+      await writeFile(join(EVIDENCE, `${checkpoint}-session-${index}.jsonl`), rawSessionLog(session))
+    }
+  }
 
   beforeAll(async () => {
-    const prompts = fixtureUserPrompts(await readFile(PARENT_FIXTURE, 'utf8'))
+    await mkdir(EVIDENCE, { recursive: true })
+    selectedParent = await selectedSessionFixture(PARENT_FIXTURE)
+    selectedChild = await selectedSessionFixture(CHILD_FIXTURE)
+    const prompts = fixtureUserPrompts(await readFile(selectedParent, 'utf8'))
     expect(prompts).toHaveLength(1)
     prompt = prompts[0]!
     scaffold = await launchWebScaffold({
-      replayFixture: PARENT_FIXTURE,
-      replayChildFixtures: [CHILD_FIXTURE],
-      compareReplaySession: false,
+      replayFixture: selectedParent,
+      replayChildFixtures: [selectedChild],
+      compareReplaySession: true,
     })
+    stopSessions = scaffold.ctx.on('session/created', (session) => { sessions.push(session) })
+    scaffold.ctx.on('workflow/start', (info) => { workflowEvents.push({ type: 'workflow/start', info }) })
+    scaffold.ctx.on('workflow/agent-start', (info, child) => { workflowEvents.push({ type: 'workflow/agent-start', info, child }) })
+    scaffold.ctx.on('workflow/end', (info, result) => { workflowEvents.push({ type: 'workflow/end', info, result }) })
     // Keep the live child available throughout disclosure, layout, and navigation checks.
-    scaffold.ctx.on('llm/stream', async function* (options, next) {
+    stopStreams = scaffold.ctx.on('llm/stream', async function* (options, next) {
       const session = options.sessionId === undefined ? undefined : scaffold.ctx.sessions.get(options.sessionId)
-      if (session?.header.origin === 'subagent') await releaseChild.promise
+      if (session?.header.parentSession === parent?.id) {
+        childEntered.resolve(session)
+        await releaseChild.promise
+      }
       yield* next()
     }, { prepend: true })
     browser = await chromium.launch()
@@ -68,13 +102,18 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
-    const sessions = scaffold.ctx.sessions.list()
     expect(sessions).toHaveLength(1)
-    scaffold.ctx.permissionPresets.set(sessions[0]!, 'danger-full-access')
+    parent = sessions[0]!
+    scaffold.ctx.permissionPresets.set(parent, 'danger-full-access')
   }, 120_000)
 
   afterAll(async () => {
     releaseChild.resolve(undefined)
+    childEntered.resolve(undefined)
+    stopStreams()
+    stopSessions()
+    stopSettlement()
+    finishSettlement()
     await browser?.close()
     await scaffold?.close()
   })
@@ -82,13 +121,39 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
   it('shows the live member, opens its local child, then retains the settled record beside the tool row', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-workflow-run-live'))
     const settled = waitForParentSettlement()
-    onTestFinished(() => {
+    onTestFinished(async () => {
       releaseChild.resolve(undefined)
+      childEntered.resolve(undefined)
+      try {
+        await scaffold.ctx.agents.get(parent.id)?.whenIdle()
+        finishSettlement()
+        await settled
+        for (const session of sessions) {
+          if (scaffold.ctx.sessions.get(session.id) === session) await scaffold.ctx.sessions.flush(session)
+          expect(await readPersistedEvents(scaffold, session.id)).toEqual(session.snapshotEvents())
+        }
+        await captureSessions('settled')
+        await page.getByText('WORKFLOW_DONE', { exact: true }).waitFor()
+        await expandTurnProcesses(page)
+        await page.screenshot({ path: join(EVIDENCE, 'settled.png'), fullPage: true })
+      } finally {
+        stopSettlement()
+        finishSettlement()
+      }
     })
     const input = page.locator('[data-composer-input]').first()
     await input.fill(prompt)
     await input.press('Enter')
 
+    const child = await childEntered.promise
+    expect(child?.header.parentSession).toBe(parent.id)
+    expect(workflowEvents.filter(event => 'type' in event && event.type === 'workflow/agent-start')).toHaveLength(1)
+    await captureSessions('active')
+    await page.locator('[data-chat-flow-kind="tool-call"]').first().waitFor({ state: 'attached' })
+    await page.screenshot({ path: join(EVIDENCE, 'active.png'), fullPage: true })
+
+    expect(parent.snapshotEvents().filter(event => event.type === 'tool-workflow/run-start'),
+      'a real Script SDK workflow must publish its durable run-start').toHaveLength(1)
     const workflow = page.locator('[data-workflow-run][data-run-status="running"]')
     await expandOwningTurnProcess(page, workflow)
     await workflow.waitFor({ timeout: 30_000 })
@@ -174,8 +239,8 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
     await member.click()
     await page.getByText(CHILD_PROMPT, { exact: true }).waitFor({ timeout: 15_000 })
 
-    const sessions = page.getByRole('tree', { name: 'Sessions' })
-    await sessions.getByRole('treeitem', { name: /Use the workflow tool exactly/ }).click()
+    const sessionTree = page.getByRole('tree', { name: 'Sessions' })
+    await sessionTree.getByRole('treeitem', { name: /Use run_code exactly once to/ }).click()
     releaseChild.resolve(undefined)
     await settled
     await expandTurnProcesses(page)
@@ -228,6 +293,9 @@ describe.skipIf(MODE === 'record')('web e2e: durable workflow run in Chat', () =
   it('stays clean and owns only its one golden', async () => {
     expect(tripwire.pageErrors).toEqual([])
     expect(tripwire.warnings).toEqual([])
-    await assertFixtureInventory(SNAPSHOT_DIR, ['ui-live.expected.md', 'ui.expected.md'])
+    await assertFixtureInventory(SNAPSHOT_DIR, [
+      'session.v4.jsonl', 'session.1.v4.jsonl', 'system-prompt.expected.md', 'tool-schemas.expected.json',
+    ])
+    await assertFixtureInventory(EXPECTED_DIR, ['ui-live.expected.md', 'ui.expected.md'])
   })
 })
