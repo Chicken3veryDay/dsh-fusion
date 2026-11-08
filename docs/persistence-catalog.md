@@ -1403,7 +1403,7 @@ Source: [`packages/workflow/tool-workflow/src/types.ts:62`](../packages/workflow
 
 ```ts persistence-catalog
 /**
- * Opens one top-level workflow record.
+ * Opens one Agent-owned workflow record, including Script SDK calls.
  * @param data - stable run identity and display name.
  */
 'tool-workflow/run-start': ToolWorkflowRunStartData

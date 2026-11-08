@@ -1405,7 +1405,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 ```ts persistence-catalog
 /**
- * Opens one top-level workflow record.
+ * Opens one Agent-owned workflow record, including Script SDK calls.
  * @param data - stable run identity and display name.
  */
 'tool-workflow/run-start': ToolWorkflowRunStartData

@@ -10,7 +10,7 @@ import type {
   WorkflowAgentOutcome, WorkflowRunId, WorkflowStopReason,
 } from '@deepseek-ai/dsh-workflow/types'
 
-/** Opens one durable top-level workflow run record. */
+/** Opens one durable Agent-owned workflow run record. */
 export interface ToolWorkflowRunStartData {
   readonly runId: WorkflowRunId
   readonly name: string
@@ -41,7 +41,7 @@ export interface ToolWorkflowRunEndData {
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
-     * Opens one top-level workflow record.
+     * Opens one Agent-owned workflow record, including Script SDK calls.
      * @param data - stable run identity and display name.
      */
     'tool-workflow/run-start': ToolWorkflowRunStartData
