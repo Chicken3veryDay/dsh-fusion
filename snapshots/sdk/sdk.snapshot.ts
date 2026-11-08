@@ -268,6 +268,14 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'unsupported-control-refusal': {
+    modelRequestsFile: 'codex-requests.jsonl',
+    storedCredentials: {
+      'llm-pi-ai/openai-codex': { kind: 'grant', payload: {
+        type: 'oauth', access: SIGNIN_ACCESS, refresh: 'synthetic-refresh', expires: 4102444800000,
+      } },
+    },
+  },
   'ptc-turn': {
     patches: [fileURLToPath(new URL('./ptc-turn/runtime.cordis.yml', import.meta.url))],
     expectedFinalResponse: 'CODE_ONE+CODE_TWO',
@@ -583,7 +591,13 @@ function notificationComparisonRecords(log: string, sourceLogs: readonly string[
   })
 }
 
-function modelFromSession(log: string): { provider: string; model: string } {
+/**
+ * The route a scenario starts on: the first logged request header, or, for a
+ * log that never reached a request (a refusal before dispatch), the route the
+ * manifest declares through `DSH_SNAPSHOT_PROVIDER` and `DSH_SNAPSHOT_MODEL`.
+ * A log with neither fails, so a missing request cannot silently pick a route.
+ */
+function modelFromSession(scenario: CorpusScenario, log: string): { provider: string; model: string } {
   for (const record of records(log)) {
     if (record.type !== 'request/header') continue
     const data = record.data as JsonObject | undefined
@@ -593,7 +607,9 @@ function modelFromSession(log: string): { provider: string; model: string } {
       return { provider: config.provider, model: config.model }
     }
   }
-  throw new Error('SDK snapshot session has no request model')
+  const { DSH_SNAPSHOT_PROVIDER: provider, DSH_SNAPSHOT_MODEL: model } = scenario.manifest.environment ?? {}
+  if (provider !== undefined && model !== undefined) return { provider, model }
+  throw new Error(`${scenario.name}: SDK snapshot session has no request model and its manifest declares no route`)
 }
 
 /** Replay caller inputs; profile fixtures recreate their own in-turn command activity. */
@@ -815,7 +831,7 @@ async function runScenario(scenario: CorpusScenario): Promise<{
   const fixtureContents = await Promise.all((await fixtureFiles(scenario)).map(file => readFile(file, 'utf8')))
   const primaryFixture = fixtureContents[0]
   if (primaryFixture === undefined) throw new Error(`${scenario.name}: no primary session fixture`)
-  const route = modelFromSession(primaryFixture)
+  const route = modelFromSession(scenario, primaryFixture)
   const patchRoot = join(cwd, '.snapshot-patches')
   await mkdir(patchRoot, { recursive: true })
   const assertions = SDK_ASSERTIONS[scenario.name] ?? {}
@@ -1120,9 +1136,10 @@ async function writeHeaderSidecars(
   ordered: readonly PersistedLog[],
   ctx: NormalizeContext,
 ): Promise<void> {
-  if (scenario.manifest.header.pin === true) {
-    const primary = ordered[0]
-    if (primary === undefined) throw new Error(`${scenario.name}: no primary header to snapshot`)
+  const pinned = ordered[0]
+  // A pinned scenario whose primary log never reached a request has no header, prompt or schema to snapshot.
+  if (scenario.manifest.header.pin === true && pinned !== undefined && normalizedHeaders(pinned.content, ctx).length > 0) {
+    const primary = pinned
     const prompts = normalizedSystemPrompts(primary.content, ctx)
     const schemas = normalizedToolSchemas(primary.content, ctx)
     if (scenario.manifest.header.systemPromptSource === undefined) {
@@ -1173,6 +1190,13 @@ async function verifyHeaders(
     sessionIds: [],
     cwd: typeof pinHeader.cwd === 'string' ? pinHeader.cwd : '\0no-cwd\0',
   })
+  if (pinned.length === 0) {
+    // The pin's fixture never reached a request, so no sidecar exists; no persisted log may log one either.
+    for (const [logIndex, log] of ordered.entries()) {
+      expect(normalizedHeaders(log.content, ctx), `${scenario.name}: session ${logIndex} logged a request header`).toEqual([])
+    }
+    return
+  }
   const promptOwner = sourceScenario(pin, pin.manifest.header.systemPromptSource)
   const schemaOwner = sourceScenario(pin, pin.manifest.header.toolSchemasSource)
   const prompt = await readFile(join(promptOwner.dir, 'system-prompt.expected.md'), 'utf8')
@@ -1693,6 +1717,24 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(turnEnds[0]?.data['reason']).not.toHaveProperty('error.status')
         expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
         expect(JSON.stringify(events)).not.toContain('usage_limit_reached')
+      }
+      if (scenario.name === 'unsupported-control-refusal') {
+        // The real Codex adapter refuses the extension's `stop` while the turn is prepared: the trapped endpoint
+        // saw no request (so no credential-bearing call), and the log holds the retained input and the failure only.
+        expect(modelRequests).toEqual([])
+        const events = results.flatMap(result => result.events)
+        const turnEnds = events.filter(event => event.type === 'turn/end')
+        expect(turnEnds, JSON.stringify(turnEnds)).toHaveLength(1)
+        expect(turnEnds[0]?.data['reason']).toMatchObject({
+          kind: 'error',
+          error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'stop', reason: 'adapter-rejects' } },
+        })
+        for (const type of ['request/header', 'request/context', 'assistant/attempt', 'assistant/message', 'llm/retry']) {
+          expect(events.filter(event => event.type === type), `${type} was logged for a refused call`).toEqual([])
+        }
+        const userInput = events.filter(event => event.type === 'user/message' && event.data['source']?.['kind'] === 'user')
+        expect(userInput.map(event => event.data['content'])).toEqual([[{ type: 'text', text: 'Say hello.' }]])
+        expect(results.at(-1)?.finishReason).toBe('error')
       }
       if (assertions.expectedFinalResponse !== undefined) {
         const failures = results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')
