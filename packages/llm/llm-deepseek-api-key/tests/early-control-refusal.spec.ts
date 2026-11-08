@@ -32,9 +32,15 @@ const SSE = [
 
 const contexts: Context[] = []
 afterEach(async () => {
-  for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
-  vi.unstubAllEnvs()
-  vi.restoreAllMocks()
+  try {
+    const results = await Promise.allSettled(contexts.splice(0).map(async ctx => ctx.fiber.dispose()))
+    const failures: unknown[] = []
+    for (const result of results) if (result.status === 'rejected') failures.push(result.reason)
+    if (failures.length > 0) throw new AggregateError(failures, 'Test context cleanup failed')
+  } finally {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  }
 })
 
 type LiveConfig = Awaited<ReturnType<typeof liveConfig>>
@@ -262,9 +268,13 @@ describe('accepted-call generation isolation', () => {
     const h = await host({ thinking: 'disabled' })
     const gate = h.holdListing()
     const pending = run(h, route, { temperature: 0.2 })
-    await gate.started
-    await h.live.replace({})
-    gate.release()
+    try {
+      await gate.started
+      await h.live.replace({})
+    } finally {
+      gate.release()
+      await Promise.allSettled([pending])
+    }
     const result = await pending
     expect(result.ok).toBe(true)
     if (route === 'prepareCall' && result.ok && 'call' in result) {

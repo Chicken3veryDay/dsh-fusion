@@ -203,6 +203,7 @@ describe('an unprepared ctx.llm.stream', () => {
     const ctx = await runtime(adapter)
     const output = await drain(ctx.llm.stream(request({ temperature: 1, signal: AbortSignal.abort(new Error('gone')) })))
     expect(output.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'aborted' } })
+    expect(output.at(-1)).toMatchObject({ reason: { failure: { code: 'ABORTED' } } })
     expect(output.at(-1)).not.toMatchObject({ reason: { failure: { code: 'UNSUPPORTED_CONTROL' } } })
     expect(adapter.events).toEqual([])
   })
