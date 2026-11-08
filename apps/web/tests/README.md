@@ -22,7 +22,7 @@ State-sensitive cases use Workspace, admission, attachment, and model-stream bar
 
 `whenTurnSettled` waits for `turn/end` and its durability flush. Closing the scaffold refuses new waiters, rejects armed waiters with `ScaffoldClosedError`, and joins admitted flushes before disposing sessions or deleting their workspace. A flush failure enters the teardown error and remains available unchanged to its original caller, including a late awaiter.
 
-[Changed-files coverage](changed-files-turn.e2e.ts) executes the default Script scenario and compares its current Session and complete workspace. A secondary native-executor overlay renders the highest historical native recording to check edit/write path and incomplete-content prefixes against the four original goldens. That rendering check consumes the replay and compares the complete workspace, but does not compare current persisted event ordering or refresh historical output.
+[Changed-files coverage](changed-files-turn.e2e.ts) executes the default Script scenario and compares its current Session and complete workspace. A secondary native-executor overlay renders the highest historical native recording to check edit/write path and incomplete-content prefixes against the four original goldens. That rendering check consumes the replay and compares the complete workspace, but does not compare current persisted event ordering or refresh historical output. Vitest owns its cleanup so a teardown failure cannot replace the original assertion failure.
 
 [Idle-submission handoff](idle-submission-handoff.e2e.ts) waits up to the scaffold's 30-second turn-completion budget for Host frames and browser placement. Vitest owns scaffold teardown so a replay-consumption error does not replace the failed scenario assertion.
 
