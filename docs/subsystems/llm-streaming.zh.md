@@ -904,7 +904,7 @@ interface LlmCallConfigAdapterDefaults {
 
 ## 服务与提供方约定
 
-`LlmAdapter` 是提供方约定：创建子类、实现 `stream()`，再用 `ctx.llm.registerAdapter(providers, adapter)` 注册一个适配器实例。`GenerateOptions.provider` 选择已注册适配器；`GenerateOptions.model` 会传给该适配器，无需在生命周期启动时注册。重复提供方路由会原子失败。可选的 `providerRetryPolicy()` 会按路由捕获并填入 normal 默认值，`providerInfo()` 与异步 `listModels()` 方法则为 `LlmRuntime.listProviders()` / `listModels()` 提供分离的 selector 元数据。该目录仅供参考，不是请求白名单：适配器仍是权威，并可接受未列出的模型 id。单次异步 `resolveModel()` 查询返回确切模型身份，以及可选的对正确性敏感的上下文容量、适配器配置的 `defaultMaxTokens`、由模型持有的有序推理强度 ID 和可选的部署默认值；字段缺失表示元数据不可用或保留提供方持有的行为，而不表示目录成员关系无效。解析器会接收可选的取消信号，并且必须在信号中止后迅速完成结算。`LlmRuntime.resolveModelInfo()` 会校验聚合结果并返回分离值。在最终适配器边界，`resolveCallConfig()` 仅在 `maxTokens` 缺失时填入输出默认值，并校验和填入推理强度，因此直接调用也无法绕过任何一项已配置行为；直接分派会在等待解析前捕获一项适配器注册。agent loop 则使用 `prepareCall()`，使模型解析、请求头持久记录和分派全程使用同一项注册，保留来自同一次查询的分离上下文元数据，并报告适配器填入的配置字段。在 `ConfigureCall` 与已填入的默认值之后，`prepareCall()` 与未准备的直接流路径都会调用所捕获代次的同步纯函数 `assessControls()` 一次。每个已提供的控制项（值不是 `undefined` 的字段，包括被默认值填入的推理强度或输出上限）会得到 `supported`、`translated`、`unsupported` 或 `unverified`；未做任何声明的代次为 `unverified`（`adapter-undeclared`），绝不视为受支持。纯评估中被声明为 `unsupported` 的控制项会在凭据解析、HTTP 或分派之前以 `LlmError` 的 `UNSUPPORTED_CONTROL` 失败，直接流则把同一拒绝规范化为终端 `error` 结束。`PreparedLlmCall.assessment` 在进程内暴露这些结论，从不持久化，分派已准备调用时不会再次评估。适配器查找发生在 `llm/stream` waterfall 的终端 continuation，因此 listener 可以在查找前短路调用，或路由一个可变的一次性请求。AgentLoop 在外层 waterfall 返回流句柄时观察到一次请求尝试；这个有限边界不能证明惰性终端适配器已构造完成或开始提供方 I/O。`block-start` / `block-end` 的 `index` 关联与 assembler 共同意味着适配器只需 emit 格式正确的分片——块重组不是每个适配器各自的问题。`ctx.llm.stream()` 与 `llm/stream` waterfall 在一个轮次中的位置见 [architecture.md](../architecture.zh.md#turn-flow)。
+`LlmAdapter` 是提供方约定：创建子类、实现 `stream()`，再用 `ctx.llm.registerAdapter(providers, adapter)` 注册一个适配器实例。`GenerateOptions.provider` 选择已注册适配器；`GenerateOptions.model` 会传给该适配器，无需在生命周期启动时注册。重复提供方路由会原子失败。可选的 `providerRetryPolicy()` 会按路由捕获并填入 normal 默认值，`providerInfo()` 与异步 `listModels()` 方法则为 `LlmRuntime.listProviders()` / `listModels()` 提供分离的 selector 元数据。该目录仅供参考，不是请求白名单：适配器仍是权威，并可接受未列出的模型 id。单次异步 `resolveModel()` 查询返回确切模型身份，以及可选的对正确性敏感的上下文容量、适配器配置的 `defaultMaxTokens`、由模型持有的有序推理强度 ID 和可选的部署默认值；字段缺失表示元数据不可用或保留提供方持有的行为，而不表示目录成员关系无效。解析器会接收可选的取消信号，并且必须在信号中止后迅速完成结算。`LlmRuntime.resolveModelInfo()` 会校验聚合结果并返回分离值。在最终适配器边界，`resolveCallConfig()` 仅在 `maxTokens` 缺失时填入输出默认值，并校验和填入推理强度，因此直接调用也无法绕过任何一项已配置行为；直接分派会在等待解析前捕获一项适配器注册。agent loop 则使用 `prepareCall()`，使模型解析、请求头持久记录和分派全程使用同一项注册，保留来自同一次查询的分离上下文元数据，并报告适配器填入的配置字段。在 `ConfigureCall` 与已填入的默认值之后，`prepareCall()` 与未准备的直接流路径都会调用所捕获代次的同步纯函数 `assessControls()` 一次。每个已提供的控制项（值不是 `undefined` 的字段，包括被默认值填入的推理强度或输出上限）会得到 `supported`、`translated`、`unsupported` 或 `unverified`；未做任何声明的代次为 `unverified`（`adapter-undeclared`），绝不视为受支持。纯评估中被声明为 `unsupported` 的控制项会在凭据解析、HTTP 或分派之前以 `LlmError` 的 `UNSUPPORTED_CONTROL` 失败，直接流则把同一拒绝规范化为终端 `error` 结束。适配器若已能凭当前连接事实证明某个控制项不受支持，还可以覆盖可选的同步纯函数 `preassessControls()`。运行时只对控制项已最终确定的调用，在 `adapter.prepareCall()` 之前调用它一次：即没有 `ConfigureCall` 的 `prepareCall()`，以及尚未中止的未准备直接流。它只收到已提供控制字段（不含模型默认值）的分离冻结副本，且只有 `unsupported` 结论会生效，并通过同一个 `UNSUPPORTED_CONTROL` 错误失败；其他结论让捕获代次的评估、默认值、校验与最终化照常进行，该钩子也从不声明支持。带有 `ConfigureCall` 的调用会跳过它，因为回调可能依据捕获的模型元数据添加、删除或修改控制项。通过自身流分派的已准备调用从不提前重新评估。默认实现不做任何声明。`PreparedLlmCall.assessment` 在进程内暴露这些结论，从不持久化，分派已准备调用时不会再次评估。适配器查找发生在 `llm/stream` waterfall 的终端 continuation，因此 listener 可以在查找前短路调用，或路由一个可变的一次性请求。AgentLoop 在外层 waterfall 返回流句柄时观察到一次请求尝试；这个有限边界不能证明惰性终端适配器已构造完成或开始提供方 I/O。`block-start` / `block-end` 的 `index` 关联与 assembler 共同意味着适配器只需 emit 格式正确的分片——块重组不是每个适配器各自的问题。`ctx.llm.stream()` 与 `llm/stream` waterfall 在一个轮次中的位置见 [architecture.md](../architecture.zh.md#turn-flow)。
 
 纯评估后，可选的 `finalizeControls()` 会在准备返回或直接流式调用投影消息之前，绑定依赖账户的最终结论与分派。取消会丢弃迟到结果；最终不支持结论同样在请求入日志前拒绝。`PreparedLlmCall.assessment` 是分离的不可变结果，不持久化。
 
@@ -1052,6 +1052,27 @@ declare abstract class LlmAdapter {
     model: string,
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo>;
+  /**
+   * Judge supplied controls before any credential, network or listing work, for a
+   * call whose controls are already final: {@link LlmRuntime.prepareCall} without a
+   * `ConfigureCall`, and an unprepared stream. A `ConfigureCall` may replace the
+   * controls from captured model metadata, so a call that has one skips this hook.
+   * Synchronous and pure: no credential, network or clock access, and it reads only
+   * the adapter's current connection facts. Only an `unsupported` verdict has effect
+   * (the call fails with `UNSUPPORTED_CONTROL` before {@link prepareCall}); any other
+   * verdict, or `undefined`, leaves the normal captured-generation assessment to run
+   * after {@link prepareCall}, which this hook never replaces or advertises.
+   * The default declares nothing.
+   * @param _provider - registered provider route.
+   * @param _model - exact model id.
+   * @param _controls - a detached, frozen copy of the supplied controls without model defaults.
+   * @returns a verdict for each control it can judge without captured model facts, or `undefined`.
+   */
+  preassessControls(
+    _provider: string,
+    _model: string,
+    _controls: Readonly<LlmCallControls>,
+  ): CallControlAssessment | undefined;
   /**
    * Bind exact model metadata, control assessment and the eventual request dispatch
    * to one adapter generation. Dynamic adapters override this so settings changes
