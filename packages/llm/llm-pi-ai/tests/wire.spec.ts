@@ -271,28 +271,28 @@ describe('Codex Responses over a signed-in grant', () => {
     `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`
   const account = jwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acct_fixture' } })
 
-  async function codex(baseURL: string): Promise<Context> {
+  async function signedIn(baseURL: string, provider = 'openai-codex'): Promise<Context> {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-wire-'))
     onTestFinished(() => rm(dir, { recursive: true, force: true }))
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
-    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor(provider), () => Promise.resolve({
       kind: 'grant',
       payload: { type: 'oauth', access: account, refresh: 'r', expires: Date.now() + 3_600_000 },
     }))
-    await ctx.plugin(PiAi, { providers: { 'openai-codex': { baseURL } } })
+    await ctx.plugin(PiAi, { providers: { [provider]: { baseURL } } })
     return ctx
   }
 
-  it('sends one SSE request by default and maps a usage-limit rejection to a quota failure', async () => {
+  it.each(['usage_limit_reached', 'usage_not_included'])('sends one SSE request and maps %s to terminal quota', async (code) => {
     const server = await mockServer([{
       status: 429,
-      body: JSON.stringify({ error: { code: 'usage_limit_reached', message: 'limit', resets_in_seconds: 60 } }),
+      body: JSON.stringify({ error: { code, message: 'limit', resets_in_seconds: 60 } }),
       headers: { 'retry-after': '60' },
     }])
-    const ctx = await codex(server.url)
+    const ctx = await signedIn(server.url)
     const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
 
     const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
@@ -306,13 +306,35 @@ describe('Codex Responses over a signed-in grant', () => {
     expect(server.headers[0]).toMatchObject({ 'chatgpt-account-id': 'acct_fixture' })
   })
 
+  it.each([
+    ['subscription_sharing_usage_limit_exceeded', 'QUOTA', false],
+    ['subscription_sharing_usage_unavailable', 'SERVER', true],
+    ['subscription_sharing_user_unavailable', 'SERVER', true],
+  ] as const)('classifies OpenAI subscription error %s over HTTP and SSE', async (code, inBandCode, retryable) => {
+    for (const status of [429, 200]) {
+      const error = { code, message: 'Subscription unavailable' }
+      const server = await mockServer([status === 429
+        ? { status, body: JSON.stringify({ error }) }
+        : { events: [JSON.stringify({ type: 'response.failed', response: { status: 'failed', error } })] }])
+      const ctx = await signedIn(server.url, 'openai')
+      const model = (await ctx.llm.listModels('openai'))[0]!.id
+      const { finish } = await assemble(ctx, { provider: 'openai', model, messages: [] })
+      const expectedCode = status === 429 && retryable ? 'RATE_LIMIT' : inBandCode
+
+      expect(finish).toMatchObject({ kind: 'error', failure: { code: expectedCode } })
+      expect(finish).not.toHaveProperty('failure.providerCode')
+      expect(defaultRetryableCodes().includes(expectedCode)).toBe(retryable)
+      if (status === 429) expect(finish).toHaveProperty('failure.status', 429)
+    }
+  })
+
   it('keeps a transient Codex 429 a retryable rate limit', async () => {
     const server = await mockServer([{
       status: 429,
       body: JSON.stringify({ error: { code: 'rate_limit_exceeded', resets_in_seconds: 2 } }),
       headers: { 'retry-after': '2' },
     }])
-    const ctx = await codex(server.url)
+    const ctx = await signedIn(server.url)
     const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
 
     const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
@@ -340,7 +362,7 @@ describe('Codex Responses over a signed-in grant', () => {
       await new Promise<void>(resolve => server.close(() => { resolve() }))
     })
     const { port } = server.address() as AddressInfo
-    const ctx = await codex(`http://127.0.0.1:${String(port)}`)
+    const ctx = await signedIn(`http://127.0.0.1:${String(port)}`)
     const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
 
     const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })

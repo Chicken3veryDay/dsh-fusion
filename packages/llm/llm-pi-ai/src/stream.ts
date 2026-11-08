@@ -36,6 +36,17 @@ export function mapUsage(usage: PiUsage): TokenUsage {
   }
 }
 
+/**
+ * Classify subscription error codes preserved in pi-ai's flattened error text.
+ * @param message - The provider code or pi-ai's error text.
+ * @returns Terminal quota, transient subscription outage, or no subscription classification.
+ */
+function subscriptionFailureCode(message: string): 'QUOTA' | 'SERVER' | undefined {
+  if (/\b(?:usage_limit_reached|usage_not_included|subscription_sharing_usage_limit_exceeded)\b/i.test(message)) return QUOTA_EXCEEDED_CODE
+  if (/\bsubscription_sharing_(?:usage|user)_unavailable\b/i.test(message)) return 'SERVER'
+  return undefined
+}
+
 // XXX(pi-ai upstream): pi-ai flattens the caught error to `error.message`
 // (api/anthropic-messages.js: `errorMessage = error instanceof Error ?
 // error.message : JSON.stringify(error)`), discarding the original Error and its
@@ -46,6 +57,8 @@ export function mapUsage(usage: PiUsage): TokenUsage {
 // us capture the cause ourselves), classify on `code`/`cause` instead of text.
 function classifyPiAiError(message: string): string {
   if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
+  const subscription = subscriptionFailureCode(message)
+  if (subscription !== undefined) return subscription
   if (isQuotaExceededError(message)) return QUOTA_EXCEEDED_CODE
   if (/\b429\b|rate.?limit/i.test(message)) return 'RATE_LIMIT'
   // A rejected request body (gateway or provider size cap): resending the
@@ -85,9 +98,10 @@ function classifyWireStatus(status: number, message: string, providerCode: strin
   if (status === 401 || status === 403) return 'AUTH'
   if (status === 402) return QUOTA_EXCEEDED_CODE
   if (status === 429) {
-    // pi-ai renders a Codex `usage_limit_reached` as generic limit text, so the
-    // structured code decides before the text does.
-    return isQuotaExceededError(`${providerCode ?? ''} ${message}`) ? QUOTA_EXCEEDED_CODE : 'RATE_LIMIT'
+    // Codex renders terminal subscription codes as generic limit text.
+    const detail = `${providerCode ?? ''} ${message}`
+    return subscriptionFailureCode(detail) === QUOTA_EXCEEDED_CODE || isQuotaExceededError(detail)
+      ? QUOTA_EXCEEDED_CODE : 'RATE_LIMIT'
   }
   if (status === 408) return 'TIMEOUT'
   if (status === 400 || status === 413 || status === 422) return 'INVALID_REQUEST'
