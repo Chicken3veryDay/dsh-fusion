@@ -10,7 +10,7 @@
 
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
-import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { FinishReason, LlmFailure, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
@@ -86,6 +86,26 @@ function classifyWireStatus(status: number, message: string): string {
   return classifyPiAiError(message)
 }
 
+/** pi-ai's wording when a stored sign-in cannot be refreshed. */
+const OAUTH_REFRESH_FAILED = /^OAuth refresh failed for ([a-z0-9-]+)/
+
+/**
+ * Recognize a stored sign-in that only signing in again can repair. A refresh
+ * the vendor rejected (a revoked or expired grant) is an authentication failure
+ * the user must act on, so it carries that step; a refresh that failed on the
+ * network or at a vendor outage keeps its own classification, because signing
+ * in again would not help.
+ * @param text - the failed assistant message's error text.
+ * @returns an `AUTH` failure naming the sign-in step, or undefined for any other failure.
+ */
+function signInFailure(text: string): LlmFailure | undefined {
+  const provider = OAUTH_REFRESH_FAILED.exec(text)?.[1]
+  if (provider === undefined) return undefined
+  const code = classifyPiAiError(text)
+  if (code !== 'INVALID_REQUEST' && code !== 'AUTH') return undefined
+  return { message: `${text}; sign in to ${provider} again in the Models settings`, code: 'AUTH' }
+}
+
 /**
  * Map a terminal pi-ai event to the harness finish reason.
  * @param message - the assistant message carried by the `done` or `error` event.
@@ -144,6 +164,8 @@ export function mapStopReason(message: AssistantMessage, contextWindow?: number,
     }
     case 'error': {
       const text = message.errorMessage ?? 'pi-ai stream error'
+      const signIn = signInFailure(text)
+      if (signIn !== undefined) return { kind: 'error', failure: signIn }
       return {
         kind: 'error',
         failure: wire === undefined

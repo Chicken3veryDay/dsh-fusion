@@ -11,6 +11,8 @@ import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import type { FinishReason } from '@deepseek-ai/dsh-llm'
 import * as PiAi from '../src/index.ts'
+import type { Usage as PiUsage } from '@earendil-works/pi-ai'
+import { mapStopReason } from '../src/stream.ts'
 import { isWireObservable, observeWire, providerRetryAfterMs } from '../src/wire.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
@@ -241,6 +243,50 @@ describe('Codex Responses over a signed-in grant', () => {
     expect(finish).toMatchObject({ kind: 'error', failure: { code: 'SERVER', status: 500 } })
     expect(upgrades).toEqual([])
     expect(requests).toEqual(['/codex/responses'])
+  })
+})
+
+describe('Codex Responses with an expired sign-in', () => {
+  it('names the sign-in step when the stored grant can no longer be refreshed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-expired-'))
+    onTestFinished(() => rm(dir, { recursive: true, force: true }))
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('openai-codex'), () => Promise.resolve({
+      kind: 'grant',
+      payload: { type: 'oauth', access: 'expired', refresh: 'revoked', expires: 1 },
+    }))
+    await ctx.plugin(PiAi)
+    const model = (await ctx.llm.listModels('openai-codex'))[0]!.id
+    // The vendor's token endpoint refuses the revoked refresh token.
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response('{"error":"invalid_grant"}', { status: 400 })))
+    onTestFinished(() => { vi.unstubAllGlobals() })
+
+    const { finish } = await assemble(ctx, { provider: 'openai-codex', model, messages: [] })
+
+    expect(finish).toMatchObject({
+      kind: 'error',
+      failure: { code: 'AUTH', message: expect.stringContaining('sign in to openai-codex again in the Models settings') as string },
+    })
+  })
+})
+
+const ZERO_USAGE: PiUsage = {
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+}
+
+describe('a sign-in failure below pi-ai', () => {
+  const failed = (errorMessage: string): FinishReason => mapStopReason(
+    { role: 'assistant', content: [], api: 'openai-responses', provider: 'openai', model: 'm', usage: ZERO_USAGE, stopReason: 'error', errorMessage, timestamp: 0 },
+  )
+
+  it('leaves a refresh that failed on the network or at the vendor to its own classification', () => {
+    expect(failed('OAuth refresh failed for openai-codex: fetch failed')).toMatchObject({ failure: { code: 'TRANSPORT' } })
+    expect(failed('OAuth refresh failed for openai-codex: token refresh failed (503)')).toMatchObject({ failure: { code: 'SERVER' } })
+    expect(failed('Something else entirely')).toMatchObject({ failure: { code: 'PI_AI_ERROR' } })
   })
 })
 
