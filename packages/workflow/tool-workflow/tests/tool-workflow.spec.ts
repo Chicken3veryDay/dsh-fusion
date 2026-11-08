@@ -747,7 +747,7 @@ describe('dsh-tool-workflow', () => {
       expect((result.content[0] as { text: string }).text).toContain('cancelled')
     })
 
-    it('a background run over the sandboxed PTC engine settles its job with the rendered return value', async () => {
+    it.each([false, true])('a background run over the sandboxed PTC engine settles its job with the rendered return value (nested=%s)', async (nested) => {
       const ctx = new Context()
       onTestFinished(async () => { await ctx.fiber.dispose() })
       await ctx.plugin(SystemPrompt)
@@ -781,7 +781,7 @@ describe('dsh-tool-workflow', () => {
         script: 'log("halfway")\nreturn { ok: true }',
         meta: { name: 'scriptonly', description: 'returns without agents' },
         run_in_background: true,
-      }, { agent: parent })
+      }, { agent: parent, ...nested ? { parent: Symbol('outer') as ToolExecutionToken } : {} })
       expect(result.isError).toBe(false)
       if (result.isError) throw new Error('expected background acceptance')
       const { jobId } = result.value as { jobId: JobId }
@@ -789,6 +789,10 @@ describe('dsh-tool-workflow', () => {
 
       await vi.waitFor(() => { expect(jobs.get(jobId, parent.id).status).toBe('completed') }, { timeout: 10_000 })
       expect(jobs.get(jobId, parent.id).detail).toBe('0 agents')
+      expect(session.snapshotEvents().filter(event => event.type.startsWith('tool-workflow/')).map(event => event.type))
+        .toEqual(['tool-workflow/run-start', 'tool-workflow/run-end'])
+      expect(session.snapshotEvents().filter(event => event.type === 'tool-workflow/run-end').map(event => event.data.stopReason))
+        .toEqual(['completed'])
       const ring = jobs.readAt(jobId, 0, parent.id).chunks.map(chunk => chunk.text).join('')
       expect(ring).toContain('halfway')
       const read = await executeToolFixture(ctx, {
