@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { MockInstance } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { BlockAssembler, LlmError, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Credential, CredentialStore } from '@earendil-works/pi-ai'
 import { AccountPool } from '../src/account-pool.ts'
@@ -66,6 +66,7 @@ async function rig(script: Script, options: {
   seed?: Record<string, Credential | undefined>
   profile?: Partial<PiAiProviderProfile>
   mutatePool?: (pool: AccountPool | undefined) => AccountPool | undefined
+  resolveApiKey?: () => Promise<string | undefined>
 } = {}): Promise<Rig> {
   const server = await mockServer(script)
   const ids = options.ids ?? ['account-1', 'account-2']
@@ -98,7 +99,7 @@ async function rig(script: Script, options: {
   const mainRead = vi.spyOn(main.credentials, 'read')
   const adapter = new PiAiAdapter({
     profiles: () => profiles,
-    resolveApiKey: () => Promise.resolve(undefined),
+    resolveApiKey: options.resolveApiKey ?? (() => Promise.resolve(undefined)),
     auth: main,
     accountPool: () => pool,
   })
@@ -267,6 +268,88 @@ describe('missing and revoked grants', () => {
   })
 })
 
+/**
+ * Run `action` once, in the window after the adapter's next authentication has
+ * settled and before its caller resumes: the instant a concurrent sign-in or
+ * another process's refresh can replace the grant between "the bearer was
+ * resolved" and "the caller looks at the store again".
+ */
+function afterAuthentication(adapter: PiAiAdapter, action: () => void): void {
+  const original = adapter['requestAuth'].bind(adapter)
+  let done = false
+  adapter['requestAuth'] = async (...args: Parameters<typeof original>) => {
+    try { return await original(...args) }
+    finally {
+      if (!done) {
+        done = true
+        action()
+      }
+    }
+  }
+}
+
+describe('a rejection belongs to the grant the call authenticated with', () => {
+  const REPLACEMENT = 'sk-ant-oat-new-valid'
+
+  it('re-admits a grant that replaced the rejected one between authentication and dispatch', async () => {
+    const { adapter, runtime, accounts, server } = await rig([rejectedBearer, ok], { ids: ['account-1'] })
+    const ctx = await runtime()
+    afterAuthentication(adapter, () => { accounts.get('account-1')!.stored.set('anthropic', oauth(REPLACEMENT)) })
+    const first = await prepared(ctx)
+    expect(await first.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    // The old bearer was sent and refused; the replacement was never offered to the provider, so it is not signed out.
+    expect(bearers(server)).toEqual([bearer('account-1')])
+    expect(await (await prepared(ctx)).finish()).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual([bearer('account-1'), `Bearer ${REPLACEMENT}`])
+  })
+
+  it('still signs out exactly the rejected grant when the replacement lands after preparation', async () => {
+    const { runtime, accounts, server } = await rig([rejectedBearer, ok], { ids: ['account-1'] })
+    const ctx = await runtime()
+    const first = await prepared(ctx)
+    accounts.get('account-1')!.stored.set('anthropic', oauth(REPLACEMENT))
+    expect(await first.finish()).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(await (await prepared(ctx)).finish()).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual([bearer('account-1'), `Bearer ${REPLACEMENT}`])
+  })
+
+  it('keeps the rejected grant signed out for as long as it is the stored grant', async () => {
+    const { adapter, server, pool } = await rig([rejectedBearer, ok], { ids: ['account-1'] })
+    expect(await finishOf(adapter.stream(OPTIONS))).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    await expect(finishOf(adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    expect(server.requests).toHaveLength(1)
+    expect(pool?.hasEligible()).toBe(false)
+  })
+
+  it('has no grant to quarantine when a call is refused before any grant is read', async () => {
+    let calls = 0
+    const { adapter, server } = await rig([ok], {
+      ids: ['account-1'],
+      resolveApiKey: () => {
+        calls += 1
+        return calls === 1 ? Promise.reject(new LlmError('no key reference resolved', 'MISSING_CREDENTIAL')) : Promise.resolve(undefined)
+      },
+    })
+    await expect(finishOf(adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    // The marker of an unobserved call equals no stored grant, so the account is re-admitted at once.
+    expect(await finishOf(adapter.stream(OPTIONS))).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual([bearer('account-1')])
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['an API key', { type: 'api_key', key: 'sk-ant-api-not-for-pool' } satisfies Credential],
+  ])('re-admits a grant that replaced %s while the account was being authenticated', async (_name, seeded) => {
+    const { adapter, accounts, server } = await rig([ok], { ids: ['account-1'], seed: { 'account-1': seeded } })
+    afterAuthentication(adapter, () => { accounts.get('account-1')!.stored.set('anthropic', oauth(REPLACEMENT)) })
+    // The call saw no OAuth grant: nothing was sent, and the sign-in that arrived meanwhile is not judged.
+    await expect(finishOf(adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    expect(server.requests).toEqual([])
+    expect(await finishOf(adapter.stream(OPTIONS))).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual([`Bearer ${REPLACEMENT}`])
+  })
+})
+
 describe('refresh through an intercepted token endpoint', () => {
   const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 
@@ -304,6 +387,33 @@ describe('refresh through an intercepted token endpoint', () => {
     expect(accounts.get('account-1')?.stored.get('anthropic')).toEqual(oauth(token('account-1'), 0))
     // The next request does not try the rejected account again.
     await finishOf(adapter.stream(OPTIONS))
+    expect(intercepted.refreshes).toHaveLength(1)
+  })
+
+  it('re-admits a grant that replaced the one whose refresh was refused while the refresh was in flight', async () => {
+    const { adapter, server, accounts } = await rig([ok], { ids: ['account-1'], seed: { 'account-1': oauth(token('account-1'), 0) } })
+    // The sign-in lands exactly while the token request is outstanding.
+    const intercepted = interceptRefresh(() => {
+      accounts.get('account-1')!.stored.set('anthropic', oauth('sk-ant-oat-new-valid'))
+      return Response.json({ error: 'refused' }, { status: 401 })
+    })
+    await expect(finishOf(adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    expect(server.requests).toEqual([])
+    expect(await finishOf(adapter.stream(OPTIONS))).toEqual({ kind: 'stop' })
+    expect(bearers(server)).toEqual(['Bearer sk-ant-oat-new-valid'])
+    expect(intercepted.refreshes).toEqual([`${token('account-1')}-refresh`])
+  })
+
+  it('keeps a refreshed grant signed out when the provider then rejects its bearer, until the stored grant changes', async () => {
+    const { adapter, server, accounts } = await rig([rejectedBearer, ok], { ids: ['account-1'], seed: { 'account-1': oauth(token('account-1'), 0) } })
+    const intercepted = interceptRefresh(() => Response.json({ access_token: 'sk-ant-oat-refreshed', refresh_token: 'rotated-refresh', expires_in: 3600 }))
+    expect(await finishOf(adapter.stream(OPTIONS))).toMatchObject({ kind: 'error', failure: { code: 'AUTH' } })
+    expect(bearers(server)).toEqual(['Bearer sk-ant-oat-refreshed'])
+    await expect(finishOf(adapter.stream(OPTIONS))).rejects.toMatchObject({ code: 'AUTH' })
+    expect(server.requests).toHaveLength(1)
+    accounts.get('account-1')!.stored.set('anthropic', oauth('sk-ant-oat-signed-in-again'))
+    expect(await finishOf(adapter.stream(OPTIONS))).toEqual({ kind: 'stop' })
+    expect(bearers(server).at(-1)).toBe('Bearer sk-ant-oat-signed-in-again')
     expect(intercepted.refreshes).toHaveLength(1)
   })
 

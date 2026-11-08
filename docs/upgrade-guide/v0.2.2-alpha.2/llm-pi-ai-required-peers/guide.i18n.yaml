@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/llm-pi-ai-required-peers/guide.md
+/:
+  en: 579aec3c979e3070
+  zh: cac0ef80845dbb82
+/two-more-required-peers-for-dsh-llm-pi-ai:
+  en: eaffea6afb6f75cc
+  zh: f61f877b345ce41c
+/two-more-required-peers-for-dsh-llm-pi-ai/change:
+  en: 2852646d9cba08e5
+  zh: 90b8ee620f939cc4
+/two-more-required-peers-for-dsh-llm-pi-ai/migration:
+  en: 35a5c8104d4f1f39
+  zh: 3b6d035089b186bd

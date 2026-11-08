@@ -4,7 +4,6 @@
  * hot replacement, mount failure, disposal, and the failover listener.
  */
 
-import { execFileSync } from 'node:child_process'
 import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -37,8 +36,44 @@ vi.mock('../../../credentials/credentials-local/node_modules/chokidar', async (i
   }
 })
 
+/**
+ * Document reads a test holds open, by the end of the document's file name. A held read keeps one
+ * mount stuck mid-way on every platform, without a named pipe or a timer: the mount is provably
+ * waiting once `reached` settles, and proceeds when the test calls `open`.
+ */
+interface HeldRead { reached: () => void; released: Promise<undefined>; open: () => void }
+const heldReads = vi.hoisted(() => new Map<string, HeldRead>())
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readFile: (async (...args: Parameters<typeof actual.readFile>) => {
+      // Document paths are strings; a handle or URL read is never held.
+      const path = typeof args[0] === 'string' ? args[0] : ''
+      for (const [suffix, held] of heldReads) {
+        if (!path.endsWith(suffix)) continue
+        held.reached()
+        await held.released
+      }
+      return actual.readFile(...args)
+    }) as typeof actual.readFile,
+  }
+})
+
+/** Hold every read of the named document until the returned handle opens it. */
+function holdReads(suffix: string): { reached: Promise<undefined>; open: () => void } {
+  const reached = Promise.withResolvers<undefined>()
+  const released = Promise.withResolvers<undefined>()
+  const open = (): void => { released.resolve(undefined) }
+  heldReads.set(suffix, { reached: () => { reached.resolve(undefined) }, released: released.promise, open })
+  return { reached: reached.promise, open }
+}
+
 afterEach(async () => {
   onAccountWatcher = undefined
+  // A failed test must not leave a mount waiting on a read that nobody will release.
+  for (const held of heldReads.values()) held.open()
+  heldReads.clear()
   await disposeComposition()
   await closeMockServers()
   vi.restoreAllMocks()
@@ -211,11 +246,12 @@ describe('mounting the account documents', () => {
     expect(server.headers.map(headers => headers.authorization)).not.toContain(`Bearer ${MAIN_ACCESS}`)
   })
 
-  it('leaves the route unavailable, with no watcher left behind, when a document cannot be mounted', async () => {
+  /** Boot with a valid first account and a second document that cannot be mounted, and assert nothing is left mounted or served. */
+  async function expectUnavailable(second: (home: string) => Promise<string>): Promise<void> {
     const server = await mockServer([ok])
-    const { ctx, mounted } = await boot(server.url, async () => ({
+    const { ctx, mounted } = await boot(server.url, async home => ({
       'account-1': await document('account-1'),
-      'account-2': await document('account-2', { mode: 0o644 }),
+      'account-2': await second(home),
     }))
     // The first account mounted before the second failed; its watcher was released with the failed attempt.
     await vi.waitFor(() => { expect(mounted()).toBe(0) }, { timeout: 5000 })
@@ -223,29 +259,41 @@ describe('mounting the account documents', () => {
     expect(server.requests).toEqual([])
     // With no pool published, failover has nothing to offer.
     expect(await offer(ctx, 'RATE_LIMIT')).toBeUndefined()
+  }
+
+  it('leaves the route unavailable, with no watcher left behind, when a document cannot be mounted', async () => {
+    // A document of a version this build does not read fails the mount on every platform.
+    await expectUnavailable(async (home) => {
+      const path = join(home, 'account-2.credentials.yaml')
+      await writeFile(path, 'version: 2\n', { mode: 0o600 })
+      return path
+    })
+  })
+
+  // Windows has no POSIX modes to inspect: credentials-local skips the owner-only check there.
+  it.skipIf(process.platform === 'win32')('leaves the route unavailable when a document is readable beyond its owner', async () => {
+    await expectUnavailable(() => document('account-2', { mode: 0o644 }))
   })
 
   it('mounts nothing for an update queued behind a mount that an unload is waiting on', async () => {
     const server = await mockServer([ok])
     const { ctx, settingsPath } = await loadComposition()
     const first = await document('account-1')
-    // A named pipe holds the second mount open until the test writes the document: the mount is stuck mid-way.
-    const second = join(root!, 'account-2.credentials.yaml')
-    execFileSync('mkfifo', ['-m', '600', second])
+    const second = await document('account-2')
+    // Holding the second document's read keeps its mount stuck mid-way, until the test opens it.
+    const held = holdReads('account-2.credentials.yaml')
     let firstMounted: (() => void) | undefined
     const mountedFirst = new Promise<void>((resolve) => { firstMounted = resolve })
     onAccountWatcher = (path) => { if (path.endsWith('account-1.credentials.yaml')) firstMounted?.() }
     await writeFile(settingsPath, settings(server.url, { 'account-1': first, 'account-2': second }))
     await mountedFirst
+    await held.reached
 
     // A settings update queues a second application behind the stuck mount, then the unload begins and waits for it.
     ctx.emit('loader/volatile-update', [])
     const disposing = disposeComposition()
     await new Promise<void>((resolve) => { setTimeout(resolve, 100) })
-    await writeFile(second, [
-      'version: 1', 'records:', '  llm-pi-ai/anthropic:', '    kind: grant',
-      `    payload: { type: oauth, access: ${token('account-2')}, refresh: r, expires: 4102444800000 }`, '',
-    ].join('\n'))
+    held.open()
     await disposing
     expect(openWatchers.size).toBe(0)
   })

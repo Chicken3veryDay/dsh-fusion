@@ -21,7 +21,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { CredentialStore } from '@earendil-works/pi-ai'
+import type { Credential, CredentialStore } from '@earendil-works/pi-ai'
 import { ACCOUNT_QUOTA_EXCEEDED_CODE, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { LlmFailure, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ResolvedAccountPool } from './config.ts'
@@ -70,6 +70,67 @@ interface AccountState {
 /** Whether a failure code is a provider limit on the account rather than on the request. */
 function isLimit(code: string): boolean {
   return code === 'RATE_LIMIT' || code === QUOTA_EXCEEDED_CODE || code === ACCOUNT_QUOTA_EXCEEDED_CODE
+}
+
+/**
+ * The identity of one stored grant: a digest that changes exactly when the grant does.
+ * @param stored - the credential a store returned, or undefined when it held none.
+ * @returns a hex digest, or `absent` for no credential.
+ */
+export function grantFingerprint(stored: Credential | undefined): string {
+  return stored === undefined ? 'absent' : createHash('sha256').update(JSON.stringify(stored)).digest('hex')
+}
+
+/** A credential store that reports which grant the authentication using it last relied on. */
+export interface GrantObserver {
+  /** The store to authenticate through; it behaves exactly like the one it wraps. */
+  readonly store: CredentialStore
+  /**
+   * The identity of the grant the authentication ended on, or undefined before
+   * any grant was read. It is the last grant a read returned or a refresh
+   * lock saw, so it is the grant a resolved bearer came from, or the grant a
+   * refresh was refused for, even when the stored grant is replaced afterwards.
+   * `unreadable` stands for a read that failed.
+   */
+  observed(): string | undefined
+}
+
+/**
+ * Wrap one account's store for the duration of one authentication, so the
+ * grant that authentication used is known without reading the store again: a
+ * later read describes the store as it is then, not the grant this call holds.
+ * @param store - the account's own credential store.
+ * @returns the observing store and its observation; use one per authentication.
+ */
+export function observeGrant(store: CredentialStore): GrantObserver {
+  let observed: string | undefined
+  return {
+    store: {
+      async read(providerId, options) {
+        let stored: Credential | undefined
+        try { stored = await store.read(providerId, options) }
+        catch (unreadable) {
+          // The caller's own read reports the failure; the observation records that no grant was seen.
+          observed = 'unreadable'
+          throw unreadable
+        }
+        observed = grantFingerprint(stored)
+        return stored
+      },
+      list: options => store.list(options),
+      async modify(providerId, mutate, options) {
+        const result = await store.modify(providerId, (current) => {
+          // The refresh runs against this grant under the store's lock; a refusal is about it.
+          observed = grantFingerprint(current)
+          return mutate(current)
+        }, options)
+        observed = grantFingerprint(result)
+        return result
+      },
+      delete: (providerId, options) => store.delete(providerId, options),
+    },
+    observed: () => observed,
+  }
 }
 
 /** The in-process availability and load of the accounts of one pooled route. */
@@ -137,7 +198,7 @@ export class AccountPool {
       void unreadable
       return 'unreadable'
     }
-    return stored === undefined ? 'absent' : createHash('sha256').update(JSON.stringify(stored)).digest('hex')
+    return grantFingerprint(stored)
   }
 
   /**
@@ -221,7 +282,7 @@ export class AccountPool {
   /**
    * Record that the provider rejected the grant an account served with.
    * @param account - the rejected account.
-   * @param fingerprint - the digest of the grant the request used, read before the request.
+   * @param fingerprint - the identity of the grant the request used, from {@link GrantObserver.observed}.
    */
   markSignedOut(account: string, fingerprint: string): void {
     this.state(account).signedOut = { fingerprint }

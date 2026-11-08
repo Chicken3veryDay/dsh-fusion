@@ -1,9 +1,10 @@
 /** Account pool configuration and in-process selection state, with a manual clock and fixed randomness. */
 
+import { resolve as resolvePath } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Credential, CredentialStore } from '@earendil-works/pi-ai'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { AccountPool, observeAccountStream } from '../src/account-pool.ts'
+import { AccountPool, grantFingerprint, observeAccountStream, observeGrant } from '../src/account-pool.ts'
 import type { AccountLease } from '../src/account-pool.ts'
 import { resolveProfiles } from '../src/config.ts'
 import type { PiAiProviderProfile } from '../src/config.ts'
@@ -31,8 +32,10 @@ describe('account pool configuration', () => {
   it('resolves accounts with defaulted cooldowns, requires a stored credential, and normalizes paths', () => {
     const profile = resolveAccounts({ accounts: [accounts[0]!, { id: 'account-2', credentialsPath: '/home/u/x/../.dsh-2/.credentials.yaml' }] })
     expect(profile?.requiresStoredCredential).toBe(true)
+    // `path.resolve` is platform-owned: on Windows a rooted POSIX-looking path gains a drive and backslashes.
+    const resolved = accounts.map(account => ({ id: account.id, credentialsPath: resolvePath(account.credentialsPath) }))
     expect(profile?.accountPool).toMatchObject({
-      accounts: [accounts[0], accounts[1]],
+      accounts: resolved,
       rateLimitCooldownMs: 300_000,
       quotaCooldownMs: 3_600_000,
       reservationMs: 30_000,
@@ -245,6 +248,18 @@ describe('account availability', () => {
     expect(await new AccountPool(config!, new Map([['one', broken]])).fingerprint('one')).toBe('unreadable')
   })
 
+  it('identifies a grant by its content, and a missing one as absent', () => {
+    expect(grantFingerprint(grant('one'))).toMatch(/^[0-9a-f]{64}$/)
+    expect(grantFingerprint(grant('one'))).toBe(grantFingerprint(grant('one')))
+    expect(grantFingerprint(grant('one'))).not.toBe(grantFingerprint(grant('two')))
+    expect(grantFingerprint(undefined)).toBe('absent')
+  })
+
+  it('agrees with the pool fingerprint of the same stored grant', async () => {
+    const { pool, auth } = makePool()
+    expect(await pool.fingerprint('account-1')).toBe(grantFingerprint(auth.get('account-1')?.stored.get('anthropic')))
+  })
+
   it('reports a grant only when some account holds an OAuth grant, reading each store without selecting one', async () => {
     const empty = makePool({ seed: { 'account-1': undefined, 'account-2': { type: 'api_key', key: 'k' } } })
     expect(await empty.pool.hasGrant()).toBe(false)
@@ -342,5 +357,75 @@ describe('account stream observation', () => {
     // Neither claim still counts: the next claim ties and takes the last-used account.
     expect(claim(pool).account).toBe(thrown.account)
     expect(claim(pool).account).not.toBe(thrown.account)
+  })
+})
+
+describe('grant observation', () => {
+  const seeded = (credential?: Credential) => memoryAuth(credential === undefined ? {} : { anthropic: credential })
+
+  it('knows no grant before the store is used', () => {
+    expect(observeGrant(seeded(grant('one')).credentials).observed()).toBeUndefined()
+  })
+
+  it('reports the grant a read returned, even when the store changes afterwards', async () => {
+    const auth = seeded(grant('one'))
+    const observer = observeGrant(auth.credentials)
+    expect(await observer.store.read('anthropic')).toEqual(grant('one'))
+    auth.stored.set('anthropic', grant('two'))
+    expect(observer.observed()).toBe(grantFingerprint(grant('one')))
+    expect(await observer.store.read('anthropic')).toEqual(grant('two'))
+    expect(observer.observed()).toBe(grantFingerprint(grant('two')))
+  })
+
+  it.each([
+    ['absent', undefined, 'absent'],
+    ['an API key', { type: 'api_key', key: 'k' } satisfies Credential, grantFingerprint({ type: 'api_key', key: 'k' })],
+  ])('reports %s as read', async (_name, stored, expected) => {
+    const observer = observeGrant(seeded(stored).credentials)
+    await observer.store.read('anthropic')
+    expect(observer.observed()).toBe(expected)
+  })
+
+  it('reports a failed read as unreadable and rethrows it', async () => {
+    const broken: CredentialStore = { ...seeded().credentials, read: () => Promise.reject(new Error('denied')) }
+    const observer = observeGrant(broken)
+    await expect(observer.store.read('anthropic')).rejects.toThrow('denied')
+    expect(observer.observed()).toBe('unreadable')
+  })
+
+  it('reports the grant a refresh ran against when the refresh is refused', async () => {
+    const auth = seeded(grant('old'))
+    const observer = observeGrant(auth.credentials)
+    await expect(observer.store.modify('anthropic', () => {
+      // The sign-in lands while the refresh is outstanding.
+      auth.stored.set('anthropic', grant('new'))
+      return Promise.reject(new Error('refused'))
+    })).rejects.toThrow('refused')
+    expect(observer.observed()).toBe(grantFingerprint(grant('old')))
+  })
+
+  it('reports the refreshed grant when a refresh succeeds, and the stored one when none was needed', async () => {
+    const auth = seeded(grant('old'))
+    const observer = observeGrant(auth.credentials)
+    await observer.store.modify('anthropic', () => Promise.resolve(grant('refreshed')))
+    expect(observer.observed()).toBe(grantFingerprint(grant('refreshed')))
+    await observer.store.modify('anthropic', () => Promise.resolve(undefined))
+    expect(observer.observed()).toBe(grantFingerprint(grant('refreshed')))
+  })
+
+  it('reports an account signed out under the lock as absent', async () => {
+    const auth = seeded()
+    const observer = observeGrant(auth.credentials)
+    expect(await observer.store.modify('anthropic', () => Promise.resolve(undefined))).toBeUndefined()
+    expect(observer.observed()).toBe('absent')
+  })
+
+  it('passes listing and deletion through to the wrapped store', async () => {
+    const auth = seeded(grant('one'))
+    const observer = observeGrant(auth.credentials)
+    expect(await observer.store.list()).toEqual([{ providerId: 'anthropic', type: 'oauth' }])
+    await observer.store.delete('anthropic')
+    expect(auth.stored.has('anthropic')).toBe(false)
+    expect(observer.observed()).toBeUndefined()
   })
 })

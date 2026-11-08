@@ -61,7 +61,7 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
-import { observeAccountStream } from './account-pool.ts'
+import { observeAccountStream, observeGrant } from './account-pool.ts'
 import type { AccountLease, AccountPool } from './account-pool.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
@@ -95,11 +95,14 @@ interface PiAiSnapshot {
   /** The account pool this snapshot was built with, when a route configures accounts. */
   pool: AccountPool | undefined
   /**
-   * One collection per pooled account, each over that account's own credential
-   * store. A pooled request authenticates only through one of these, never
-   * through `models`, whose store is the shared sign-in document.
+   * One collection builder per pooled account: given a credential store over
+   * that account's own document, it returns a collection whose authentication
+   * reads and refreshes only that store. A pooled request authenticates only
+   * through one of these, never through `models`, whose store is the shared
+   * sign-in document, and builds its own so the store it passes can report
+   * which grant that request used.
    */
-  accounts: ReadonlyMap<string, Models>
+  accounts: ReadonlyMap<string, (credentials: CredentialStore) => Models>
 }
 
 /** One authentication resolution of a request: the explicit key and the checked result. */
@@ -402,10 +405,10 @@ export class PiAiAdapter extends LlmAdapter {
       }
       return models
     }
-    const accounts = new Map<string, Models>()
+    const accounts = new Map<string, (credentials: CredentialStore) => Models>()
     if (pool !== undefined) {
       for (const account of pool.accounts) {
-        accounts.set(account, build({ credentials: pool.store(account), authContext: this.config.auth.authContext }))
+        accounts.set(account, credentials => build({ credentials, authContext: this.config.auth.authContext }))
       }
     }
     this.snapshot = { profiles, models: build(this.config.auth), pool, accounts }
@@ -965,8 +968,12 @@ export class PiAiAdapter extends LlmAdapter {
 
   /**
    * Authenticate as one account, reading and refreshing only that account's
-   * own credentials document. The grant fingerprint is read after the attempt,
-   * so a refresh the attempt performed does not look like a later change.
+   * own credentials document. The returned fingerprint identifies the grant
+   * the attempt itself ended on: the grant its bearer came from, the refreshed
+   * grant when it refreshed, or the grant whose refresh or read failed. It is
+   * never read from the store after the attempt, so a sign-in or another
+   * process's refresh that replaces the grant meanwhile cannot be mistaken for
+   * the grant the provider is about to judge.
    */
   private async authenticateAccount(
     snapshot: PiAiSnapshot,
@@ -980,23 +987,24 @@ export class PiAiAdapter extends LlmAdapter {
     | { readonly kind: 'bound'; readonly fingerprint: string; readonly binding: AuthBinding }
     | { readonly kind: 'failed'; readonly fingerprint: string; readonly error: unknown }
   > {
-    const models = snapshot.accounts.get(account)
-    if (models === undefined) throw new LlmError(`The Claude account "${account}" has no collection in this configuration.`, 'ACCOUNT_POOL_UNAVAILABLE')
-    const scope: AuthScope = { models, credentials: pool.store(account) }
+    const collectionOf = snapshot.accounts.get(account)
+    if (collectionOf === undefined) throw new LlmError(`The Claude account "${account}" has no collection in this configuration.`, 'ACCOUNT_POOL_UNAVAILABLE')
+    const grants = observeGrant(pool.store(account))
+    const scope: AuthScope = { models: collectionOf(grants.store), credentials: grants.store }
+    // A call that read no grant has no identity to quarantine, and no stored grant equals this marker.
+    const fingerprint = (): string => grants.observed() ?? 'unobserved'
     let binding: AuthBinding
     try { binding = await this.requestAuth(snapshot, model.provider, profile, model, signal, {}, true, scope) }
     catch (error) {
       signal?.throwIfAborted()
-      const fingerprint = await pool.fingerprint(account, signal)
       return error instanceof LlmError && ['AUTH', 'MISSING_CREDENTIAL'].includes(error.code)
-        ? { kind: 'rejected', fingerprint }
-        : { kind: 'failed', fingerprint, error }
+        ? { kind: 'rejected', fingerprint: fingerprint() }
+        : { kind: 'failed', fingerprint: fingerprint(), error }
     }
-    const fingerprint = await pool.fingerprint(account, signal)
     if (binding.checked?.ok === false && classifyPiAiError(binding.checked.error.message) === 'AUTH') {
-      return { kind: 'rejected', fingerprint }
+      return { kind: 'rejected', fingerprint: fingerprint() }
     }
-    return { kind: 'bound', fingerprint, binding }
+    return { kind: 'bound', fingerprint: fingerprint(), binding }
   }
 
   private async * streamWithSnapshot(
