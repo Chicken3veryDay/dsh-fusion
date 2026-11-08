@@ -238,7 +238,10 @@ describe('PiAiAdapter provider routing', () => {
     const server = await mockServer([])
     const ctx = await harness(server.url)
     const result = await assemble(ctx, { model: 'deepseek-flash', messages: [], stop: ['END'] })
-    expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'UNSUPPORTED_OPTION' } })
+    expect(result.finish).toMatchObject({
+      kind: 'error',
+      failure: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'stop', reason: 'adapter-rejects' } },
+    })
     expect(server.requests).toEqual([])
   })
 

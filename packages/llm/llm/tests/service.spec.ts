@@ -11,6 +11,7 @@ import LlmRuntime, {
   LlmError,
   ProviderRequestId,
   ReasoningEffortId,
+  assessSuppliedControls,
   resolveRetryPolicy,
   StreamChunk,
   undeclaredControlAssessment,
@@ -19,7 +20,9 @@ import LlmRuntime, {
   createUserMessage,
 } from '@deepseek-ai/dsh-llm'
 import type {
+  ControlDisposition,
   LlmCallConfig,
+  LlmCallControls,
   ConfigureCall,
   LlmModelContext,
   LlmModelInfo,
@@ -1195,6 +1198,163 @@ describe('LlmRuntime', () => {
       reasoningEffort: ReasoningEffortId('unsupported'),
     }))).rejects.toMatchObject({ code: 'UNSUPPORTED_REASONING_EFFORT' })
     expect(adapter.lastOptions).toBeUndefined()
+  })
+
+  describe('control assessment', () => {
+    /** Declares `temperature` unsupported while the defaulted effort is `high`, and counts every effect. */
+    class AssessingAdapter extends RecordingAdapter {
+      assessments: LlmCallControls[] = []
+      prepares = 0
+
+      override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider, id: model, name: model, defaultMaxTokens: 512,
+          reasoning: {
+            efforts: [{ id: ReasoningEffortId('off'), name: 'Off' }, { id: ReasoningEffortId('high'), name: 'High' }],
+            defaultEffort: ReasoningEffortId('high'),
+          },
+        })
+      }
+
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        this.prepares++
+        const base = await super.prepareCall(provider, model, signal)
+        return {
+          ...base,
+          assessControls: (controls: Readonly<LlmCallControls>) => {
+            this.assessments.push({ ...controls })
+            return assessSuppliedControls(controls, (control): ControlDisposition => control === 'temperature' && controls.reasoningEffort === 'high'
+              ? { kind: 'unsupported', reason: 'reasoning-active' }
+              : control === 'maxTokens'
+                ? { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256 }] }
+                : { kind: 'supported' })
+          },
+        }
+      }
+    }
+
+    it('refuses a declared unsupported control at preparation with structured data and no dispatch', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const adapter = new AssessingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['route'], adapter)
+      const refusal = await ctx.llm.prepareCall({ provider: 'route', model: 'model', temperature: 0.2 }).then(
+        () => undefined, (error: unknown) => error,
+      )
+      expect(refusal).toBeInstanceOf(LlmError)
+      expect(refusal).toMatchObject({
+        code: 'UNSUPPORTED_CONTROL',
+        failure: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason: 'reasoning-active' } },
+      })
+      expect(adapter.lastOptions).toBeUndefined()
+    })
+
+    it('lets the defaulted reasoning effort decide, and accepts the same control once effort is off', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const adapter = new AssessingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['route'], adapter)
+      await expect(ctx.llm.prepareCall({ provider: 'route', model: 'model', temperature: 0 }))
+        .rejects.toMatchObject({ code: 'UNSUPPORTED_CONTROL' })
+      expect(adapter.assessments.at(-1)).toEqual({ temperature: 0, reasoningEffort: 'high', maxTokens: 512 })
+      const off = await ctx.llm.prepareCall({
+        provider: 'route', model: 'model', temperature: 0, reasoningEffort: ReasoningEffortId('off'),
+      })
+      expect(off.config).toMatchObject({ temperature: 0, reasoningEffort: 'off' })
+    })
+
+    it('exposes a frozen, process-local assessment covering exactly the supplied and defaulted controls', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      ctx.llm.registerAdapter(['route'], new AssessingAdapter(SCRIPT))
+      const prepared = await ctx.llm.prepareCall({ provider: 'route', model: 'model', stop: ['END'] })
+      expect(prepared.assessment.fields).toEqual({
+        reasoningEffort: { kind: 'supported' },
+        maxTokens: { kind: 'translated', translations: [{ kind: 'add-thinking-allowance', thinkingTokens: 1_024, answerReserve: 256 }] },
+        stop: { kind: 'supported' },
+      })
+      expect(Object.isFrozen(prepared.assessment)).toBe(true)
+      expect(Object.isFrozen(prepared.assessment.fields)).toBe(true)
+      expect(Object.isFrozen(prepared.assessment.fields.maxTokens)).toBe(true)
+    })
+
+    it('normalizes the same refusal to the terminal failure on the direct stream path before any dispatch', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const adapter = new AssessingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['route'], adapter)
+      const chunks = await collect(ctx.llm.stream({
+        provider: 'route', model: 'model', messages: [], temperature: 0.2,
+      }))
+      expect(chunks).toEqual([{
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: 'provider "route" model "model" does not support temperature (reasoning-active)',
+            code: 'UNSUPPORTED_CONTROL',
+            unsupportedControl: { control: 'temperature', reason: 'reasoning-active' },
+          },
+        },
+      }])
+      expect(adapter.lastOptions).toBeUndefined()
+      const accepted = await collect(ctx.llm.stream({ provider: 'route', model: 'model', messages: [], stop: ['END'] }))
+      expect(accepted.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    })
+
+    it('never re-assesses a prepared call at dispatch and keeps its own generation after replacement', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const adapter = new AssessingAdapter(SCRIPT)
+      const registration = ctx.llm.registerAdapter(['route'], adapter)
+      const prepared = await ctx.llm.prepareCall({ provider: 'route', model: 'model', stop: ['END'] })
+      registration.replace([])
+      expect(adapter.assessments).toHaveLength(1)
+      await collect(prepared.stream({ ...prepared.config, messages: [] }))
+      expect(adapter.assessments).toHaveLength(1)
+      expect(prepared.assessment.fields.stop).toEqual({ kind: 'supported' })
+    })
+
+    it('reads an adapter that declares nothing, or omits a supplied control, as unverified rather than supported', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const undeclared = new RecordingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['plain'], undeclared)
+      const plain = await ctx.llm.prepareCall({ provider: 'plain', model: 'model', temperature: 0.5, maxTokens: 9 })
+      expect(plain.assessment.fields).toEqual({
+        temperature: { kind: 'unverified', reason: 'adapter-undeclared' },
+        maxTokens: { kind: 'unverified', reason: 'adapter-undeclared' },
+      })
+      expect(await collect(plain.stream({ ...plain.config, messages: [] }))).toEqual(SCRIPT)
+
+      const partial = new class extends RecordingAdapter {
+        override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+          return { ...(await super.prepareCall(provider, model, signal)), assessControls: () => ({ fields: {} }) }
+        }
+      }(SCRIPT)
+      ctx.llm.registerAdapter(['partial'], partial)
+      const omitted = await ctx.llm.prepareCall({ provider: 'partial', model: 'model', stop: ['x'] })
+      expect(omitted.assessment.fields).toEqual({ stop: { kind: 'unverified', reason: 'adapter-undeclared' } })
+    })
+
+    it('assesses nothing for a default call and runs no assessment after cancellation', async () => {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      const adapter = new RecordingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['plain'], adapter)
+      const prepared = await ctx.llm.prepareCall({ provider: 'plain', model: 'model' })
+      expect(prepared.assessment.fields).toEqual({})
+
+      const assessing = new AssessingAdapter(SCRIPT)
+      ctx.llm.registerAdapter(['route'], assessing)
+      const abort = new AbortController()
+      const failure = new Error('cancelled before assessment')
+      await expect(ctx.llm.prepareCall({ provider: 'route', model: 'model', stop: ['x'] }, abort.signal, (controls) => {
+        abort.abort(failure)
+        return controls
+      })).rejects.toBe(failure)
+      expect(assessing.assessments).toEqual([])
+    })
   })
 
   it('skips configuration when cancellation precedes preparation or occurs during model lookup', async () => {

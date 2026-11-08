@@ -6,7 +6,9 @@
 
 import { describe, expect, it } from 'vitest'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
-import { callConfigEquals, isAgentLoopRequest, markAgentLoopRequest } from '../src/call-config.ts'
+import {
+  assessSuppliedControls, callConfigEquals, isAgentLoopRequest, markAgentLoopRequest, undeclaredControlAssessment,
+} from '../src/call-config.ts'
 import { ReasoningEffortId } from '../src/brand.ts'
 import type { GenerateOptions } from '../src/types.ts'
 
@@ -27,6 +29,28 @@ describe('callConfigEquals', () => {
     expect(callConfigEquals({ ...base, stop: ['a'] }, { ...base, stop: ['a', 'b'] })).toBe(false)
     expect(callConfigEquals({ ...base, stop: ['a'] }, { ...base, stop: ['b'] })).toBe(false)
     expect(callConfigEquals({ ...base, stop: ['a', 'b'] }, { ...base, stop: ['a', 'b'] })).toBe(true)
+  })
+})
+
+describe('control assessment helpers', () => {
+  it('builds one frozen entry per supplied control, including falsy values, and none for omitted ones', () => {
+    const decided: string[] = []
+    const assessment = assessSuppliedControls(
+      { temperature: 0, maxTokens: 1, stop: [], reasoningEffort: undefined },
+      (control) => { decided.push(control); return { kind: 'supported' } },
+    )
+    expect(decided).toEqual(['temperature', 'maxTokens', 'stop'])
+    expect(Object.keys(assessment.fields)).toEqual(['temperature', 'maxTokens', 'stop'])
+    expect(Object.isFrozen(assessment)).toBe(true)
+    expect(Object.isFrozen(assessment.fields.temperature)).toBe(true)
+    expect(assessSuppliedControls({}, () => { throw new Error('nothing to decide') }).fields).toEqual({})
+  })
+
+  it('labels an undeclared adapter unverified for every supplied control, never supported', () => {
+    expect(undeclaredControlAssessment({ reasoningEffort: ReasoningEffortId('high'), temperature: 0.2 }).fields).toEqual({
+      reasoningEffort: { kind: 'unverified', reason: 'adapter-undeclared' },
+      temperature: { kind: 'unverified', reason: 'adapter-undeclared' },
+    })
   })
 })
 

@@ -8,8 +8,8 @@
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import LlmRuntime, { createUserMessage, LlmError, ReasoningEffortId  } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmModelReasoningInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { assessSuppliedControls, createUserMessage, LlmError, ReasoningEffortId  } from '@deepseek-ai/dsh-llm'
+import type { ControlDisposition, GenerateOptions, LlmCallControls, LlmModelReasoningInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionId, foldRequestHeader } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -458,6 +458,49 @@ describe('request stability across the loop', () => {
       expect(adapter.requests).toHaveLength(0)
     },
   )
+
+  it('refuses a declared unsupported control before the request is logged or any model call is made', async () => {
+    const adapter = new class extends MockAdapter {
+      override async prepareCall(provider: string, model: string, signal?: AbortSignal) {
+        return {
+          ...await super.prepareCall(provider, model, signal),
+          assessControls: (controls: Readonly<LlmCallControls>) => assessSuppliedControls(controls, (control): ControlDisposition => control === 'temperature'
+            ? { kind: 'unsupported', reason: 'model-forbids' }
+            : { kind: 'supported' }),
+        }
+      }
+    }([textResponse('never sent'), textResponse('sent')])
+    const ctx = await harness(adapter)
+    let proposeTemperature = true
+    ctx.on('agent/request', async (_event, next) => {
+      const proposal = await next()
+      return proposeTemperature ? { ...proposal, temperature: 0.2 } : proposal
+    })
+    const agent = await ctx.agentLoop.create(SessionId('unsupported-control'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'go')
+    await waitForIdle(ctx, agent)
+
+    const refused = agent.session.snapshotEvents()
+    expect(refused.findLast(event => event.type === 'turn/end')).toMatchObject({
+      data: {
+        reason: {
+          kind: 'error',
+          error: { code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'temperature', reason: 'model-forbids' } },
+        },
+      },
+    })
+    expect(adapter.requests).toHaveLength(0)
+    // The failed step commits only the claimed input (documented): no request header, assistant message or usage.
+    expect(refused.map(event => event.type).filter(type => type !== 'agent/inbox/spliced'))
+      .toEqual(['turn/start', 'step/start', 'system/message', 'user/message', 'step/end', 'turn/end'])
+
+    proposeTemperature = false
+    send(agent, 'again')
+    await waitForIdle(ctx, agent)
+    expect(adapter.requests).toHaveLength(1)
+    expect(agent.session.requestHeader()?.config).toEqual({ provider: 'mock', model: 'mock' })
+  })
 
   it('lets a short-circuiting llm/stream listener own an unregistered route', async () => {
     const ctx = new Context()

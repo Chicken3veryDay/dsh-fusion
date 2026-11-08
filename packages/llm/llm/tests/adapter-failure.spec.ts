@@ -60,6 +60,29 @@ describe('adapter failure normalization', () => {
     expect(normalizeLlmFailure(accessorBacked)).toEqual({ message: 'provider failed', code: 'UNKNOWN' })
   })
 
+  it('carries a valid refused-control fact and rejects unknown control or reason values', () => {
+    const carried = Object.assign(new Error('refused'), {
+      code: 'UNSUPPORTED_CONTROL',
+      failure: { message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'stop', reason: 'adapter-rejects', extra: 1 } },
+    })
+    const failure = normalizeLlmFailure(carried)
+    expect(failure).toEqual({
+      message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl: { control: 'stop', reason: 'adapter-rejects' },
+    })
+    expect(Object.isFrozen(failure.unsupportedControl)).toBe(true)
+    for (const unsupportedControl of [
+      { control: 'topP', reason: 'adapter-rejects' },
+      { control: 'stop', reason: 'because' },
+      'stop',
+      null,
+    ]) {
+      const malformed = Object.assign(new Error('refused'), {
+        code: 'UNSUPPORTED_CONTROL', failure: { message: 'refused', code: 'UNSUPPORTED_CONTROL', unsupportedControl },
+      })
+      expect(normalizeLlmFailure(malformed)).toEqual({ message: 'refused', code: 'UNKNOWN' })
+    }
+  })
+
   it('falls back when an Error message accessor throws', () => {
     const error = new Error('provider failed')
     Object.defineProperty(error, 'message', { get() { throw new Error('message getter failed') } })
