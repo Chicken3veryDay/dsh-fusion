@@ -68,12 +68,13 @@ import { credentialKeyId, credentialKeyScope } from '@deepseek-ai/dsh-credential
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
-import { authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE } from './auth.ts'
+import { chatgptAccessToken, authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE, recordKeyFor } from './auth.ts'
 import { catalogProvider, catalogProviderIds } from './catalog.ts'
-import { assertServiceable, Config, resolveProfiles } from './config.ts'
+import { assertServiceable, Config, DEFAULT_MODEL_LIST_TIMEOUT_MS, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
-import { discoverModels } from './discovery.ts'
+import { discoverModelsWithin } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
+import { createModels } from './models.ts'
 import { registerPiAiFlows } from './login.ts'
 import { providerDefaultsOf } from './provider-data.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
@@ -237,6 +238,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const implied = Object.fromEntries([...signedIn].filter(provider => configured?.[provider] === undefined)
       .map(provider => [provider, {}]))
     const next = resolveProfiles({ ...implied, ...configured }, 'deferred')
+    for (const [provider, profile] of next) {
+      if (provider === 'openai' && provider in implied) profile.requiresStoredCredential = true
+    }
     lastRaw = raw
     lastSignedIn = signedIn
     memoized = next
@@ -283,10 +287,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // through `ctx` per call, so they stay correct across the collection rebuilds
   // a configuration change causes, and a sign-in survives one.
   const auth = { credentials: credentialStoreFrom(ctx), authContext: authContextFrom(ctx) }
+  // Owner of every network model listing: unloading this instance cancels the
+  // ones in flight and closes their connections.
+  const lifetime = new AbortController()
+  ctx.effect(() => () => { lifetime.abort(new Error('llm-pi-ai: adapter unloaded')) })
+  const reportedWithheld = new Map<string, string>()
   const adapter = new PiAiAdapter({
     profiles,
     resolveApiKey,
     auth,
+    lifetime: lifetime.signal,
+    onUnofferedAccountModels: ({ provider, models }) => {
+      const key = models.join('\n')
+      if (reportedWithheld.get(provider) === key) return
+      reportedWithheld.set(provider, key)
+      ctx.logger.warn(
+        `llm-pi-ai: route "${provider}" is not offering account-listed model(s) ${models.join(', ')}:`
+        + ' the configuration has no metadata for them; add a models entry with their capacities to offer them',
+      )
+    },
     prepareHeaders: (request, headers) => ctx.waterfall('llm-pi-ai/request-headers', request, headers, () => headers),
     resolveAttachments: () => ctx.get('attachments'),
     resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(
@@ -339,6 +358,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return {
       headers: profile.headers,
       resolveApiKey: () => resolveApiKey(provider, profile),
+      ...provider !== 'openai' || profile.apiKeyEnv !== undefined ? {} : {
+        chatgpt: async (signal: AbortSignal) => {
+          const stored = await auth.credentials.read(provider, { signal })
+          if (stored?.type !== 'oauth') return undefined
+          const models = createModels(auth)
+          if (profile.piProvider !== undefined) models.setProvider(profile.piProvider)
+          return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(models, signal) }
+        },
+      },
     }
   }
   // Interrogating an endpoint is a configuration-time action over a draft, so
@@ -347,7 +375,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // except the stored credential and deployment-owned headers: the curated UI
   // accepts neither, so an already-configured route supplies both inside the
   // Host rather than widening the discovery request.
-  ctx.llm.registerModelDiscovery(settingsNs, (request, signal) => discoverModels(
+  ctx.llm.registerModelDiscovery(settingsNs, (request, signal) => discoverModelsWithin(
+    {
+      // A draft not yet saved has no profile to carry a deadline, so it runs under the default.
+      timeoutMs: (request.provider === undefined ? undefined : profiles().get(request.provider)?.modelListTimeoutMs)
+        ?? DEFAULT_MODEL_LIST_TIMEOUT_MS,
+      lifetime: lifetime.signal,
+    },
     { ...request, ...signal === undefined ? {} : { signal } },
     () => storedDiscoveryProfile(request.provider),
   ))
@@ -405,12 +439,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => { unloaded = true })
   const mounted = (): boolean => !unloaded && ctx.fiber.uid !== null
   /**
-   * Whether a changed credential can change what its route offers. Only a
-   * catalog provider that narrows its models per credential (Copilot, by the
-   * account) can.
+   * Whether a credential change can alter account-specific model offers,
+   * including ChatGPT discovery and catalog-provider filters such as Copilot's.
    */
   const offersVaryByCredential = (provider: string): boolean =>
-    catalogProvider(provider)?.filterModels !== undefined && registration !== undefined
+    (provider === 'openai' || catalogProvider(provider)?.filterModels !== undefined) && registration !== undefined
+  /**
+   * The registration of the ChatGPT sign-in the offers were last announced for: the
+   * `clientId` OpenAI issues to each login. A refresh keeps it, so a rotated token
+   * is recognized as the same sign-in; a new login (possibly another account) changes
+   * it. Undefined when nothing identifies the login, which is treated as changed.
+   */
+  let announcedLogin: string | undefined
+  const loginOf = async (store: CredentialProvider): Promise<string | undefined> => {
+    const record = await store.readRecord(recordKeyFor('openai'))
+    if (record?.kind !== 'grant' || typeof record.payload !== 'object' || record.payload === null) return undefined
+    const { type, clientId } = record.payload as { type?: unknown; clientId?: unknown }
+    return type === 'oauth' && typeof clientId === 'string' && clientId.length > 0 ? clientId : undefined
+  }
   /**
    * One refresh of the signed-in set from the store one binding committed to. Never
    * rejects: a failure is logged and leaves the routes as they were, so a refresh
@@ -438,11 +484,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         .filter(entry => catalogProvider(entry.providerId) !== undefined
           && !(entry.providerId === 'anthropic' && entry.type === 'oauth'))
         .map(entry => entry.providerId))
+      const login = next.has('openai') ? await loginOf(store) : undefined
+      if (!admitted()) return
+      const previousLogin = announcedLogin
+      announcedLogin = login
       if (next.size === signedIn.size && [...next].every(provider => signedIn.has(provider))) {
         // The routes are the same, but a replaced credential can still change
         // which models the route offers. The registry announces a route swap
         // like any topology change, which is what open model pickers listen to.
-        if (touched !== undefined && offersVaryByCredential(touched)) registration?.replace([...profiles().keys()])
+        // An ordinary token refresh of the same ChatGPT login changes no offer
+        // and would only make every open picker repeat its listing request.
+        const sameLogin = touched === 'openai' && login !== undefined && login === previousLogin
+        if (touched !== undefined && offersVaryByCredential(touched) && !sameLogin) registration?.replace([...profiles().keys()])
         return
       }
       signedIn = next

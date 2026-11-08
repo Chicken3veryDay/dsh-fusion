@@ -1,0 +1,37 @@
+# TypeScript SDK snapshot patch over `dsh --profile sdk`: the signed-in ChatGPT plan
+# route runs the real llm-pi-ai adapter; only the external HTTPS endpoint is faked.
+
+# The fixture corpus must not depend on the developer's personal skill roots.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    includeDefaultRoots: false
+
+# No API-key route: the stored sign-in is the only credential this scenario holds.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+  disabled: true
+
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js dshHomePath('sessions')
+    compression: !!js "process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"
+
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    maxDepth: 1
+
+# The process-local clock is deterministic; native timers remain live.
+- insert:
+    - id: snapshot-clock
+      name: './clock.mjs'
+    - id: codex-endpoint-fixture
+      name: './codex-endpoint.mjs'
+
+- id: time-context
+  config:
+    timeZone: UTC

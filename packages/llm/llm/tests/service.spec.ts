@@ -729,6 +729,28 @@ describe('LlmRuntime', () => {
     expect(second?.badge).toEqual(literal)
   })
 
+  it('answers a selection from the advertised models unless the adapter decides it itself', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['catalog'], new CatalogAdapter({ id: 'catalog', name: 'Catalog' }, [
+      { provider: 'catalog', id: 'listed', name: 'Listed' },
+    ]))
+    await expect(ctx.llm.canSelectModel('catalog', 'listed')).resolves.toBe(true)
+    await expect(ctx.llm.canSelectModel('catalog', 'unlisted')).resolves.toBe(false)
+    await expect(ctx.llm.canSelectModel('missing', 'listed')).rejects.toMatchObject({ code: 'NO_ADAPTER' })
+
+    const asked: string[] = []
+    ctx.llm.registerAdapter(['decided'], new class extends CatalogAdapter {
+      override canSelectModel(_provider: string, model: string): Promise<boolean> {
+        asked.push(model)
+        return Promise.resolve(model === 'local')
+      }
+    }({ id: 'decided', name: 'Decided' }, []))
+    await expect(ctx.llm.canSelectModel('decided', 'local')).resolves.toBe(true)
+    await expect(ctx.llm.canSelectModel('decided', 'remote')).resolves.toBe(false)
+    expect(asked).toEqual(['local', 'remote'])
+  })
+
   it('defaults adapters to their route name and an empty advisory model list', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)

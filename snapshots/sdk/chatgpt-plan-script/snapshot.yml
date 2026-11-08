@@ -1,0 +1,12 @@
+version: 1
+scenario: chatgpt-plan-script
+profile: sdk
+composition: sdk-chatgpt-plan-script
+recording: authored
+workspace:
+  final: true
+header:
+  class: sdk-chatgpt-plan-script
+  pin: true
+  systemPromptSource: direct-signin-script
+  toolSchemasSource: direct-signin-script

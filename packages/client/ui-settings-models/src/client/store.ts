@@ -33,6 +33,8 @@ export interface ProviderDirectoryEntry {
   readonly defaultBaseURL?: string
   readonly baseURLEnv?: readonly string[]
   readonly nativeAuth?: LlmNativeAuth
+  /** The owning adapter reports a stored sign-in that this route authenticates with. */
+  readonly hasStoredCredential?: boolean
   readonly error?: string
 }
 
@@ -58,6 +60,7 @@ export function joinProviderDirectory(
     ...entry.defaultBaseURL === undefined ? {} : { defaultBaseURL: entry.defaultBaseURL },
     ...entry.baseURLEnv === undefined ? {} : { baseURLEnv: entry.baseURLEnv },
     ...entry.nativeAuth === undefined ? {} : { nativeAuth: entry.nativeAuth },
+    ...entry.hasStoredCredential === true ? { hasStoredCredential: true } : {},
     ...entry.error === undefined ? {} : { error: entry.error },
   }))
   for (const provider of registered) {

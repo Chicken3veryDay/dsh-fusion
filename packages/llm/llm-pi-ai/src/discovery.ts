@@ -2,11 +2,10 @@
  * Answering "which models can this provider serve?" for the configuration
  * surface's "fetch available models" action.
  *
- * A route the installed pi-ai catalog ships is answered **from that catalog**,
- * with no network call at all: pi-ai's registry is the authoritative list for
- * its own providers, and it carries the capacities a listing endpoint would
- * not disclose. Only a route the catalog does not describe — a gateway, a
- * self-hosted server — is interrogated over the wire.
+ * Catalog routes use installed model metadata without a network request,
+ * except for a stored ChatGPT plan grant: its account-specific public listing
+ * supplies visible slugs and display names. Other endpoints are interrogated
+ * when the installed catalog does not describe them.
  *
  * Neither path is a catalog refresh. Nothing here is stored: the request
  * carries a draft the user is still editing, and the reply is candidate
@@ -25,7 +24,12 @@
 import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import z from '@deepseek-ai/schemastery'
+import { carriesSubscriptionToken, SUBSCRIPTION_TOKEN_REFUSAL } from './auth.ts'
 import { catalogModels } from './catalog.ts'
+
+/** Discovered rows always carry a display name, including id-based defaults. */
+type DiscoveredModel = LlmDiscoveredModel & { readonly name: string }
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -41,6 +45,9 @@ const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
   'openai-completions',
   'openai-responses',
 ])
+
+/** Visible ChatGPT entries use account-owned request slugs and display names. */
+const CHATGPT_MODEL = z.object({ slug: z.string().min(1).required(), display_name: z.string().min(1).required() })
 
 /** Stable API version required by Anthropic's model-listing endpoint. */
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -179,7 +186,7 @@ async function readBounded(response: Response, url: string): Promise<string> {
  * a working endpoint's catalog. Missing names fall back to the adopted id so
  * the Web form receives a complete human-readable row.
  */
-function readListing(body: unknown): LlmDiscoveredModel[] {
+function readListing(body: unknown): DiscoveredModel[] {
   const listing = body as { data?: unknown; models?: unknown } | null
   const data = listing?.data
   let listed: { readonly key?: string; readonly raw: unknown }[]
@@ -199,7 +206,7 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       .filter(([, raw]) => raw !== null && typeof raw === 'object' && !Array.isArray(raw))
       .map(([key, raw]) => ({ key, raw }))
   }
-  const models: LlmDiscoveredModel[] = []
+  const models: DiscoveredModel[] = []
   for (const { key, raw } of listed) {
     const entry = raw as ListingEntry | null
     const id = label(key, entry?.id)
@@ -256,25 +263,37 @@ export interface StoredModelDiscoveryProfile {
   readonly headers: Readonly<Record<string, string>> | undefined
   /** Resolve the named route's credential only when the draft carries none. */
   readonly resolveApiKey: () => Promise<string | undefined>
+  /** Resolve a stored ChatGPT grant through pi-ai, including refresh; absent for API-key routes. */
+  readonly chatgpt?: (signal: AbortSignal) => Promise<{ baseURL: string; accessToken: string } | undefined>
 }
 
 /**
- * Interrogate one draft provider endpoint for the models it advertises.
- * @param request - the endpoint, protocol, and one-shot credential to use.
+ * Interrogate one draft provider endpoint for the models it advertises. This
+ * applies no deadline of its own; product callers run it through
+ * {@link withinBounds}, whose combined signal it passes to every cancellable
+ * step and checks after each credential wait.
+ * @param request - the endpoint, protocol, one-shot credential, and the
+ *   lookup's signal.
  * @param storedProfile - Host-owned headers and lazy credential resolution for
- *   the named route. It is read only on the path that reaches the network; the
- *   credential is resolved only when the draft carries none.
- * @returns the advertised models in endpoint order.
+ *   the named route. A stored ChatGPT grant selects account discovery before
+ *   the catalog shortcut; other credentials resolve only on the network path
+ *   when the draft carries none.
+ * @returns the advertised models with display names in endpoint order.
  * @throws LlmError when the protocol has no readable listing, the endpoint
  *   refuses or fails the request, or the reply is not a model listing.
  */
 export async function discoverModels(
-  request: LlmModelDiscoveryOperation,
+  request: LlmModelDiscoveryOperation & { readonly signal: AbortSignal },
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
-): Promise<readonly LlmDiscoveredModel[]> {
+): Promise<readonly DiscoveredModel[]> {
+  let stored = request.provider === 'openai' ? storedProfile?.() : undefined
+  const plan = request.provider === 'openai' && request.apiKey === undefined
+    ? await stored?.chatgpt?.(request.signal) : undefined
+  // A credential wait may outlive its lookup's bounds; abandoned work stops here.
+  request.signal.throwIfAborted()
   // A catalog route already has its answer, and a better one: the installed
   // entries carry context windows and output caps no listing endpoint reports.
-  if (request.provider !== undefined) {
+  if (plan === undefined && request.provider !== undefined) {
     const installed = catalogModels(request.provider)
     if (installed.size > 0) {
       return [...installed.values()].map(model => ({
@@ -286,7 +305,8 @@ export async function discoverModels(
       }))
     }
   }
-  if (request.baseURL === undefined || request.baseURL.length === 0) {
+  const baseURL = plan?.baseURL ?? request.baseURL
+  if (baseURL === undefined || baseURL.length === 0) {
     throw new LlmError(
       `pi-ai ships no catalog for provider "${request.provider ?? ''}", so its models can only come from its`
       + " endpoint; set a baseURL, or enter this provider's models by hand",
@@ -299,22 +319,29 @@ export async function discoverModels(
   // the action from the case it exists for. The cost is a misdirected message
   // when the endpoint speaks something else (an Anthropic gateway answers 401,
   // which reads as a credential problem), and hand-entry remains the way out.
-  const api = request.api ?? 'openai-completions'
+  const api = plan === undefined ? request.api ?? 'openai-completions' : 'openai-responses'
   if (!LISTABLE_PROTOCOLS.has(api)) {
     throw new LlmError(
       `pi-ai protocol "${api}" has no model listing this build can read; enter this provider's models by hand`,
       'DISCOVERY_UNSUPPORTED',
     )
   }
-  const url = listingUrl(request.baseURL, api)
+  const url = listingUrl(baseURL, api)
   // A key typed into the form wins: it may replace the stored key that is
-  // failing. The stored profile is asked past the catalog and protocol checks,
+  // failing. Non-plan credentials resolve past the catalog and protocol checks,
   // and its credential resolver remains lazy so a typed key cannot fail over a
   // stored credential it supersedes. A route may still authenticate through a
   // deployment-owned Authorization header when neither key exists.
-  const stored = storedProfile?.()
-  const supplied = request.apiKey ?? await stored?.resolveApiKey()
+  stored ??= storedProfile?.()
+  const supplied = plan?.accessToken ?? request.apiKey ?? await stored?.resolveApiKey()
+  request.signal.throwIfAborted()
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
+  // The listing carries the key and deployment headers to whatever endpoint the
+  // draft names, so a Claude subscription token is refused here exactly as the
+  // request path refuses it, before anything is sent.
+  if (api === 'anthropic-messages' && carriesSubscriptionToken([apiKey, ...Object.values(stored?.headers ?? {})])) {
+    throw new LlmError(SUBSCRIPTION_TOKEN_REFUSAL, 'AUTH')
+  }
   let response: Response
   try {
     const headers = new Headers(stored?.headers === undefined ? undefined : Object.entries(stored.headers))
@@ -329,10 +356,10 @@ export async function discoverModels(
     response = await fetch(url, {
       method: 'GET',
       headers,
-      ...request.signal === undefined ? {} : { signal: request.signal },
+      signal: request.signal,
     })
   } catch (error: unknown) {
-    if (request.signal?.aborted) {
+    if (request.signal.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
     throw new LlmError(`could not reach ${url}`, 'DISCOVERY_FAILED', { cause: error })
@@ -350,7 +377,7 @@ export async function discoverModels(
     // Cancellation during the body read rejects with the abort reason, which
     // may be any value; the caller gets the same coded failure it would have
     // for a cancellation before the request went out.
-    if (request.signal?.aborted) {
+    if (request.signal.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
     throw error
@@ -361,5 +388,95 @@ export async function discoverModels(
   } catch (error: unknown) {
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
   }
+  if (plan !== undefined) {
+    if (typeof body !== 'object' || body === null || !('models' in body) || !Array.isArray(body.models)) {
+      throw new LlmError(`${url} did not return a ChatGPT model listing`, 'DISCOVERY_FAILED')
+    }
+    const models: DiscoveredModel[] = []
+    const rows: readonly unknown[] = body.models
+    for (const entry of rows) {
+      if (typeof entry !== 'object' || entry === null || !('visibility' in entry) || entry.visibility !== 'list') continue
+      let parsed: ReturnType<typeof CHATGPT_MODEL>
+      try { parsed = CHATGPT_MODEL(entry) }
+      catch (error) { throw new LlmError(`${url} returned an invalid ChatGPT model entry`, 'DISCOVERY_FAILED', { cause: error }) }
+      models.push({ id: parsed.slug, name: parsed.display_name })
+    }
+    return models
+  }
   return readListing(body)
+}
+
+/** The two bounds every network model listing runs under. */
+export interface DiscoveryBounds {
+  /** Validated deadline in milliseconds for the whole lookup, body included. */
+  readonly timeoutMs: number
+  /** Owner lifetime; its abort cancels the lookup and releases the connection. */
+  readonly lifetime: AbortSignal | undefined
+}
+
+/**
+ * Run one model lookup under a deadline, its owner's lifetime and its caller's
+ * signal. The operation receives one signal combining all three and must pass
+ * it to every cancellable step and check it after every wait it cannot cancel.
+ *
+ * The returned promise settles as soon as any bound fires, even while the
+ * operation still waits on a step that ignores the signal, such as a credential
+ * read whose interface takes none. That abandoned operation keeps running only
+ * until its next signal check, which it reaches before any further I/O or
+ * report; its eventual outcome is observed and discarded here, so a late
+ * rejection is never unhandled. The deadline timer and abort listener are
+ * released when the returned promise settles.
+ * @param bounds - the deadline and owner lifetime.
+ * @param caller - the caller's own cancellation, if any.
+ * @param operation - the lookup, given the combined signal.
+ * @returns what the operation resolves with, when it finishes first.
+ * @throws LlmError `TIMEOUT` when the deadline fires first; `ABORTED` for the
+ *   caller's or the owner's cancellation; otherwise what the operation throws.
+ */
+export async function withinBounds<T>(
+  bounds: DiscoveryBounds,
+  caller: AbortSignal | undefined,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const deadline = new AbortController()
+  const timer = setTimeout(() => { deadline.abort() }, bounds.timeoutMs)
+  const signal = AbortSignal.any([deadline.signal, bounds.lifetime, caller].filter(entry => entry !== undefined))
+  const bounded = (cause: unknown): LlmError => {
+    const cancelled = bounds.lifetime?.aborted === true || caller?.aborted === true
+    return cancelled
+      ? new LlmError('model discovery aborted by caller', 'ABORTED', { cause })
+      : new LlmError(`model listing did not finish within ${String(bounds.timeoutMs)}ms`, 'TIMEOUT', { cause })
+  }
+  const settled = Promise.withResolvers<T>()
+  const onAbort = (): void => { settled.reject(bounded(signal.reason)) }
+  signal.addEventListener('abort', onAbort, { once: true })
+  try {
+    // An abort rejects synchronously from its listener, before any reaction to
+    // the operation's own outcome can run, so the bound always names the failure.
+    if (signal.aborted) onAbort()
+    else operation(signal).then(settled.resolve, settled.reject)
+    return await settled.promise
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Run {@link discoverModels} through {@link withinBounds}, so a listing whose
+ * credential lookup is held, or whose endpoint never answers or stalls
+ * mid-body, settles and closes its connection instead of holding its caller.
+ * @param bounds - the deadline and owner lifetime.
+ * @param request - the draft or route to interrogate.
+ * @param storedProfile - Host-owned headers and credential resolution.
+ * @returns the advertised models in endpoint order.
+ * @throws LlmError `TIMEOUT` when the deadline passes first; `ABORTED` for the
+ *   caller's or the owner's cancellation; otherwise what {@link discoverModels} throws.
+ */
+export function discoverModelsWithin(
+  bounds: DiscoveryBounds,
+  request: LlmModelDiscoveryOperation,
+  storedProfile?: () => StoredModelDiscoveryProfile | undefined,
+): Promise<readonly DiscoveredModel[]> {
+  return withinBounds(bounds, request.signal, signal => discoverModels({ ...request, signal }, storedProfile))
 }

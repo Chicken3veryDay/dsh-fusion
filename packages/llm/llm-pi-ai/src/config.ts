@@ -47,6 +47,13 @@ import { buildProvider, supportedProtocols } from './provider.ts'
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /**
+ * Default deadline for one network model listing, covering the connection, the
+ * headers, and the whole body. A listing is interactive (a picker or the Models
+ * page waits on it), so it is far shorter than a stream's idle bound.
+ */
+export const DEFAULT_MODEL_LIST_TIMEOUT_MS = 15_000
+
+/**
  * Default request-level bound on base64-encoded image payload. Every image in
  * history is re-encoded into every request body, so an unbounded conversation
  * eventually exceeds a provider or gateway request-size cap and the session
@@ -165,6 +172,22 @@ export interface PiAiProviderProfile {
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
   /**
+   * Deadline in milliseconds for one model lookup of this route (its model
+   * offers, a selection check, or a draft endpoint's interrogation), covering
+   * every credential read, the connection, headers, and body. A lookup that
+   * misses it fails with `TIMEOUT` even while a credential read is still
+   * pending, and its connection is closed; other routes' catalogs are unaffected.
+   */
+  modelListTimeoutMs?: number
+  /**
+   * Authenticate this route only through its stored sign-in. With no sign-in
+   * stored, a request fails with `AUTH` instead of reading the provider's
+   * ambient API key, so signing out never silently selects API billing. The
+   * Models page records it when it saves a profile for a signed-in route; a
+   * profile naming `apiKeyEnv` is an explicit API-key selection and wins.
+   */
+  signInOnly?: boolean
+  /**
    * Maximum base64-encoded image payload per request. When a request's
    * accumulated images exceed it, the oldest images are replaced by text
    * placeholders until the request fits, so a long session keeps completing
@@ -184,15 +207,22 @@ export interface PiAiProviderProfile {
 
 /** Validated profile with its route stamped and every adapter-owned default resolved. */
 export interface ResolvedPiAiProviderProfile
-  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'retryPolicy' | 'models' | 'displayName'> {
+  extends Omit<PiAiProviderProfile, 'apiKeyEnv' | 'retryPolicy' | 'models' | 'displayName' | 'signInOnly'> {
   /** Harness route key and the `Models` collection key (the configuration dict key). */
   provider: string
+  /**
+   * True for an automatic OpenAI route and for a profile recording `signInOnly`;
+   * otherwise a configured keyless route may fall back to ambient discovery.
+   */
+  requiresStoredCredential?: boolean
   /** Resolved display name for selectors and configuration surfaces. */
   displayName: string
   /** Validated credential reference, when one is configured. */
   apiKeyEnv?: CredentialRef
   /** Positive finite provider-idle interval after defaulting. */
   streamIdleTimeoutMs: number
+  /** Positive finite network model-listing deadline after defaulting. */
+  modelListTimeoutMs: number
   /** Positive request-level base64 image payload bound after defaulting. */
   maxRequestImageBytes: number
   /** Positive total-pixel request-version budget after defaulting. */
@@ -342,6 +372,8 @@ const profile = z.object({
   timeoutMs: z.natural(),
   websocketConnectTimeoutMs: z.natural(),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+  modelListTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_MODEL_LIST_TIMEOUT_MS),
+  signInOnly: z.boolean(),
   maxRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES),
   requestImagePixelBudget: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET),
   requestImageMaxBytes: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
@@ -434,6 +466,12 @@ export function resolveProfiles(
         `llm-pi-ai: provider "${provider}" streamIdleTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
       )
     }
+    const modelListTimeoutMs = source.modelListTimeoutMs ?? DEFAULT_MODEL_LIST_TIMEOUT_MS
+    if (!Number.isFinite(modelListTimeoutMs) || modelListTimeoutMs <= 0 || modelListTimeoutMs > MAX_TIMER_DELAY_MS) {
+      throw new Error(
+        `llm-pi-ai: provider "${provider}" modelListTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
+      )
+    }
     const maxRequestImageBytes = source.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES
     if (!Number.isInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0) {
       throw new Error(`llm-pi-ai: provider "${provider}" maxRequestImageBytes must be a positive integer`)
@@ -487,13 +525,15 @@ export function resolveProfiles(
       if (validation === 'strict' || !(error instanceof PiAiCatalogError)) throw error
       catalogError ??= error.message
     }
-    const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
+    const { apiKeyEnv, retryPolicy, signInOnly, models: _models, displayName: _displayName, ...rest } = source
     resolved.set(provider, {
       ...rest,
       provider,
       displayName,
       ...apiKeyEnv === undefined ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },
+      ...signInOnly === true ? { requiresStoredCredential: true } : {},
       streamIdleTimeoutMs,
+      modelListTimeoutMs,
       maxRequestImageBytes,
       requestImagePixelBudget,
       requestImageMaxBytes,

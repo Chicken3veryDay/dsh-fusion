@@ -132,6 +132,7 @@ function renderProviderEditor({ target, row, ...props }: ProviderEditorRenderPro
       {...target.defaultBaseURL === undefined ? {} : { defaultBaseURL: target.defaultBaseURL }}
       {...target.baseURLEnv === undefined ? {} : { baseURLEnv: target.baseURLEnv }}
       {...target.nativeAuth === undefined ? {} : { nativeAuth: target.nativeAuth }}
+      {...row.entry.hasStoredCredential === true ? { signedIn: true } : {}}
       {...row.credential === undefined ? {} : { credential: row.credential }}
       {...row.credentialChecks === undefined ? {} : { credentialChecks: row.credentialChecks }}
       {...props}
@@ -647,6 +648,7 @@ function Loaded({ injected, renderSlot }: { injected: ModelsSectionFace; renderS
                       {...draft.target.defaultBaseURL === undefined ? {} : { defaultBaseURL: draft.target.defaultBaseURL }}
                       {...draft.target.baseURLEnv === undefined ? {} : { baseURLEnv: draft.target.baseURLEnv }}
                       {...draft.target.nativeAuth === undefined ? {} : { nativeAuth: draft.target.nativeAuth }}
+                      {...addRow?.entry.hasStoredCredential === true ? { signedIn: true } : {}}
                       {...addRow?.credentialChecks === undefined ? {} : { credentialChecks: addRow.credentialChecks }}
                       t={t}
                       readOnly={!state.writable}

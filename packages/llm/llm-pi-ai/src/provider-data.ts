@@ -15,5 +15,6 @@ export function providerDefaultsOf(provider: Provider): Pick<LlmConfigurableProv
   // unrecorded provider remains configurable without guessed auth metadata.
   if (data === undefined) return provider.baseUrl && !provider.baseUrl.includes('{') ? { defaultBaseURL: provider.baseUrl } : {}
   const { env, ...endpoint } = data
+  if (provider.id === 'anthropic') return { ...endpoint, nativeAuth: { env: env.filter(name => name !== 'ANTHROPIC_AUTH_TOKEN' && name !== 'ANTHROPIC_OAUTH_TOKEN'), oauth: false } }
   return { ...endpoint, nativeAuth: { env, oauth: provider.auth.oauth !== undefined } }
 }

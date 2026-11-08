@@ -9,14 +9,10 @@ const REASONING_CONFIG_ID = 'reasoning_effort'
 // DSH reasoning effort ids are non-empty, so the empty opaque ACP value is a disjoint provider-default choice.
 const PROVIDER_DEFAULT_REASONING_VALUE = ''
 
-interface ModelChoice {
-  selection: ModelSelection
-  value: SessionConfigValueId
-}
-
-interface ConfigState {
-  choices: Map<SessionConfigValueId, ModelSelection>
-  options: SessionConfigOption[]
+interface ModelGroup {
+  group: string
+  name: string
+  options: { value: SessionConfigValueId; name: string; description?: string }[]
 }
 
 /** Caller-correctable session configuration failure. */
@@ -29,12 +25,16 @@ export class AcpModelConfigError extends Error {
 
 /**
  * Project and mutate one Agent's provider/model/reasoning selection through ACP
- * config options. The Session's recorded model selection is the only state; a
- * change applies from the Agent's next model step.
+ * config options. The Session's recorded model selection is the only selection
+ * state, and a change applies from the Agent's next model step. The control
+ * also keeps the provider groups of its latest catalog listing, which only
+ * shape the option state a mutation returns; they never decide a selection.
  */
 export class AcpModelControl {
   private tail = Promise.resolve()
   private hasResolvedState = false
+  /** Provider groups from the latest catalog listing, re-projected after a mutation. */
+  private listed: ModelGroup[] | undefined
 
   constructor(
     private readonly llm: LlmRuntime,
@@ -42,19 +42,32 @@ export class AcpModelControl {
   ) {}
 
   /**
-   * Return the complete standard config-option state after prior mutations settle.
+   * Return the complete standard config-option state after prior mutations
+   * settle. An absent selection returns no options without listing; cancellation
+   * before admission rejects before catalog access. Otherwise this lists every
+   * provider's catalog and retains the result for later mutations.
    * @param signal - optional catalog and exact-model cancellation.
    * @returns all current standard configuration options.
    */
   options(signal?: AbortSignal): Promise<SessionConfigOption[]> {
-    return this.serialize(async () => (await this.state(signal)).options)
+    return this.serialize(async () => {
+      if (this.model.current() === undefined) return []
+      signal?.throwIfAborted()
+      return this.project(await this.list(), signal)
+    })
   }
 
   /**
    * Set one advertised option and return the complete resulting option state.
+   * A model value is accepted when it is exactly an opaque value this control
+   * produces, for a registered provider whose adapter lets an interface select
+   * that model, or when it names the current selection; the check makes no
+   * catalog listing for an adapter that answers locally. The returned state
+   * re-projects the latest listed catalog rather than listing again, so an
+   * accepted change never fails or waits on a listing.
    * @param configId - standard option id.
    * @param value - opaque selected value returned by a previous option state.
-   * @param signal - optional catalog and exact-model cancellation.
+   * @param signal - optional selection-check and exact-model cancellation.
    * @returns all standard options after the serialized mutation.
    */
   set(configId: string, value: unknown, signal?: AbortSignal): Promise<SessionConfigOption[]> {
@@ -63,8 +76,7 @@ export class AcpModelControl {
       const current = this.model.current()
       if (current === undefined) throw new AcpModelConfigError('this session has no model selection')
       if (configId === MODEL_CONFIG_ID) {
-        const state = await this.state(signal)
-        const selected = state.choices.get(value)
+        const selected = await this.selectable(value, current, signal)
         if (selected === undefined) throw new AcpModelConfigError(`unknown model option: ${value}`)
         await this.resolveSelection(selected, signal)
         this.model.select(selected)
@@ -86,7 +98,7 @@ export class AcpModelControl {
       } else {
         throw new AcpModelConfigError(`unknown session config option: ${configId}`)
       }
-      return (await this.state(signal)).options
+      return this.project(this.listed ?? await this.list(), signal)
     })
   }
 
@@ -97,10 +109,53 @@ export class AcpModelControl {
     return result
   }
 
-  /** Build detached model choices and the dependent reasoning option. */
-  private async state(signal?: AbortSignal): Promise<ConfigState> {
+  /**
+   * Decode one opaque model value and decide whether it may be selected.
+   * @returns the selection, or undefined for a value this control would refuse.
+   */
+  private async selectable(
+    value: SessionConfigValueId,
+    current: ModelSelection,
+    signal: AbortSignal | undefined,
+  ): Promise<ModelSelection | undefined> {
+    if (value === modelValue(current.provider, current.model)) return { provider: current.provider, model: current.model }
+    const route = decodeModelValue(value)
+    if (route === undefined || !this.llm.listProviders().some(provider => provider.id === route.provider)) return undefined
+    try {
+      return await this.llm.canSelectModel(route.provider, route.model, signal) ? route : undefined
+    } catch (_selectionUnavailable) {
+      // A provider whose selection check fails offers nothing, as its catalog would.
+      signal?.throwIfAborted()
+      return undefined
+    }
+  }
+
+  /** List every provider's catalog as option groups and retain them. */
+  private async list(): Promise<ModelGroup[]> {
+    const groups = await Promise.all(this.llm.listProviders().map(async (provider): Promise<ModelGroup> => {
+      try {
+        const models = await this.llm.listModels(provider.id)
+        return {
+          group: provider.id,
+          name: provider.name,
+          options: models.map(model => ({
+            value: modelValue(provider.id, model.id),
+            name: model.name,
+            ...model.description === undefined ? {} : { description: model.description },
+          })),
+        }
+      } catch (_providerCatalogUnavailable) {
+        return { group: provider.id, name: provider.name, options: [] }
+      }
+    }))
+    this.listed = groups
+    return groups
+  }
+
+  /** Project listed groups plus the current selection and its reasoning option. */
+  private async project(listed: readonly ModelGroup[], signal?: AbortSignal): Promise<SessionConfigOption[]> {
     const selected = this.model.current()
-    if (selected === undefined) return { choices: new Map(), options: [] }
+    if (selected === undefined) return []
     let resolved: ModelSelection
     let routeAvailable = true
     try {
@@ -111,30 +166,9 @@ export class AcpModelControl {
       resolved = selected
       routeAvailable = false
     }
-    const choices = new Map<SessionConfigValueId, ModelSelection>()
-    const groups = await Promise.all(this.llm.listProviders().map(async (provider) => {
-      try {
-        const models = await this.llm.listModels(provider.id)
-        const entries = models.map((model) => {
-          const choice: ModelChoice = {
-            value: modelValue(provider.id, model.id),
-            selection: { provider: provider.id, model: model.id },
-          }
-          choices.set(choice.value, choice.selection)
-          return {
-            value: choice.value,
-            name: model.name,
-            ...model.description === undefined ? {} : { description: model.description },
-          }
-        })
-        return { group: provider.id, name: provider.name, options: entries }
-      } catch (_providerCatalogUnavailable) {
-        return { group: provider.id, name: provider.name, options: [] }
-      }
-    }))
+    const groups = listed.map(group => ({ ...group, options: [...group.options] }))
     const currentValue = modelValue(resolved.provider, resolved.model)
-    if (!choices.has(currentValue)) {
-      choices.set(currentValue, { provider: resolved.provider, model: resolved.model })
+    if (!groups.some(group => group.options.some(option => option.value === currentValue))) {
       let group = groups.find(item => item.group === resolved.provider)
       if (group === undefined) {
         group = { group: resolved.provider, name: resolved.provider, options: [] }
@@ -174,7 +208,7 @@ export class AcpModelControl {
         ],
       })
     }
-    return { choices, options }
+    return options
   }
 
   /** Validate an exact route and retain only Agent-owned selection fields. */
@@ -191,4 +225,20 @@ export class AcpModelControl {
 /** Opaque ACP selector value carrying the full route identity. */
 function modelValue(provider: string, model: string): SessionConfigValueId {
   return JSON.stringify([provider, model])
+}
+
+/**
+ * Decode a value only when it is exactly what {@link modelValue} produces.
+ * @param value - the client's opaque selector value.
+ * @returns the route it names, or undefined for any other string.
+ */
+function decodeModelValue(value: string): ModelSelection | undefined {
+  let parsed: unknown
+  try { parsed = JSON.parse(value) }
+  catch (_notJson) { return undefined }
+  if (!Array.isArray(parsed) || parsed.length !== 2) return undefined
+  const entries: readonly unknown[] = parsed
+  const [provider, model] = entries
+  if (typeof provider !== 'string' || typeof model !== 'string') return undefined
+  return modelValue(provider, model) === value ? { provider, model } : undefined
 }

@@ -12,7 +12,8 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
-import type { AuthContext, Credential, CredentialInfo, CredentialStore } from '@earendil-works/pi-ai'
+import type { AuthContext, Credential, CredentialInfo, CredentialStore, Models } from '@earendil-works/pi-ai'
+import { ModelsError } from '@earendil-works/pi-ai/utils/models-error'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   credentialKey, credentialKeyId, credentialKeyScope, credentialRef, isCredentialKeySegment, isCredentialRefName,
@@ -20,6 +21,7 @@ import {
 import type { CredentialKey, CredentialProvider, CredentialRecord } from '@deepseek-ai/dsh-credentials'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { LlmError } from '@deepseek-ai/dsh-llm'
+import { classifyPiAiError } from './stream.ts'
 
 /**
  * The record scope every credential this adapter family stores is written
@@ -301,4 +303,49 @@ export function authContextFrom(ctx: Context): AuthContext {
       }
     },
   }
+}
+
+/** Marker of a Claude subscription token, which pi-ai's Messages protocol answers by impersonating Claude Code. */
+const SUBSCRIPTION_TOKEN_MARKER = 'sk-ant-oat'
+
+/**
+ * Whether any effective credential-bearing value is a Claude subscription token.
+ * Direct requests use API keys; subscription access belongs to the official
+ * Claude Code integration.
+ * @param values - API key and header values a Messages request or listing would carry.
+ * @returns true when a value contains the subscription-token marker.
+ */
+export function carriesSubscriptionToken(values: Iterable<string | null | undefined>): boolean {
+  for (const value of values) {
+    if (value?.includes(SUBSCRIPTION_TOKEN_MARKER) === true) return true
+  }
+  return false
+}
+
+/** The refusal for a subscription token offered as a direct Messages credential. */
+export const SUBSCRIPTION_TOKEN_REFUSAL =
+  'Direct Anthropic requests require an API key, not a Claude subscription token; use the official Claude Code integration for subscription access.'
+
+/**
+ * Resolve a ChatGPT plan credential without accepting an ambient API-key replacement.
+ * @param models - Request-owned pi-ai collection, using the harness credential store.
+ * @param signal - Optional caller cancellation; omission uses pi-ai's operation signal.
+ * @returns The refreshed OAuth bearer token.
+ * @throws LlmError with AUTH when sign-out leaves no plan credential or refresh
+ *   requires sign-in; transient refresh failures retain their failure category.
+ *   Caller cancellation propagates, and stored grants are never deleted.
+ */
+export async function chatgptAccessToken(models: Models, signal?: AbortSignal): Promise<string> {
+  let resolved: Awaited<ReturnType<Models['getAuth']>>
+  try { resolved = await models.getAuth('openai', signal === undefined ? undefined : { signal }) }
+  catch (error) {
+    if (!(error instanceof ModelsError)) throw error
+    const classified = classifyPiAiError(error.message)
+    const code = classified === 'INVALID_REQUEST' ? 'AUTH' : classified
+    throw new LlmError(`${error.message}; ${code === 'AUTH' ? 'sign in to OpenAI again' : 'retry when the sign-in service is available'}`, code, { cause: error })
+  }
+  if (resolved?.source !== 'OAuth' || resolved.auth.apiKey === undefined) {
+    throw new LlmError('ChatGPT sign-in is no longer available; sign in again. API-key billing was not selected.', 'AUTH')
+  }
+  return resolved.auth.apiKey
 }

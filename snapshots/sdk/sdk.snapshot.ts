@@ -248,6 +248,17 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'chatgpt-plan-script': {
+    expectedFinalResponse: 'Script completed.',
+    expectedTools: { run_code: ['code', 'description'] },
+    modelRequestsFile: 'codex-requests.jsonl',
+    storedCredentials: {
+      'unrelated-owner/openai': { kind: 'grant', payload: { access: 'unrelated' } },
+      'llm-pi-ai/openai': { kind: 'grant', payload: {
+        type: 'oauth', access: SIGNIN_ACCESS, refresh: 'synthetic-refresh', expires: 4102444800000,
+      } },
+    },
+  },
   'direct-signin-quota': {
     patches: [fileURLToPath(new URL('./direct-signin-quota/runtime.cordis.yml', import.meta.url))],
     modelRequestsFile: 'codex-requests.jsonl',
@@ -1640,7 +1651,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
           expect(event.data).not.toHaveProperty('schema')
         }
       }
-      if (scenario.name === 'direct-signin-script') {
+      if (scenario.name === 'direct-signin-script' || scenario.name === 'chatgpt-plan-script') {
         // The external endpoint was reached by the llm-pi-ai adapter with the stored grant, not by a replayed model.
         const requests = modelRequests
         expect(requests).toHaveLength(2)
@@ -1648,6 +1659,11 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
           expect(request).toMatchObject({
             authorization: `Bearer ${SIGNIN_ACCESS}`,
             body: { model: 'gpt-6.1-sol', tools: [{ name: 'run_code' }] },
+          })
+        }
+        if (scenario.name === 'chatgpt-plan-script') {
+          for (const request of requests) expect(request).toMatchObject({
+            url: 'https://api.openai.com/v1/responses', body: { store: false, stream: true },
           })
         }
         expect(requests[1]).toMatchObject({
@@ -1662,7 +1678,7 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(toolResults[0]?.data['message']).toMatchObject({ isError: false })
         expect(JSON.stringify(toolResults)).toContain('DSH_SCRIPT_EXECUTED')
         for (const header of events.filter(event => event.type === 'request/header')) {
-          expect(header.data['header']).toMatchObject({ config: { provider: 'openai-codex', model: 'gpt-6.1-sol' } })
+          expect(header.data['header']).toMatchObject({ config: { provider: scenario.name === 'chatgpt-plan-script' ? 'openai' : 'openai-codex', model: 'gpt-6.1-sol' } })
         }
       }
       if (scenario.name === 'direct-signin-quota') {

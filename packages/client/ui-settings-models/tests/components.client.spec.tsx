@@ -49,6 +49,7 @@ function capacityInputs(label: string): HTMLInputElement[] {
 const PiAiConfig = Schema.object({
   providers: Schema.dict(Schema.object({
     apiKeyEnv: Schema.string().role('credential-ref'),
+    signInOnly: Schema.boolean(),
     api: Schema.union(['openai-completions', 'openai-responses', 'anthropic-messages']),
     baseURL: Schema.string(),
     reasoning: Schema.union(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
@@ -1505,6 +1506,63 @@ describe('ModelsSection', () => {
       0,
     ])
     expect(set).not.toHaveBeenCalled()
+  })
+
+  describe('a route that authenticates through a stored sign-in', () => {
+    /** The scripted Host reporting a stored sign-in for these providers. */
+    function signedInFace(...providers: string[]) {
+      const scripted = scriptedFace()
+      const listed = scripted.face.llm.listConfigurableProviders.getMockImplementation()!
+      scripted.face.llm.listConfigurableProviders.mockImplementation(async () => {
+        const answer = await listed()
+        return remoteOk(answer.value.map(entry =>
+          providers.includes(entry.provider) ? { ...entry, hasStoredCredential: true } : entry))
+      })
+      return scripted
+    }
+
+    it('records signInOnly when the first profile is created without a key, so the route stays plan-bound', async () => {
+      const { mutate, set } = await mountFace(signedInFace('anthropic'))
+      fireEvent.click(screen.getByText(en.add))
+      await screen.findByLabelText(en.provider)
+      fireEvent.click(screen.getByText(en.apply))
+      await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+      expect(mutate.mock.calls[0]).toEqual([
+        'llm-pi-ai',
+        [{ op: 'set', path: ['providers', 'anthropic', 'signInOnly'], value: true }],
+        0,
+      ])
+      expect(set).not.toHaveBeenCalled()
+    })
+
+    it('does not record signInOnly when the user chooses an API key', async () => {
+      const { mutate, set } = await mountFace(signedInFace('anthropic'))
+      fireEvent.click(screen.getByText(en.add))
+      await screen.findByLabelText(en.provider)
+      fireEvent.change(screen.getByLabelText<HTMLInputElement>(en.keyInput), { target: { value: 'sk-ant' } })
+      fireEvent.click(screen.getByText(en.apply))
+      await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+      expect(mutate.mock.calls[0]).toEqual([
+        'llm-pi-ai',
+        [{ op: 'set', path: ['providers', 'anthropic', 'apiKeyEnv'], value: 'ANTHROPIC_API_KEY' }],
+        0,
+      ])
+      await waitFor(() => { expect(set).toHaveBeenCalledWith('ANTHROPIC_API_KEY', 'sk-ant') })
+    })
+
+    it('leaves an existing profile\'s authentication choice alone on a routine edit', async () => {
+      const { mutate } = await mountFace(signedInFace('openai'))
+      fireEvent.click(screen.getByRole('button', { name: openaiCopy(en.editProvider) }))
+      fireEvent.click(screen.getByText(en.customized))
+      fireEvent.change(screen.getByLabelText<HTMLInputElement>(en.baseUrl), { target: { value: 'https://proxy/v3' } })
+      fireEvent.click(screen.getByText(en.apply))
+      await waitFor(() => { expect(mutate).toHaveBeenCalledOnce() })
+      expect(mutate.mock.calls[0]).toEqual([
+        'llm-pi-ai',
+        [{ op: 'set', path: ['providers', 'openai', 'baseURL'], value: 'https://proxy/v3' }],
+        0,
+      ])
+    })
   })
 
   it('retries only the credential after refreshed settings already committed', async () => {
