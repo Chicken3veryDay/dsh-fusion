@@ -9,7 +9,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import LlmRuntime, { createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -123,6 +123,50 @@ describe('Codex Responses tool turn over a signed-in grant', () => {
     const info = await ctx.llm.resolveModelInfo('openai-codex', models[0]!.id)
 
     expect(models.length).toBeGreaterThan(0)
+    // Image input is whatever the catalog declares per model, not an assumption of this adapter.
+    expect(models.some(model => model.inputModalities?.includes('image'))).toBe(true)
     expect(info.reasoning?.efforts.length).toBeGreaterThan(0)
+  })
+})
+
+describe('GitHub Copilot routing over a signed-in grant', () => {
+  async function copilot(): Promise<Context> {
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-copilot-wire-'))
+    onTestFinished(() => rm(dir, { recursive: true, force: true }))
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LocalCredentialProvider, { path: join(dir, '.credentials.yaml'), watch: false })
+    await ctx.credentials.modifyRecord(PiAi.recordKeyFor('github-copilot'), () => Promise.resolve({
+      kind: 'grant',
+      payload: { type: 'oauth', access: 'tid=1;exp=9999999999', refresh: 'gh-refresh', expires: Date.now() + 3_600_000 },
+    }))
+    await ctx.plugin(PiAi)
+    return ctx
+  }
+
+  // Offline by construction: the account's endpoint comes from its token, so the request is
+  // observed at `fetch` and answered from the script instead of reaching GitHub.
+  it.each([
+    { model: 'claude-sonnet-5', path: '/v1/messages?beta=true' },
+    { model: 'gpt-5.4-mini', path: '/responses' },
+    { model: 'gemini-3.5-flash', path: '/chat/completions' },
+  ])('sends $model to $path with the Copilot headers and maps a 402 to a quota failure', async ({ model, path }) => {
+    const seen: { url: string; headers: Headers }[] = []
+    vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: input instanceof Request ? input.url : String(input), headers: new Headers(init?.headers) })
+      return Promise.resolve(new Response('{"error":{"message":"scripted"}}', { status: 402, headers: { 'retry-after': '5' } }))
+    })
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    const ctx = await copilot()
+
+    const { finish } = await assemble(ctx, { provider: 'github-copilot', model, messages: [] })
+
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'QUOTA', status: 402, providerRetryAfterMs: 5000 } })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.url).toBe(`https://api.individual.githubcopilot.com${path}`)
+    expect(seen[0]?.headers.get('authorization')).toBe('Bearer tid=1;exp=9999999999')
+    expect(seen[0]?.headers.get('copilot-integration-id')).toBe('vscode-chat')
+    expect(seen[0]?.headers.get('x-initiator')).toBe('user')
   })
 })
