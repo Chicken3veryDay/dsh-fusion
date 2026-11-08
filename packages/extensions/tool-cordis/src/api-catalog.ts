@@ -7144,12 +7144,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface ContinuableCreateSpec {\n    readonly seed?: readonly SessionEvent[];\n}',
   },
   {
+    name: 'ControlConstraint',
+    declaration: 'export type ControlConstraint = {\n    readonly kind: \'model-output-ceiling\';\n    readonly maxTokens: number;\n} | {\n    readonly kind: \'context-window-clamp\';\n    readonly contextWindow: number;\n    readonly reserveTokens: number;\n    readonly minimumTokens: number;\n};',
+  },
+  {
     name: 'ControlDisposition',
-    declaration: 'export type ControlDisposition = {\n    readonly kind: \'supported\';\n} | {\n    readonly kind: \'translated\';\n    readonly translations: readonly ControlTranslation[];\n} | {\n    readonly kind: \'unsupported\';\n    readonly reason: UnsupportedControlReason;\n} | {\n    readonly kind: \'unverified\';\n    readonly reason: \'account-mode-unresolved\' | \'protocol-unverified\' | \'adapter-undeclared\';\n};',
+    declaration: 'export type ControlDisposition = {\n    readonly kind: \'supported\';\n    readonly constraints?: readonly ControlConstraint[];\n} | {\n    readonly kind: \'translated\';\n    readonly translations: readonly ControlTranslation[];\n    readonly constraints?: readonly ControlConstraint[];\n} | {\n    readonly kind: \'unsupported\';\n    readonly reason: UnsupportedControlReason;\n} | {\n    readonly kind: \'unverified\';\n    readonly reason: \'account-mode-unresolved\' | \'protocol-unverified\' | \'adapter-undeclared\';\n};',
   },
   {
     name: 'ControlTranslation',
-    declaration: 'export type ControlTranslation = {\n    readonly kind: \'add-thinking-allowance\';\n    readonly thinkingTokens: number;\n    readonly answerReserve: number;\n};',
+    declaration: 'export type ControlTranslation = {\n    readonly kind: \'add-thinking-allowance\';\n    readonly thinkingTokens: number;\n    readonly answerReserve: number;\n    readonly zeroBudgetSends: number;\n};',
   },
   {
     name: 'CordisDynamicPackageId',

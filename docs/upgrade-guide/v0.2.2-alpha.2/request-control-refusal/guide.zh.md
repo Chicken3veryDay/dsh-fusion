@@ -14,7 +14,7 @@ description: "模型调用在准备阶段以 UNSUPPORTED_CONTROL 拒绝被声明
 行为变化：
 
 - `@deepseek-ai/dsh-llm-pi-ai` 以 `UNSUPPORTED_CONTROL` 拒绝 `stop`；此前在流开始时为 `UNSUPPORTED_OPTION`。
-- Anthropic Messages 路由在推理处于启用状态或捕获的 `compat` 禁止时拒绝 `temperature`。早期版本会静默省略它。推理为 `off` 时仍会发送。`maxTokens` 仍是回答额度。
+- Anthropic Messages 路由在推理处于启用状态或捕获的 `compat` 禁止时拒绝 `temperature`。早期版本会静默省略它。推理为 `off` 时仍会发送。`maxTokens` 仍是回答额度，没有总量硬上限；评估把模型输出上限和上下文窗口钳制报告为序列化时生效的 `constraints`，而不是载荷值。
 - `PreparedAdapterCall` 要求 `assessControls(controls)`，`PreparedLlmCall` 暴露 `assessment`。`LlmFailure` 新增可选的 `unsupportedControl`。
 
 在 pi-ai 路由上传入 `stop`、在启用推理的 Anthropic 路由上传入 `temperature` 的 `ctx.llm.prepareCall()` 与 `ctx.llm.stream()` 调用方，以及覆盖 `prepareCall()` 的适配器作者会受影响。

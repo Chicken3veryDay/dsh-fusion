@@ -14,7 +14,7 @@ English | [中文](guide.zh.md)
 Changed behavior:
 
 - `@deepseek-ai/dsh-llm-pi-ai` refuses `stop` with `UNSUPPORTED_CONTROL`; it was `UNSUPPORTED_OPTION` at stream start.
-- Anthropic Messages routes refuse `temperature` while reasoning is active or when the captured `compat` forbids it. Earlier versions omitted it silently. Reasoning `off` still sends it. `maxTokens` keeps its answer-allowance meaning.
+- Anthropic Messages routes refuse `temperature` while reasoning is active or when the captured `compat` forbids it. Earlier versions omitted it silently. Reasoning `off` still sends it. `maxTokens` keeps its answer-allowance meaning with no hard total cap; the assessment reports the model output ceiling and context-window clamp as `constraints` that apply at serialization, not as payload values.
 - `PreparedAdapterCall` requires `assessControls(controls)`, and `PreparedLlmCall` exposes `assessment`. `LlmFailure` gains the optional `unsupportedControl`.
 
 Callers of `ctx.llm.prepareCall()` and `ctx.llm.stream()` with `stop`, or with `temperature` on an active Anthropic reasoning route, and authors of adapters that override `prepareCall()` are affected.

@@ -112,7 +112,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 确切模型元数据将 `reasoning.efforts` 按可选强度从低到高排列。配置函数可从该列表中选择，再由 `prepareCall()` 校验具体强度。适配器只接收解析后的控制项。选择 `off` 不保证禁用推理：以省略推理字段表达该值的协议会沿用网关默认行为。所选等级下产生的推理 token 都计入该请求的输出上限。
 
-控制项评估遵循协议实际发送的内容。在 Anthropic Messages 上，推理处于启用状态（显式指定或路由默认）或捕获的 `compat` 禁止时，`temperature` 会以 `UNSUPPORTED_CONTROL` 被拒绝；推理为 `off` 时则会发送。`maxTokens` 仍是回答额度：基于预算的模型把 thinking 预算加到协议上限上（报告为 `add-thinking-allowance` 转换，因此 `high` 下的 777 发送 17161），自适应模型则原样发送。`openai` 路由是否支持取决于凭据模式，而准备阶段不解析凭据，因此其 `temperature` 与 `maxTokens` 为 `unverified`（`account-mode-unresolved`）；其他协议为 `unverified`（`protocol-unverified`）。`unverified` 的控制项仍会分派。
+控制项评估遵循协议实际发送的内容。在 Anthropic Messages 上，推理处于启用状态（显式指定或路由默认）或捕获的 `compat` 禁止时，`temperature` 会以 `UNSUPPORTED_CONTROL` 被拒绝；推理为 `off` 时则会发送。`maxTokens` 仍是回答额度，没有总量硬上限。基于预算的模型会加上 thinking 预算（报告为 `add-thinking-allowance` 转换，因此在普通上下文中 `high` 下的 777 发送 17161），并报告 `model-output-ceiling` 约束：总和以模型的 `maxTokens` 为上限，随后 thinking 预算会被降低以保留回答余量（计算结果为 0 时发送 1024）。只要模型有上下文窗口，每个 Anthropic 额度（无论是否自适应）还会报告 `context-window-clamp` 约束：pi-ai 会降低该值，使估算输入加 4096 个 token 能放入窗口，且不低于 1。这些约束是有条件的事实，而不是载荷值；最终数值要在消息序列化之后才存在，因此自适应的 777 除非输入挤占窗口，否则仍为 777。`openai` 路由是否支持取决于凭据模式，而准备阶段不解析凭据，因此其 `temperature` 与 `maxTokens` 为 `unverified`（`account-mode-unresolved`）；其他协议为 `unverified`（`protocol-unverified`）。`unverified` 的控制项仍会分派。
 
 对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
 
