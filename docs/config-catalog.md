@@ -2191,7 +2191,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:252`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:305`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2312,6 +2312,24 @@ export interface PiAiProviderProfile {
   requestImageMaxBytes?: number
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
+  /**
+   * Claude subscription accounts this `anthropic` route chooses between for
+   * each request. Every entry names one credentials document that keeps its own
+   * grant, refresh token and refresh lock. The route authenticates only through
+   * these documents (never `$DSH_HOME/.credentials.yaml`, an API key or the
+   * environment); an empty list is the same as omitting the field. Only the
+   * `anthropic` route accepts it, and not beside `apiKeyEnv`.
+   */
+  accounts?: PiAiAccountProfile[]
+  /** Fallback cooldown in milliseconds for an account whose rate limit named no delay (default 300000). Only with `accounts`. */
+  accountRateLimitCooldownMs?: number
+  /** Fallback cooldown in milliseconds for an account whose quota failure named no delay (default 3600000). Only with `accounts`. */
+  accountQuotaCooldownMs?: number
+  /**
+   * How long a prepared call that never starts streaming keeps its account
+   * counted as busy, in milliseconds (default 30000). Only with `accounts`.
+   */
+  accountReservationMs?: number
 }
 
 /** One configured model entry: an id plus the catalog fields it overrides. */
@@ -2456,6 +2474,14 @@ export interface PiAiCompatProfile {
 
 /** One request modality a pi-ai model may accept. */
 export type PiAiModality = Model<Api>['input'][number]
+
+/** One Claude subscription account of a pooled `anthropic` route. */
+export interface PiAiAccountProfile {
+  /** Stable lowercase hyphenated name; appears in diagnostics, never in requests. */
+  id: string
+  /** Absolute path of this account's credentials document, readable only by its owner. */
+  credentialsPath: string
+}
 
 /**
  * Selectable reasoning efforts for one model: each key is a level the model

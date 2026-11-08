@@ -85,6 +85,10 @@ kind: "package-reference"
 | `defaultMaxTokens` | `128,000` | 未描述模型的输出上限回退 |
 | `modelListTimeoutMs` | `15,000` | 路由每次模型查询（其供给、选择检查或草稿发现）的期限（毫秒），从第一次凭据读取一直覆盖到完整列表正文；未在期限内完成的查询以 `TIMEOUT` 失败（即使凭据读取仍未返回）并关闭其连接 |
 | `signInOnly` | 无 | 模型页面为仅有已存登录的路由创建 profile 时写入；该路由随后要求这一登录，退出登录后绝不回退到环境中的 API 密钥计费 |
+| `accounts` | 无 | `anthropic` 路由的 Claude 订阅账号，每项为 `{ id, credentialsPath }` 并指向各自的凭据文档；见[汇集多个 Claude 订阅账号](#pool-claude-accounts)。其他路由上以及与 `apiKeyEnv` 同时设置时被拒绝 |
+| `accountRateLimitCooldownMs` | `300,000` | 配合 `accounts`：限流未指明延迟的账号的冷却毫秒数 |
+| `accountQuotaCooldownMs` | `3,600,000` | 配合 `accounts`：配额失败未指明延迟的账号的冷却毫秒数 |
+| `accountReservationMs` | `30,000` | 配合 `accounts`：已准备但始终未开始流式传输的调用，其账号被计为忙碌的时长 |
 | `requestImagePixelBudget` | `4,194,304` | 每张确定性请求图片的总像素预算 |
 | `requestImageMaxBytes` | `1 MiB` | 每张请求图片在 base64 扩展前的编码字节目标 |
 | `maxRequestImageBytes` | `20 MiB` | base64 图片载荷总上限，保留图片超过时请求以 `IMAGE_OFFLOAD_REQUIRED` 失败 |
@@ -101,6 +105,30 @@ OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存�
 `openai` ChatGPT 套餐路由使用 [公共 Responses API](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)，携带 OAuth bearer，并设置 `store: false` 和 `stream: true`；调用方提示词和工具保持不变。模型选项来自同一账户的 `GET /v1/models`，仅采用 `visibility: list` 条目，保留服务端顺序，以 `display_name` 显示标签，以 `slug` 发送请求，并限定为同一配置能够解析的模型：显式 `models` 列表会收窄供给；已安装目录和 profile 都没有元数据的 slug 不会进入供给，并且每组不同的 slug 只告警一次，因为选择它只会失败。容量从不猜测；添加带 `contextWindow` 与 `maxTokens` 的 `models` 条目即可供给该 slug。每个供给的模型都能在同一份已捕获的配置中解析。选择已注册模型无需列表请求，因此目录端点返回 `503` 不会阻止选择或运行已注册模型；每次查询（包括其凭据读取）都受 `modelListTimeoutMs`、调用方取消与插件生命周期限制，并在所有路径上释放连接。超出这些限制的凭据读取会被放弃而非取消，因为凭据服务不接受取消；此时查询已经失败，被放弃的工作不会发送请求，也不会报告供给。每次列表读取都使用当前授权。已存登录改变时，替换授权会重新宣告供给；仅轮换同一登录令牌的刷新则不会。请求能力与容量仍由已安装目录或显式模型 profile 提供。API 密钥路由保留目录行为，`openai-codex` 保留为旧版 Codex 集成。
 
 ChatGPT 请求只有在 `response.completed` 后才算成功；不完整输出和中断流保留不同的终止结果。套餐流中的配额和可用性错误遵循 [OpenAI 恢复指南](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery)。刷新失败保留已存授权；若退出登录抢先完成解析，解析套餐授权的请求会拒绝环境 API 密钥替代。Anthropic 订阅请求仅使用已存储的 OAuth 和维护中的 pi-ai Messages 传输。该传输提供兼容标头及必需的身份前缀 `You are Claude Code, Anthropic's official CLI for Claude.`；对于代理循环请求，DSH 在已有 `system/message` 中将此前缀记录在组装的提示词之前，并且只编码一次。这不会启动 Claude Code 进程。通过 API 密钥引用或认证标头覆盖提供的订阅令牌仍以 `AUTH` 拒绝，包括其他使用 Anthropic Messages 的路由。环境发现排除 `ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_OAUTH_TOKEN`。显式 API 密钥和工作负载身份路由仍独立存在。已检查的认证固定至分派；退出登录或存储变化不会静默替换为 API 密钥计费。
+
+<a id="pool-claude-accounts"></a>
+### 汇集多个 Claude 订阅账号
+
+在 `anthropic` 路由上设置 `accounts`，DSH 会为每个请求选择 Claude 订阅账号，并在某个账号受限时把当前步骤转到另一个账号。只有账号会变化：路由、模型、提示词、工具和历史保持不变，同一对话跨账号继续。
+
+```yaml
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      anthropic:
+        accounts:
+          - id: personal
+            credentialsPath: /home/me/.dsh-accounts/personal.credentials.yaml
+          - id: work
+            credentialsPath: /home/me/.dsh-accounts/work.credentials.yaml
+        accountRateLimitCooldownMs: 300000
+```
+
+每个账号把自己的 `llm-pi-ai/anthropic` 授权保存在各自的凭据文档中（`id` 为小写连字符名称，`credentialsPath` 为绝对路径，且文档只能由其所有者读取）。该文档在自己的跨进程锁下刷新，刷新只写入该文档。DSH 绝不读取授权来复制它，汇集的路由也绝不使用 `$DSH_HOME/.credentials.yaml`、API 密钥或环境变量。文档中没有授权、或授权被提供方以 `AUTH` 拒绝的账号会被跳过，直到其存储的授权发生变化；没有任何账号拥有可用授权时，请求在任何推理之前以可操作的 `AUTH` 失败。
+
+`RATE_LIMIT` 或 `QUOTA` 失败只让处理该请求的账号冷却，时长为提供方给出的延迟或对应的 `account…CooldownMs`。随后 Agent loop 立即在另一个可用账号上重试同一步骤，不重放工具或历史，同一步骤对每个账号至多一次。所有账号都在冷却时，失败以最早的恢复时间作为延迟，且不发送任何推理。`SERVER` 失败和暂时性刷新失败仍由流自身的重试策略处理，不改变账号的可用性。
+
+选择优先使用处理上一个请求的账号（在其空闲时），使对话及其提示词缓存留在同一账号上。并发请求按负载分布到各账号，负载相同时第一次选择是随机的。每个请求在准备时捕获一个账号，因此并发请求不会互换凭据。选择状态只存在于本进程；见[已知限制](#known-limitations-and-deferred-work)。
 
 ### 解析模型目录
 
@@ -171,6 +199,7 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 | [`src/provider-data.ts`](src/provider-data.ts) | 配置界面使用的认证与端点生成数据 |
 | [`src/models.ts`](src/models.ts) | 基于 pi-ai 窄入口的 model collection、静态 provider 与 reasoning level |
 | [`src/controls.ts`](src/controls.ts) | 基于捕获的模型与 profile 的纯请求控制项评估 |
+| [`src/account-pool.ts`](src/account-pool.ts) | 汇集的 `anthropic` 路由的进程内账号选择、冷却、租约与流观察器 |
 | [`src/provider.ts`](src/provider.ts) | 受支持协议表与提供方构建 |
 | [`src/context.ts`](src/context.ts) | Harness 到 pi-ai 的上下文转换、图片处理、回放恢复 |
 | [`src/stream.ts`](src/stream.ts) | 把 pi-ai 事件转换为 harness `StreamChunk` 值 |
@@ -241,7 +270,7 @@ git add packages/llm/llm-pi-ai/src/provider-data.generated.ts
 
 #### KV Cache 影响
 
-传给适配器的后续系统消息不会进入初始提示词，从而保留此前的请求前缀。这不改变 Agent loop 的提示词纳入行为；它仍在不支持原生系统更新的路由上合并更新。转换保持逻辑请求顺序，图片句柄与卸载占位符则会添加模型可见文本。即使附件身份与请求字节保持稳定，执行世界路径变化也会改写历史句柄，并可能从该图片起阻止复用。更换适配器实例、提供方、模型或其他上游 token 具有相同的后缀影响。一次省略决策会把较早图片换成占位文本，因此复用在该消息处结束；省略永不回退，此后前缀保持稳定。
+传给适配器的后续系统消息不会进入初始提示词，从而保留此前的请求前缀。这不改变 Agent loop 的提示词纳入行为；它仍在不支持原生系统更新的路由上合并更新。转换保持逻辑请求顺序，图片句柄与卸载占位符则会添加模型可见文本。即使附件身份与请求字节保持稳定，执行世界路径变化也会改写历史句柄，并可能从该图片起阻止复用。更换适配器实例、提供方、模型或其他上游 token 具有相同的后缀影响。一次省略决策会把较早图片换成占位文本，因此复用在该消息处结束；省略永不回退，此后前缀保持稳定。配置 `accounts` 后，转到另一个账号的请求发送相同的前缀，但该账号的提供方缓存尚未见过它，因此复用在那里重新开始。
 
 ### 提供方响应
 
@@ -284,6 +313,11 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **重试策略由提供方自有，而非 SDK 重试**——pi-ai SDK 重试保持禁用，因此持久 agent（智能体）步骤与 `llm/retry` 事件拥有每个可见尝试，直接 `ctx.llm.stream()` 调用仍是单次尝试。省略 `transport` 时 Codex 使用 SSE；显式传输设置保留其行为（[迁移说明](../../../docs/upgrade-guide/v0.2.2-alpha.2/codex-sse-default/guide.zh.md)）。
 - **流式 JSON 工具调用参数避免逐 delta 重复解析**——安装的 pi-ai 带有 [`patches/@earendil-works__pi-ai@1.3.0.patch`](../../../patches/@earendil-works__pi-ai@1.3.0.patch)，它移除了每个流适配器中对整段累计参数 JSON 的逐 delta 重新解析（上游 [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)）；未打补丁时，数 MB 的参数流会在事件循环上消耗 O(n²) CPU，并使进程内所有会话停滞。完成事件提供解析后的参数；Responses 可能在参数完成和输出项完成时分别解析。本适配器只读取 delta 字符串与最终参数。每次升级 pi-ai 时都要重新应用或撤销该补丁。
 - **Chat Completions 中的 Gemini 工具调用思考签名由补丁保留**——同一补丁把 OpenAI 兼容流式响应里的 `tool_calls[].extra_content.google.thought_signature` 读入工具调用的重放签名，并在同一模型继续时以 `extra_content` 发回（上游 [earendil-works/pi#10157](https://github.com/earendil-works/pi/issues/10157)）；未打补丁时，Gemini 会以 HTTP 400 拒绝工具调用轮次的下一步。OpenRouter 的加密推理详情仍通过 `reasoning_details` 重放。
+- **账号池状态按进程保存**——冷却、退出标记与亲和性只在内存中。另一个 DSH 进程只能通过自己触发限流得知某账号受限，重启会忘记冷却。
+- **汇集请求只在停留于同一账号时保留其缓存**——第一个账号是在条件相同者中随机选择的，限流后切换会在下一个账号上从未缓存的前缀开始。
+- **长于重试策略 `maxDelayMs` 的冷却会结束该轮**——所有账号的冷却都长于策略等待时间时，该轮以携带最早恢复时间的 `RATE_LIMIT` 结束。
+- **无法挂载的账号池保持不可用**——挂载失败的凭据文档由本插件记录日志，请求以 `ACCOUNT_POOL_UNAVAILABLE` 失败，直到配置变化。已准备但从未开始流式传输的调用会让其账号保持忙碌 `accountReservationMs`，除非先被中止。
+- **汇集的账号在登录流程之外管理**——登录与退出流程仍使用共享存储，本插件不创建账号文档，目录对汇集的路由报告 `hasStoredCredential` 为 false。
 
 <a id="dev-note"></a>
 ### 开发备注

@@ -227,7 +227,10 @@ export class AccountPool {
     this.state(account).signedOut = { fingerprint }
   }
 
-  /** Whether some account can be claimed right now. */
+  /**
+   * Whether some account can be claimed right now.
+   * @returns true when at least one account is neither cooling nor signed out.
+   */
   hasEligible(): boolean {
     const at = this.now()
     return this.accounts.some(account => this.eligible(this.state(account), at))
@@ -307,6 +310,7 @@ export class AccountPool {
  * @param fingerprint - the digest of the grant this call authenticated with.
  * @param inner - the call's chunks.
  * @yields the chunks, with a terminal failure's delay adjusted as described.
+ * @returns the generator over the adjusted chunks.
  */
 export async function* observeAccountStream(
   pool: AccountPool,
