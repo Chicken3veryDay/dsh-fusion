@@ -901,10 +901,17 @@ export class PiAiAdapter extends LlmAdapter {
         release(claim)
         throw new LlmError('pi-ai preparation aborted', 'ABORTED', { cause: signal.reason })
       }
+      // Until the call streams, its claim belongs to the prepared call: a later
+      // abort (a prepared call the loop then discards) gives the account back.
+      const releaseOnAbort = (): void => { release(claim) }
+      signal.addEventListener('abort', releaseOnAbort, { once: true })
       return {
         assessment,
         systemPromptPrefix: ANTHROPIC_OAUTH_SYSTEM_PREFIX,
-        stream: options => this.streamClaim(claim, options, snapshot, piModel),
+        stream: (options) => {
+          signal.removeEventListener('abort', releaseOnAbort)
+          return this.streamClaim(claim, options, snapshot, piModel)
+        },
       }
     } finally {
       signal.removeEventListener('abort', onAbort)
