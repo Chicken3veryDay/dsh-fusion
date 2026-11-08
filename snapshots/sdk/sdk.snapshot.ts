@@ -73,7 +73,12 @@ import { replayRetained } from './fusion-retained/runner.ts'
 
 const corpusRoot = fileURLToPath(new URL('../', import.meta.url))
 
-const MINIMAL_SYSTEM_PROMPT = 'You are the environment-selected minimal software engineer.'
+/** Synthetic Codex access token whose payload names a synthetic ChatGPT account. */
+const SIGNIN_ACCESS = `h.${Buffer.from(JSON.stringify({
+  'https://api.openai.com/auth': { chatgpt_account_id: 'acct_synthetic' },
+})).toString('base64url')}.s`
+
+const MINIMAL_SYSTEM_PROMPT ='You are the environment-selected minimal software engineer.'
 const MINIMAL_BASH_DESCRIPTION = `Run commands in a bash shell
 * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
 * You don't have access to the internet via this tool.
@@ -126,6 +131,8 @@ interface SdkAssertions {
   waitForProviderTitle?: boolean
   /** Final response required from a completed turn before updating goldens. */
   expectedFinalResponse?: string
+  /** Synthetic credential records written to the private DSH home's credential document before launch. */
+  storedCredentials?: Readonly<Record<string, unknown>>
   /** Environment overrides passed to the runtime subprocess. */
   environment?: Readonly<Record<string, string>>
   /** A separate DSH SDK child whose persisted session joins the evidence. */
@@ -229,6 +236,17 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
   'script-default': {
     expectedFinalResponse: 'CODE_ONE+CODE_TWO',
     expectedTools: { run_code: ['code', 'description'] },
+  },
+  'direct-signin-script': {
+    expectedFinalResponse: 'Script completed.',
+    expectedTools: { run_code: ['code', 'description'] },
+    modelRequestsFile: 'codex-requests.jsonl',
+    storedCredentials: {
+      'unrelated-owner/openai-codex': { kind: 'grant', payload: { access: 'unrelated' } },
+      'llm-pi-ai/openai-codex': { kind: 'grant', payload: {
+        type: 'oauth', access: SIGNIN_ACCESS, refresh: 'synthetic-refresh', expires: 4102444800000,
+      } },
+    },
   },
   'ptc-turn': {
     patches: [fileURLToPath(new URL('./ptc-turn/runtime.cordis.yml', import.meta.url))],
@@ -800,6 +818,12 @@ async function runScenario(scenario: CorpusScenario): Promise<{
       DSH_TEST_CHILD_PATCHES: JSON.stringify([legacyChildPatch, childPatch]),
       DSH_TEST_CHILD_HOME: childHome,
     }
+  }
+  if (assertions.storedCredentials !== undefined) {
+    await mkdir(dshHome, { recursive: true })
+    await writeFile(join(dshHome, '.credentials.yaml'), JSON.stringify({
+      version: 1, refs: {}, records: assertions.storedCredentials,
+    }), { mode: 0o600 })
   }
   const workspaceDir = join(scenario.dir, 'workspace')
   if (existsSync(workspaceDir)) {
@@ -1607,8 +1631,32 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
           expect(event.data).not.toHaveProperty('schema')
         }
       }
+      if (scenario.name === 'direct-signin-script') {
+        // The external endpoint was reached by the llm-pi-ai adapter with the stored grant, not by a replayed model.
+        const requests = modelRequests as unknown as {
+          authorization: string
+          body: { model: string; tools: { name: string }[]; input: { type: string; output?: string }[] }
+        }[]
+        expect(requests).toHaveLength(2)
+        for (const request of requests) {
+          expect(request.authorization).toBe(`Bearer ${SIGNIN_ACCESS}`)
+          expect(request.body.model).toBe('gpt-6.1-sol')
+          expect(request.body.tools.map(tool => tool.name)).toEqual(['run_code'])
+        }
+        expect(requests[1]?.body.input.find(item => item.type === 'function_call_output')?.output)
+          .toContain('DSH_SCRIPT_EXECUTED')
+        const events = results.flatMap(result => result.events)
+        expect(events.filter(event => event.type === 'tool/call').map(event => event.data['name'])).toEqual(['run_code'])
+        const toolResults = events.filter(event => event.type === 'tool/result')
+        expect(toolResults).toHaveLength(1)
+        expect(toolResults[0]?.data['message']).toMatchObject({ isError: false })
+        expect(JSON.stringify(toolResults)).toContain('DSH_SCRIPT_EXECUTED')
+        for (const header of events.filter(event => event.type === 'request/header')) {
+          expect(header.data['header']).toMatchObject({ config: { provider: 'openai-codex', model: 'gpt-6.1-sol' } })
+        }
+      }
       if (assertions.expectedFinalResponse !== undefined) {
-        const failures = results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')
+        const failures =results.flatMap(result => result.events).filter(event => event.type === 'turn/end' || event.type === 'tool/result')
         expect(results.at(-1)?.finalResponse, `${scenario.name}: final response; outcomes: ${JSON.stringify(failures)}`).toBe(assertions.expectedFinalResponse)
         const parent = ordered[0]
         if (parent === undefined) throw new Error(`${scenario.name}: no primary session log`)

@@ -1,0 +1,10 @@
+version: 1
+scenario: direct-signin-script
+profile: sdk
+composition: sdk-direct-signin-script
+recording: authored
+workspace:
+  final: true
+header:
+  class: sdk-direct-signin-script
+  pin: true
