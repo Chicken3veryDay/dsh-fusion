@@ -129,6 +129,17 @@ export interface ProviderSpec {
  * @returns the auth to construct this route's provider with.
  */
 function routeAuth(spec: ProviderSpec, catalog: Provider | undefined): Provider['auth'] {
+  if (spec.provider === 'anthropic' && catalog?.auth.apiKey !== undefined) {
+    const apiKey = catalog.auth.apiKey
+    return { apiKey: {
+      ...apiKey,
+      resolve: async ({ ctx, credential, signal }) => {
+        signal.throwIfAborted()
+        const key = credential?.key ?? await ctx.env('ANTHROPIC_API_KEY')
+        return key ? { auth: { apiKey: key }, source: credential?.key === undefined ? 'ANTHROPIC_API_KEY' : 'stored credential' } : undefined
+      },
+    } }
+  }
   if (catalog === undefined) return { apiKey: harnessApiKeyAuth(spec.displayName) }
   if (catalog.auth.apiKey !== undefined || !spec.namesCredential) return catalog.auth
   return { ...catalog.auth, apiKey: harnessApiKeyAuth(spec.displayName) }

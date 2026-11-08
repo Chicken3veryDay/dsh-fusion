@@ -347,7 +347,7 @@ describe('Codex Responses over a signed-in grant', () => {
         ? { status, body: JSON.stringify({ error }) }
         : { events: [JSON.stringify({ type: 'response.failed', response: { status: 'failed', error } })] }])
       const ctx = await signedIn(server.url, 'openai')
-      const model = (await ctx.llm.listModels('openai'))[0]!.id
+      const model = 'gpt-5.4'
       const { finish } = await assemble(ctx, { provider: 'openai', model, messages: [] })
       const expectedCode = status === 429 && retryable ? 'RATE_LIMIT' : inBandCode
 

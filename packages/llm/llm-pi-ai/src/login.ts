@@ -40,7 +40,7 @@ const DEVICE_ID_OAUTH: ReadonlySet<string> = new Set(['openai'])
 function loginMethods(provider: Provider | undefined): AuthorizationMethod[] {
   const methods: AuthorizationMethod[] = []
   const oauth = provider?.auth.oauth
-  if (oauth !== undefined) methods.push({ id: 'oauth', label: oauth.loginLabel ?? oauth.name })
+  if (provider?.id !== 'anthropic' && oauth !== undefined) methods.push({ id: 'oauth', label: oauth.loginLabel ?? oauth.name })
   const apiKey = provider?.auth.apiKey
   if (apiKey?.login !== undefined) methods.push({ id: 'api-key', label: apiKey.name })
   return methods

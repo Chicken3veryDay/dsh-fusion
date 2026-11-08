@@ -55,7 +55,12 @@ function subscriptionFailureCode(message: string): 'QUOTA' | 'SERVER' | undefine
 // wrapper a bare `terminated`, so we are left pattern-matching terse words here.
 // If pi-ai ever forwards the original Error (or a fetch/dispatcher hook that lets
 // us capture the cause ourselves), classify on `code`/`cause` instead of text.
-function classifyPiAiError(message: string): string {
+/**
+ * Classify pi-ai's flattened provider or authentication error.
+ * @param message - Error text retained by pi-ai after structured facts are lost.
+ * @returns Provider-neutral failure code; wire facts take precedence when available.
+ */
+export function classifyPiAiError(message: string): string {
   if (/\b(?:401|403)\b/.test(message)) return 'AUTH'
   const subscription = subscriptionFailureCode(message)
   if (subscription !== undefined) return subscription

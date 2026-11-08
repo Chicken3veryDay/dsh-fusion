@@ -61,6 +61,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
+import { chatgptAccessToken } from './auth.ts'
+import { discoverModels } from './discovery.ts'
 import { toStreamChunks } from './stream.ts'
 import { isWireObservable, observeWire } from './wire.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
@@ -343,16 +345,53 @@ export class PiAiAdapter extends LlmAdapter {
     return this.current().profiles.get(provider)?.retryPolicy
   }
 
+  /** Refuse subscription credentials for DSH-owned Anthropic requests before provider dispatch. */
+  private async requestApiKey(
+    snapshot: PiAiSnapshot,
+    provider: string,
+    profile: ResolvedPiAiProviderProfile,
+    api?: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const explicit = await this.config.resolveApiKey(provider, profile)
+    if (provider === 'openai' && api !== undefined && explicit === undefined
+      && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
+      if (api !== 'openai-responses') throw new LlmError('ChatGPT plan sign-in requires the openai-responses protocol; configure an API key for other protocols.', 'AUTH')
+      return chatgptAccessToken(snapshot.models, signal)
+    }
+    if (provider !== 'anthropic' && api !== 'anthropic-messages') return explicit
+    if (provider === 'anthropic' && explicit === undefined && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
+      throw new LlmError('Direct Anthropic requests require an API key; configure ANTHROPIC_API_KEY or use the official Claude Code integration for subscription access. The saved sign-in is unchanged.', 'AUTH')
+    }
+    const key = explicit ?? (provider === 'anthropic' || (await this.config.auth.credentials.read(provider))?.type === 'api_key'
+      ? (await snapshot.models.getAuth(provider))?.auth.apiKey : undefined)
+    if (key?.includes('sk-ant-oat')) {
+      throw new LlmError('Direct Anthropic requests require an API key, not a Claude subscription token; use the official Claude Code integration for subscription access.', 'AUTH')
+    }
+    return key
+  }
+
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve().then(async () => {
       const snapshot = this.current()
       const profile = this.profileOf(snapshot, provider)
       let apiKey: string | undefined
-      try { apiKey = await this.config.resolveApiKey(provider, profile) }
+      try { apiKey = await this.requestApiKey(snapshot, provider, profile) }
       catch (error) {
         // A route whose named key does not resolve cannot serve a request, so it offers no models until the key is stored.
         if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return []
         throw error
+      }
+      if (provider === 'openai' && apiKey === undefined
+        && (await this.config.auth.credentials.read(provider))?.type === 'oauth') {
+        const account = await discoverModels({ provider }, () => ({
+          headers: profile.headers,
+          resolveApiKey: this.config.resolveApiKey.bind(undefined, provider, profile),
+          chatgpt: async (signal) => {
+            return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(snapshot.models, signal) }
+          },
+        }))
+        return account.map(model => ({ ...model, name: model.name ?? model.id, provider }))
       }
       const catalog = snapshot.models.getModels(provider)
       // A provider that narrows its catalog per credential (Copilot, by the
@@ -444,7 +483,7 @@ export class PiAiAdapter extends LlmAdapter {
       model,
       options.reasoningEffort ?? profile.reasoning,
     )
-    const apiKey = await this.config.resolveApiKey(options.provider, profile)
+    const apiKey = await this.requestApiKey(snapshot, options.provider, profile, model.api, options.signal)
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -484,7 +523,7 @@ export class PiAiAdapter extends LlmAdapter {
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, model, reasoning, apiKey),
         ...wire === undefined ? {} : { fetch: wire.fetch },
-        ...wire === undefined || model.api !== 'openai-codex-responses' ? {} : { onProviderStreamEvent: wire.onProviderStreamEvent },
+        ...wire === undefined || !['openai-codex-responses', 'openai-responses'].includes(model.api) ? {} : { onProviderStreamEvent: wire.onProviderStreamEvent },
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },

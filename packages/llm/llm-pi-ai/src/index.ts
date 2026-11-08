@@ -68,12 +68,13 @@ import { credentialKeyId, credentialKeyScope } from '@deepseek-ai/dsh-credential
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
-import { authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE } from './auth.ts'
+import { chatgptAccessToken, authContextFrom, credentialStoreFrom, listProviderCredentials, RECORD_SCOPE } from './auth.ts'
 import { catalogProvider, catalogProviderIds } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
+import { createModels } from './models.ts'
 import { registerPiAiFlows } from './login.ts'
 import { providerDefaultsOf } from './provider-data.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
@@ -339,6 +340,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return {
       headers: profile.headers,
       resolveApiKey: () => resolveApiKey(provider, profile),
+      ...provider !== 'openai' || profile.apiKeyEnv !== undefined ? {} : {
+        chatgpt: async (signal?: AbortSignal) => {
+          const stored = await auth.credentials.read(provider)
+          if (stored?.type !== 'oauth') return undefined
+          const models = createModels(auth)
+          if (profile.piProvider !== undefined) models.setProvider(profile.piProvider)
+          return { baseURL: profile.baseURL ?? 'https://api.openai.com/v1', accessToken: await chatgptAccessToken(models, signal) }
+        },
+      },
     }
   }
   // Interrogating an endpoint is a configuration-time action over a draft, so
@@ -410,7 +420,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
    * account) can.
    */
   const offersVaryByCredential = (provider: string): boolean =>
-    catalogProvider(provider)?.filterModels !== undefined && registration !== undefined
+    (provider === 'openai' || catalogProvider(provider)?.filterModels !== undefined) && registration !== undefined
   /**
    * One refresh of the signed-in set from the store one binding committed to. Never
    * rejects: a failure is logged and leaves the routes as they were, so a refresh

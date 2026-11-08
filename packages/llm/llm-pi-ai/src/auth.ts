@@ -8,11 +8,13 @@
  * @module dsh-llm-pi-ai/auth
  */
 
+import { ModelsError } from '@earendil-works/pi-ai/utils/models-error'
+import { classifyPiAiError } from './stream.ts'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
-import type { AuthContext, Credential, CredentialInfo, CredentialStore } from '@earendil-works/pi-ai'
+import type { AuthContext, Credential, CredentialInfo, CredentialStore, Models } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   credentialKey, credentialKeyId, credentialKeyScope, credentialRef, isCredentialKeySegment, isCredentialRefName,
@@ -301,4 +303,26 @@ export function authContextFrom(ctx: Context): AuthContext {
       }
     },
   }
+}
+
+/**
+ * Resolve a ChatGPT plan credential without accepting an ambient API-key replacement.
+ * @param models - Request-owned pi-ai collection, using the harness credential store.
+ * @param signal - Optional caller cancellation; omission uses pi-ai's operation signal.
+ * @returns The refreshed OAuth bearer token.
+ * @throws LlmError with AUTH when sign-out or revocation leaves no plan credential.
+ */
+export async function chatgptAccessToken(models: Models, signal?: AbortSignal): Promise<string> {
+  let resolved: Awaited<ReturnType<Models['getAuth']>>
+  try { resolved = await models.getAuth('openai', signal === undefined ? undefined : { signal }) }
+  catch (error) {
+    if (!(error instanceof ModelsError)) throw error
+    const classified = classifyPiAiError(error.message)
+    const code = classified === 'INVALID_REQUEST' ? 'AUTH' : classified
+    throw new LlmError(`${error.message}; ${code === 'AUTH' ? 'sign in to OpenAI again' : 'retry when the sign-in service is available'}`, code, { cause: error })
+  }
+  if (resolved?.source !== 'OAuth' || resolved.auth.apiKey === undefined) {
+    throw new LlmError('ChatGPT sign-in is no longer available; sign in again. API-key billing was not selected.', 'AUTH')
+  }
+  return resolved.auth.apiKey
 }

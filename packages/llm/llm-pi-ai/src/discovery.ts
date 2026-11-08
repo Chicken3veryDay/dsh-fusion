@@ -256,6 +256,8 @@ export interface StoredModelDiscoveryProfile {
   readonly headers: Readonly<Record<string, string>> | undefined
   /** Resolve the named route's credential only when the draft carries none. */
   readonly resolveApiKey: () => Promise<string | undefined>
+  /** Resolve a stored ChatGPT grant through pi-ai, including refresh; absent for API-key routes. */
+  readonly chatgpt?: (signal?: AbortSignal) => Promise<{ baseURL: string; accessToken: string } | undefined>
 }
 
 /**
@@ -272,9 +274,12 @@ export async function discoverModels(
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
 ): Promise<readonly LlmDiscoveredModel[]> {
+  let stored = request.provider === 'openai' ? storedProfile?.() : undefined
+  const plan = request.provider === 'openai' && request.apiKey === undefined
+    ? await stored?.chatgpt?.(request.signal) : undefined
   // A catalog route already has its answer, and a better one: the installed
   // entries carry context windows and output caps no listing endpoint reports.
-  if (request.provider !== undefined) {
+  if (plan === undefined && request.provider !== undefined) {
     const installed = catalogModels(request.provider)
     if (installed.size > 0) {
       return [...installed.values()].map(model => ({
@@ -286,7 +291,8 @@ export async function discoverModels(
       }))
     }
   }
-  if (request.baseURL === undefined || request.baseURL.length === 0) {
+  const baseURL = plan?.baseURL ?? request.baseURL
+  if (baseURL === undefined || baseURL.length === 0) {
     throw new LlmError(
       `pi-ai ships no catalog for provider "${request.provider ?? ''}", so its models can only come from its`
       + " endpoint; set a baseURL, or enter this provider's models by hand",
@@ -306,14 +312,14 @@ export async function discoverModels(
       'DISCOVERY_UNSUPPORTED',
     )
   }
-  const url = listingUrl(request.baseURL, api)
+  const url = listingUrl(baseURL, api)
   // A key typed into the form wins: it may replace the stored key that is
   // failing. The stored profile is asked past the catalog and protocol checks,
   // and its credential resolver remains lazy so a typed key cannot fail over a
   // stored credential it supersedes. A route may still authenticate through a
   // deployment-owned Authorization header when neither key exists.
-  const stored = storedProfile?.()
-  const supplied = request.apiKey ?? await stored?.resolveApiKey()
+  stored ??= storedProfile?.()
+  const supplied = plan?.accessToken ?? request.apiKey ?? await stored?.resolveApiKey()
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
   let response: Response
   try {
@@ -360,6 +366,20 @@ export async function discoverModels(
     body = JSON.parse(text)
   } catch (error: unknown) {
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
+  }
+  if (plan !== undefined) {
+    if (typeof body !== 'object' || body === null || !('models' in body) || !Array.isArray(body.models)) {
+      throw new LlmError(`${url} did not return a ChatGPT model listing`, 'DISCOVERY_FAILED')
+    }
+    const models: LlmDiscoveredModel[] = []
+    for (const entry of body.models) {
+      if (typeof entry !== 'object' || entry === null || entry.visibility !== 'list') continue
+      if (typeof entry.slug !== 'string' || entry.slug.length === 0 || typeof entry.display_name !== 'string' || entry.display_name.length === 0) {
+        throw new LlmError(`${url} returned an invalid ChatGPT model entry`, 'DISCOVERY_FAILED')
+      }
+      models.push({ id: entry.slug, name: entry.display_name })
+    }
+    return models
   }
   return readListing(body)
 }
