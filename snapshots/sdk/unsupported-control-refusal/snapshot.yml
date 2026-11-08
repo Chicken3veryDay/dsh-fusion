@@ -1,0 +1,11 @@
+version: 1
+scenario: unsupported-control-refusal
+profile: sdk
+composition: sdk-unsupported-control-refusal
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: openai-codex
+  DSH_SNAPSHOT_MODEL: gpt-6.1-sol
+header:
+  class: sdk-unsupported-control-refusal
+  pin: true

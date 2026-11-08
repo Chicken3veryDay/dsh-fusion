@@ -18,7 +18,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime, { createAssistantMessage, createDeveloperMessage, createSystemMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { ReasoningEffortId, createAssistantMessage, createDeveloperMessage, createSystemMessage, createToolResultMessage, createUserMessage, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import LocalCredentials from '@deepseek-ai/dsh-credentials-local'
@@ -208,6 +208,32 @@ describe('direct Messages HTTP', () => {
     await chunks(llm.stream(options()))
     expect(first.requests[0]).toMatchObject({ headers: { 'x-api-key': 'first' }, body: { max_tokens: 10 } })
     expect(second.requests[0]).toMatchObject({ headers: { 'x-api-key': 'second' }, body: { max_tokens: 20 } })
+  })
+
+  it('supports temperature and stop beside enabled reasoning, and sends them, through the real runtime', async () => {
+    const http = await endpoint()
+    const ctx = new Context()
+    cleanup.push(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    ctx.llm.registerAdapter(['deepseek-official'], adapter({ baseURL: http.url }))
+    const prepared = await ctx.llm.prepareCall({
+      provider: 'deepseek-official', model: MODEL, maxTokens: 777, temperature: 0.2, stop: ['END'], reasoningEffort: ReasoningEffortId('high'),
+    })
+    expect(prepared.assessment.fields).toEqual({
+      reasoningEffort: { kind: 'supported' },
+      temperature: { kind: 'supported' },
+      maxTokens: { kind: 'supported' },
+      stop: { kind: 'supported' },
+    })
+    await chunks(prepared.stream({ ...prepared.config, messages: [user()] }))
+    const direct = await chunks(ctx.llm.stream({
+      provider: 'deepseek-official', model: MODEL, messages: [user()], temperature: 0.2, stop: ['END'], reasoningEffort: ReasoningEffortId('high'),
+    }))
+    expect(direct.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(http.requests).toHaveLength(2)
+    for (const request of http.requests) {
+      expect(request.body).toMatchObject({ temperature: 0.2, stop_sequences: ['END'], thinking: { type: 'enabled' }, output_config: { effort: 'high' } })
+    }
   })
 
   it('aborts an open provider response when its consumer stops', async () => {

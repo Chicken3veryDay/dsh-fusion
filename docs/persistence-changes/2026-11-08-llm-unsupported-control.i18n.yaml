@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-08-llm-unsupported-control.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-11-08-llm-unsupported-control.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-11-08-llm-unsupported-control:
+  en: c1503ecd6ccaa5e3
+  zh: 2a0dcaa5c66c3394
+/2026-11-08-llm-unsupported-control/summary:
+  en: 24362ebbad701e5f
+  zh: 36054bd69f62d8aa
+/2026-11-08-llm-unsupported-control/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-11-08-llm-unsupported-control/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-11-08-llm-unsupported-control/compatibility:
+  en: a99d760120e23451
+  zh: 8f8b9ec29aafc0bc
+/2026-11-08-llm-unsupported-control/verification:
+  en: b4294c9c43c0cdc9
+  zh: fe52811ddec8380e
+/2026-11-08-llm-unsupported-control/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

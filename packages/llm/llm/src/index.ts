@@ -21,6 +21,8 @@ import type {
   LlmModelInfo,
   LlmResolvedModelInfo,
   LlmProviderInfo,
+  LlmControlName,
+  LlmUnsupportedControl,
   ModelModality,
   StreamChunk,
   SystemPromptUpdate,
@@ -31,8 +33,10 @@ import { freezeMessage } from './message.ts'
 import { resolveRetryPolicy } from './retry-policy.ts'
 import type { ResolvedRetryPolicy } from './retry-policy.ts'
 import type { ProviderRequestId } from './brand.ts'
-import { callConfigEquals } from './call-config.ts'
-import type { ConfigureCall, LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
+import { assessSuppliedControls, callConfigEquals, undeclaredControlAssessment } from './call-config.ts'
+import type {
+  CallControlAssessment, ConfigureCall, LlmCallConfig, LlmCallConfigAdapterDefaults, LlmCallControls,
+} from './call-config.ts'
 import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
@@ -51,8 +55,13 @@ export * from './assistant-stream.ts'
 export * from './message.ts'
 export * from './retry-policy.ts'
 export { BlockAssembler } from './assembler.ts'
-export { callConfigEquals, isAgentLoopRequest, markAgentLoopRequest } from './call-config.ts'
-export type { ConfigureCall, LlmCallConfig, LlmCallConfigAdapterDefaults, LlmCallControls } from './call-config.ts'
+export {
+  assessSuppliedControls, callConfigEquals, isAgentLoopRequest, markAgentLoopRequest, undeclaredControlAssessment,
+} from './call-config.ts'
+export type {
+  CallControlAssessment, ConfigureCall, ControlConstraint, ControlDisposition, ControlTranslation, LlmCallConfig,
+  LlmCallConfigAdapterDefaults, LlmCallControls,
+} from './call-config.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -87,6 +96,8 @@ export interface LlmErrorOptions extends ErrorOptions {
   requestId?: ProviderRequestId
   /** Positive count of additional oldest retained image occurrences to offload; only with `IMAGE_OFFLOAD_REQUIRED`. */
   offloadImages?: number
+  /** The refused control and reason; only with `UNSUPPORTED_CONTROL`. */
+  unsupportedControl?: LlmUnsupportedControl
 }
 
 /**
@@ -126,6 +137,7 @@ export class LlmError extends HarnessError {
       ...options?.providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs: options.providerRetryAfterMs },
       ...options?.requestId === undefined ? {} : { requestId: options.requestId },
       ...options?.offloadImages === undefined ? {} : { offloadImages: options.offloadImages },
+      ...options?.unsupportedControl === undefined ? {} : { unsupportedControl: Object.freeze({ ...options.unsupportedControl }) },
     })
   }
 }
@@ -182,6 +194,12 @@ export interface PreparedLlmCall {
   /** Config fields materialized by the captured adapter rather than proposed by the caller. */
   readonly adapterDefaults: LlmCallConfigAdapterDefaults
   /**
+   * The captured adapter generation's verdict on every control in {@link config},
+   * including materialized defaults. Process-local and never persisted; a
+   * control the generation declared unsupported already failed preparation.
+   */
+  readonly assessment: CallControlAssessment
+  /**
    * Dispatch this call once through the registration captured during
    * preparation. The request's call-config fields must match {@link config};
    * reuse or mismatch fails with `INVALID_PREPARED_CALL`.
@@ -195,6 +213,16 @@ export interface PreparedLlmCall {
 export interface PreparedAdapterCall {
   /** Exact model metadata from the same adapter generation as {@link stream}. */
   readonly model: LlmResolvedModelInfo
+  /**
+   * Judge each supplied control against this generation's captured facts.
+   * Synchronous and pure: no credential, network or clock access. The runtime
+   * calls it after `ConfigureCall` and model defaults, before any dispatch,
+   * on both {@link LlmRuntime.prepareCall} and the unprepared stream path.
+   * @param controls - the call's controls with model defaults materialized.
+   * @returns one disposition for each control whose value is not `undefined`;
+   *   a missing entry is read as `unverified`, never as supported.
+   */
+  assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment
   /** Dispatch through that generation without re-reading dynamic connection facts. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 }
@@ -293,17 +321,20 @@ export abstract class LlmAdapter {
   }
 
   /**
-   * Bind exact model metadata and the eventual request dispatch to one adapter generation.
-   * Dynamic adapters override this so settings changes between preparation and
-   * dispatch cannot combine one generation's capabilities with another's endpoint.
+   * Bind exact model metadata, control assessment and the eventual request dispatch
+   * to one adapter generation. Dynamic adapters override this so settings changes
+   * between preparation and dispatch cannot combine one generation's capabilities
+   * with another's endpoint. The default declares no control support: every
+   * supplied control is `unverified`.
    * @param provider - registered provider route.
    * @param model - exact model id.
    * @param signal - cancellation for model resolution.
-   * @returns model metadata and a one-generation stream entry point.
+   * @returns model metadata, control assessment and a one-generation stream entry point.
    */
   async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
     return {
       model: await this.resolveModel(provider, model, signal),
+      assessControls: undeclaredControlAssessment,
       stream: options => this.stream(options),
     }
   }
@@ -973,6 +1004,29 @@ export class LlmRuntime extends TypertRemoteService {
   }
 
   /**
+   * Assess every control of one resolved config against its adapter generation
+   * and refuse a declared unsupported control before any credential, message
+   * or provider work. A supplied control the generation did not answer is
+   * `unverified`; absence never becomes support.
+   */
+  private assessCall(adapterCall: PreparedAdapterCall, config: LlmCallConfig): CallControlAssessment {
+    const { provider, model, ...controls } = config
+    const declared = adapterCall.assessControls(controls).fields
+    const assessment = assessSuppliedControls(controls, control => declared[control] ?? { kind: 'unverified', reason: 'adapter-undeclared' })
+    for (const control of CONTROL_ORDER) {
+      const disposition = assessment.fields[control]
+      if (disposition?.kind === 'unsupported') {
+        throw new LlmError(
+          `provider "${provider}" model "${model}" does not support ${control} (${disposition.reason})`,
+          'UNSUPPORTED_CONTROL',
+          { unsupportedControl: { control, reason: disposition.reason } },
+        )
+      }
+    }
+    return assessment
+  }
+
+  /**
    * Resolve one call under its current adapter registration. The returned
    * one-shot handle keeps that registration across header logging and dispatch,
    * so HMR cannot combine one adapter's capability result with another adapter.
@@ -1001,6 +1055,7 @@ export class LlmRuntime extends TypertRemoteService {
     signal?.throwIfAborted()
     const resolved = this.resolveCallWithInfo(proposed, modelInfo)
     const resolvedConfig = deepFreeze(structuredClone(resolved.config))
+    const assessment = this.assessCall(adapterCall, resolvedConfig)
     const context = resolved.context === undefined
       ? undefined
       : deepFreeze(structuredClone(resolved.context))
@@ -1017,6 +1072,7 @@ export class LlmRuntime extends TypertRemoteService {
       config: resolvedConfig,
       retryPolicy: registration.retryPolicy,
       adapterDefaults,
+      assessment,
       ...context === undefined ? {} : { context },
       ...modelInfo.inputModalities === undefined
         ? {}
@@ -1114,6 +1170,7 @@ export class LlmRuntime extends TypertRemoteService {
         const adapterCall = await adapter.prepareCall(options.provider, options.model, options.signal)
         modelInfo = this.normalizeModelInfo(registration, options.model, adapterCall.model)
         resolvedConfig = this.resolveCallWithInfo(options, modelInfo).config
+        this.assessCall(adapterCall, resolvedConfig)
         dispatch = options => adapterCall.stream(options)
       } else {
         modelInfo = prepared.modelInfo
@@ -1217,6 +1274,9 @@ export class LlmRuntime extends TypertRemoteService {
     )
   }
 }
+
+/** Order in which a call's refused controls are reported, so the first failure is deterministic. */
+const CONTROL_ORDER: readonly LlmControlName[] = ['reasoningEffort', 'temperature', 'maxTokens', 'stop']
 
 /** Convert one adapter throw into the stream protocol's terminal outcome. */
 function adapterFailureChunk(error: unknown, signal?: AbortSignal): StreamChunk {

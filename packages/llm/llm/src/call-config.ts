@@ -6,7 +6,8 @@
  * @module dsh-llm/call-config
  */
 
-import type { GenerateOptions, LlmResolvedModelInfo } from './types.ts'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
+import type { GenerateOptions, LlmControlName, LlmResolvedModelInfo, UnsupportedControlReason } from './types.ts'
 import type { ReasoningEffortId } from './brand.ts'
 
 /** Process-local identities of request objects assembled by dsh-agent-loop. */
@@ -46,6 +47,101 @@ export type ConfigureCall = (
   controls: Readonly<LlmCallControls>,
   model: Readonly<LlmResolvedModelInfo>,
 ) => LlmCallControls
+
+/**
+ * How an adapter generation turns a supplied control into a different wire
+ * value. `add-thinking-allowance`: `maxTokens` is an answer allowance and the
+ * requested wire ceiling is `maxTokens + thinkingTokens`; the thinking budget
+ * actually sent is the smaller of `thinkingTokens` and the final ceiling minus
+ * `answerReserve`; a result of 0 is sent as `zeroBudgetSends`, which can
+ * exceed the final ceiling. The requested ceiling is the value before any
+ * {@link ControlConstraint} on the same disposition.
+ */
+export type ControlTranslation =
+  | {
+    readonly kind: 'add-thinking-allowance'
+    readonly thinkingTokens: number
+    readonly answerReserve: number
+    readonly zeroBudgetSends: number
+  }
+
+/**
+ * A bound the adapter generation's serializer may apply to a control's wire
+ * value. A constraint is a condition, not a result: `context-window-clamp`
+ * depends on the messages, which do not exist at preparation, so the exact
+ * wire value is known only when the request is serialized.
+ *
+ * - `model-output-ceiling`: the wire ceiling never exceeds `maxTokens`.
+ * - `context-window-clamp`: the wire ceiling never exceeds what is left of
+ *   `contextWindow` after the estimated input and `reserveTokens`, and never
+ *   falls below `minimumTokens`, so a long input can lower an allowance.
+ */
+export type ControlConstraint =
+  | { readonly kind: 'model-output-ceiling'; readonly maxTokens: number }
+  | {
+    readonly kind: 'context-window-clamp'
+    readonly contextWindow: number
+    readonly reserveTokens: number
+    readonly minimumTokens: number
+  }
+
+/**
+ * One adapter generation's verdict on one supplied control. `unverified` means
+ * the generation cannot establish support from its captured facts; it is
+ * neither refused nor advertised as supported. `constraints` lists the
+ * bounds the generation knows from its captured facts; the value in the
+ * serialized request remains authoritative.
+ */
+export type ControlDisposition =
+  | { readonly kind: 'supported'; readonly constraints?: readonly ControlConstraint[] }
+  | {
+    readonly kind: 'translated'
+    readonly translations: readonly ControlTranslation[]
+    readonly constraints?: readonly ControlConstraint[]
+  }
+  | { readonly kind: 'unsupported'; readonly reason: UnsupportedControlReason }
+  | { readonly kind: 'unverified'; readonly reason: 'account-mode-unresolved' | 'protocol-unverified' | 'adapter-undeclared' }
+
+/** Process-local verdicts on the controls one prepared call supplied; never persisted. */
+export interface CallControlAssessment {
+  /** One entry per supplied control (a field whose value is not `undefined`). */
+  readonly fields: Readonly<Partial<Record<LlmControlName, ControlDisposition>>>
+}
+
+/** Every control name, checked against both {@link LlmControlName} and {@link LlmCallControls}. */
+const CONTROL_NAME_SET = {
+  reasoningEffort: true,
+  temperature: true,
+  maxTokens: true,
+  stop: true,
+} as const satisfies Record<LlmControlName, true> & Record<keyof LlmCallControls, true>
+
+/**
+ * Build an assessment with one entry per supplied control, so an adapter
+ * cannot omit a supplied field and be read as supporting it.
+ * @param controls - controls after `ConfigureCall` and model defaults.
+ * @param decide - the adapter's verdict for one supplied control.
+ * @returns a detached, deeply frozen assessment covering exactly the supplied controls.
+ */
+export function assessSuppliedControls(
+  controls: Readonly<LlmCallControls>,
+  decide: (control: LlmControlName) => ControlDisposition,
+): CallControlAssessment {
+  const fields: Partial<Record<LlmControlName, ControlDisposition>> = {}
+  for (const control of Object.keys(CONTROL_NAME_SET) as LlmControlName[]) {
+    if (controls[control] !== undefined) fields[control] = deepFreeze(structuredClone(decide(control)))
+  }
+  return Object.freeze({ fields: Object.freeze(fields) })
+}
+
+/**
+ * Assessment of an adapter that declares nothing about request controls.
+ * @param controls - controls after `ConfigureCall` and model defaults.
+ * @returns every supplied control `unverified` as `adapter-undeclared`.
+ */
+export function undeclaredControlAssessment(controls: Readonly<LlmCallControls>): CallControlAssessment {
+  return assessSuppliedControls(controls, () => ({ kind: 'unverified', reason: 'adapter-undeclared' }))
+}
 
 /**
  * Effective config fields supplied by exact-model adapter resolution rather

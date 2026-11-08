@@ -1,6 +1,6 @@
 /** Protocol-independent model capabilities and reasoning choices. */
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { LlmModelBadge, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import { assessSuppliedControls, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { CallControlAssessment, LlmCallControls, LlmModelBadge, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type { DeepSeekCatalogModel, DeepSeekConnectionOptions } from './types.ts'
 
 const OFF_REASONING_EFFORT = ReasoningEffortId('off')
@@ -99,4 +99,14 @@ export function modelInfo(
         },
       },
   }
+}
+
+/** Assess request controls against the Messages serializer, which sends every one of them.
+ * Reasoning effort is validated against {@link modelInfo} before assessment, and a sampling
+ * temperature or stop list is forwarded with thinking enabled or disabled.
+ * @param controls - the call's controls with model defaults materialized.
+ * @returns every supplied control as supported.
+ */
+export function assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment {
+  return assessSuppliedControls(controls, () => ({ kind: 'supported' }))
 }

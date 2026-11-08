@@ -5,7 +5,10 @@
  */
 
 import { HarnessError } from './error.ts'
-import type { LlmFailure } from './types.ts'
+import type { LlmFailure, LlmUnsupportedControl } from './types.ts'
+
+const CONTROL_NAMES: ReadonlySet<unknown> = new Set(['reasoningEffort', 'temperature', 'maxTokens', 'stop'] satisfies LlmUnsupportedControl['control'][])
+const CONTROL_REASONS: ReadonlySet<unknown> = new Set(['adapter-rejects', 'reasoning-active', 'model-forbids'] satisfies LlmUnsupportedControl['reason'][])
 
 /**
  * Detach serializable provider facts from a value thrown by an adapter.
@@ -70,13 +73,15 @@ function failureSnapshot(value: unknown): LlmFailure | undefined {
     const providerRetryAfterMs = candidate.providerRetryAfterMs
     const requestId = candidate.requestId
     const offloadImages = candidate.offloadImages
+    const unsupportedControl = candidate.unsupportedControl
     if (typeof message !== 'string' || message.length === 0
       || typeof code !== 'string' || code.length === 0
       || (status !== undefined && (!Number.isInteger(status) || status < 100 || status > 599))
       || (providerRetryAfterMs !== undefined
         && (!Number.isFinite(providerRetryAfterMs) || providerRetryAfterMs <= 0))
       || (requestId !== undefined && (typeof requestId !== 'string' || requestId.length === 0))
-      || (offloadImages !== undefined && (!Number.isSafeInteger(offloadImages) || offloadImages <= 0))) return undefined
+      || (offloadImages !== undefined && (!Number.isSafeInteger(offloadImages) || offloadImages <= 0))
+      || (unsupportedControl !== undefined && !isUnsupportedControl(unsupportedControl))) return undefined
     return Object.freeze({
       message,
       code,
@@ -84,10 +89,20 @@ function failureSnapshot(value: unknown): LlmFailure | undefined {
       ...providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs },
       ...requestId === undefined ? {} : { requestId },
       ...offloadImages === undefined ? {} : { offloadImages },
+      ...unsupportedControl === undefined ? {} : {
+        unsupportedControl: Object.freeze({ control: unsupportedControl.control, reason: unsupportedControl.reason }),
+      },
     })
   } catch (_sdkFailureGetter) {
     return undefined
   }
+}
+
+/** Whether a carried value names a known refused control and reason. */
+function isUnsupportedControl(value: unknown): value is LlmUnsupportedControl {
+  if (typeof value !== 'object' || value === null) return false
+  const { control, reason } = value as Partial<LlmUnsupportedControl>
+  return CONTROL_NAMES.has(control) && CONTROL_REASONS.has(reason)
 }
 
 /** Read an SDK error message without letting an accessor replace the primary failure. */

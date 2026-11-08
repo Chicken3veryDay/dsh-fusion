@@ -64,6 +64,29 @@ export interface LlmFailure {
    * selected occurrences in an `image/offload` event and retries the step.
    */
   readonly offloadImages?: number
+  /**
+   * With code `UNSUPPORTED_CONTROL`: the request control the captured adapter
+   * generation refused and why. Route on these fields, never on `message`.
+   */
+  readonly unsupportedControl?: LlmUnsupportedControl
+}
+
+/** Request-control names an adapter assesses; one per field of `LlmCallControls`. */
+export type LlmControlName = 'reasoningEffort' | 'temperature' | 'maxTokens' | 'stop'
+
+/**
+ * Why a captured adapter generation refuses a supplied control: the adapter
+ * never sends it (`adapter-rejects`), the active reasoning mode cannot carry it
+ * (`reasoning-active`), or the exact model forbids it (`model-forbids`).
+ */
+export type UnsupportedControlReason = 'adapter-rejects' | 'reasoning-active' | 'model-forbids'
+
+/** The control and reason carried by an `UNSUPPORTED_CONTROL` failure. */
+export interface LlmUnsupportedControl {
+  /** The refused request control. */
+  readonly control: LlmControlName
+  /** Why the adapter generation refuses it. */
+  readonly reason: UnsupportedControlReason
 }
 
 /** Plain text visible to the end user. */

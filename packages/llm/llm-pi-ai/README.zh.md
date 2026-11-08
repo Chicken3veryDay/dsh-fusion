@@ -112,6 +112,8 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 确切模型元数据将 `reasoning.efforts` 按可选强度从低到高排列。配置函数可从该列表中选择，再由 `prepareCall()` 校验具体强度。适配器只接收解析后的控制项。选择 `off` 不保证禁用推理：以省略推理字段表达该值的协议会沿用网关默认行为。所选等级下产生的推理 token 都计入该请求的输出上限。
 
+控制项评估遵循协议实际发送的内容。在 Anthropic Messages 上，推理处于启用状态（显式指定或路由默认）或捕获的 `compat` 禁止时，`temperature` 会以 `UNSUPPORTED_CONTROL` 被拒绝；推理为 `off` 时则会发送。`maxTokens` 仍是回答额度，没有总量硬上限。基于预算的模型会加上 thinking 预算（报告为 `add-thinking-allowance` 转换，因此在普通上下文中 `high` 下的 777 发送 17161），并报告 `model-output-ceiling` 约束：总和以模型的 `maxTokens` 为上限，随后 thinking 预算会被降低以保留回答余量（计算结果为 0 时发送 1024）。只要模型有上下文窗口，每个 Anthropic 额度（无论是否自适应）还会报告 `context-window-clamp` 约束：pi-ai 会降低该值，使估算输入加 4096 个 token 能放入窗口，且不低于 1。这些约束是有条件的事实，而不是载荷值；最终数值要在消息序列化之后才存在，因此自适应的 777 除非输入挤占窗口，否则仍为 777。`openai` 路由是否支持取决于凭据模式，而准备阶段不解析凭据，因此其 `temperature` 与 `maxTokens` 为 `unverified`（`account-mode-unresolved`）；其他协议为 `unverified`（`protocol-unverified`）。`unverified` 的控制项仍会分派。
+
 对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
 
 ### 运行时更改配置
@@ -124,7 +126,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 失败与恢复
 
-pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。提供方错误 code 或消息表明额度已耗尽的 429（例如 Codex 的 `usage_limit_reached`）为 `QUOTA`，不参与常规重试；其他 429 仍是可重试的 `RATE_LIMIT`。流中传递的订阅用量或用户数据暂时不可用 code 为可重试的 `SERVER` 失败。成功流中的 Codex 失败帧（`error` 或 `response.failed`）按其 code 分类：`usage_limit_reached` 与 `usage_not_included` 为 `QUOTA`，`rate_limit_exceeded` 为 `RATE_LIMIT`，没有 code 或为其他 code 的帧按其消息分类；这类失败不携带 HTTP 状态，若观察到被拒绝的响应，则由该响应决定。适配器从 429 响应体的有界副本中读取 429 code，从 pi-ai 的 `onProviderStreamEvent` 回调中读取帧 code，因为 pi-ai 会把两者都压平为消息文本；两种 code 都不会被持久化。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
+pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。提供方错误 code 或消息表明额度已耗尽的 429（例如 Codex 的 `usage_limit_reached`）为 `QUOTA`，不参与常规重试；其他 429 仍是可重试的 `RATE_LIMIT`。流中传递的订阅用量或用户数据暂时不可用 code 为可重试的 `SERVER` 失败。成功流中的 Codex 失败帧（`error` 或 `response.failed`）按其 code 分类：`usage_limit_reached` 与 `usage_not_included` 为 `QUOTA`，`rate_limit_exceeded` 为 `RATE_LIMIT`，没有 code 或为其他 code 的帧按其消息分类；这类失败不携带 HTTP 状态，若观察到被拒绝的响应，则由该响应决定。适配器从 429 响应体的有界副本中读取 429 code，从 pi-ai 的 `onProviderStreamEvent` 回调中读取帧 code，因为 pi-ai 会把两者都压平为消息文本；两种 code 都不会被持久化。`stop` 列表会在准备阶段以 `UNSUPPORTED_CONTROL`（`stop`、`adapter-rejects`）被拒绝，不会进行任何凭据或请求工作，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
 
 Config 更新严格验证发生变化的 provider。初始加载将已存储的目录故障保留为可编辑的 provider 诊断；未更改的故障 provider 不阻止其他编辑。可用模型仍可选择，无法解析的模型在网络 I/O 前失败。修复或删除问题配置会清除其诊断。
 
@@ -166,6 +168,7 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 | [`src/catalog.ts`](src/catalog.ts) | 已安装目录集成与漂移门禁 |
 | [`src/provider-data.ts`](src/provider-data.ts) | 配置界面使用的认证与端点生成数据 |
 | [`src/models.ts`](src/models.ts) | 基于 pi-ai 窄入口的 model collection、静态 provider 与 reasoning level |
+| [`src/controls.ts`](src/controls.ts) | 基于捕获的模型与 profile 的纯请求控制项评估 |
 | [`src/provider.ts`](src/provider.ts) | 受支持协议表与提供方构建 |
 | [`src/context.ts`](src/context.ts) | Harness 到 pi-ai 的上下文转换、图片处理、回放恢复 |
 | [`src/stream.ts`](src/stream.ts) | 把 pi-ai 事件转换为 harness `StreamChunk` 值 |

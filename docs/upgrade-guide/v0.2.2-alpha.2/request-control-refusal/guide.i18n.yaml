@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/request-control-refusal/guide.md
+/:
+  en: 8944c9a87fe730e4
+  zh: b37fc293a3e321ca
+/unsupported-request-controls-fail-at-preparation:
+  en: 024aea8021666d30
+  zh: 3d4ac42a1e1ee554
+/unsupported-request-controls-fail-at-preparation/change:
+  en: 6166567bcba46722
+  zh: fe1e4f2eac822ae3
+/unsupported-request-controls-fail-at-preparation/migration:
+  en: 4df5986a77b51358
+  zh: fd5f80f162e5abda
