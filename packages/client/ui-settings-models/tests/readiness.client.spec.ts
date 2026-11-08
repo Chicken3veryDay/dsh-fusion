@@ -93,6 +93,23 @@ describe('onboardingReadiness', () => {
     }))).toEqual({ kind: 'credential-missing' })
   })
 
+  it('ends onboarding for a provider the user signed in to, which has no settings profile', () => {
+    // An implied route: registered, its settings address unset, no key reference of its own.
+    const signedIn = otherRow({
+      entry: { ...otherRow().entry, provider: 'openai-codex', displayName: 'openai-codex', settingsPath: ['providers', 'openai-codex'] },
+      configured: false,
+      removable: false,
+      apiKeyEnv: undefined,
+      credential: undefined,
+    })
+
+    expect(onboardingReadiness(state({ rows: [row(), signedIn] }))).toEqual({ kind: 'provider-ready' })
+    // The same route while signed out is not registered, so the prompt stays.
+    expect(onboardingReadiness(state({
+      rows: [row(), { ...signedIn, entry: { ...signedIn.entry, active: false } }],
+    }))).toEqual({ kind: 'credential-missing' })
+  })
+
   it('accepts file and process-environment credentials without prompting', () => {
     expect(onboardingReadiness(state({
       rows: [row({ credential: { configured: true, source: 'file', writable: true } })],
