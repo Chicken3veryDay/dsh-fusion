@@ -338,6 +338,30 @@ export abstract class LlmAdapter {
   }
 
   /**
+   * Judge supplied controls before any credential, network or listing work, for a
+   * call whose controls are already final: {@link LlmRuntime.prepareCall} without a
+   * `ConfigureCall`, and an unprepared stream. A `ConfigureCall` may replace the
+   * controls from captured model metadata, so a call that has one skips this hook.
+   * Synchronous and pure: no credential, network or clock access, and it reads only
+   * the adapter's current connection facts. Only an `unsupported` verdict has effect
+   * (the call fails with `UNSUPPORTED_CONTROL` before {@link prepareCall}); any other
+   * verdict, or `undefined`, leaves the normal captured-generation assessment to run
+   * after {@link prepareCall}, which this hook never replaces or advertises.
+   * The default declares nothing.
+   * @param _provider - registered provider route.
+   * @param _model - exact model id.
+   * @param _controls - a detached, frozen copy of the supplied controls without model defaults.
+   * @returns a verdict for each control it can judge without captured model facts, or `undefined`.
+   */
+  preassessControls(
+    _provider: string,
+    _model: string,
+    _controls: Readonly<LlmCallControls>,
+  ): CallControlAssessment | undefined {
+    return undefined
+  }
+
+  /**
    * Bind exact model metadata, control assessment and the eventual request dispatch
    * to one adapter generation. Dynamic adapters override this so settings changes
    * between preparation and dispatch cannot combine one generation's capabilities
@@ -1043,6 +1067,23 @@ export class LlmRuntime extends TypertRemoteService {
     return assessment
   }
 
+  /**
+   * Refuse a control the adapter already knows is unsupported, before the adapter
+   * prepares the call. Only controls are shown to the adapter, as a detached frozen
+   * copy; an accepted call is still assessed after preparation by the captured generation.
+   */
+  private refuseEarly(adapter: LlmAdapter, config: LlmCallConfig): void {
+    const { provider, model } = config
+    const controls = deepFreeze(structuredClone<LlmCallControls>({
+      ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
+      ...config.temperature === undefined ? {} : { temperature: config.temperature },
+      ...config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens },
+      ...config.stop === undefined ? {} : { stop: config.stop },
+    }))
+    const declared = adapter.preassessControls(provider, model, controls)
+    if (declared !== undefined) this.assessCall({ provider, model, ...controls }, declared)
+  }
+
   /** Run pure refusal before optional account work, and detach the final verdicts. */
   private async finalizeCall(adapterCall: PreparedAdapterCall, config: LlmCallConfig, signal?: AbortSignal) {
     if (signal?.aborted) throw new LlmError('LLM preparation aborted', 'ABORTED', { cause: signal.reason })
@@ -1076,6 +1117,7 @@ export class LlmRuntime extends TypertRemoteService {
     signal?.throwIfAborted()
     const { provider, model, ...controls } = config
     const registration = this.registration(provider)
+    if (configure === undefined) this.refuseEarly(registration.adapter, config)
     const adapterCall = await registration.adapter.prepareCall(provider, model, signal)
     signal?.throwIfAborted()
     const modelInfo = this.normalizeModelInfo(registration, model, adapterCall.model)
@@ -1197,6 +1239,8 @@ export class LlmRuntime extends TypertRemoteService {
       let resolvedConfig: LlmCallConfig
       let dispatch: (options: GenerateOptions) => AsyncIterable<StreamChunk>
       if (prepared === undefined) {
+        // An aborted caller keeps the cancellation classification of preparation below.
+        if (options.signal?.aborted !== true) this.refuseEarly(adapter, options)
         const adapterCall = await adapter.prepareCall(options.provider, options.model, options.signal)
         modelInfo = this.normalizeModelInfo(registration, options.model, adapterCall.model)
         resolvedConfig = this.resolveCallWithInfo(options, modelInfo).config

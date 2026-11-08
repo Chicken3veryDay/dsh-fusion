@@ -101,7 +101,11 @@ export interface DeepSeekAdapterOptions<Connection extends DeepSeekConnectionOpt
   providerName?: string
   /** Provider-owned catalog availability; omission exposes no discovery entries. */
   discoverModels?: (provider: string) => Promise<LlmModelInfo[]>
-  /** Current validated connection facts; called once per operation. */
+  /**
+   * Current validated connection facts, read synchronously without I/O. The runtime reads them once
+   * before preparing a call that has no `ConfigureCall`, to refuse a known-unsupported control; the
+   * facts a call dispatches with come from {@link connect}, or from one further read when omitted.
+   */
   options: () => Connection
   /**
    * Resolve the connection for one exact-model lookup or prepared call, for

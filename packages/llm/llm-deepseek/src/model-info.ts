@@ -40,6 +40,22 @@ const OFF_ONLY_REASONING_EFFORTS = [
   },
 ] as const
 
+/** Reasoning choices and the default effort one connection offers; the single source for metadata, validation and assessment. */
+function reasoningOf(connection: DeepSeekConnectionOptions): NonNullable<LlmResolvedModelInfo['reasoning']> {
+  const { defaults } = connection
+  if (defaults.thinking === 'disabled') return { efforts: OFF_ONLY_REASONING_EFFORTS, defaultEffort: OFF_REASONING_EFFORT }
+  return {
+    efforts: REASONING_EFFORTS,
+    defaultEffort: defaults.reasoningEffort === 'off'
+      ? OFF_REASONING_EFFORT
+      : defaults.reasoningEffort === 'low'
+        ? LOW_REASONING_EFFORT
+        : defaults.reasoningEffort === 'max'
+          ? MAX_REASONING_EFFORT
+          : HIGH_REASONING_EFFORT,
+  }
+}
+
 /** Advertise one catalog entry.
  * @param provider - registered provider id.
  * @param model - advisory catalog entry.
@@ -82,25 +98,7 @@ export function modelInfo(
     defaultMaxTokens: configured?.maxTokens ?? connection.maxTokens,
     ...configured?.systemPromptUpdate === undefined ? {} : { systemPromptUpdate: configured.systemPromptUpdate },
     ...configured?.toolUpdate === undefined ? {} : { toolUpdate: configured.toolUpdate },
-    ...connection.defaults.thinking === 'disabled'
-      ? {
-        reasoning: {
-          efforts: OFF_ONLY_REASONING_EFFORTS,
-          defaultEffort: OFF_REASONING_EFFORT,
-        },
-      }
-      : {
-        reasoning: {
-          efforts: REASONING_EFFORTS,
-          defaultEffort: connection.defaults.reasoningEffort === 'off'
-            ? OFF_REASONING_EFFORT
-            : connection.defaults.reasoningEffort === 'low'
-              ? LOW_REASONING_EFFORT
-              : connection.defaults.reasoningEffort === 'max'
-                ? MAX_REASONING_EFFORT
-                : HIGH_REASONING_EFFORT,
-        },
-      },
+    reasoning: reasoningOf(connection),
   }
 }
 
@@ -131,6 +129,24 @@ export function assessControls(connection: DeepSeekConnectionOptions, controls: 
 
 /** Whether the serializer sends `thinking.type: enabled` for these controls on this connection. */
 function reasoningEnabled(connection: DeepSeekConnectionOptions, controls: Readonly<LlmCallControls>): boolean {
-  const { defaults } = connection
-  return (controls.reasoningEffort ?? defaults.reasoningEffort ?? (defaults.thinking === 'disabled' ? 'off' : 'high')) !== OFF_REASONING_EFFORT
+  return (controls.reasoningEffort ?? reasoningOf(connection).defaultEffort) !== OFF_REASONING_EFFORT
+}
+
+/**
+ * Judge controls that need only the current connection, before the call captures its connection
+ * and before any credential or listing work. Only the temperature verdict of {@link assessControls}
+ * is decisive here: the call's reasoning mode is the supplied effort or this connection's default
+ * effort. A supplied effort the connection does not offer gets no verdict, so
+ * `UNSUPPORTED_REASONING_EFFORT` is raised by normal model resolution.
+ * @param connection - the connection facts current at call entry; never retained for dispatch.
+ * @param controls - the supplied controls, without model defaults.
+ * @returns verdicts, or `undefined` when the supplied reasoning effort is not offered.
+ */
+export function assessControlsEarly(
+  connection: DeepSeekConnectionOptions,
+  controls: Readonly<LlmCallControls>,
+): CallControlAssessment | undefined {
+  const { reasoningEffort } = controls
+  if (reasoningEffort !== undefined && !reasoningOf(connection).efforts.some(effort => effort.id === reasoningEffort)) return undefined
+  return assessControls(connection, controls)
 }
