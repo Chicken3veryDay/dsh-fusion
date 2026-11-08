@@ -85,7 +85,7 @@ it('records a bound provider prefix and removes it when the next call no longer 
         }),
       }
     }
-  }([textResponse('one'), textResponse('two')])
+  }([textResponse('one'), textResponse('two'), textResponse('three')])
   const ctx = await harness(adapter)
   onTestFinished(() => ctx.fiber.dispose())
   const agent = await ctx.agentLoop.create(SessionId('provider-prefix'), { provider: 'mock', model: 'mock' })
@@ -94,7 +94,10 @@ it('records a bound provider prefix and removes it when the next call no longer 
   await idle
   const first = adapter.requests[0]?.messages[0]
   expect(first?.role).toBe('system')
-  expect(first?.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringMatching(/^Required transport context\.\n\n/) })])
+  expect(first?.content).toHaveLength(1)
+  const block = first?.content[0]
+  if (block?.type !== 'text') throw new Error('Missing captured system prompt')
+  expect(block.text).toMatch(/^Required transport context\.\n\n/)
   const firstEvent = agent.session.snapshotEvents().find(event => event.type === 'system/message')
   expect(firstEvent?.type === 'system/message' && firstEvent.data.message.content).toEqual(first?.content)
 
@@ -107,6 +110,13 @@ it('records a bound provider prefix and removes it when the next call no longer 
   const systems = agent.session.snapshotEvents().filter(event => event.type === 'system/message')
   expect(systems).toHaveLength(2)
   expect(systems[1]?.data.message.content).toEqual(adapter.requests[1]?.messages[0]?.content)
+
+  ctx.on('system-prompt/assemble', async (_assembly, _context, next) => ({ ...await next(), sections: [] }))
+  adapter.prefix = 'Required transport context.'
+  idle = waitForIdle(ctx, agent)
+  send(agent, 'third')
+  await idle
+  expect(adapter.requests[2]?.messages[0]?.content).toEqual([{ type: 'text', text: 'Required transport context.' }])
 })
 
 /** Assert `previous` is a strict value-prefix of `current`. */

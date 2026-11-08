@@ -1,0 +1,13 @@
+version: 1
+scenario: anthropic-oauth-script
+profile: sdk
+composition: sdk-anthropic-oauth-script
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: anthropic
+  DSH_SNAPSHOT_MODEL: claude-haiku-4-5
+workspace:
+  final: true
+header:
+  class: sdk-anthropic-oauth-script
+  pin: true

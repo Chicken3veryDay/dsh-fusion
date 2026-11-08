@@ -925,6 +925,8 @@ interface PreparedLlmCall {
   readonly systemPromptUpdate?: SystemPromptUpdate
   /** Exact model tool update mode captured with the adapter dispatch generation. */
   readonly toolUpdate?: ToolUpdate
+  /** Captured provider-required prefix; the loop records it before the assembled system prompt. */
+  readonly systemPromptPrefix?: string
   /** Config fields materialized by the captured adapter rather than proposed by the caller. */
   readonly adapterDefaults: LlmCallConfigAdapterDefaults
   /**
@@ -975,7 +977,12 @@ interface PreparedAdapterCall {
   finalizeControls?(
     controls: Readonly<LlmCallControls>,
     signal?: AbortSignal,
-  ): Promise<{ readonly assessment: CallControlAssessment; readonly stream: PreparedAdapterCall['stream'] }>
+  ): Promise<{
+    readonly assessment: CallControlAssessment
+    readonly stream: PreparedAdapterCall['stream']
+    /** Provider-required system text, bound to the same authentication as dispatch. */
+    readonly systemPromptPrefix?: string
+  }>
   /** Dispatch through that generation without re-reading dynamic connection facts. */
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 }

@@ -1,0 +1,82 @@
+{
+  "final_response": "OAuth Script completed.",
+  "finish_reason": "completed",
+  "reason": {
+    "kind": "completed"
+  },
+  "event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/message",
+    "tool/call",
+    "tool/ptc-dispatch-start",
+    "tool/ptc-dispatch",
+    "tool/result",
+    "step/end",
+    "step/start",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "notification_event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/message",
+    "tool/call",
+    "tool/ptc-dispatch-start",
+    "tool/ptc-dispatch",
+    "tool/result",
+    "step/end",
+    "step/start",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "tool_names": [
+    "run_code"
+  ],
+  "system_prefix": "You are Claude Code, Anthropic's official CLI for Claude.",
+  "proof_file": "DSH_OAUTH_EXECUTED\n",
+  "outbound_requests": [
+    {
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "bearerAuth": true,
+      "apiKeyHeader": false,
+      "clientHeader": true,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "run_code"
+      ],
+      "toolResult": false
+    },
+    {
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "bearerAuth": true,
+      "apiKeyHeader": false,
+      "clientHeader": true,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "run_code"
+      ],
+      "toolResult": true
+    }
+  ]
+}

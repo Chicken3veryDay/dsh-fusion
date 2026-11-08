@@ -8985,7 +8985,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedAdapterCall',
-    declaration: 'export interface PreparedAdapterCall {\n    readonly model: LlmResolvedModelInfo;\n    assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment;\n    finalizeControls?(controls: Readonly<LlmCallControls>, signal?: AbortSignal): Promise<{\n        readonly assessment: CallControlAssessment;\n        readonly stream: PreparedAdapterCall[\'stream\'];\n    }>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export interface PreparedAdapterCall {\n    readonly model: LlmResolvedModelInfo;\n    assessControls(controls: Readonly<LlmCallControls>): CallControlAssessment;\n    finalizeControls?(controls: Readonly<LlmCallControls>, signal?: AbortSignal): Promise<{\n        readonly assessment: CallControlAssessment;\n        readonly stream: PreparedAdapterCall[\'stream\'];\n        readonly systemPromptPrefix?: string;\n    }>;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
     name: 'PreparedDeepSeekLlmApiExtension',
@@ -8997,7 +8997,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PreparedLlmCall',
-    declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly toolUpdate?: ToolUpdate;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    readonly assessment: CallControlAssessment;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
+    declaration: 'export interface PreparedLlmCall {\n    readonly config: LlmCallConfig;\n    readonly retryPolicy: ResolvedRetryPolicy;\n    readonly context?: LlmModelContext;\n    readonly inputModalities?: readonly ModelModality[];\n    readonly systemPromptUpdate?: SystemPromptUpdate;\n    readonly toolUpdate?: ToolUpdate;\n    readonly systemPromptPrefix?: string;\n    readonly adapterDefaults: LlmCallConfigAdapterDefaults;\n    readonly assessment: CallControlAssessment;\n    stream(options: GenerateOptions): AsyncIterable<StreamChunk>;\n}',
   },
   {
     name: 'PreparedParticipants',

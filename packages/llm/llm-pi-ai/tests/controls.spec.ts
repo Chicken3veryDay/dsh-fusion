@@ -62,11 +62,14 @@ function contextClamp(contextWindow: number) {
   return { kind: 'context-window-clamp', contextWindow, reserveTokens: 4096, minimumTokens: 1 }
 }
 
-/** Prepare, assert nothing ran, dispatch, and return the single request body. */
+/** Prepare without inference, dispatch, and return the single request body. */
 async function dispatch(p: Probe, config: LlmCallConfig, input = messages) {
   const prepared = await p.ctx.llm.prepareCall(config)
   expect(p.requests).toHaveLength(0)
-  expect(p.authCalls()).toBe(config.provider === 'openai' && (config.temperature !== undefined || config.maxTokens !== undefined) ? 1 : 0)
+  // Anthropic binds authentication to capture any OAuth-required system prefix.
+  const bindsAuth = config.provider === 'anthropic'
+    || config.provider === 'openai' && (config.temperature !== undefined || config.maxTokens !== undefined)
+  expect(p.authCalls()).toBe(bindsAuth ? 1 : 0)
   await collect(prepared.stream({ ...prepared.config, messages: input }))
   expect(p.requests).toHaveLength(1)
   return { prepared, body: p.requests[0] }

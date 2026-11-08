@@ -268,6 +268,16 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       } },
     },
   },
+  'anthropic-oauth-script': {
+    expectedFinalResponse: 'OAuth Script completed.',
+    expectedTools: { run_code: ['code', 'description'] },
+    modelRequestsFile: 'oauth-requests.jsonl',
+    storedCredentials: {
+      'llm-pi-ai/anthropic': { kind: 'grant', payload: {
+        type: 'oauth', access: 'sk-ant-oat-synthetic-dsh', refresh: 'synthetic-refresh', expires: 4102444800000,
+      } },
+    },
+  },
   'account-auth-retry': {
     expectedFinalResponse: 'Authentication retry completed.',
     modelRequestsFile: 'auth-requests.jsonl',
@@ -1748,6 +1758,30 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(turnEnds[0]?.data['reason']).not.toHaveProperty('error.status')
         expect(events.filter(event => event.type === 'request/header')).toHaveLength(1)
         expect(JSON.stringify(events)).not.toContain('usage_limit_reached')
+      }
+      if (scenario.name === 'anthropic-oauth-script') {
+        expect(modelRequests).toHaveLength(2)
+        const prefix = "You are Claude Code, Anthropic's official CLI for Claude."
+        const events = results.flatMap(result => result.events)
+        const system = events.find(event => event.type === 'system/message')?.data['message']
+        const logged = JSON.stringify(system)
+        expect(logged.includes(prefix), 'the transport prefix must be recorded in system/message').toBe(true)
+        for (const request of modelRequests) {
+          expect(request).toMatchObject({
+            endpoint: 'https://api.anthropic.com/v1/messages', bearerAuth: true, apiKeyHeader: false,
+            clientHeader: true, model: 'claude-haiku-4-5', tools: ['run_code'],
+          })
+          const blocks = request['system']
+          expect(Array.isArray(blocks)).toBe(true)
+          if (!Array.isArray(blocks)) throw new Error('Missing Messages system blocks')
+          expect(blocks[0]).toBe(prefix)
+          expect(system).toMatchObject({ content: [{ type: 'text', text: blocks.join('\n\n') }] })
+        }
+        expect(modelRequests.map(request => request['toolResult'])).toEqual([false, true])
+        expect(events.filter(event => event.type === 'tool/call').map(event => event.data['name'])).toEqual(['run_code'])
+        expect(JSON.stringify(events)).toContain('DSH_OAUTH_EXECUTED')
+        expect(JSON.stringify(events)).not.toContain('sk-ant-oat-synthetic-dsh')
+        expect(JSON.stringify(notifications)).not.toContain('sk-ant-oat-synthetic-dsh')
       }
       if (scenario.name === 'account-auth-retry') {
         expect(modelRequests).toEqual([

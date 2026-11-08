@@ -428,7 +428,7 @@ export class PiAiAdapter extends LlmAdapter {
       if (Object.keys(headers).some(name => /^(authorization|x-api-key)$/i.test(name))) {
         throw new LlmError('Anthropic subscription authentication cannot be overridden by request auth headers.', 'AUTH')
       }
-    } else if (provider === 'anthropic' && profile.requiresStoredCredential === true) {
+    } else if (provider === 'anthropic' && explicit === undefined && profile.requiresStoredCredential === true) {
       throw new LlmError('Anthropic subscription sign-in is unavailable; sign in again. API-key billing was not selected.', 'AUTH')
     }
     let resolved: Awaited<ReturnType<Models['getAuth']>>
@@ -740,7 +740,8 @@ export class PiAiAdapter extends LlmAdapter {
     )
     const headers = requestHeaders(profile.headers, options, model.baseUrl, this.config.prepareHeaders)
     const { apiKey, checked } = binding ?? await this.requestAuth(snapshot, options.provider, profile, model, options.signal, headers)
-    if (model.provider === 'anthropic' && checked?.ok === true && checked.result?.source === 'OAuth') {
+    const anthropicOAuth = model.provider === 'anthropic' && checked?.ok === true && checked.result?.source === 'OAuth'
+    if (anthropicOAuth) {
       if (Object.keys(headers).some(name => /^(authorization|x-api-key)$/i.test(name))) {
         throw new LlmError('Anthropic subscription authentication cannot be overridden by request auth headers.', 'AUTH')
       }
@@ -780,7 +781,7 @@ export class PiAiAdapter extends LlmAdapter {
             maxBytes: profile.requestImageMaxBytes,
           },
         }, onReplayDegrade, updates.systemPromptUpdate === 'in-history')
-      if (model.provider === 'anthropic' && checked?.ok === true && checked.result?.source === 'OAuth') {
+      if (anthropicOAuth) {
         // The loop already logged this prefix. Let pi-ai encode its one mandatory
         // prefix block, without also sending it inside the caller's system block.
         if (context.systemPrompt === ANTHROPIC_OAUTH_SYSTEM_PREFIX) delete context.systemPrompt

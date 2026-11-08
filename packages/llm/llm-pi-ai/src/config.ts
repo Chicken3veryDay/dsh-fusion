@@ -211,7 +211,7 @@ export interface ResolvedPiAiProviderProfile
   /** Harness route key and the `Models` collection key (the configuration dict key). */
   provider: string
   /**
-   * True for an automatic OpenAI route and for a profile recording `signInOnly`;
+   * True for automatic OpenAI/Anthropic routes and profiles recording `signInOnly`;
    * otherwise a configured keyless route may fall back to ambient discovery.
    */
   requiresStoredCredential?: boolean
