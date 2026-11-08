@@ -94,6 +94,8 @@ kind: "package-reference"
 
 pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程提供 OAuth 或交互式密钥提示（密钥键入 pi-ai 自己的登录提示，而非设置表单），得到的凭据存储在 harness 凭据存储的 `llm-pi-ai/<provider id>` 记录中。受支持的已安装目录提供方登录后，会从已安装模型目录自动激活路由，无需 `providers` 条目；同一提供方的显式 profile 优先。退出登录会移除自动激活的路由。Anthropic OAuth 记录不会自动激活路由；请用 API 密钥登录或配置 profile。存储的登录在存储的跨进程锁下刷新。落在记录文法之外——小写连字符标识符——的手工声明路由键无法登录，因为对它的记录写入会以 `LlmError('UNSTORABLE_PROVIDER_ID')` 拒绝；这类路由改用 `apiKeyEnv` 或提供方 ambient 设置认证。
 
+OpenAI 的 Sign in with ChatGPT 使用 DSH 生成的稳定 UUID，并将其存储在 `llm-pi-ai/installation-id`。退出登录会移除提供方授权，但保留该安装实例标识。
+
 ### 解析模型目录
 
 profile 的 `models` 列表会替换而非扩展路由的已安装目录；每个条目从同 id 已安装模型取未设置字段的默认值，因此把路由收窄到两个模型、修正一个容量或添加比已安装目录更新的模型都是一行编辑。`modelOverrides` 无需该代价即可重塑个别已安装目录模型——修正一个模型，保留其余三十七个——当它与 `models` 列表并存、位于手工声明路由上、或点名目录未描述的模型时会被拒绝，因为静默不变的模型会成为别人日后寻找的拼写错误。
@@ -161,6 +163,7 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 | [`src/provider.ts`](src/provider.ts) | 受支持协议表与提供方构建 |
 | [`src/context.ts`](src/context.ts) | Harness 到 pi-ai 的上下文转换、图片处理、回放恢复 |
 | [`src/stream.ts`](src/stream.ts) | 把 pi-ai 事件转换为 harness `StreamChunk` 值 |
+| [`src/wire.ts`](src/wire.ts) | 观测 HTTP 失败状态、重试延迟与请求 id |
 | [`src/replay.ts`](src/replay.ts) | 带版本的 `ReplayEnvelope` 存储与校验 |
 | [`src/discovery.ts`](src/discovery.ts) | 面向配置界面的端点询问 |
 
@@ -237,7 +240,7 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 
 #### Token 影响
 
-生成内容只在 loop 记录后才影响后续输入。提供方未单独报告推理 token 时，pi-ai 会把推理 token 并入输出用量，并原样保留其精确 `totalTokens` 值。
+生成内容只在 loop 记录后才影响后续输入。推理 token 仍属于输出用量；提供方报告的推理细分值未超过输出计数时，还会作为 `reasoningTokens` 提供。适配器原样保留 pi-ai 的精确 `totalTokens` 值。
 
 #### KV Cache 影响
 
@@ -252,7 +255,6 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 
 - **`maxRequestImageBytes` 只计算 base64 图片载荷**，文本、工具、描述符与 JSON 结构在该上限之外，因此它必须留有余量地低于网关请求体上限。
 - **登录只存在于发起它的进程中**——授权尝试不持久，因此登录中途刷新页面会放弃它，用户需要重新开始。退出登录是对已存储记录执行 `deleteRecord`，只在本地忘记它，不会告知签发方。
-- **OpenAI 不提供 ChatGPT 登录**——pi-ai 的 Sign in with ChatGPT 用应用提供的稳定 UUID 向 OpenAI 标识安装实例，而 harness 没有用于第三方账号登录的安装 ID；`openai` 路由改用 API key 登录。
 - **提供方原生发现经本插件的 ambient context 回答**——不点名凭据的路由交由目录提供方自身解析，它会询问环境值（`AZURE_OPENAI_API_KEY`、`AWS_PROFILE` 及各提供方自有集合）与本地凭据文件。两个问题都在这里得到回答：凭据 seam 先于进程环境被查询，文件存在性则针对宿主进程的文件系统以 `~` 展开后检查。它做不到的是*读取*凭据文件内容——自行解析 `~/.aws/credentials` 的提供方会直接读取，不经该 seam。
 - **重置恢复继承配置**——重置下层 profile 提供的路由会恢复该路由。
 - **完整替换 Config 可以移除继承的字典条目**——字段重置则恢复其继承值。
@@ -265,8 +267,8 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **不支持 `GenerateOptions.stop`**——pi-ai 的通用流式选项无法跨提供方保证停止序列行为。
 - **对话更新支持只来自已安装的 pi-ai 目录**——原生系统与工具更新需要目录模型的对话中 compat 标志，profile 不能设置这些标志。手工声明的路由与未标记的模型会以用户角色提醒接收后续系统文本，并在每次请求开头接收完整的当前工具列表。
 - **图片只在 user 与工具结果消息中被接受**——system、developer 或 assistant 历史中的图片在两条转换路径上都会以 `UNSUPPORTED_CONTENT` 失败。
-- **提供方 HTTP 状态不可用**——pi-ai 错误事件不跨提供方暴露稳定 HTTP 状态。
-- **重试策略由提供方自有，而非 SDK 重试**——pi-ai SDK 重试保持禁用，因此持久 agent（智能体）步骤与 `llm/retry` 事件拥有每个可见尝试，直接 `ctx.llm.stream()` 调用仍是单次尝试。
+- **HTTP 失败详情取决于协议**——Chat Completions、Responses 与 Anthropic Messages 会保留被拒请求的 HTTP 状态，以及响应提供的重试延迟和请求 id。Google 与 Bedrock 传输不支持通过 pi-ai 的自定义 fetch 进行观测，错误分类仍依赖其错误文本。
+- **重试策略由提供方自有，而非 SDK 重试**——pi-ai SDK 重试保持禁用，因此持久 agent（智能体）步骤与 `llm/retry` 事件拥有每个可见尝试，直接 `ctx.llm.stream()` 调用仍是单次尝试。省略 `transport` 时 Codex 使用 SSE；显式传输设置保留其行为（[迁移说明](../../../docs/upgrade-guide/v0.2.2-alpha.2/codex-sse-default/guide.zh.md)）。
 - **流式 JSON 工具调用参数避免逐 delta 重复解析**——安装的 pi-ai 带有 [`patches/@earendil-works__pi-ai@1.3.0.patch`](../../../patches/@earendil-works__pi-ai@1.3.0.patch)，它移除了每个流适配器中对整段累计参数 JSON 的逐 delta 重新解析（上游 [earendil-works/pi#9265](https://github.com/earendil-works/pi/issues/9265)）；未打补丁时，数 MB 的参数流会在事件循环上消耗 O(n²) CPU，并使进程内所有会话停滞。完成事件提供解析后的参数；Responses 可能在参数完成和输出项完成时分别解析。本适配器只读取 delta 字符串与最终参数。每次升级 pi-ai 时都要重新应用或撤销该补丁。
 - **Chat Completions 中的 Gemini 工具调用思考签名由补丁保留**——同一补丁把 OpenAI 兼容流式响应里的 `tool_calls[].extra_content.google.thought_signature` 读入工具调用的重放签名，并在同一模型继续时以 `extra_content` 发回（上游 [earendil-works/pi#10157](https://github.com/earendil-works/pi/issues/10157)）；未打补丁时，Gemini 会以 HTTP 400 拒绝工具调用轮次的下一步。OpenRouter 的加密推理详情仍通过 `reasoning_details` 重放。
 

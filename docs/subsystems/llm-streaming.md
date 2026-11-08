@@ -508,6 +508,8 @@ interface LlmConfigurableProvider {
   baseURLEnv?: readonly string[]
   /** Authentication the adapter performs when the profile names no credential reference; absent when it reports none. */
   nativeAuth?: LlmNativeAuth
+  /** Whether the owning adapter recognizes a stored credential for this route; absent means none reported. */
+  hasStoredCredential?: boolean
   /** Configuration diagnostic for repair; unaffected models may remain serviceable. */
   error?: string
 }
