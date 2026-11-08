@@ -78,6 +78,12 @@ export interface ProviderEditorProps {
   baseURLEnv?: readonly string[]
   /** Authentication the route performs when its profile names no credential reference; absent when the adapter reports none. */
   nativeAuth?: LlmNativeAuth
+  /**
+   * Whether the route currently authenticates through a stored sign-in rather than a profile-named
+   * key, from the provider directory. The card then records `signInOnly` when it creates the route's
+   * profile, so a routine edit keeps the plan-bound route from becoming ambient API billing.
+   */
+  signedIn?: boolean
   /** Redacted state of the profile's named credential reference, from the page snapshot. */
   credential?: CredentialInfo
   /** Redacted checks for the profile's named reference or the provider's native variables. */
@@ -269,10 +275,16 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     const ns = namespace.ns
     // A pi-ai profile names the conventional reference only when this page is
     // about to store a key. Otherwise the provider keeps its native auth path.
-    const next = layout === 'pi-ai' && stringAt(draft, 'apiKeyEnv') === undefined
+    const named = layout === 'pi-ai' && stringAt(draft, 'apiKeyEnv') === undefined
       && stringAt(fallback, 'apiKeyEnv') === undefined && keyValue.length > 0
       ? schema.setPath(draft, ['apiKeyEnv'], keyRef)
       : draft
+    // The first profile written for a route that has only its stored sign-in keeps that route
+    // sign-in-bound; naming a key (typed here or already in the draft) is the deliberate switch.
+    const createsSignedInProfile = layout === 'pi-ai' && props.signedIn === true
+      && props.credentialOnly !== true && fallback === undefined && committedOriginal === undefined
+      && stringAt(named, 'apiKeyEnv') === undefined
+    const next = createsSignedInProfile ? schema.setPath(named, ['signInOnly'], true) : named
     if (props.credentialOnly !== true) {
       // The same checker gates the submit button, so a card cannot reach this
       // with a bad row; it stays because the schema check below would refuse
