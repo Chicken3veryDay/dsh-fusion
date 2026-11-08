@@ -1,0 +1,13 @@
+version: 1
+scenario: anthropic-account-pool
+profile: sdk
+composition: sdk-anthropic-account-pool
+recording: authored
+environment:
+  DSH_SNAPSHOT_PROVIDER: anthropic
+  DSH_SNAPSHOT_MODEL: claude-haiku-4-5
+workspace:
+  final: true
+header:
+  class: sdk-anthropic-account-pool
+  pin: true

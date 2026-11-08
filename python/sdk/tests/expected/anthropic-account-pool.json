@@ -1,0 +1,105 @@
+{
+  "final_response": "Pool Script completed.",
+  "finish_reason": "completed",
+  "reason": {
+    "kind": "completed"
+  },
+  "event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/attempt",
+    "assistant/message",
+    "tool/call",
+    "tool/ptc-dispatch-start",
+    "tool/ptc-dispatch",
+    "tool/result",
+    "step/end",
+    "step/start",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "notification_event_types": [
+    "agent/inbox/spliced",
+    "turn/start",
+    "agent/inbox/spliced",
+    "step/start",
+    "system/message",
+    "user/message",
+    "user/message",
+    "user/message",
+    "session/title",
+    "request/header",
+    "request/context",
+    "assistant/attempt",
+    "assistant/message",
+    "tool/call",
+    "tool/ptc-dispatch-start",
+    "tool/ptc-dispatch",
+    "tool/result",
+    "step/end",
+    "step/start",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "tool_names": [
+    "run_code"
+  ],
+  "system_prefix": "You are Claude Code, Anthropic's official CLI for Claude.",
+  "proof_file": "DSH_POOL_EXECUTED\n",
+  "retry_replays_identical_history": true,
+  "tool_result_changes_history": true,
+  "failed_attempts": [
+    {
+      "status": 429,
+      "providerRetryAfterMs": 30000,
+      "message": "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"rate limited\"}}",
+      "code": "RATE_LIMIT"
+    }
+  ],
+  "outbound_requests": [
+    {
+      "role": "limited",
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "bearerAuth": true,
+      "apiKeyHeader": false,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "run_code"
+      ],
+      "toolResult": false
+    },
+    {
+      "role": "serving",
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "bearerAuth": true,
+      "apiKeyHeader": false,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "run_code"
+      ],
+      "toolResult": false
+    },
+    {
+      "role": "serving",
+      "endpoint": "https://api.anthropic.com/v1/messages",
+      "bearerAuth": true,
+      "apiKeyHeader": false,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "run_code"
+      ],
+      "toolResult": true
+    }
+  ]
+}

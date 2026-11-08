@@ -12,7 +12,7 @@
 import { existsSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, delimiter, join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
@@ -133,6 +133,8 @@ interface SdkAssertions {
   expectedFinalResponse?: string
   /** Synthetic credential records written to the private DSH home's credential document before launch. */
   storedCredentials?: Readonly<Record<string, unknown>>
+  /** Synthetic credential documents by path under the private DSH home, each written 0600 with only its own records. */
+  accountDocuments?: Readonly<Record<string, Readonly<Record<string, unknown>>>>
   /** Environment overrides passed to the runtime subprocess. */
   environment?: Readonly<Record<string, string>>
   /** A separate DSH SDK child whose persisted session joins the evidence. */
@@ -276,6 +278,23 @@ const SDK_ASSERTIONS: Readonly<Record<string, SdkAssertions>> = {
       'llm-pi-ai/anthropic': { kind: 'grant', payload: {
         type: 'oauth', access: 'sk-ant-oat-synthetic-dsh', refresh: 'synthetic-refresh', expires: 4102444800000,
       } },
+    },
+  },
+  'anthropic-account-pool': {
+    expectedFinalResponse: 'Pool Script completed.',
+    expectedTools: { run_code: ['code', 'description'] },
+    modelRequestsFile: 'pool-requests.jsonl',
+    accountDocuments: {
+      'accounts/pool-a.credentials.yaml': {
+        'llm-pi-ai/anthropic': { kind: 'grant', payload: {
+          type: 'oauth', access: 'sk-ant-oat-synthetic-pool-a', refresh: 'synthetic-refresh-pool-a', expires: 4102444800000,
+        } },
+      },
+      'accounts/pool-b.credentials.yaml': {
+        'llm-pi-ai/anthropic': { kind: 'grant', payload: {
+          type: 'oauth', access: 'sk-ant-oat-synthetic-pool-b', refresh: 'synthetic-refresh-pool-b', expires: 4102444800000,
+        } },
+      },
     },
   },
   'account-auth-retry': {
@@ -889,6 +908,11 @@ async function runScenario(scenario: CorpusScenario): Promise<{
     await writeFile(join(dshHome, '.credentials.yaml'), JSON.stringify({
       version: 1, refs: {}, records: assertions.storedCredentials,
     }), { mode: 0o600 })
+  }
+  for (const [relative, records] of Object.entries(assertions.accountDocuments ?? {})) {
+    const document = join(dshHome, relative)
+    await mkdir(dirname(document), { recursive: true })
+    await writeFile(document, JSON.stringify({ version: 1, refs: {}, records }), { mode: 0o600 })
   }
   const workspaceDir = join(scenario.dir, 'workspace')
   if (existsSync(workspaceDir)) {
@@ -1782,6 +1806,37 @@ describe('TypeScript SDK snapshots over the jsonrpc runtime', () => {
         expect(JSON.stringify(events)).toContain('DSH_OAUTH_EXECUTED')
         expect(JSON.stringify(events)).not.toContain('sk-ant-oat-synthetic-dsh')
         expect(JSON.stringify(notifications)).not.toContain('sk-ant-oat-synthetic-dsh')
+      }
+      if (scenario.name === 'anthropic-account-pool') {
+        // A real 429 on the first-asked account moves the same step to the other account: three requests in one
+        // conversation, one Script execution, and the retried request carries the identical history.
+        const prefix = "You are Claude Code, Anthropic's official CLI for Claude."
+        const events = results.flatMap(result => result.events)
+        expect(modelRequests.map(request => request['role']), JSON.stringify(events.filter(event => event.type === 'turn/end'))).toEqual(['limited', 'serving', 'serving'])
+        expect(modelRequests.map(request => request['toolResult'])).toEqual([false, false, true])
+        expect(modelRequests[1]?.['historyDigest']).toBe(modelRequests[0]?.['historyDigest'])
+        expect(modelRequests[2]?.['historyDigest']).not.toBe(modelRequests[1]?.['historyDigest'])
+        for (const request of modelRequests) {
+          expect(request).toMatchObject({
+            endpoint: 'https://api.anthropic.com/v1/messages', bearerAuth: true, apiKeyHeader: false,
+            model: 'claude-haiku-4-5', tools: ['run_code'],
+          })
+          expect(request['system']).toEqual(modelRequests[0]?.['system'])
+        }
+        const system = events.find(event => event.type === 'system/message')?.data['message']
+        expect(JSON.stringify(system).includes(prefix), 'the transport prefix must be recorded in system/message').toBe(true)
+        expect(events.filter(event => event.type === 'tool/call').map(event => event.data['name'])).toEqual(['run_code'])
+        expect(events.filter(event => event.type === 'tool/result')).toHaveLength(1)
+        expect(JSON.stringify(events)).toContain('DSH_POOL_EXECUTED')
+        expect(events.filter(event => event.type === 'turn/end')).toMatchObject([{ data: { reason: { kind: 'completed' } } }])
+        // Neither account's grant reaches events, notifications or the main credential document.
+        const secrets = ['sk-ant-oat-synthetic-pool-a', 'sk-ant-oat-synthetic-pool-b', 'synthetic-refresh-pool']
+        for (const secret of secrets) {
+          expect(JSON.stringify(events)).not.toContain(secret)
+          expect(JSON.stringify(notifications)).not.toContain(secret)
+        }
+        const main = join(cwd, '.dsh', '.credentials.yaml')
+        if (existsSync(main)) expect(await readFile(main, 'utf8')).not.toContain('llm-pi-ai/anthropic')
       }
       if (scenario.name === 'account-auth-retry') {
         expect(modelRequests).toEqual([
