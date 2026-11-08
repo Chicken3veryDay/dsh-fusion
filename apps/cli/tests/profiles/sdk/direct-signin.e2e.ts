@@ -37,7 +37,7 @@ it.each([true, false])('uses a stored sign-in through the Script-default SDK pro
   const requestsFile = join(root, 'requests.jsonl')
   const launch = resolveExampleLaunch({
     srcBin: join(repoRoot, 'apps/cli/src/bin.ts'),
-    tsconfigPath: join(repoRoot, 'tsconfig.json'), sourceImport: 'tsx/esm',
+    mode: 'lib',
   })
   const child = execa(launch.command, [
     '--import', networkFixture, ...launch.args, '--profile', 'sdk', '--patch', patch,

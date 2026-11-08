@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { FinishReason } from '@deepseek-ai/dsh-llm'
 import * as PiAi from '../src/index.ts'
 import type { Usage as PiUsage } from '@earendil-works/pi-ai'
@@ -122,6 +122,27 @@ async function finishOf(baseURL: string): Promise<FinishReason> {
 }
 
 describe('a rejected response through the adapter', () => {
+  it('preserves native Google errors without claiming structured HTTP details', async () => {
+    const server = await mockServer([{
+      status: 400, body: JSON.stringify({ error: { code: 400, message: 'Invalid test request', status: 'INVALID_ARGUMENT' } }),
+    }])
+    vi.stubEnv('PI_WIRE_KEY', 'fixture-key')
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(PiAi, { providers: { google: { apiKeyEnv: 'PI_WIRE_KEY', baseURL: server.url } } })
+    const model = (await ctx.llm.listModels('google'))[0]!.id
+
+    const { finish } = await assemble(ctx, { provider: 'google', model, messages: [
+      createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] }),
+    ] })
+
+    expect(finish).toMatchObject({ kind: 'error', failure: { code: 'INVALID_REQUEST' } })
+    expect(JSON.stringify(finish)).toContain('Invalid test request')
+    expect(finish).not.toHaveProperty('failure.status')
+    expect(server.requests).toHaveLength(1)
+  })
+
   it.each([
     [402, '{"error":{"message":"Payment required"}}', 'QUOTA', {}],
     [429, '{"error":{"message":"Slow down"}}', 'RATE_LIMIT', { 'retry-after': '12', 'x-request-id': 'req_9' }],
@@ -291,7 +312,7 @@ describe('a sign-in failure below pi-ai', () => {
 })
 
 describe('GitHub Copilot model offer', () => {
-  async function copilot(...ids: [] | [unknown]): Promise<readonly string[]> {
+  async function copilot(options: { availableModelIds?: unknown; apiKey?: string } = {}): Promise<readonly string[]> {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-pi-copilot-'))
     onTestFinished(() => rm(dir, { recursive: true, force: true }))
     const ctx = new Context()
@@ -301,20 +322,28 @@ describe('GitHub Copilot model offer', () => {
     await ctx.credentials.modifyRecord(PiAi.recordKeyFor('github-copilot'), () => Promise.resolve({
       kind: 'grant',
       payload: { type: 'oauth', access: 'a', refresh: 'r', expires: Date.now() + 3_600_000,
-        ...ids.length === 0 ? {} : { availableModelIds: ids[0] } },
+        ...options.availableModelIds === undefined ? {} : { availableModelIds: options.availableModelIds } },
     }))
-    await ctx.plugin(PiAi, { providers: { 'github-copilot': {} } })
+    if (options.apiKey !== undefined) vi.stubEnv('PI_COPILOT_OVERRIDE', options.apiKey)
+    await ctx.plugin(PiAi, { providers: { 'github-copilot': {
+      ...options.apiKey === undefined ? {} : { apiKeyEnv: 'PI_COPILOT_OVERRIDE' },
+    } } })
     return (await ctx.llm.listModels('github-copilot')).map(model => model.id)
   }
 
   it('offers only the models the signed-in account can call', async () => {
     const all = await copilot()
     expect(all.length).toBeGreaterThan(2)
-    expect(await copilot([all[0]!, 'not-in-the-catalog'])).toEqual([all[0]])
+    expect(await copilot({ availableModelIds: [all[0]!, 'not-in-the-catalog'] })).toEqual([all[0]])
   })
 
   it('offers the whole catalog while the account lists nothing', async () => {
     const all = await copilot()
-    expect(await copilot('malformed')).toEqual(all)
+    expect(await copilot({ availableModelIds: 'malformed' })).toEqual(all)
+  })
+
+  it('uses the configured API-key override instead of a stored sign-in to filter models', async () => {
+    const all = await copilot()
+    expect(await copilot({ availableModelIds: [all[0]!], apiKey: 'configured-key' })).toEqual(all)
   })
 })

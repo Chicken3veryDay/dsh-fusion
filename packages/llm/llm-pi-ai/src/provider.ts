@@ -145,6 +145,7 @@ function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
   // Provider-level `baseUrl` is display metadata: pi-ai routes every request
   // through `Model.baseUrl`, which model resolution has already overridden.
   const baseUrl = spec.baseURL ?? base.baseUrl
+  const filterModels = base.filterModels?.bind(base)
   return {
     id: spec.provider,
     name: spec.displayName,
@@ -153,9 +154,7 @@ function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
     getModels: () => spec.models,
     // Credential-specific availability (Copilot lists only the models the
     // signed-in account may use) stays the catalog provider's policy.
-    ...base.filterModels === undefined ? {} : {
-      filterModels: (models, credential) => base.filterModels?.(models, credential) ?? models,
-    },
+    ...filterModels === undefined ? {} : { filterModels },
     // Delegated rather than copied: the catalog provider stays the receiver, so
     // an implementation holding state on itself keeps working.
     stream: (model, context, options) => base.stream(model, context, options),

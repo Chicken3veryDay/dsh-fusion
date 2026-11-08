@@ -347,7 +347,8 @@ export class PiAiAdapter extends LlmAdapter {
     return Promise.resolve().then(async () => {
       const snapshot = this.current()
       const profile = this.profileOf(snapshot, provider)
-      try { await this.config.resolveApiKey(provider, profile) }
+      let apiKey: string | undefined
+      try { apiKey = await this.config.resolveApiKey(provider, profile) }
       catch (error) {
         // A route whose named key does not resolve cannot serve a request, so it offers no models until the key is stored.
         if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return []
@@ -355,13 +356,15 @@ export class PiAiAdapter extends LlmAdapter {
       }
       const catalog = snapshot.models.getModels(provider)
       // A provider that narrows its catalog per credential (Copilot, by the
-      // signed-in account) is asked with the stored credential, so the picker
+      // signed-in account) is asked with the effective credential, so the picker
       // offers only models the account can call. Explicitly selecting another
       // catalog model still resolves; this narrows the offer, not the route.
       const piProvider = snapshot.models.getProvider(provider)
       const offered = piProvider?.filterModels === undefined
         ? catalog
-        : piProvider.filterModels(catalog, await this.config.auth.credentials.read(provider))
+        : piProvider.filterModels(catalog, apiKey === undefined
+          ? await this.config.auth.credentials.read(provider)
+          : { type: 'api_key', key: apiKey })
       return offered.map(model => ({
         provider,
         id: model.id,
