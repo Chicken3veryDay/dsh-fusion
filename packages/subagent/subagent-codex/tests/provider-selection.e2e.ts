@@ -69,8 +69,9 @@ it.skipIf(process.env.DSH_CODEX_ACCOUNT_SMOKE !== '1')('retained ChatGPT account
     expect(result.stdout).toContain('"accountType":"chatgpt"')
     expect(result.stdout).toContain('"exactAnswer":true')
     expect(result.stdout).toContain('"parentCompletion":true')
+    expect(result.stdout).toContain('"persistedParent":true')
     expect(result.stdout).toContain('"managedExited":true')
     expect(result.stdout).toContain('"toolItems":0')
-    process.stdout.write(`${JSON.stringify({ attempt: attempt + 1, accountType: 'chatgpt', modelProvider: 'openai', model: 'gpt-5.6-luna', exactNonce: true, parentCompletion: true, managedExited: true, toolItems: 0, workspaceFilesUnchanged: true, usageAndCost: 'unavailable' })}\n`)
+    process.stdout.write(`${JSON.stringify({ attempt: attempt + 1, accountType: 'chatgpt', modelProvider: 'openai', model: 'gpt-5.6-luna', exactNonce: true, parentCompletion: true, persistedParent: true, managedExited: true, toolItems: 0, workspaceFilesUnchanged: true, usageAndCost: 'unavailable' })}\n`)
   }
 }, 180_000)

@@ -9,6 +9,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
+import { loadStoredSession } from '../../../../subagent/tests/persistence-helpers.ts'
 import { bootProductionProfile } from '../../../../../test-support/loader-smoke/tests/fixtures/production-profile.ts'
 
 /**
@@ -87,6 +88,7 @@ export async function runProviderSelection(configPath: string, mode: string): Pr
     }
     // Observe the real managed process without changing its arguments, environment, or ownership.
     let toolItems = 0
+    let invalidObservations = 0
     const filesBefore = await readdir(process.cwd())
     ctx.subprocess.spawn = (spec) => {
       const handle = spawn(spec)
@@ -99,12 +101,17 @@ export async function runProviderSelection(configPath: string, mode: string): Pr
           if (newline < 0) break
           const line = buffer.slice(0, newline)
           buffer = buffer.slice(newline + 1)
-          const frame: unknown = JSON.parse(line)
-          if (!frame || typeof frame !== 'object' || !('method' in frame) || frame.method !== 'item/started') continue
-          assert('params' in frame && frame.params && typeof frame.params === 'object' && 'item' in frame.params)
-          const item = frame.params.item
-          assert(item && typeof item === 'object' && 'type' in item && typeof item.type === 'string')
-          if (!['userMessage', 'agentMessage', 'reasoning', 'contextCompaction'].includes(item.type)) toolItems += 1
+          try {
+            const frame: unknown = JSON.parse(line)
+            if (!frame || typeof frame !== 'object' || !('method' in frame) || frame.method !== 'item/started') continue
+            assert('params' in frame && frame.params && typeof frame.params === 'object' && 'item' in frame.params)
+            const item = frame.params.item
+            assert(item && typeof item === 'object' && 'type' in item && typeof item.type === 'string')
+            if (!['userMessage', 'agentMessage', 'reasoning', 'contextCompaction'].includes(item.type)) toolItems += 1
+          } catch (_error: unknown) {
+            // Observation failure rejects acceptance after managed cleanup can run.
+            invalidObservations += 1
+          }
         }
       })
       return handle
@@ -123,11 +130,13 @@ export async function runProviderSelection(configPath: string, mode: string): Pr
       assert.equal(starts, 1)
       assert.equal(ends, 1)
       assert(completed, 'native turn did not complete')
+      assert.equal(invalidObservations, 0, 'native tool observations must parse')
       assert.equal(toolItems, 0, 'nonce must use no tools')
       assert.deepEqual(await readdir(process.cwd()), filesBefore, 'nonce must create no workspace files')
       // Keyless fixtures have a fixed answer; the live model must reproduce the random nonce.
       assert(exactAnswer, 'native answer did not equal the nonce')
-      const events = parent.agent.session.snapshotEvents()
+      assert(await ctx.sessions.flush(parent.agent.session), 'parent persistence flush must succeed')
+      const { events } = await loadStoredSession(ctx.sessionPersistence, parent.agent.id)
       const catalog = events.filter(event => event.type === 'subagent/catalog')
       assert.equal(catalog.length, 1)
       assert.equal(catalog[0]?.data.mode, 'external')
@@ -140,16 +149,24 @@ export async function runProviderSelection(configPath: string, mode: string): Pr
         assert(await handle.waitForExit())
         await handle.done
       }
-      process.stdout.write(`${JSON.stringify({ mode, completed, exactAnswer, toolItems, workspaceFilesUnchanged: true, starts, ends, externalCatalog: true, parentCompletion: true, managedExited: true, nativeUsageAndCost: 'unavailable' })}\n`)
+      process.stdout.write(`${JSON.stringify({ mode, completed, exactAnswer, toolItems, workspaceFilesUnchanged: true, starts, ends, externalCatalog: true, parentCompletion: true, persistedParent: true, managedExited: true, nativeUsageAndCost: 'unavailable' })}\n`)
     } finally {
       await parent.dispose()
     }
   } finally {
-    await ctx.fiber.dispose()
-    for (const handle of handles) {
-      handle.terminate()
-      await handle.waitForExit()
-      await handle.done
+    try {
+      await ctx.fiber.dispose()
+    } finally {
+      const cleanup = await Promise.allSettled(handles.map(async (handle) => {
+        handle.terminate()
+        try {
+          assert(await handle.waitForExit())
+        } finally {
+          await handle.done
+        }
+      }))
+      const failures = cleanup.filter(result => result.status === 'rejected')
+      if (failures.length > 0) throw new AggregateError(failures.map((result): unknown => result.reason), 'native acceptance process cleanup failed')
     }
   }
 }
