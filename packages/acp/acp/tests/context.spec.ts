@@ -248,6 +248,36 @@ describe('ACP recipient, latest-input, and state context', () => {
       .toEqual([inputs[0]!.id, inputs[1]!.id])
   })
 
+  it('keeps old untagged history valid but unclassified across resume, until a tagged input arrives', async () => {
+    harness = await makeBridgeHarness({ script: [textResponse('one'), textResponse('two'), textResponse('three')] })
+    const sessionId = await newSession(harness)
+    const old = createUserMessage({ content: [{ type: 'text', text: 'Never push to main.' }], source: { kind: 'user' } })
+    const first = harness.ctx.agents.get(SessionId(sessionId))!
+    first.followup(old)
+    await first.whenIdle()
+    await harness.client.closeSession({ sessionId })
+    await harness.client.resumeSession({ sessionId, cwd: process.cwd(), mcpServers: [] })
+    const resumed = harness.ctx.agents.get(SessionId(sessionId))!
+    resumed.followup(createUserMessage({ content: [{ type: 'text', text: 'Also keep it small.' }], source: { kind: 'user' } }))
+    await resumed.whenIdle()
+
+    // The recorded packet already says "unknown"; resume does not repeat it or guess a channel for old input.
+    let events = eventsOf(harness, sessionId)
+    expect(packetsOf(events)).toHaveLength(1)
+    expect(textOf(packetsOf(events)[0]!.message)).toContain('Latest client input: unknown')
+    expect(userMessages(events).filter(({ message }) => message.source.kind === 'user').map(({ message }) => message.source))
+      .toEqual([{ kind: 'user' }, { kind: 'user' }])
+    const afterResume = harness.adapter.requests[1]!.messages
+    expect(afterResume.some(message => textOf(message) === 'Never push to main.')).toBe(true)
+
+    await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'Now a tagged task.' }] })
+    events = eventsOf(harness, sessionId)
+    const tagged = userMessages(events).filter(({ message }) => message.source.kind === 'user' && 'input' in message.source)
+    expect(tagged).toHaveLength(1)
+    expect(packetsOf(events)).toHaveLength(2)
+    expect(packetsOf(events)[1]!.message.source).toMatchObject({ latestInput: tagged[0]!.message.id })
+  })
+
   it('does not label a spawned child as the ACP recipient while the parent keeps its own packet', async () => {
     harness = await makeBridgeHarness({ script: [
       toolCallResponse('delegate-1', 'delegate', {}), textResponse('child answer'), textResponse('parent answer'),
