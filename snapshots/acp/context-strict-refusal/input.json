@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "op": "initialize"
+    },
+    {
+      "op": "newSession"
+    },
+    {
+      "op": "promptExpectError",
+      "text": "List the workspace rules."
+    }
+  ]
+}

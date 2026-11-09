@@ -1563,7 +1563,8 @@ export function defineAcpSnapshotSuite(options: SnapshotSuiteOptions): void {
             expect(header, `session ${log.id}: request/header #${k + 1} diverged from the pinned (${pinningScenario.name}) header`)
               .toEqual(expected)
           }
-          if (expectedPromptChanges === 0) {
+          // A Session that never sent a request (a refusal before dispatch) has no request prompt to pin.
+          if (expectedPromptChanges === 0 && headers.length > 0) {
             // A pinned child owns its whole prompt: its scope-local sections
             // are exactly what the class pin cannot describe.
             const childPrompt = childPinnedPrompts.get(logIndex)

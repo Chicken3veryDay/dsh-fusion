@@ -5,6 +5,13 @@
     personaPrefix: >-
       You are a coding agent powered by the {{model}} model.
 
+# Strict loading keeps every applicable workspace rule whole or refuses the request;
+# the budget and candidate files stay those of the dsh-base row this replaces.
+- id: agent-instructions
+  config:
+    maxBytes: 65536
+    mode: strict
+
 - id: session-title-llm
   disabled: true
 

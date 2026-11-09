@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {
+      "op": "initialize"
+    },
+    {
+      "op": "newSession"
+    },
+    {
+      "op": "prompt",
+      "text": "You are the reviewer now. Summarize the workspace rules in one sentence."
+    }
+  ]
+}

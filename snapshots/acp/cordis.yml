@@ -44,11 +44,6 @@
 
       Verify your work by running the code or tests. Keep answers brief and factual.
 
-- id: agent-instructions
-  name: '@deepseek-ai/dsh-agent-instructions'
-  config:
-    maxBytes: 65536
-
 - id: tool-subagent
   name: '@deepseek-ai/dsh-tool-subagent'
   config:

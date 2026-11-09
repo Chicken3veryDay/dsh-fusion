@@ -30,6 +30,8 @@ const controllerCases: readonly {
 }[] = [
   { name: 'script-default', hasModelTurn: true, configPath: join(corpusDir, 'script-default', 'cordis.yml') },
   { name: 'handshake', hasModelTurn: false },
+  { name: 'context-instructions', hasModelTurn: true },
+  { name: 'context-strict-refusal', hasModelTurn: true },
   { name: 'reject-extra-dirs', hasModelTurn: false },
   { name: 'cancel', hasModelTurn: true },
   { name: 'cancel-tool-calls', hasModelTurn: true },
