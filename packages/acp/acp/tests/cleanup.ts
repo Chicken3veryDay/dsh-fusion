@@ -53,6 +53,17 @@ export class TestCleanup {
   }
 
   /**
+   * Make cleanup wait for a pending call, so a failing test never leaves it unsettled or its rejection unhandled.
+   * Its outcome is ignored here; the test asserts it when it matters.
+   * @param pending - a promise the test started and may not await.
+   * @returns the same promise.
+   */
+  track<T>(pending: Promise<T>): Promise<T> {
+    this.defer(async () => { await pending.catch(() => undefined) })
+    return pending
+  }
+
+  /**
    * Adopt a bridge harness for disposal.
    * @param harness - a started bridge harness.
    * @returns the same harness.

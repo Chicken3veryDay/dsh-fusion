@@ -16,7 +16,7 @@
 
 ## `@deepseek-ai/dsh-acp`
 
-- `inject`: `agents` · `llm` · `sessionPersistence` · `sessionProjections` · `sessions`
+- `inject`: `agents` · `llm` · `sessionPersistence` · `sessionProjections` · `sessions` · `systemPrompt`
 - `refs`: `Stream` (`@agentclientprotocol/sdk`)
 - `source`: [`packages/acp/acp/src/index.ts:75`](../packages/acp/acp/src/index.ts)
 
@@ -4084,7 +4084,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-system-prompt`
 
-- `source`: [`packages/core/system-prompt/src/index.ts:295`](../packages/core/system-prompt/src/index.ts)
+- `source`: [`packages/core/system-prompt/src/index.ts:304`](../packages/core/system-prompt/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the deployment-authored fragment of the system prompt (see {@link Config.personaPrefix} for its contract). */

@@ -7,6 +7,7 @@ import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/w
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import GoalService from '@deepseek-ai/dsh-goal'
+import { TestCleanup } from './cleanup.ts'
 import { acpInputOf, makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -36,16 +37,18 @@ function userMessages(events: readonly SessionEvent[]): { seq: SessionEvent['seq
 const packetsOf = (events: readonly SessionEvent[]) =>
   userMessages(events).filter(({ message }) => message.source.kind === 'acp-context')
 
+const cleanup = new TestCleanup()
+
 describe('ACP recipient, latest-input, and state context', () => {
   let harness: BridgeHarness | undefined
 
   afterEach(async () => {
-    await harness?.dispose()
     harness = undefined
+    await cleanup.run()
   })
 
   it('declares the recipient and names the exact admitted input on an ordinary unseeded session', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('done')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('done')] }))
     const sessionId = await newSession(harness)
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
     expect(agent.session.header.isSeeded).not.toBe(true)
@@ -78,7 +81,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('moves the latest-input reference on a later independent input without repeating, revoking, or creating a goal', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('one'), textResponse('two')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('one'), textResponse('two')] }))
     const sessionId = await newSession(harness)
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'Never touch the production database.' }] })
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'Now summarize the README.' }] })
@@ -98,7 +101,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('keeps the pointer through a tool continuation without a second packet', async () => {
-    harness = await makeBridgeHarness({ script: [toolCallResponse('probe-1', 'probe', {}), textResponse('after tool')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [toolCallResponse('probe-1', 'probe', {}), textResponse('after tool')] }))
     harness.ctx.tools.register(defineContentToolFixture({
       name: 'probe', description: 'Return a fixed value.', parameters: {},
       execute: () => Promise.resolve([{ type: 'text', text: 'probed' }]),
@@ -114,7 +117,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('reports an unknown latest input and tags nothing for non-ACP input, and states absent services as unavailable', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('ok')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('ok')] }))
     const sessionId = await newSession(harness)
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'autonomous work' }], source: { kind: 'context-test' } }))
@@ -129,22 +132,21 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('dispatches the goal created while another provider holds request-context collection', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('ok')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('ok')] }))
     await harness.ctx.plugin(GoalService)
-    const reached = Promise.withResolvers<undefined>()
-    const release = Promise.withResolvers<undefined>()
+    const hold = cleanup.barrier()
     harness.ctx.on('system-prompt/request-context', async (_context, _pending, next) => {
       const added = await next()
-      reached.resolve(undefined)
-      await release.promise
+      hold.reach()
+      await hold.released
       return added
     })
     const sessionId = await newSession(harness)
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
-    const prompting = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'state changes mid-collection' }] })
-    await reached.promise
-    ;(harness.ctx.get('goals') as GoalService).create(agent, { objective: 'ship the slice' })
-    release.resolve(undefined)
+    const prompting = cleanup.track(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'state changes mid-collection' }] }))
+    await hold.reached
+    harness.ctx.goals.create(agent, { objective: 'ship the slice' })
+    hold.release()
     await prompting
 
     const [packet] = packetsOf(eventsOf(harness, sessionId))
@@ -156,19 +158,18 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('commits neither the input pointer nor a packet when preparation is cancelled', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('never sent')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('never sent')] }))
     const sessionId = await newSession(harness)
-    const reached = Promise.withResolvers<undefined>()
-    const release = Promise.withResolvers<undefined>()
+    const hold = cleanup.barrier()
     harness.ctx.on('agent/request', async (_info, next) => {
-      reached.resolve(undefined)
-      await release.promise
+      hold.reach()
+      await hold.released
       return next()
     })
-    const prompting = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'cancel me' }] })
-    await reached.promise
+    const prompting = cleanup.track(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'cancel me' }] }))
+    await hold.reached
     await harness.client.cancel({ sessionId })
-    release.resolve(undefined)
+    hold.release()
     await expect(prompting).resolves.toEqual({ stopReason: 'cancelled' })
 
     const events = eventsOf(harness, sessionId)
@@ -178,29 +179,28 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('publishes nothing when the Agent is disposed while another provider holds the request context', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('never sent')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('never sent')] }))
     const sessionId = await newSession(harness)
     const session = harness.ctx.agents.get(SessionId(sessionId))!.session
-    const reached = Promise.withResolvers<undefined>()
-    const release = Promise.withResolvers<undefined>()
+    const hold = cleanup.barrier()
     harness.ctx.on('system-prompt/request-context', async (_context, _pending, next) => {
       const added = await next()
-      reached.resolve(undefined)
-      await release.promise
+      hold.reach()
+      await hold.released
       return added
     })
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
-    const cancelled = Promise.withResolvers<undefined>()
+    const cancelled = cleanup.barrier()
     const cancel = agent.cancel.bind(agent)
     vi.spyOn(agent, 'cancel').mockImplementation((...args) => {
       cancel(...args)
-      cancelled.resolve(undefined)
+      cancelled.reach()
     })
-    const prompting = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'dispose during collection' }] })
-    await reached.promise
-    const closing = harness.client.closeSession({ sessionId })
-    await cancelled.promise
-    release.resolve(undefined)
+    const prompting = cleanup.track(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'dispose during collection' }] }))
+    await hold.reached
+    const closing = cleanup.track(harness.client.closeSession({ sessionId }))
+    await cancelled.reached
+    hold.release()
     await closing
     await prompting.catch(() => undefined)
 
@@ -210,7 +210,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('rebuilds the packet after compaction removes it from the conversation, naming the replaced input', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('first'), textResponse('second')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('first'), textResponse('second')] }))
     const sessionId = await newSession(harness)
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'original task' }] })
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
@@ -236,7 +236,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('resumes with the recorded pointer and moves it on the next tagged input', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('one'), textResponse('two')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('one'), textResponse('two')] }))
     const sessionId = await newSession(harness)
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'before restart' }] })
     await harness.client.closeSession({ sessionId })
@@ -251,7 +251,7 @@ describe('ACP recipient, latest-input, and state context', () => {
   })
 
   it('keeps old untagged history valid but unclassified across resume, until a tagged input arrives', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('one'), textResponse('two'), textResponse('three')] })
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('one'), textResponse('two'), textResponse('three')] }))
     const sessionId = await newSession(harness)
     const old = createUserMessage({ content: [{ type: 'text', text: 'Never push to main.' }], source: { kind: 'user' } })
     const first = harness.ctx.agents.get(SessionId(sessionId))!

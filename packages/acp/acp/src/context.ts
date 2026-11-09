@@ -157,7 +157,8 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
     install(agentCtx, sessionId) {
       const goalState = (context: AssembleContext): string => {
         const agent = context.agent
-        // Scoped dispatch already limits this contribution to its Agent; the check keeps a same-id impostor out.
+        // Scope routing keyed by Agent identity confines this contribution to its Agent, even against another
+        // Agent with the same session id; the id check is a second guard that also narrows `context.agent`.
         return agent === undefined || agent.session.id !== sessionId ? '' : goalText(agent, ctx.get('goals'))
       }
       agentCtx.systemPrompt.context({
@@ -170,7 +171,7 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
       agentCtx.on('system-prompt/request-context', async (context, pending, next): Promise<UserMessage[]> => {
         const additions = await next()
         const agent = context.agent
-        // Scoped dispatch already limits this listener to its Agent; the check keeps a same-id impostor out.
+        // Scope routing keyed by Agent identity confines this listener to its Agent; the id check is a second guard.
         if (agent === undefined || agent.session.id !== sessionId) return additions
         context.signal?.throwIfAborted()
         const session = agent.session

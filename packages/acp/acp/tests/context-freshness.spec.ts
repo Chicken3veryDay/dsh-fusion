@@ -96,7 +96,7 @@ describe('goal state at request admission', () => {
         return true
       },
     })
-    const prompting = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'second' }] })
+    const prompting = cleanup.track(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'second' }] }))
     await hold.reached
     goals.create(agent, { objective: 'created at final admission' })
     hold.release()

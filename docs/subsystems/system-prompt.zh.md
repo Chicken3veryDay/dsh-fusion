@@ -105,10 +105,18 @@ interface PromptContext {
   readonly interpolate?: boolean
   /** Keep this operational context when optional runtime context is disabled. */
   readonly required?: boolean
+  /**
+   * The state `text` renders from, as an opaque string. Request-time admission reads it through
+   * {@link SystemPrompt.contextRevisions} in the synchronous step that renders the accepted context and
+   * again in the step that freezes the request. A difference restarts the attempt once with the current
+   * text, and a second difference fails the request before dispatch. Omit it for text that is allowed
+   * to change between reads, such as a clock; such a context is rendered at admission refresh only.
+   */
+  readonly revision?: (context: AssembleContext) => string
 }
 ```
 
-`required: true` 在可选运行时上下文被抑制时保留操作所需的贡献。`interpolate: false` 原样保留文本，包括看起来像变量的目录名。`AssembledContext` 将已求值文本及其插值选择传给渲染过程。
+`required: true` 在可选运行时上下文被抑制时保留操作所需的贡献。`interpolate: false` 原样保留文本，包括看起来像变量的目录名。`AssembledContext` 将已求值文本及其插值选择传给渲染过程。`revision` 指明 `text` 所依据的状态；请求冻结时，准入会再次检查它。
 
 ```ts type-equiv
 /** One resolved dynamic context contribution. */
@@ -226,6 +234,15 @@ refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptA
  * @returns one `[name, revision]` entry per revisioned section, in section order.
  */
 sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
+
+/**
+ * Read the current revision of every effective runtime context that declares one,
+ * without rendering context text. Call it in the same synchronous step that renders
+ * the context text it describes. Suppression applies as in {@link refreshContext}.
+ * @param context - the same scope and plugin-defined assembly fields as the rendering.
+ * @returns one `[name, revision]` entry per revisioned context, in context order.
+ */
+contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
 
 /**
  * Assemble global and scoped providers, detach tool parameters, apply

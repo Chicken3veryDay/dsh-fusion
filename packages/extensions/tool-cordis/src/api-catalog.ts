@@ -4289,6 +4289,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'one `[name, revision]` entry per revisioned section, in section order.',
       },
       {
+        signature: 'contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]',
+        description: 'Read the current revision of every effective runtime context that declares one, without rendering context text. Call it in the same synchronous step that renders the context text it describes. Suppression applies as in refreshContext.',
+        parameters: [{ name: 'context', description: 'the same scope and plugin-defined assembly fields as the rendering.' }],
+        returns: 'one `[name, revision]` entry per revisioned context, in context order.',
+      },
+      {
         signature: 'async assemble(context: AssembleContext = {}): Promise<PromptAssembly>',
         description: 'Assemble global and scoped providers, detach tool parameters, apply canonical ordering, then run the presentation waterfall. Scoped sections and variables shadow globals. The waterfall\'s text is authoritative except that an effective complete section is restored afterwards as the sole prompt section; tool declarations stay provider-owned.',
         parameters: [{ name: 'context', description: 'the optional scope, step tool set, and plugin-defined assembly fields.' }],
@@ -9097,7 +9103,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PromptContext',
-    declaration: 'export interface PromptContext {\n    readonly name: string;\n    readonly order: number;\n    readonly text: string | ((context: AssembleContext) => string);\n    readonly interpolate?: boolean;\n    readonly required?: boolean;\n}',
+    declaration: 'export interface PromptContext {\n    readonly name: string;\n    readonly order: number;\n    readonly text: string | ((context: AssembleContext) => string);\n    readonly interpolate?: boolean;\n    readonly required?: boolean;\n    readonly revision?: (context: AssembleContext) => string;\n}',
   },
   {
     name: 'PromptContextOrderName',
@@ -10857,7 +10863,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SystemPrompt',
-    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    sectionRevisions(context: AssembleContext = {}): readonly (readonly [\n        name: string,\n        revision: string\n    ])[];\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
+    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    sectionRevisions(context: AssembleContext = {}): readonly (readonly [\n        name: string,\n        revision: string\n    ])[];\n    contextRevisions(context: AssembleContext = {}): readonly (readonly [\n        name: string,\n        revision: string\n    ])[];\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
   },
   {
     name: 'SystemPromptMessageSource',

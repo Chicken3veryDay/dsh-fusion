@@ -105,10 +105,18 @@ interface PromptContext {
   readonly interpolate?: boolean
   /** Keep this operational context when optional runtime context is disabled. */
   readonly required?: boolean
+  /**
+   * The state `text` renders from, as an opaque string. Request-time admission reads it through
+   * {@link SystemPrompt.contextRevisions} in the synchronous step that renders the accepted context and
+   * again in the step that freezes the request. A difference restarts the attempt once with the current
+   * text, and a second difference fails the request before dispatch. Omit it for text that is allowed
+   * to change between reads, such as a clock; such a context is rendered at admission refresh only.
+   */
+  readonly revision?: (context: AssembleContext) => string
 }
 ```
 
-`required: true` keeps an operational contribution when optional runtime context is suppressed. `interpolate: false` preserves literal text, including variable-like directory names. `AssembledContext` carries the resolved text and that interpolation choice into rendering.
+`required: true` keeps an operational contribution when optional runtime context is suppressed. `interpolate: false` preserves literal text, including variable-like directory names. `AssembledContext` carries the resolved text and that interpolation choice into rendering. `revision` names the state `text` renders from; request admission checks it again when the request freezes.
 
 ```ts type-equiv
 /** One resolved dynamic context contribution. */
@@ -226,6 +234,15 @@ refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptA
  * @returns one `[name, revision]` entry per revisioned section, in section order.
  */
 sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
+
+/**
+ * Read the current revision of every effective runtime context that declares one,
+ * without rendering context text. Call it in the same synchronous step that renders
+ * the context text it describes. Suppression applies as in {@link refreshContext}.
+ * @param context - the same scope and plugin-defined assembly fields as the rendering.
+ * @returns one `[name, revision]` entry per revisioned context, in context order.
+ */
+contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
 
 /**
  * Assemble global and scoped providers, detach tool parameters, apply
