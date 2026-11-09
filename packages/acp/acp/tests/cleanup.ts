@@ -60,7 +60,9 @@ export class TestCleanup {
    */
   track<T>(pending: T | PromiseLike<T>): Promise<T> {
     const settled = Promise.resolve(pending)
-    this.defer(async () => { await settled.catch(() => undefined) })
+    // Observe rejection at acquisition; callers still receive the original rejecting promise.
+    const observed = settled.catch((_error: unknown) => undefined)
+    this.defer(async () => { await observed })
     return settled
   }
 

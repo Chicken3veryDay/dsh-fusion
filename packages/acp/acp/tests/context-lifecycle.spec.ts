@@ -67,6 +67,22 @@ describe('ACP context setup lifetime', () => {
 })
 
 describe('failure-safe test cleanup', () => {
+  it('observes an early tracked rejection while preserving its original outcome', async () => {
+    const scope = new TestCleanup()
+    cleanup.defer(() => scope.run())
+    const unhandled = scope.trackUnhandledRejections()
+    const failure = new Error('tracked early failure')
+    const original = Promise.reject(failure)
+    const pending = scope.track(original)
+
+    await settleRejections()
+    expect(unhandled).toEqual([])
+    expect(pending).toBe(original)
+    await expect(pending).rejects.toBe(failure)
+    await scope.run()
+    expect(unhandled).toEqual([])
+  })
+
   it('quiesces a held request and a mounted bridge when an assertion fails while both are held', async () => {
     const failing = new TestCleanup()
     let prompting: Promise<unknown> | undefined
