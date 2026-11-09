@@ -104,6 +104,14 @@ export interface PromptContext {
   readonly interpolate?: boolean
   /** Keep this operational context when optional runtime context is disabled. */
   readonly required?: boolean
+  /**
+   * The state `text` renders from, as an opaque string. Request-time admission reads it through
+   * {@link SystemPrompt.contextRevisions} in the synchronous step that renders the accepted context and
+   * again in the step that freezes the request. A difference restarts the attempt once with the current
+   * text, and a second difference fails the request before dispatch. Omit it for text that is allowed
+   * to change between reads, such as a clock; such a context is rendered at admission refresh only.
+   */
+  readonly revision?: (context: AssembleContext) => string
 }
 
 /** One section of an assembly: {@link PromptSection} with its text resolved. */
@@ -204,6 +212,7 @@ const CONTEXT_ORDERS = {
   APPROVAL_POLICY: 115,
   SUBAGENT_DELEGATION: 120,
   TEAM_IDENTITY: 125,
+  GOAL_STATE: 130,
   // Process-specific paths and endpoints stay out of the cached system prompt.
   HARNESS_SOURCE: 200,
   WEB_SURFACE: 210,
@@ -664,6 +673,22 @@ export class SystemPrompt extends Service {
     return [...this.layers.merge(context.scope, layer => layer.sections).values()]
       .sort(comparePromptSections)
       .flatMap(section => section.revision === undefined ? [] : [[section.name, section.revision(context)] as const])
+  }
+
+  /**
+   * Read the current revision of every effective runtime context that declares one,
+   * without rendering context text. Call it in the same synchronous step that renders
+   * the context text it describes. Suppression applies as in {@link refreshContext}.
+   * @param context - the same scope and plugin-defined assembly fields as the rendering.
+   * @returns one `[name, revision]` entry per revisioned context, in context order.
+   */
+  contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[] {
+    const suppressed = !this.layers.global.runtimeContextSuppressors.isEmpty()
+      || this.layers.chainLayers(context.scope).some(layer => !layer.runtimeContextSuppressors.isEmpty())
+    return [...this.layers.merge(context.scope, layer => layer.contexts).values()]
+      .filter(entry => !suppressed || entry.required === true)
+      .sort((a, b) => a.order - b.order)
+      .flatMap(entry => entry.revision === undefined ? [] : [[entry.name, entry.revision(context)] as const])
   }
 
   /**

@@ -7,7 +7,7 @@ import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/w
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import GoalService from '@deepseek-ai/dsh-goal'
-import { makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
+import { acpInputOf, makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -72,8 +72,8 @@ describe('ACP recipient, latest-input, and state context', () => {
 
     // The frozen request carries exactly the logged input and packet bytes, input first.
     const request = harness.adapter.requests[0]!.messages
-    expect(request.at(-2)?.content).toEqual(input.content)
-    expect(request.at(-1)?.content).toEqual(packet.content)
+    expect(acpInputOf(request)?.content).toEqual(input.content)
+    expect(request.findLast(message => textOf(message).includes('ACP automation context'))?.content).toEqual(packet.content)
     expect(request.filter(message => textOf(message).includes('ACP automation context'))).toHaveLength(1)
   })
 
@@ -122,17 +122,17 @@ describe('ACP recipient, latest-input, and state context', () => {
 
     const [packet] = packetsOf(eventsOf(harness, sessionId))
     expect(textOf(packet!.message)).toContain('Latest client input: unknown')
-    expect(textOf(packet!.message)).toContain('Goal: unavailable (no goal service is mounted).')
+    expect(textOf(packet!.message)).not.toContain('Goal:')
+    expect(harness.adapter.requests[0]!.messages.some(message => textOf(message).includes('Goal: unavailable (no goal service is mounted).'))).toBe(true)
     expect(packet!.message.source).toMatchObject({ latestInput: null })
     expect(userMessages(eventsOf(harness, sessionId)).some(({ message }) => message.source.kind === 'user')).toBe(false)
   })
 
-  it('reads the goal after every other provider settles, so a change during collection reaches the dispatched packet', async () => {
+  it('dispatches the goal created while another provider holds request-context collection', async () => {
     harness = await makeBridgeHarness({ script: [textResponse('ok')] })
     await harness.ctx.plugin(GoalService)
     const reached = Promise.withResolvers<undefined>()
     const release = Promise.withResolvers<undefined>()
-    // Registered before the session exists, like a plugin loaded ahead of it: it wraps the ACP provider and settles last.
     harness.ctx.on('system-prompt/request-context', async (_context, _pending, next) => {
       const added = await next()
       reached.resolve(undefined)
@@ -148,10 +148,11 @@ describe('ACP recipient, latest-input, and state context', () => {
     await prompting
 
     const [packet] = packetsOf(eventsOf(harness, sessionId))
-    expect(textOf(packet!.message)).toContain('Goal: active, round 0 of 256; the objective is supplied by the goal itself.')
     expect(textOf(packet!.message)).not.toContain('ship the slice')
-    const dispatched = harness.adapter.requests[0]!.messages.filter(message => textOf(message).includes('ACP automation context'))
-    expect(dispatched.map(textOf)).toEqual([textOf(packet!.message)])
+    const dispatched = harness.adapter.requests[0]!.messages.map(textOf).join('\n')
+    expect(dispatched).toContain('Goal: active, round 0 of 256; the objective is supplied by the goal itself.')
+    expect(dispatched).not.toContain('Goal: none.')
+    expect(dispatched).not.toContain('ship the slice')
   })
 
   it('commits neither the input pointer nor a packet when preparation is cancelled', async () => {

@@ -1,6 +1,6 @@
 import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,18 +28,41 @@ const loop = await mountAgentLoopTestHarness(loopCtx)
 let nextSession = 1
 const absentAgentsHome = await mkdtemp(join(tmpdir(), 'dsh-strict-absent-agents-'))
 const scratch: string[] = []
+/** Contexts mounted by a test, registered at creation so a failing assertion still disposes them. */
+const mounted: Context[] = []
 
 beforeEach(() => {
   vi.stubEnv('DSH_AGENTS_HOME', absentAgentsHome)
 })
 afterEach(async () => {
   vi.unstubAllEnvs()
+  await disposeMounted()
   for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true })
 })
 afterAll(async () => {
   await loopCtx.fiber.dispose()
   await rm(absentAgentsHome, { recursive: true, force: true })
 })
+
+/** Create a Context whose disposal is already registered. */
+function mountedContext(): Context {
+  const ctx = new Context()
+  mounted.push(ctx)
+  return ctx
+}
+
+/** Dispose every registered Context, newest first, reporting every failure after all have run. */
+async function disposeMounted(): Promise<void> {
+  const failures: unknown[] = []
+  for (const ctx of mounted.splice(0).reverse()) {
+    try {
+      await ctx.fiber.dispose()
+    } catch (error: unknown) {
+      failures.push(error)
+    }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, 'mounted context disposal failed')
+}
 
 async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-strict-instructions-'))
@@ -65,12 +88,19 @@ async function workspaceFixture(): Promise<{ root: string; home: string }> {
   return { root, home }
 }
 
-function load(root: string, options: { maxBytes: number; maxSourceBytes?: number; strict?: boolean; cwd?: string }) {
+function load(root: string, options: {
+  maxBytes: number
+  maxSourceBytes?: number
+  strict?: boolean
+  cwd?: string
+  replacePreviousBaseline?: boolean
+}) {
   return loadBaselineInstructions({
     cwd: options.cwd ?? join(root, 'pkg'),
     maxBytes: options.maxBytes,
     ...options.maxSourceBytes === undefined ? {} : { maxSourceBytes: options.maxSourceBytes },
     ...options.strict === undefined ? {} : { strict: options.strict },
+    ...options.replacePreviousBaseline === undefined ? {} : { replacePreviousBaseline: options.replacePreviousBaseline },
   })
 }
 
@@ -126,17 +156,24 @@ describe('strict workspace instruction loading', () => {
     expect((failure as AgentInstructionsError).message).toContain(join(root, 'pkg/AGENTS.md'))
   })
 
-  it('refuses a discovered file that cannot be read', async () => {
+  it('refuses a discovered file whose provider read fails, where legacy mode ignores it', async () => {
     const { root } = await workspaceFixture()
-    await chmod(join(root, 'pkg/AGENTS.md'), 0o000)
-    try {
-      const legacy = await load(root, { maxBytes: 65536 })
-      expect(legacy?.text).not.toContain('nested rule')
-      const failure = await load(root, { maxBytes: 65536, strict: true }).catch((error: unknown) => error)
-      expect((failure as AgentInstructionsError).code).toBe('AGENT_INSTRUCTIONS_SOURCE_UNREADABLE')
-    } finally {
-      await chmod(join(root, 'pkg/AGENTS.md'), 0o644)
-    }
+    const provider = mountedContext()
+    await provider.plugin(LocalFileSystem, { cwd: '/' })
+    const fileSystem = provider.fs
+    const unreadable = join(root, 'pkg/AGENTS.md')
+    const stream = fileSystem.streamText.bind(fileSystem)
+    vi.spyOn(fileSystem, 'streamText').mockImplementation((target, abort) =>
+      target.displayPath === unreadable || target.targetKey.endsWith(unreadable)
+        ? Promise.reject(new Error('provider read failed'))
+        : stream(target, abort))
+    const legacy = await loadBaselineInstructions({ cwd: join(root, 'pkg'), maxBytes: 65536 }, fileSystem)
+    expect(legacy?.text).not.toContain('nested rule')
+    const failure = await loadBaselineInstructions({ cwd: join(root, 'pkg'), maxBytes: 65536, strict: true }, fileSystem)
+      .catch((error: unknown) => error)
+    expect((failure as AgentInstructionsError).code).toBe('AGENT_INSTRUCTIONS_SOURCE_UNREADABLE')
+    expect((failure as AgentInstructionsError).message).toContain(unreadable)
+    expect(((failure as AgentInstructionsError).cause as Error).message).toBe('provider read failed')
   })
 
   it('treats missing candidate files as normal and loads nothing without error', async () => {
@@ -144,6 +181,31 @@ describe('strict workspace instruction loading', () => {
     vi.stubEnv('DSH_HOME', await tempDir())
     await mkdir(join(root, '.git'), { recursive: true })
     expect(await load(root, { cwd: root, maxBytes: 65536, strict: true })).toBeUndefined()
+  })
+
+  it('measures an empty replacement frame: refuses it when it exceeds maxBytes and fits it exactly', async () => {
+    const root = await tempDir()
+    vi.stubEnv('DSH_HOME', await tempDir())
+    await mkdir(join(root, '.git'), { recursive: true })
+    const roomy = await load(root, { cwd: root, maxBytes: 65536, strict: true, replacePreviousBaseline: true })
+    expect(roomy?.text).toContain('No workspace instructions are currently active')
+    const exact = Buffer.byteLength(roomy!.text, 'utf8')
+    expect((await load(root, { cwd: root, maxBytes: exact, strict: true, replacePreviousBaseline: true }))?.text).toBe(roomy!.text)
+    for (const maxBytes of [1, exact - 1]) {
+      const failure = await load(root, { cwd: root, maxBytes, strict: true, replacePreviousBaseline: true })
+        .catch((error: unknown) => error)
+      expect(failure).toBeInstanceOf(AgentInstructionsError)
+      expect((failure as AgentInstructionsError).code).toBe('AGENT_INSTRUCTIONS_BUDGET_EXCEEDED')
+      expect((failure as AgentInstructionsError).message).toContain(`needs ${String(exact)} bytes`)
+    }
+  })
+
+  it('rejects an invalid numeric source limit in strict mode instead of loading no rules, and leaves legacy mode alone', async () => {
+    const { root } = await workspaceFixture()
+    for (const maxSourceBytes of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+      await expect(load(root, { maxBytes: 65536, maxSourceBytes, strict: true })).rejects.toThrow(/positive finite maxSourceBytes/)
+      expect(await load(root, { maxBytes: 65536, maxSourceBytes })).toBeUndefined()
+    }
   })
 
   it('refuses a dynamic change batch that does not fit, where legacy mode omits the transition', () => {
@@ -192,18 +254,17 @@ function preStep(ctx: Context, agent: Agent) {
 describe('strict instruction loading in a mounted plugin', () => {
   it('stops the first request before dispatch when a baseline rule cannot fit', async () => {
     const { root } = await workspaceFixture()
-    const ctx = new Context()
+    const ctx = mountedContext()
     await mountStrict(ctx, { maxBytes: 200, mode: 'strict' })
     const agent = await strictAgent(root)
     const failure = await preStep(ctx, agent).catch((error: unknown) => error)
     expect((failure as AgentInstructionsError).code).toBe('AGENT_INSTRUCTIONS_BUDGET_EXCEEDED')
     expect(agent.inbox.nextStep).toEqual([])
-    await ctx.fiber.dispose()
   })
 
   it('stops the next request after an asynchronous touch failure, retries it, and delivers the rule once fixed', async () => {
     const { root } = await workspaceFixture()
-    const ctx = new Context()
+    const ctx = mountedContext()
     await mountStrict(ctx, { maxBytes: 65536, mode: 'strict', maxSourceBytes: 400 })
     const agent = await strictAgent(root)
     await preStep(ctx, agent)
@@ -228,6 +289,23 @@ describe('strict instruction loading in a mounted plugin', () => {
     const decision = await preStep(ctx, agent)
     expect(decision.kind).toBe('enter')
     expect(JSON.stringify(agent.inbox.nextStep.map(message => message.content))).toContain('deep rule: fixed')
-    await ctx.fiber.dispose()
+  })
+})
+
+describe('failure-safe mounted contexts', () => {
+  it('disposes a mounted Context registered before an assertion fails inside it', async () => {
+    let held: Context | undefined
+    const outcome = await (async () => {
+      held = mountedContext()
+      await mountStrict(held, { maxBytes: 65536, mode: 'strict' })
+      expect(held.get('agentInstructions')).toBeUndefined()
+      expect.fail('injected assertion failure')
+    })().catch((error: unknown) => error)
+    expect((outcome as Error).message).toContain('injected assertion failure')
+    expect(held!.get('agents')).toBeDefined()
+
+    await disposeMounted()
+    expect(held!.get('agents')).toBeUndefined()
+    expect(mounted).toEqual([])
   })
 })

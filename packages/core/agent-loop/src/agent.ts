@@ -34,7 +34,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import type { EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnEndReason, UserMessage } from '@deepseek-ai/dsh-session'
 import { canonicalHeader, headerEquals, ToolCallRecovery } from '@deepseek-ai/dsh-session'
 import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
-import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type { AssembleContext, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { ToolActivationError, ToolAdmissionError, ToolBatchExecutionError } from '@deepseek-ai/dsh-tools'
 import type { ResolvedToolSet, ToolDefinition, ToolExecutor } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
@@ -69,6 +69,14 @@ interface RequestInputs {
   readonly contexts: readonly string[]
   /** Section revisions read in the same synchronous step that started the assembly. */
   readonly sections: readonly string[]
+  /** Runtime-context revisions read in the same synchronous step that rendered the accepted contexts. */
+  readonly contextRevisions: readonly string[]
+}
+
+/** Revisions that registered sections and runtime contexts declared for one assembly context. */
+interface RenderRevisions {
+  readonly sections: readonly (readonly [name: string, revision: string])[]
+  readonly contexts: readonly (readonly [name: string, revision: string])[]
 }
 
 /** Loop-owned nodes committed in this attempt but not yet sent to a model. */
@@ -429,8 +437,8 @@ export class ReactLoopAgent implements Agent {
       const definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet))
       const executor = this.loopCtx.tools.selectExecutor(this)
       const context = { ...assembleContextFor(this, signal), modelSelection: selection, toolSet }
-      // Section text resolves before assembly's first await, so these revisions describe the rendered sections.
-      const revisions = this.loopCtx.systemPrompt.sectionRevisions(context)
+      // Section and context text resolve before assembly's first await, so these revisions describe the rendered text.
+      const revisions = this.readRevisions(context)
       const assembly = await this.loopCtx.systemPrompt.assemble(context)
       signal.throwIfAborted()
       return { toolSet, assembly, inputs: this.requestInputs(toolSet, assembly, revisions, definitions, executor) }
@@ -440,9 +448,17 @@ export class ReactLoopAgent implements Agent {
     }
   }
 
-  /** Capture identities, rendered context hashes, and section revisions without retaining a mutable registry view. */
+  /** Read the declared section and runtime-context revisions without rendering any text. */
+  private readRevisions(context: AssembleContext): RenderRevisions {
+    return {
+      sections: this.loopCtx.systemPrompt.sectionRevisions(context),
+      contexts: this.loopCtx.systemPrompt.contextRevisions(context),
+    }
+  }
+
+  /** Capture identities, rendered context hashes, and declared revisions without retaining a mutable registry view. */
   private requestInputs(
-    toolSet: ResolvedToolSet, assembly: PromptAssembly, revisions: readonly (readonly [name: string, revision: string])[],
+    toolSet: ResolvedToolSet, assembly: PromptAssembly, revisions: RenderRevisions,
     definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
     executor = this.loopCtx.tools.selectExecutor(this),
   ): RequestInputs {
@@ -450,8 +466,23 @@ export class ReactLoopAgent implements Agent {
       ...this.toolInputs(toolSet, definitions, executor),
       contexts: Object.freeze(renderContextSections(assembly).map(section =>
         createHash('sha256').update(JSON.stringify([section.name, section.text])).digest('hex'))),
-      sections: Object.freeze(revisions.map(entry => JSON.stringify(entry))),
+      sections: Object.freeze(revisions.sections.map(entry => JSON.stringify(entry))),
+      contextRevisions: Object.freeze(revisions.contexts.map(entry => JSON.stringify(entry))),
     })
+  }
+
+  /**
+   * Whether every revision that sections and runtime contexts declare still reads as it did when the accepted
+   * assembly was rendered. Runs synchronously in the step that freezes the request, so no service can change
+   * a declared fact between this check and the frozen messages.
+   */
+  private revisionsCurrent(
+    inputs: RequestInputs, toolSet: ResolvedToolSet, selection: Readonly<ModelSelection>, signal: AbortSignal,
+  ): boolean {
+    const current = this.readRevisions({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet })
+    const same = (accepted: readonly string[], read: RenderRevisions['sections']): boolean =>
+      accepted.length === read.length && accepted.every((revision, index) => JSON.stringify(read[index]) === revision)
+    return same(inputs.sections, current.sections) && same(inputs.contextRevisions, current.contexts)
   }
 
   /** Read the live admitted definitions, executor, and ordering without rendering context. */
@@ -459,7 +490,7 @@ export class ReactLoopAgent implements Agent {
     toolSet: ResolvedToolSet,
     definitions = Object.freeze(this.loopCtx.tools.definitions(this, toolSet)),
     executor = this.loopCtx.tools.selectExecutor(this),
-  ): Omit<RequestInputs, 'contexts' | 'sections'> {
+  ): Omit<RequestInputs, 'contexts' | 'sections' | 'contextRevisions'> {
     return { definitions, executor, ordered: toolSet.ordered === true }
   }
 
@@ -486,10 +517,11 @@ export class ReactLoopAgent implements Agent {
     try {
       const context = { ...assembleContextFor(this, signal), modelSelection: decision.selection, toolSet }
       const assembly = this.loopCtx.systemPrompt.refreshContext(previous.assembly, context)
-      const inputs = this.requestInputs(toolSet, assembly, this.loopCtx.systemPrompt.sectionRevisions(context))
+      const inputs = this.requestInputs(toolSet, assembly, this.readRevisions(context))
       signal.throwIfAborted()
       if (this.sameRequestInputs(previous.inputs, inputs)) {
-        decision.tools = { ...previous, toolSet }
+        // The kept assembly renders the same text; the revisions read with that text are the ones to recheck.
+        decision.tools = { ...previous, toolSet, inputs }
         previous.toolSet.dispose()
         return
       }
@@ -511,7 +543,10 @@ export class ReactLoopAgent implements Agent {
   }
 
   /** Compare admission identities and ordering without rereading ordinary runtime facts. */
-  private sameToolInputs(before: Omit<RequestInputs, 'contexts' | 'sections'>, after: Omit<RequestInputs, 'contexts' | 'sections'>): boolean {
+  private sameToolInputs(
+    before: Omit<RequestInputs, 'contexts' | 'sections' | 'contextRevisions'>,
+    after: Omit<RequestInputs, 'contexts' | 'sections' | 'contextRevisions'>,
+  ): boolean {
     return before.executor === after.executor && before.ordered === after.ordered
       && before.definitions.length === after.definitions.length
       && before.definitions.every((definition, index) => after.definitions[index] === definition)
@@ -821,7 +856,8 @@ export class ReactLoopAgent implements Agent {
           if (!this.sameToolInputs(inputs, this.toolInputs(toolSet))) {
             throw new ToolAdmissionError(new Error('Tool registrations changed after admission; retry the turn'))
           }
-          return this.historyUnchanged(checked)
+          // Facts such as goal state change without touching the surface, so history alone cannot show it.
+          return this.historyUnchanged(checked) && this.revisionsCurrent(inputs, toolSet, decision.selection, signal)
         },
       }, abandoned?.request)
       if ('baseline' in built) {

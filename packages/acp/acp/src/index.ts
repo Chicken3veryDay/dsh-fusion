@@ -59,7 +59,7 @@ const DEFAULT_SESSION_LIST_PAGE_SIZE = 100
 
 export const name = 'acp'
 /** Core services required by the standard automation controls. */
-export const inject = ['agents', 'llm', 'sessionPersistence', 'sessionProjections', 'sessions']
+export const inject = ['agents', 'llm', 'sessionPersistence', 'sessionProjections', 'sessions', 'systemPrompt']
 
 /** Preserve invalid-parameter detail in the SDK wire error message. */
 function invalidParams(detail: string): RequestError {
@@ -91,16 +91,19 @@ export const Config: Schema<AcpConfig> = Schema.object({
 
 /**
  * Mount the automation-only ACP server.
+ * Activation awaits the context projection registration, so a registration failure fails the plugin
+ * and unloading during that wait settles it before the server, handlers, or transport exist.
  * @param ctx - Cordis context carrying the agent factory and session events.
  * @param config - Initial provider/model selection and optional test transport.
+ * @returns when the projection is registered and the server is mounted.
+ * @throws the registration failure, or a Cordis inactive-context error when the plugin unloads first.
  */
-export function apply(ctx: Context, config: AcpConfig): void {
+export async function apply(ctx: Context, config: AcpConfig): Promise<void> {
   // ACP handlers execute outside this plugin's injection scope, so capture the
   // injected service during apply rather than reading it lazily in a callback.
   const persistence = ctx.sessionPersistence
   const logger = ctx.logger
-  // Session creation awaits this registration; a failure rejects each activation with its cause.
-  const contextReady = registerAcpContext(ctx)
+  const acpContext = await registerAcpContext(ctx)
   const sessionListPageSize = resolveSessionListPageSize(config.sessionListPageSize)
   const sessions = new Map<SessionId, AcpSession>()
   const activating = new Set<SessionId>()
@@ -210,7 +213,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       let record: AcpSession
       try {
         record = await AcpSession.create(ctx, {
-          context: await contextReady,
+          context: acpContext,
           sessionId,
           cwd: params.cwd,
           mcpServers: params.mcpServers,
@@ -261,7 +264,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         let record: AcpSession
         try {
           record = await AcpSession.resume(ctx, {
-            context: await contextReady,
+            context: acpContext,
             sessionId,
             cwd: params.cwd,
             mcpServers: params.mcpServers ?? [],

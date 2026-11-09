@@ -495,7 +495,8 @@ function chainLabel(files: readonly InstructionFile[]): string {
  * Render every file in full, or throw. Each chain (user-global, project) must fit
  * `maxBytes` including its frame and intro, the same per-chain bound the legacy
  * renderer applies; the merged frame then holds both chains and cannot exceed twice
- * that bound. No file is omitted, truncated, or replaced by a marker.
+ * that bound. No file is omitted, truncated, or replaced by a marker. With no files the
+ * complete frame itself, such as a replacement notice, must fit `maxBytes`.
  */
 function renderStrictChains(
   files: LoadedInstructionFile[],
@@ -517,6 +518,15 @@ function renderStrictChains(
     }
   }
   const text = buildInstructionText(files, maxBytes, [], [], style)
+  // No chain was measured above, so the frame alone (a replacement notice that retires an earlier
+  // baseline) must fit; strict loading never shortens it.
+  if (files.length === 0 && byteLength(text) > maxBytes) {
+    throw new AgentInstructionsError(
+      `The workspace instruction replacement notice needs ${byteLength(text)} bytes with its frame but maxBytes is ${maxBytes}; `
+      + 'strict loading will not shorten or drop the notice that retires the earlier instructions. Raise maxBytes, then retry.',
+      'AGENT_INSTRUCTIONS_BUDGET_EXCEEDED',
+    )
+  }
   return { text, omitted: [], truncated: [], represented: files, sections: files, intro: style.intro }
 }
 

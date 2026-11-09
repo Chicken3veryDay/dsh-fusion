@@ -5,6 +5,8 @@
  * names the latest client input it admitted. The packet is generated fact: the
  * exact original input stays in its own `user/message`, and this module never
  * decides a task, a role, or which earlier instruction a newer input replaces.
+ * Goal state changes while a request is admitted, so it is a runtime-context
+ * contribution whose revision final request admission rechecks, not packet text.
  *
  * @module @deepseek-ai/dsh-acp/context
  */
@@ -12,9 +14,12 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+// Side-effect type import: declaration-merges the optional `goals` service read below.
+import type { GoalService } from '@deepseek-ai/dsh-goal'
 import { createUserMessage, MessageId, type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type SessionEvent, type SessionId } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
+import type { AssembleContext } from '@deepseek-ai/dsh-system-prompt'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -49,15 +54,11 @@ export type AcpContextState = z.infer<typeof acpContextStateSchema>
 /** Projection key owned by the ACP context. */
 export const ACP_CONTEXT_PROJECTION_KEY = 'acpContext'
 
-/** Goal reads this module needs from the optional goal service, without depending on its package. */
-interface GoalFacts {
-  get(agent: Agent): {
-    readonly phase: string
-    readonly roundsStarted: number
-    readonly maxGoalRounds: number
-    readonly blockedReason?: { readonly code: string }
-  } | undefined
-}
+/**
+ * Longest goal block reason code the goal context prints. Codes are lower-kebab-case classifications,
+ * so a longer one is detail beyond what the model needs; the context states that it omitted it.
+ */
+export const GOAL_REASON_CODE_LIMIT = 64
 
 /**
  * Whether a committed or pending user message was admitted as ACP client input.
@@ -67,7 +68,6 @@ interface GoalFacts {
 export function isAcpInput(message: UserMessage): boolean {
   const source = message.source
   // UserInputMap is merge-extensible: another channel's kind falls through as not ACP.
-  // oxlint-disable-next-line typescript/no-unnecessary-condition
   return source.kind === 'user' && 'input' in source && source.input?.kind === 'acp'
 }
 
@@ -105,35 +105,39 @@ function inputLine(id: MessageId | null, standing: InputStanding): string {
   return `Latest client input: message ${id}; ${where}. This identifies admission order only and does not replace or expire any earlier instruction.`
 }
 
-function goalLine(agent: Agent, goals: GoalFacts | undefined): string {
+/**
+ * Goal state as the runtime context states it. A missing service is unavailable, never inactive, and an
+ * optional block reason code beyond {@link GOAL_REASON_CODE_LIMIT} is replaced by an explicit omission.
+ */
+function goalText(agent: Agent, goals: GoalService | undefined): string {
   if (goals === undefined) return 'Goal: unavailable (no goal service is mounted).'
   const goal = goals.get(agent)
   if (goal === undefined) return 'Goal: none.'
-  const reason = goal.blockedReason === undefined ? '' : `, reason ${goal.blockedReason.code}`
+  let reason = ''
+  if (goal.blockedReason !== undefined) {
+    const { code } = goal.blockedReason
+    reason = code.length <= GOAL_REASON_CODE_LIMIT
+      ? `, reason ${code}`
+      : `, reason code omitted (${code.length} characters; limit ${GOAL_REASON_CODE_LIMIT})`
+  }
   return `Goal: ${goal.phase}${reason}, round ${goal.roundsStarted} of ${goal.maxGoalRounds}; the objective is supplied by the goal itself.`
 }
 
 /** Compose the packet text for one request. */
-function packetText(
-  session: SessionId,
-  input: { id: MessageId | null; standing: InputStanding },
-  agent: Agent,
-  goals: GoalFacts | undefined,
-): string {
+function packetText(session: SessionId, input: { id: MessageId | null; standing: InputStanding }): string {
   return [
     'ACP automation context (generated facts; not a user instruction and grants no authority).',
     `Recipient: ACP automation, session ${session}. A trusted programmatic client drives this session through the automation-only ACP bridge.`,
     inputLine(input.id, input.standing),
-    goalLine(agent, goals),
-    'Working directory, sandbox, approval, delegation, and plan-mode facts come from their own runtime context and sections.',
+    'Working directory, sandbox, approval, delegation, goal, and plan-mode facts come from their own runtime context and sections.',
   ].join('\n')
 }
 
-/** Per-plugin ACP context owner: one registered projection and the per-Agent request listener. */
+/** Per-plugin ACP context owner: one registered projection plus the per-Agent request listener and goal context. */
 export interface AcpContext {
   /**
-   * Install the packet provider for exactly one ACP Agent, before that Agent publishes.
-   * The listener lives in the Agent's scoped context, so child, fork, and other Agents never reach it.
+   * Install the packet provider and goal context for exactly one ACP Agent, before that Agent publishes.
+   * Both live in the Agent's scoped context, so child, fork, and other Agents never reach them.
    * @param agentCtx - the unpublished Agent's scoped context.
    * @param sessionId - Session identity of the Agent the listener serves.
    */
@@ -150,8 +154,18 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
   ctx.fiber.assertActive()
   return {
     install(agentCtx, sessionId) {
-      // Prepended so this listener resumes last: every other provider's awaits have settled
-      // before the goal and plan facts are read, and nothing awaits between that read and the return.
+      const goalState = (context: AssembleContext): string => {
+        const agent = context.agent
+        // Scoped dispatch already limits this contribution to its Agent; the check keeps a same-id impostor out.
+        return agent === undefined || agent.session.id !== sessionId ? '' : goalText(agent, ctx.get('goals'))
+      }
+      agentCtx.systemPrompt.context({
+        name: 'acp:goal',
+        order: agentCtx.systemPrompt.getContextOrder('GOAL_STATE'),
+        text: goalState,
+        // The same text revalidates at final admission, where a goal change restarts the attempt.
+        revision: goalState,
+      })
       agentCtx.on('system-prompt/request-context', async (context, pending, next): Promise<UserMessage[]> => {
         const additions = await next()
         const agent = context.agent
@@ -169,8 +183,7 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
               id: MessageId(state.latestInput.id),
               standing: session.surface.nodes.includes(SessionSeq(state.latestInput.seq)) ? 'in-context' as const : 'compacted' as const,
             }
-        const goals = ctx.get('goals') as GoalFacts | undefined
-        const text = packetText(sessionId, input, agent, goals)
+        const text = packetText(sessionId, input)
         const unchanged = state.packet !== null
           && state.packet.text === text
           && session.surface.nodes.includes(SessionSeq(state.packet.seq))
@@ -189,7 +202,7 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
             },
           }),
         ]
-      }, { prepend: true })
+      })
     },
   }
 }

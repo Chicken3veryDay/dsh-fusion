@@ -10,7 +10,7 @@ import { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from 
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionPersistenceRevision, type SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
-import { makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
+import { acpInputOf, makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
 import { startHttpMcpFixture } from '../../../mcp/mcp-client/tests/http-fixture.ts'
 
 /** Wrap a bare header as the snapshot shape `SessionPersistence.list` now returns. */
@@ -94,7 +94,7 @@ describe('automation-only ACP bridge', () => {
     expect('messageId' in harness.updates[0]!).toBe(true)
     if ('messageId' in harness.updates[0]!) expect(typeof harness.updates[0].messageId).toBe('string')
     expect(harness.ctx.agents.get(SessionId(sessionId))?.session.header.cwd).toBe(process.cwd())
-    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{ type: 'text', text: 'say hello' }])
+    expect(acpInputOf(harness.adapter.requests[0]!.messages)?.content).toEqual([{ type: 'text', text: 'say hello' }])
   })
 
   it('closes one active session without affecting its neighbor', async () => {
@@ -899,7 +899,7 @@ describe('automation-only ACP bridge', () => {
       ],
     })
 
-    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{ type: 'text', text: 'first second' }])
+    expect(acpInputOf(harness.adapter.requests[0]!.messages)?.content).toEqual([{ type: 'text', text: 'first second' }])
   })
 
   it('admits mixed text/image prompts in wire order and logs references only', async () => {
@@ -921,7 +921,7 @@ describe('automation-only ACP bridge', () => {
 
     expect(resolve).toHaveBeenCalledWith('mock', 'mock', expect.any(AbortSignal))
     expect(harness.attachments?.saved.map(input => [...input.data])).toEqual([[1], [2]])
-    const requestContent = harness.adapter.requests[0]?.messages.at(-2)?.content
+    const requestContent = acpInputOf(harness.adapter.requests[0]!.messages)?.content
     expect(requestContent?.map(block => block.type)).toEqual(['text', 'image', 'text', 'image', 'text'])
     expect(requestContent?.[0]).toEqual({ type: 'text', text: 'before' })
     expect(requestContent?.[2]).toEqual({ type: 'text', text: 'between' })
@@ -1021,7 +1021,7 @@ describe('automation-only ACP bridge', () => {
         { type: 'resource_link', name: 'notes.txt', uri: 'file:///tmp/notes.txt' },
       ],
     })
-    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{
+    expect(acpInputOf(harness.adapter.requests[0]!.messages)?.content).toEqual([{
       type: 'text',
       text: 'summarize\n[resource_link name="notes.txt" uri="file:///tmp/notes.txt"]\n',
     }])

@@ -153,6 +153,18 @@ class MemoryAttachmentStore extends AttachmentStore {
   }
 }
 
+/**
+ * The client input of a dispatched request: the message directly before the ACP context packet,
+ * independent of how many runtime-context snapshots follow it.
+ * @param messages - the request's messages.
+ * @returns the input message, or undefined when the request carries no packet.
+ */
+export function acpInputOf(messages: GenerateOptions['messages']): GenerateOptions['messages'][number] | undefined {
+  const packet = messages.findLastIndex(message =>
+    message.content.some(block => block.type === 'text' && block.text.startsWith('ACP automation context')))
+  return packet > 0 ? messages[packet - 1] : undefined
+}
+
 /** Scripted text response ending in a clean stop. */
 export function textResponse(text: string): StreamChunk[] {
   return [
@@ -214,6 +226,8 @@ export interface BridgeHarness {
   closeClientTransport: () => Promise<void>
   abortClientTransport: () => Promise<void>
   acpFiber: Awaited<ReturnType<Context['plugin']>>
+  /** Settles when ACP activation finishes and rejects with its failure; `makeBridgeHarness` awaits it unless `deferActivation` is set. */
+  acpActivation: Promise<unknown>
   /** The AgentLoop fiber, so a test can reload the loop out from under the bridge. */
   loopFiber: Awaited<ReturnType<Context['plugin']>>
   dispose: () => Promise<void>
@@ -231,6 +245,10 @@ export async function makeBridgeHarness(options: {
   persistenceRoot?: string
   /** Run tools through the Node PTC `run_code` executor over the local process runtime, at this standing sandbox mode. */
   ptc?: { sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
+  /** Run after every dependency is mounted and before the ACP plugin starts, e.g. to occupy a registration key. */
+  beforeAcp?: (ctx: Context) => Promise<void>
+  /** Return before ACP activation settles; the caller owns `acpActivation`. */
+  deferActivation?: boolean
 } = {}): Promise<BridgeHarness> {
   const adapter = new MockAdapter(options.script ?? [], options.imageCapable === true)
   const ctx = new Context()
@@ -278,6 +296,7 @@ export async function makeBridgeHarness(options: {
     replacePrimaryProviders: (providers) => { primaryAdapter.replace(providers) },
     client: undefined as unknown as BridgeClient,
     acpFiber: undefined as unknown as BridgeHarness['acpFiber'],
+    acpActivation: Promise.resolve(),
     loopFiber,
     closeClientTransport: async () => { await clientToAgentWriter.close() },
     abortClientTransport: async () => { await clientToAgentWriter.abort(new Error('client transport failed')) },
@@ -302,11 +321,24 @@ export async function makeBridgeHarness(options: {
   const config = { stream: agentStream, ...options.config } as AcpConfig
   if (!(options.config && 'provider' in options.config)) config.provider = 'mock'
   if (!(options.config && 'model' in options.config)) config.model = 'mock'
-  harness.acpFiber = await ctx.plugin({
+  await options.beforeAcp?.(ctx)
+  const activation = ctx.plugin({
     name: 'acp-test',
     inject: [...AcpPlugin.inject],
-    apply: (inner: Context) => { AcpPlugin.apply(inner, config) },
+    apply: (inner: Context) => AcpPlugin.apply(inner, config),
   })
+  if (options.deferActivation === true) {
+    // `ctx.plugin` returns a thenable that inherits from the fiber; the fiber itself is its prototype.
+    harness.acpFiber = Object.getPrototypeOf(activation) as BridgeHarness['acpFiber']
+    harness.acpActivation = Promise.resolve(activation)
+  } else {
+    try {
+      harness.acpFiber = await activation
+    } catch (error: unknown) {
+      await harness.dispose()
+      throw error
+    }
+  }
   const clientConnection = clientApp.connect(clientStream)
   const client = clientConnection.agent
   harness.client = {

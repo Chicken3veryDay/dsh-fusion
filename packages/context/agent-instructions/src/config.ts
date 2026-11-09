@@ -107,12 +107,16 @@ export function workspaceBaselineIdentity(
  * Undeclared row fields cannot override the process home.
  * @param config - user-facing plugin configuration.
  * @returns normalized runtime configuration.
- * @throws when strict loading is configured with a disabled (non-positive or non-finite) byte budget.
+ * @throws when strict loading is configured with a disabled (non-positive or non-finite) byte budget or source-size limit.
  */
 export function resolveConfig(config: Config): ResolvedConfig {
   const mode = config.mode ?? 'legacy'
   if (mode === 'strict' && (!Number.isFinite(config.maxBytes) || config.maxBytes <= 0)) {
     throw new TypeError('agent-instructions: mode "strict" requires a positive finite maxBytes; a disabled budget would silently load no instructions')
+  }
+  const maxSourceBytes = config.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES
+  if (mode === 'strict' && (!Number.isFinite(maxSourceBytes) || maxSourceBytes <= 0)) {
+    throw new TypeError('agent-instructions: mode "strict" requires a positive finite maxSourceBytes; a disabled source limit would silently ignore every file')
   }
   return {
     ...resolveDiscoveryConfig({
@@ -123,7 +127,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
         : { localInstructionFileCandidates: config.localInstructionFileCandidates },
     }),
     maxBytes: config.maxBytes,
-    maxSourceBytes: config.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES,
+    maxSourceBytes,
     mode,
   }
 }

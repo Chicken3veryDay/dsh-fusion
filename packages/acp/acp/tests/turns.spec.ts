@@ -811,7 +811,8 @@ describe('ACP prompt lifecycle', () => {
     const releaseLate = Promise.withResolvers<undefined>()
     const stream = harness.adapter.stream.bind(harness.adapter)
     vi.spyOn(harness.adapter, 'stream').mockImplementation(async function* (options) {
-      if (options.messages.slice(-2).some(message => message.content.some(block => block.type === 'text' && block.text === 'late child result'))) {
+      // The first request of a session ends with the input, its context packet, and the runtime-context snapshot.
+      if (options.messages.slice(-3).some(message => message.content.some(block => block.type === 'text' && block.text === 'late child result'))) {
         lateStarted.resolve(undefined)
         await releaseLate.promise
       }
@@ -973,6 +974,8 @@ describe('ACP prompt lifecycle', () => {
 
   it('cancels a prompt removed before its turn claims it', async () => {
     harness = await makeBridgeHarness({ script: [] })
+    // A runtime-context snapshot alone would make the empty claim spend a model call.
+    harness.ctx.systemPrompt.suppressRuntimeContext()
     const sessionId = await newSession(harness)
     const dispose = harness.ctx.on('agent/inbox/inserted', ({ agent, message }) => {
       if (message.source.kind === 'user') agent.inbox.remove(message.id)
