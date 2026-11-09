@@ -24,6 +24,12 @@
       "path": "../../core/agent"
     },
     {
+      "path": "../../core/system-prompt"
+    },
+    {
+      "path": "../../goal/goal"
+    },
+    {
       "path": "../../attachment/attachment"
     },
     {

@@ -10,9 +10,9 @@ English | [中文](guide.zh.md)
 
 `dsh --profile acp` replaces its `agent-instructions` row with `mode: strict`. A discovered applicable instruction file that cannot be read, a file above `maxSourceBytes`, or a chain whose complete rendering exceeds `maxBytes` now fails the request with `AgentInstructionsError` before model dispatch. Before, the profile omitted or truncated such text and continued. Other profiles keep `mode: legacy`.
 
-Each ACP-admitted client input is logged as `source: { kind: 'user', input: { kind: 'acp' } }` with its exact content, and each Session receives a generated `user/message` with `source.kind: 'acp-context'` after it. The message declares the recipient `ACP automation`, names the latest admitted input, and states the goal phase. It is a `snapshot` fact with no authority. Session logs written before this change stay valid and unannotated.
+Each ACP-admitted client input is logged as `source: { kind: 'user', input: { kind: 'acp' } }` with its exact content, and each Session receives a generated `user/message` with `source.kind: 'acp-context'` after it. The message declares the recipient `ACP automation` and names the latest admitted input. It is a `snapshot` fact with no authority. Goal state arrives as an `acp:goal` section of the runtime-context snapshot instead (a block reason code longer than 64 characters is replaced by an explicit omission). Session logs written before this change stay valid and unannotated.
 
-`@deepseek-ai/dsh-acp` now requires `sessionProjections` in its `inject` list and depends on `zod`. `UserMessage.source` gains the optional `input` field, and `MessageSourceMap` gains `acp-context`. Same-version Session readers keep working: [the persistence record](../../../persistence-changes/2026-11-08-acp-input-context.md) lists both reader directions.
+`@deepseek-ai/dsh-acp` now requires `sessionProjections` and `systemPrompt` in its `inject` list, depends on `zod`, and optionally reads the `goals` service. Its `apply` is asynchronous: a conflicting `acpContext` projection registration fails plugin activation. `PromptContext` gains an optional `revision`, `SystemPrompt` gains `contextRevisions()`, and the `GOAL_STATE` context order is new. `UserMessage.source` gains the optional `input` field, and `MessageSourceMap` gains `acp-context`. Same-version Session readers keep working: [the persistence record](../../../persistence-changes/2026-11-08-acp-input-context.md) lists both reader directions.
 
 ## Migration
 
@@ -26,6 +26,6 @@ Each ACP-admitted client input is logged as `source: { kind: 'user', input: { ki
    ```
 
 2. Raise `maxBytes` or `maxSourceBytes`, or shorten the named instruction file, when a request fails with `AGENT_INSTRUCTIONS_BUDGET_EXCEEDED` or `AGENT_INSTRUCTIONS_SOURCE_TOO_LARGE`. Fix permissions for `AGENT_INSTRUCTIONS_SOURCE_UNREADABLE`.
-3. Compositions that mount `@deepseek-ai/dsh-acp` outside the shipped profile must provide `sessionProjections`.
+3. Compositions that mount `@deepseek-ai/dsh-acp` outside the shipped profile must provide `sessionProjections` and `systemPrompt`, and must await the plugin fiber to observe an activation failure.
 4. Session readers that switch on `source.kind` should treat `acp-context` as an unprivileged fact and ignore an unknown `input` channel.
 5. Confirm by prompting an ACP session and finding one `acp-context` message after the client input in its log.

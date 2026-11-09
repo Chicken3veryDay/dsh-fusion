@@ -8,6 +8,8 @@ from pathlib import Path
 from deepseek_harness import DeepSeekHarness
 
 EXPECTED = Path(__file__).parent / "expected" / "acp-source-projection.json"
+# Session log the shipped `dsh --profile acp` composition wrote in the keyless recorded-session snapshot.
+PRODUCT_SESSION = Path(__file__).parents[3] / "snapshots" / "acp" / "context-instructions" / "session.v4.jsonl"
 
 RUNTIME = """
 import json
@@ -68,3 +70,27 @@ def test_acp_input_annotation_unknown_channel_and_packet_are_preserved(tmp_path:
         for event in received
     ]
     assert projection == expected["projection"]
+
+
+def test_acp_product_session_output_keeps_each_source_kind_and_authority(tmp_path: Path) -> None:
+    logged = [json.loads(line) for line in PRODUCT_SESSION.read_text(encoding="utf-8").splitlines() if line]
+    events = [event for event in logged if event["type"] == "user/message"]
+    script = tmp_path / "acp_runtime.py"
+    script.write_text(RUNTIME.strip(), encoding="utf-8")
+    with DeepSeekHarness(
+        _launch_args=(sys.executable, str(script)), cwd=str(tmp_path),
+        env={"SCRIPTED_EVENTS": json.dumps(events)},
+    ) as harness:
+        result = harness.run([{"type": "text", "text": "read the product events"}], session_id="sdk-acp-product")
+    received = [event for event in result.events if event["type"] == "user/message"]
+    assert [{key: value for key, value in event.items() if key not in ("seq", "time")} for event in received] == events
+    assert [event["data"]["source"]["kind"] for event in received] == ["user", "agent-instructions", "acp-context", "runtime-context"]
+    input_message, instructions, packet, runtime = (event["data"] for event in received)
+    assert input_message["source"] == {"kind": "user", "input": {"kind": "acp"}}
+    assert instructions["source"]["baseline"] is True
+    assert packet["source"]["recipient"] == "acp-automation"
+    assert packet["source"]["latestInput"] == input_message["id"]
+    # The goal fact arrives as a runtime-context section, a snapshot that carries no ACP channel or authority.
+    assert runtime["source"]["kind"] == "runtime-context" and runtime["source"]["form"] == "snapshot"
+    assert "input" not in runtime["source"]
+    assert {section["name"]: section["text"] for section in runtime["source"]["sections"]}["acp:goal"] == "Goal: none."

@@ -68,6 +68,7 @@ export const GOAL_REASON_CODE_LIMIT = 64
 export function isAcpInput(message: UserMessage): boolean {
   const source = message.source
   // UserInputMap is merge-extensible: another channel's kind falls through as not ACP.
+  // oxlint-disable-next-line typescript/no-unnecessary-condition
   return source.kind === 'user' && 'input' in source && source.input?.kind === 'acp'
 }
 

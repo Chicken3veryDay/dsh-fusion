@@ -37,6 +37,7 @@ describe('ACP context setup lifetime', () => {
       deferActivation: true,
       beforeAcp: (ctx) => {
         // Forward the caller's `this`: the registration effect belongs to whichever plugin called it.
+        // oxlint-disable-next-line typescript/unbound-method -- invoked below with the caller's `this`.
         const register = ctx.sessionProjections.register
         vi.spyOn(ctx.sessionProjections, 'register').mockImplementation(async function (this: typeof ctx.sessionProjections, definition) {
           const handle = await register.call(this, definition)

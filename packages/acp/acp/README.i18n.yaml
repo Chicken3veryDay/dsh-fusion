@@ -30,8 +30,8 @@
   en: ffed8331e11aa57c
   zh: 8e782fb2b327f25f
 /deepseek-ai-dsh-acp/use-this-package/recipient-and-latest-input-context:
-  en: d954b2d8ea1d1ce6
-  zh: 9ecb3fc8a1ac455b
+  en: 4ca7e28509736357
+  zh: 4fbae8ce8523a2fb
 /deepseek-ai-dsh-acp/understand-the-implementation:
   en: ea8afe89dbdd1934
   zh: 6567979f92f34afd
@@ -45,8 +45,8 @@
   en: 535197dd2e750100
   zh: 5a05c7d98e08aee2
 /deepseek-ai-dsh-acp/understand-the-implementation/recipient-context:
-  en: d0d4d8bd0668e2c1
-  zh: cf47a98c93367c89
+  en: 205ecf1eb23650e5
+  zh: 3cc76d5256028258
 /deepseek-ai-dsh-acp/understand-the-implementation/teardown-and-connection-ownership:
   en: 7e2be6a9e211d4d6
   zh: 3ba8482d3231b9d0
@@ -60,14 +60,14 @@
   en: c3cbc138e8480544
   zh: bdb0badc0e8a3593
 /deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/what-the-model-sees:
-  en: ae29ccbcfddc60e8
-  zh: 7faf37622fc04b34
+  en: de02efed74817807
+  zh: 7332f7b19a6350da
 /deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/token-effect:
-  en: b09cb02c81ed7ac3
-  zh: a1232c56b36c11bf
+  en: 4aa6b1842485996f
+  zh: bb9e5c0ca77e807b
 /deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/kv-cache-effect:
-  en: 5d9ca46004504f52
-  zh: 39cf50c68498ac55
+  en: a641d97617d24490
+  zh: d490a74d88bd05ea
 /deepseek-ai-dsh-acp/model-experience/prompt-content:
   en: 7fca865c9895801f
   zh: 78a0ab12c0bb0499

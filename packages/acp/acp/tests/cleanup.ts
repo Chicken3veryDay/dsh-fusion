@@ -48,7 +48,7 @@ export class TestCleanup {
       reach: () => { reached.resolve(undefined) },
       release: () => { released.resolve(undefined) },
     }
-    this.defer(barrier.release, 'release')
+    this.defer(() => { barrier.release() }, 'release')
     return barrier
   }
 

@@ -84,7 +84,7 @@ Without a model selection, configuration returns no options and skips catalog ac
 <a id="recipient-and-latest-input-context"></a>
 ### Recipient and latest-input context
 
-Every request of a session's Agent also carries one generated `acp-context` message after the admitted client input. It declares the fixed recipient class `ACP automation` for that session, names the message id of the latest client input this server admitted, and states the current goal phase when a goal service is mounted (`unavailable` when it is not). Nothing in the request format changes: the client sends the same `session/prompt`, and a role stated in prompt prose does not change the recipient class.
+Every request of a session's Agent also carries one generated `acp-context` message after the admitted client input. It declares the fixed recipient class `ACP automation` for that session and names the message id of the latest client input this server admitted. Goal state is not packet text: an `acp:goal` runtime-context section states the phase, round counts, and a block reason code when it is at most 64 characters (a longer code is replaced by an explicit omission with its length), or `unavailable` when no goal service is mounted. Nothing in the request format changes: the client sends the same `session/prompt`, and a role stated in prompt prose does not change the recipient class.
 
 The admitted input keeps `source.kind: 'user'`, its exact content, and an `input: { kind: 'acp' }` annotation; the packet is a `snapshot`-form fact that grants no authority. A newer input moves the reference only. It does not replace, expire, or reinterpret an earlier instruction, and it creates no goal or task. Input without the annotation, including older history and goal continuations, is never attributed to this channel: while no tagged input exists the packet reports the latest input as unknown. Tool continuations and retries repeat nothing; a new packet is logged when its facts change or compaction removes it from the conversation. Spawned and forked Agents do not receive the packet as their own recipient declaration.
 
@@ -125,7 +125,7 @@ Each session permits one in-flight prompt. Admission validates the whole prompt 
 
 ### Recipient context
 
-`AcpSession` stamps only input that passed content admission, using the existing user-message path. The plugin registers one host-only `acpContext` projection that retains the latest tagged input reference and the newest packet's text and position; the first request reads the pending tagged input, later attempts read the committed projection. Each Agent receives its own `system-prompt/request-context` listener through its unpublished scope, prepended so it reads goal state after every other provider has settled. A goal change during request preparation appends a log event, so the loop's admission re-validation also retries a stale packet. The packet is returned uncommitted, and the loop alone logs it after provider preparation, so cancellation records neither a packet nor a pointer. Session creation awaits the projection registration and fails with its error.
+`AcpSession` stamps only input that passed content admission, using the existing user-message path. The plugin registers one host-only `acpContext` projection that retains the latest tagged input reference and the newest packet's text and position; the first request reads the pending tagged input, later attempts read the committed projection. Each Agent receives its own `system-prompt/request-context` listener and its own `acp:goal` runtime context through its unpublished scope. The packet holds only stable facts and is returned uncommitted; the loop alone logs it after provider preparation, so cancellation records neither a packet nor a pointer. The goal context declares a `revision` equal to its text, which request admission reads again in the step that freezes the request: a goal change at the last admission await restarts the attempt with the current text, and a second change fails the request before dispatch ([agent-loop admission](../../core/agent-loop/README.md#understand-the-implementation)). `apply` awaits the projection registration, so a registration failure fails plugin activation, and an unload during the wait settles before the server, handlers, or transport exist.
 
 ### Teardown and connection ownership
 
@@ -154,15 +154,15 @@ Read these pages when the package-level contract is not enough. They move from t
 
 #### What the model sees
 
-One short user-role snapshot after each new client input, fixed in this form: the heading line marking it as generated facts with no authority, the recipient declaration with the session id, the latest client input as `message <id>` with whether its text is still in the conversation, the goal phase and round counts without the objective, and a pointer to the runtime context for directory, sandbox, approval, and delegation facts. A repeated request or tool continuation sees the same single packet.
+One short user-role snapshot after each new client input, fixed in this form: the heading line marking it as generated facts with no authority, the recipient declaration with the session id, the latest client input as `message <id>` with whether its text is still in the conversation, and a pointer to the runtime context for directory, sandbox, approval, delegation, goal, and plan facts. The runtime context carries one `Goal:` line without the objective. A repeated request or tool continuation sees the same single packet.
 
 #### Token effect
 
-About 120 tokens per logged packet. It is logged again only when the latest input, goal phase, or compaction state changes.
+About 100 tokens per logged packet and about 20 for the goal line. The packet is logged again only when the latest input or its compaction state changes; the goal line rides in the runtime-context snapshot, which is logged again only when a fact in it changes.
 
 #### KV Cache effect
 
-Append-only: a packet joins the history after the client input it names; an unchanged state adds nothing.
+Append-only: a packet joins the history after the client input it names, and a goal change appends a new runtime-context snapshot; an unchanged state adds nothing.
 
 ### Prompt content
 

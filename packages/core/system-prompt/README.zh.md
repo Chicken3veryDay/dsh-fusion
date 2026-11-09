@@ -65,7 +65,7 @@ ctx.systemPrompt.section({
 
 在段或动态上下文上设置 `interpolate: false` 可原样保留文本，包括生成的工具文档或目录名中的 `{{…}}` 组。其他贡献默认执行变量插值。
 
-`refreshContext(assembly, context)` 在 pre-step 与路由准备之后刷新已注册的运行时事实。它保留已接纳的段、工具、变量及仅由组装 waterfall 添加的上下文，应用当前的可选上下文抑制，并恢复缺失的必需条目。将变化的事实放在上下文 provider 中；已注册上下文的文本会在准入前再次读取。若某个段的文本依赖组装之后可能变化的状态，就声明 `revision(context)`，以不透明字符串表示该状态；`sectionRevisions(context)` 读取每个生效段的修订值而不渲染文本，若某一步的修订值自其已接纳的组装以来发生变化，agent loop 会重新组装该步。`requestContext(context, pending)` 在每次请求准备后运行 `system-prompt/request-context`。提供方返回存活历史以及已接受但尚未提交的 `pending` 消息中缺少的额外用户消息。循环在请求时工具准入之前提交这些消息、已接受用户消息与刷新的运行时快照；提供方不认领收件箱消息。若准入改变组装结果，循环协调一次上下文，并在发起请求前验证稳定性。
+`refreshContext(assembly, context)` 在 pre-step 与路由准备之后刷新已注册的运行时事实。它保留已接纳的段、工具、变量及仅由组装 waterfall 添加的上下文，应用当前的可选上下文抑制，并恢复缺失的必需条目。将变化的事实放在上下文 provider 中；已注册上下文的文本会在准入前再次读取。若某个段的文本依赖组装之后可能变化的状态，就声明 `revision(context)`，以不透明字符串表示该状态；`sectionRevisions(context)` 读取每个生效段的修订值而不渲染文本，若某一步的修订值自其已接纳的组装以来发生变化，agent loop 会重新组装该步。事实可能在请求准入期间变化的运行时上下文声明同类的 `revision(context)`；`contextRevisions(context)` 读取其中生效的修订值（遵循抑制规则），请求准入在冻结请求的同一步骤中再次读取：变化时以当前文本重启一次尝试，再次变化则在派发前使请求失败。允许在两次读取之间变化的上下文（例如时钟）不要声明 `revision`。`requestContext(context, pending)` 在每次请求准备后运行 `system-prompt/request-context`。提供方返回存活历史以及已接受但尚未提交的 `pending` 消息中缺少的额外用户消息。循环在请求时工具准入之前提交这些消息、已接受用户消息与刷新的运行时快照；提供方不认领收件箱消息。若准入改变组装结果，循环协调一次上下文，并在发起请求前验证稳定性。
 
 agent loop 在 `agent/pre-step` 之前为每个拟议步骤调用一次 `assemble(context)`，并传入该步骤捕获的模型选择（`context.modelSelection`）与准入工具集合（`context.toolSet`）。展示监听器接收段落、上下文与变量；工具声明仍由提供方持有。依赖工具的段落回调通过 `context.toolSet` 读取与执行相同的步骤集合。请求时准入改变已捕获输入时，循环会再组装一次；展示监听器等待期间被撤回的工具注册或追加的历史，会使该请求以 `TOOL_ADMISSION_FAILED` 失败，而不会进入分派。
 
