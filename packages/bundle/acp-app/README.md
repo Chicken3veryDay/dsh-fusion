@@ -46,9 +46,7 @@ The complete supported method matrix, MCP trust model, update mapping, and stop 
 
 #### What the model sees
 
-The profile supplies `You are a coding agent powered by the {{model}} model.` before first-party guidance; the ACP route resolves `{{model}}`. Each Session receives its current directory in required user-role context from [`dsh-working-directory`](../../session/working-directory/README.md).
-
-Each client input is followed by one short generated `acp-context` fact naming the ACP automation recipient and the latest admitted input; workspace instructions render in full or the request fails.
+The profile supplies `You are a coding agent powered by the {{model}} model.` before first-party guidance; the ACP route resolves `{{model}}`. Each Session receives its current directory in required user-role context from [`dsh-working-directory`](../../session/working-directory/README.md). Each client input is also followed by one short generated `acp-context` fact naming the ACP automation recipient and the latest admitted input, and workspace instructions render in full or the request fails.
 
 #### Token effect
 

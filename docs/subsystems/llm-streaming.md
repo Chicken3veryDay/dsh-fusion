@@ -85,12 +85,14 @@ Where a message came from is itself a merge-extensible sum type:
  * producer's kind, and consumers fall through unknown kinds.
  */
 interface MessageSourceMap {
-  user: { kind: 'user' }
+  user: UserMessageSource
   model: ModelMessageSource
   tool: ToolMessageSource
   'system-prompt': SystemPromptMessageSource
 }
 ```
+
+A `user` source is `UserMessageSource`: kind `'user'` plus an optional `input` annotation from the merge-extensible `UserInputMap` that names the channel which admitted the exact content, such as `{ kind: 'acp' }` for the ACP bridge. The annotation neither grants nor removes authority, which stays with `source.kind`; an absent annotation records no channel, and readers ignore a channel they do not know.
 
 Producer identity and presentation form are independent. `kind` answers *who produced this*; the optional `form` answers *what kind of information this is*, and consumers decide how to present it. Several producers may share one form, and one producer may emit more than one form over a session. The values are semantic and grow one at a time; an absent or unrecognized value uses the documented default and is presented as opaque content:
 

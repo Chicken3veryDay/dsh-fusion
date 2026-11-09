@@ -59,7 +59,11 @@ interface GoalFacts {
   } | undefined
 }
 
-/** Whether a committed or pending user message was admitted as ACP client input. */
+/**
+ * Whether a committed or pending user message was admitted as ACP client input.
+ * @param message - a committed or pending user message.
+ * @returns true only when its source carries the ACP input annotation.
+ */
 export function isAcpInput(message: UserMessage): boolean {
   const source = message.source
   // UserInputMap is merge-extensible: another channel's kind falls through as not ACP.

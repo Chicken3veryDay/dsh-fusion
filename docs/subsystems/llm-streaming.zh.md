@@ -85,12 +85,14 @@ type Message = MessageRoleMap[keyof MessageRoleMap]
  * producer's kind, and consumers fall through unknown kinds.
  */
 interface MessageSourceMap {
-  user: { kind: 'user' }
+  user: UserMessageSource
   model: ModelMessageSource
   tool: ToolMessageSource
   'system-prompt': SystemPromptMessageSource
 }
 ```
+
+`user` 来源是 `UserMessageSource`：kind 为 `'user'`，另有一个可选的 `input` 标注，取自可合并扩展的 `UserInputMap`，指明准入该确切内容的通道，例如 ACP bridge 的 `{ kind: 'acp' }`。该标注既不授予也不移除权限，权限仍由 `source.kind` 决定；没有标注表示未记录通道，读取方会忽略自己不认识的通道。
 
 生产方标识与呈现形式相互独立。`kind` 回答「由谁产生」；可选的 `form` 回答「这是什么类型的信息」，消费方决定如何呈现。多个生产方可以共用一种 `form`，一个生产方在一次会话中也可以发出多种 `form`。这些取值描述语义，并逐个增加；未声明或无法识别的值使用文档规定的默认值，按不透明内容呈现：
 

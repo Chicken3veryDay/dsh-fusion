@@ -46,9 +46,7 @@ ACP v1 SDK 客户端先初始化 `dsh --profile acp`，再用绝对 `cwd` 与可
 
 #### 模型看到什么
 
-profile 在第一方指导之前提供 `You are a coding agent powered by the {{model}} model.`；ACP 路由解析 `{{model}}`。每个 Session 通过 [`dsh-working-directory`](../../session/working-directory/README.zh.md) 提供的必需 user-role 上下文接收当前目录。
-
-每条客户端输入之后会跟一条简短的生成式 `acp-context` 事实，指明 ACP automation 接收方与最近准入的输入；工作区指令要么完整渲染，要么请求失败。
+profile 在第一方指导之前提供 `You are a coding agent powered by the {{model}} model.`；ACP 路由解析 `{{model}}`。每个 Session 通过 [`dsh-working-directory`](../../session/working-directory/README.zh.md) 提供的必需 user-role 上下文接收当前目录。每条客户端输入之后还会跟一条简短的生成式 `acp-context` 事实，指明 ACP automation 接收方与最近准入的输入；工作区指令要么完整渲染，要么请求失败。
 
 #### Token 影响
 
