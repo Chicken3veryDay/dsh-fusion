@@ -67,6 +67,25 @@ describe.each(modes)('native message-source admission ($compression, $access)', 
     expect(await readFile(path)).toEqual(bytes)
   })
 
+  it.each([
+    { name: 'a user input annotated with the ACP channel', source: { kind: 'user', input: { kind: 'acp' } } },
+    { name: 'a user input from a channel this reader does not know', source: { kind: 'user', input: { kind: 'future-channel', detail: { nested: [1, 2] } } } },
+    { name: 'a generated ACP context packet with an unknown optional field', source: {
+      kind: 'acp-context', form: 'snapshot', sections: [{ name: 'acp-context', text: 'packet' }],
+      recipient: 'acp-automation', session: 'session-1', latestInput: null, futureField: { kept: true },
+    } },
+    { name: 'a user input written before the annotation existed', source: { kind: 'user' } },
+  ])('keeps $name exactly as stored', async ({ source }) => {
+    const { ctx, path, bytes, event } = await stored(source)
+    const handle = await ctx.sessionPersistence.open(id, access)
+    try {
+      expect((await handle.read()).events[0]).toEqual(event)
+    } finally {
+      await handle.close()
+    }
+    expect(await readFile(path)).toEqual(bytes)
+  })
+
   it('leaves unknown ignorable queued payloads opaque', async () => {
     const { ctx, path, bytes, event } = await stored(null, 'external/inbox', true)
     const handle = await ctx.sessionPersistence.open(id, access)

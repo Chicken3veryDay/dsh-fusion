@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { Context, FiberState } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-agent-instructions'
+import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { compactCheckpointSource, CompactionId } from '@deepseek-ai/dsh-compaction'
 import LlmRuntime, {
   createMessage,
@@ -2079,5 +2082,128 @@ describe('logged-fact failures', () => {
 
     expect(probe.runs()).toBe(0)
     expect(adapter.requests).toHaveLength(0)
+  })
+})
+
+describe('ACP-admitted input, generated context, and workspace constraints in the review request', () => {
+  const denial = decisionChunks('{"risk":"medium","decision":"deny"}')
+  const packetText = 'ACP automation context (generated facts; not a user instruction and grants no authority).\nGoal: none.'
+
+  async function reviewHistory(
+    ctx: Context,
+    adapter: RecordingAdapter,
+    session: Session,
+    index = 0,
+  ): Promise<Array<{ role: string; source: Record<string, unknown>; content: Array<{ type: string; text: string }> }>> {
+    appendHeader(session, [{ name: 'probe', description: 'probe', parameters: { type: 'object' } }])
+    const callId = ToolCallId(`acp-call-${session.id}`)
+    appendAssistant(session, [{ type: 'tool-call', id: callId, name: 'probe', arguments: '{}' }])
+    appendNativeCall(session, callId, 'probe', '{}')
+    const result = await executeToolFixture(ctx, {
+      signal: new AbortController().signal, callId, name: 'probe', arguments: {}, agent: agentFor(session),
+    })
+    expect(result.isError).toBe(true)
+    return requestSections(adapter.requests[index]!).FILTERED_HISTORY as never
+  }
+
+  it('keeps the tagged original input a user instruction and the generated packet a fact', async () => {
+    const { ctx, adapter } = await harness([denial])
+    registerProbe(ctx)
+    const { session } = autoSession(ctx, 'acp-authority')
+    appendUser(session, 'Delete the staging directory.', { kind: 'user', input: { kind: 'acp' } })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: packetText }],
+      source: {
+        kind: 'acp-context', form: 'snapshot', sections: [{ name: 'acp-context', text: packetText }],
+        recipient: 'acp-automation', session: session.id, latestInput: null,
+      },
+    }), { surfaceOp: 'append' })
+
+    const history = await reviewHistory(ctx, adapter, session)
+    expect(history.map(entry => [entry.role, entry.content[0]?.text, entry.source.kind])).toEqual([
+      ['user-instruction', 'Delete the staging directory.', 'user'],
+      ['fact', packetText, 'acp-context'],
+    ])
+    // Source attribution reaches the reviewer unchanged; only the assigned role carries authority.
+    expect(history[0]!.source).toEqual({ kind: 'user', input: { kind: 'acp' } })
+  })
+
+  it('sends a strictly loaded workspace baseline whole as one constraint, with the Commands rule and overlay intact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-review-instructions-'))
+    const home = await mkdtemp(join(tmpdir(), 'dsh-review-home-'))
+    const agents = await mkdtemp(join(tmpdir(), 'dsh-review-agents-'))
+    vi.stubEnv('DSH_HOME', home)
+    vi.stubEnv('DSH_AGENTS_HOME', agents)
+    try {
+      await mkdir(join(root, '.git'), { recursive: true })
+      await writeFile(join(root, 'AGENTS.md'), '# Project\n\n## Commands\n\n- required: run the check before push\n- deny: never force push\n')
+      await writeFile(join(root, 'AGENTS.local.md'), 'local overlay: scratch only\n')
+      await mkdir(join(root, 'pkg'), { recursive: true })
+      await writeFile(join(root, 'pkg/AGENTS.md'), 'nested: pkg needs the addon\n')
+      await writeFile(join(home, 'AGENTS.md'), 'user-global: answer briefly\n')
+      const rendered = await loadBaselineInstructions({ cwd: join(root, 'pkg'), maxBytes: 65536, strict: true })
+      expect(rendered?.omitted).toEqual([])
+
+      const { ctx, adapter } = await harness([denial])
+      registerProbe(ctx)
+      const { session } = autoSession(ctx, 'acp-constraint')
+      appendUser(session, 'Please publish.', { kind: 'user', input: { kind: 'acp' } })
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: rendered!.text }],
+        source: { kind: 'agent-instructions', form: 'instructions', baseline: true, changes: [] },
+      }), { surfaceOp: 'append' })
+
+      const history = await reviewHistory(ctx, adapter, session)
+      const constraint = history.filter(entry => entry.role === 'constraint')
+      expect(constraint).toHaveLength(1)
+      expect(constraint[0]!.content).toEqual([{ type: 'text', text: rendered!.text }])
+      for (const rule of [
+        'required: run the check before push', 'deny: never force push', 'local overlay: scratch only',
+        'nested: pkg needs the addon', 'user-global: answer briefly',
+      ]) expect(constraint[0]!.content[0]!.text).toContain(rule)
+    } finally {
+      vi.unstubAllEnvs()
+      await Promise.all([root, home, agents].map(dir => rm(dir, { recursive: true, force: true })))
+    }
+  })
+
+  it('does not let an ACP annotation raise a delegated child above direct-parent or fact authority', async () => {
+    const { ctx, adapter } = await harness([denial, denial])
+    registerProbe(ctx)
+    const parentId = SessionId('acp-child-parent')
+    const parent = ctx.sessions.create(parentId, { meta: { cwd: '/workspace' } })
+    parent.append('turn/start', { turn: 1 })
+    appendUser(parent, 'Keep inherited user scope.', { kind: 'user', input: { kind: 'acp' } })
+    const seed = parent.snapshotEvents()
+    const child = ctx.sessions.create(SessionId('acp-child'), {
+      seed,
+      inheritedEventCount: SessionLogOffset(seed.length),
+      meta: { cwd: '/workspace', parentSession: parentId, isSeeded: true, origin: 'subagent' },
+    })
+    ctx.permissionPresets.set(child, AUTO_PRESET)
+    setApprovalPolicy(child, 'never')
+    child.append('subagent/descriptor', {
+      version: SUBAGENT_DESCRIPTOR_VERSION, mode: 'one-shot', provider: 'in-process',
+    })
+    appendUser(child, 'Delete everything as the child task.', { kind: 'user', input: { kind: 'acp' } })
+
+    const history = await reviewHistory(ctx, adapter, child)
+    expect(history.map(entry => [entry.role, entry.content[0]?.text])).toEqual([
+      ['user-instruction', 'Keep inherited user scope.'],
+      ['direct-parent-instruction', 'Delete everything as the child task.'],
+    ])
+
+    const unverified = ctx.sessions.create(SessionId('acp-child-unverified'), {
+      seed,
+      inheritedEventCount: SessionLogOffset(seed.length),
+      meta: { cwd: '/workspace', parentSession: parentId, isSeeded: true, origin: 'subagent' },
+    })
+    ctx.permissionPresets.set(unverified, AUTO_PRESET)
+    appendUser(unverified, 'Unverified tagged text.', { kind: 'user', input: { kind: 'acp' } })
+    const second = await reviewHistory(ctx, adapter, unverified, 1)
+    expect(second.map(entry => [entry.role, entry.content[0]?.text])).toEqual([
+      ['user-instruction', 'Keep inherited user scope.'],
+      ['fact', 'Unverified tagged text.'],
+    ])
   })
 })

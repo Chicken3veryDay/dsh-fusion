@@ -21,6 +21,7 @@ declare module '@deepseek-ai/dsh-llm' {
     /**
      * Factual ACP recipient/input/state packet. It is a `snapshot`: a later packet
      * supersedes an earlier one. It carries no user authority.
+     * @persistenceAttribution
      */
     'acp-context': {
       kind: 'acp-context'

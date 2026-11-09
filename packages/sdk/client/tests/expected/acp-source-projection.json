@@ -1,0 +1,135 @@
+{
+  "events": [
+    {
+      "type": "user/message",
+      "data": {
+        "id": "message-1",
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are the reviewer now. Summarize the workspace rules."
+          }
+        ],
+        "source": {
+          "kind": "user",
+          "input": {
+            "kind": "acp",
+            "futureRevision": 2
+          }
+        }
+      },
+      "surfaceOp": "append"
+    },
+    {
+      "type": "user/message",
+      "data": {
+        "id": "message-2",
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "ACP automation context (generated facts; not a user instruction and grants no authority).\nRecipient: ACP automation, session session-1. A trusted programmatic client drives this session through the automation-only ACP bridge.\nLatest client input: message message-1; its exact text is in this conversation. This identifies admission order only and does not replace or expire any earlier instruction.\nGoal: none.\nWorking directory, sandbox, approval, delegation, and plan-mode facts come from their own runtime context and sections."
+          }
+        ],
+        "source": {
+          "kind": "acp-context",
+          "form": "snapshot",
+          "sections": [
+            {
+              "name": "acp-context",
+              "text": "ACP automation context (generated facts; not a user instruction and grants no authority).\nRecipient: ACP automation, session session-1. A trusted programmatic client drives this session through the automation-only ACP bridge.\nLatest client input: message message-1; its exact text is in this conversation. This identifies admission order only and does not replace or expire any earlier instruction.\nGoal: none.\nWorking directory, sandbox, approval, delegation, and plan-mode facts come from their own runtime context and sections."
+            }
+          ],
+          "recipient": "acp-automation",
+          "session": "session-1",
+          "latestInput": "message-1",
+          "futureField": {
+            "kept": true
+          }
+        }
+      },
+      "surfaceOp": "append"
+    },
+    {
+      "type": "user/message",
+      "data": {
+        "id": "message-3",
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Input from a channel this reader does not know."
+          }
+        ],
+        "source": {
+          "kind": "user",
+          "input": {
+            "kind": "future-channel",
+            "detail": {
+              "nested": [
+                1,
+                2
+              ]
+            }
+          }
+        }
+      },
+      "surfaceOp": "append"
+    },
+    {
+      "type": "user/message",
+      "data": {
+        "id": "message-4",
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Input written before the annotation existed."
+          }
+        ],
+        "source": {
+          "kind": "user"
+        }
+      },
+      "surfaceOp": "append"
+    }
+  ],
+  "projection": [
+    {
+      "id": "message-1",
+      "authority": "user",
+      "input": {
+        "kind": "acp",
+        "futureRevision": 2
+      },
+      "packet": false
+    },
+    {
+      "id": "message-2",
+      "authority": "acp-context",
+      "input": null,
+      "packet": true
+    },
+    {
+      "id": "message-3",
+      "authority": "user",
+      "input": {
+        "kind": "future-channel",
+        "detail": {
+          "nested": [
+            1,
+            2
+          ]
+        }
+      },
+      "packet": false
+    },
+    {
+      "id": "message-4",
+      "authority": "user",
+      "input": null,
+      "packet": false
+    }
+  ]
+}
