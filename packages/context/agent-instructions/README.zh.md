@@ -56,6 +56,7 @@ export interface Config {
   maxSourceBytes?: number
   instructionFileCandidates?: string[]
   localInstructionFileCandidates?: string[]
+  mode?: 'legacy' | 'strict'
 }
 ```
 
@@ -66,6 +67,7 @@ export interface Config {
 | `projectRootMarkers` | `['.git']` | 标记项目根目录的目录名 |
 | `instructionFileCandidates` | `['AGENTS.md', 'CLAUDE.md']` | 每个项目目录中加载的基础文件名 |
 | `localInstructionFileCandidates` | `['AGENTS.local.md', 'CLAUDE.local.md']` | 在基础文件之后加载的本地 overlay 文件名 |
+| `mode` | `legacy` | `strict` 完整保留每个适用文件，否则使依赖它的请求失败；`legacy` 为适应预算而省略并截断 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-agent-instructions)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -74,6 +76,13 @@ export interface Config {
 渲染分别为用户全局指令链与项目指令链做预算，每条链各受 `maxBytes` 限制。在一条链内，渲染优先保留最具体的文件：先丢弃完整的较宽泛文件，再截断剩下的最后一个文件，然后依次退回到精简引言、带该文件空标题的预算通知，最后是仅含预算通知的文本。因此用户全局文件只有超出自身预算时才会被省略或截断，且 harness home 文件先于共享根目录文件被省略；下文的回退情形除外。可见的 `Workspace instruction budget ...` 通知会指名两条链中被省略与被截断的路径。超出预算的宽泛文件会被忽略；刷新期间它被视为暂时不可用，而非被移除。
 
 所有文件合起来能放进 `maxBytes` 时，消息包含全部文件且没有预算通知；只有一条链有文件时，该链单独在 `maxBytes` 内渲染。其他情况下，一个 `<system-reminder>` 框架包含合并后的预算通知（仅当有文件被省略或截断时）、一段引言（仅当某条链保留了框架时），以及按加载顺序排列的两条链渲染段落，因此基线中用户全局文件在前；这条消息可以超过 `maxBytes`，但至多为其两倍。若某条链在没有框架的情况下渲染，且合并后的框架会超过 `maxBytes` 的两倍，则所有文件改为作为一条链在一个 `maxBytes` 内渲染，这可能省略一个本可放进自身预算的用户全局文件；这只会在预算只有几百字节，或预算通知接近或超过 `maxBytes` 时发生。[按指令链分别预算的决策](../../../.agents/notes/implemented/architecture/2026-10-16-separate-instruction-chain-budgets.zh.md)记录了两条链分别预算的原因。
+
+<a id="strict-loading"></a>
+### 严格加载
+
+`mode: strict` 使加载的指令无损。已发现的适用文件无法探测或读取、文件超过 `maxSourceBytes`，或某条链的完整渲染（含框架与引言）超过 `maxBytes`，都会使依赖它的请求以 `AgentInstructionsError` 失败，错误会指明文件、大小或指令链以及应调整的设置；不会省略、截断，也不会用标记或哈希代替。缺失的候选文件仍属正常。基线、动态更新与重载路径共用此行为，需求按 UTF-8 字节计量，因此渲染结果恰好等于 `maxBytes` 时指令链可以放入。文件 touch 之后异步刷新失败时，会在该 agent 的下一次请求重试，并在规则仍无法表示时以同一错误失败。严格模式要求正的有限 `maxBytes` 以及文件系统提供方。`dsh --profile acp` 选用该模式；其他产品保持 `legacy`。
+
+文件内字面的 `</system-reminder>` 文本仍会被转义，使仓库文本无法关闭插件控制的框架；这是对文件文本的唯一改动。
 
 -----
 
@@ -99,6 +108,7 @@ export interface Config {
 | [`src/render.ts`](src/render.ts) | 指令渲染、按指令链的预算截断、变更记录 |
 | [`src/state.ts`](src/state.ts) | 持久消息来源、版本／digest 缓存、对账 |
 | [`src/digest.ts`](src/digest.ts) | SHA-1 内容标识与每候选组重复键 |
+| [`src/errors.ts`](src/errors.ts) | 严格加载的 `AgentInstructionsError` 错误码 |
 
 ### 主要流程
 
@@ -225,8 +235,8 @@ The previously loaded instructions from this file no longer apply.
 - **同一候选组共享失败命运**：组内任一候选（包括隐藏的重复项）的元数据或内容无法读取时，整个组在该轮保留最后一次成功状态。因此共享 agents 根目录不可读时，harness home 的变更通知也会推迟到之后某一轮同时观测到两个根目录时。
 - **字节预算省略的候选不重新进入对账**：所在指令链的预算从基线中丢弃的候选及其内容重复项在可见基线存续期间不再被探测，只有基线重建后才会重新可见。
 - **Symlink 指令文件会跨越信任边界跟随**：最终组件是 symlink 的候选文件会被解析并加载其目标，因此克隆仓库可以将树外文件内容呈现为较低优先级的工作区指引（它绝不覆盖 system、developer 或用户直接下达的指令）。加载不受信任仓库时，请用文件系统策略门禁或 OS 沙箱限制 `ctx.fs`。
-- **指令内容受限但不会被摘要**：每条指令链内超出预算的宽泛文件会被省略，该链最具体的文件可能被截断；该插件绝不请求模型压缩指令文本。
-- **预算不在指令链之间共享**：一条链未用完的字节不会让给另一条链，因此即使项目指令链只用了 1 KiB，70 KiB 的用户全局文件也会被截断到 `maxBytes` 以内。
+- **指令内容受限但不会被摘要**：在 `legacy` 模式下，每条指令链内超出预算的宽泛文件会被省略，该链最具体的文件可能被截断；该插件绝不请求模型压缩指令文本。
+- **预算不在指令链之间共享**：一条链未用完的字节不会让给另一条链，因此即使项目指令链只用了 1 KiB，70 KiB 的用户全局文件在 `legacy` 模式下也会被截断到 `maxBytes` 以内，在 `strict` 模式下则使请求失败。
 
 <a id="dev-note"></a>
 ### 开发备注

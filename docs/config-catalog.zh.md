@@ -16,9 +16,9 @@
 
 ## `@deepseek-ai/dsh-acp`
 
-- `inject`: `agents` · `llm` · `sessionPersistence` · `sessions`
+- `inject`: `agents` · `llm` · `sessionPersistence` · `sessionProjections` · `sessions`
 - `refs`: `Stream` (`@agentclientprotocol/sdk`)
-- `source`: [`packages/acp/acp/src/index.ts:74`](../packages/acp/acp/src/index.ts)
+- `source`: [`packages/acp/acp/src/index.ts:75`](../packages/acp/acp/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the provider/model selection used for each ACP-created agent. */
@@ -77,7 +77,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-agent-instructions`
 
 - `inject`: `agents` · `workingDirectory`
-- `source`: [`packages/context/agent-instructions/src/config.ts:18`](../packages/context/agent-instructions/src/config.ts)
+- `source`: [`packages/context/agent-instructions/src/config.ts:26`](../packages/context/agent-instructions/src/config.ts)
 
 ```ts config-catalog
 /** User-facing workspace instruction loader configuration. */
@@ -102,7 +102,22 @@ export interface Config {
    * under the same per-directory trimmed-content dedup; empty disables the overlay.
    */
   localInstructionFileCandidates?: string[]
+  /**
+   * `strict` requires lossless loading: a discovered applicable file that cannot be read,
+   * exceeds `maxSourceBytes`, or does not fit its complete chain in `maxBytes` stops the
+   * dependent request. `legacy` (the default) keeps omission and truncation for products that
+   * accept lossy instructions. Strict mode requires a positive finite `maxBytes`.
+   */
+  mode?: InstructionLoadingMode
 }
+
+/**
+ * How instruction text that does not fit its limits is handled.
+ * `legacy` omits or truncates to fit the byte budget and ignores unreadable
+ * or oversized files; `strict` represents every applicable file in full or
+ * fails the dependent request with an {@link AgentInstructionsError}.
+ */
+export type InstructionLoadingMode = 'legacy' | 'strict'
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-instructions -->
 

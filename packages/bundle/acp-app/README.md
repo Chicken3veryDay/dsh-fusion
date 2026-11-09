@@ -26,6 +26,8 @@ The automation-only ACP stdio application as a `dsh` profile bundle over [`dsh-b
 
 The startup provider binds stdin EOF to the launcher's bounded successful shutdown. ACP connection close, SIGINT, and SIGTERM drain the bridge-owned agents and the root profile tree before exit. Stdout is reserved for newline-delimited ACP JSON-RPC frames. The bundle disables model-generated session titles because ACP exposes no title surface; deterministic fallback titles remain durable without an auxiliary model request. The inherited projection cache checkpoints ACP-created sessions for later consumers; its durability barrier flushes each covered log prefix before publishing the cache row and may split otherwise coalesced JSONL runs. A deployment selects a different complete composition through profile bundles and patch files, not another app bin.
 
+The bundle replaces the inherited `agent-instructions` row with the same 65,536-byte budget and candidate files in [strict mode](../../context/agent-instructions/README.md#strict-loading): an applicable workspace rule is loaded whole or the request fails before dispatch. The ACP bridge also adds its recipient and latest-input context to every Session it owns; see [Recipient and latest-input context](../../acp/acp/README.md#recipient-and-latest-input-context).
+
 The shipped row creates sessions with `deepseek-official` and `deepseek-v4-flash`; a later patch can replace that row's complete config. The base profile owns adapters, tools, persistence, policy, settings, credentials, and the per-session workspace supplied by the ACP client.
 
 -----
@@ -45,6 +47,8 @@ The complete supported method matrix, MCP trust model, update mapping, and stop 
 #### What the model sees
 
 The profile supplies `You are a coding agent powered by the {{model}} model.` before first-party guidance; the ACP route resolves `{{model}}`. Each Session receives its current directory in required user-role context from [`dsh-working-directory`](../../session/working-directory/README.md).
+
+Each client input is followed by one short generated `acp-context` fact naming the ACP automation recipient and the latest admitted input; workspace instructions render in full or the request fails.
 
 #### Token effect
 

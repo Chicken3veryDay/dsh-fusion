@@ -27,8 +27,11 @@
   en: 4ed8e37834267edb
   zh: a32d5dedb4e8e919
 /deepseek-ai-dsh-acp/use-this-package/protocol-contract:
-  en: 4c87100d312138ec
-  zh: 9997b0e74fe3fd0f
+  en: ffed8331e11aa57c
+  zh: 8e782fb2b327f25f
+/deepseek-ai-dsh-acp/use-this-package/recipient-and-latest-input-context:
+  en: d954b2d8ea1d1ce6
+  zh: 9ecb3fc8a1ac455b
 /deepseek-ai-dsh-acp/understand-the-implementation:
   en: ea8afe89dbdd1934
   zh: 6567979f92f34afd
@@ -36,11 +39,14 @@
   en: ad90a93d87b6caa4
   zh: d7e90af3ea7a678c
 /deepseek-ai-dsh-acp/understand-the-implementation/source-map:
-  en: 9f85ae4ecdb5d022
-  zh: dc2b911360768b9e
+  en: 1150cd66c8d9cf5a
+  zh: 3d311655d66d7eb7
 /deepseek-ai-dsh-acp/understand-the-implementation/admission-and-prompt-settlement:
   en: 535197dd2e750100
   zh: 5a05c7d98e08aee2
+/deepseek-ai-dsh-acp/understand-the-implementation/recipient-context:
+  en: d0d4d8bd0668e2c1
+  zh: cf47a98c93367c89
 /deepseek-ai-dsh-acp/understand-the-implementation/teardown-and-connection-ownership:
   en: 7e2be6a9e211d4d6
   zh: 3ba8482d3231b9d0
@@ -50,6 +56,18 @@
 /deepseek-ai-dsh-acp/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
+/deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context:
+  en: c3cbc138e8480544
+  zh: bdb0badc0e8a3593
+/deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/what-the-model-sees:
+  en: ae29ccbcfddc60e8
+  zh: 7faf37622fc04b34
+/deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/token-effect:
+  en: b09cb02c81ed7ac3
+  zh: a1232c56b36c11bf
+/deepseek-ai-dsh-acp/model-experience/recipient-latest-input-and-state-context/kv-cache-effect:
+  en: 5d9ca46004504f52
+  zh: 39cf50c68498ac55
 /deepseek-ai-dsh-acp/model-experience/prompt-content:
   en: 7fca865c9895801f
   zh: 78a0ab12c0bb0499
@@ -75,8 +93,8 @@
   en: 83120763a07c4b72
   zh: 6a1a181dc4da869d
 /deepseek-ai-dsh-acp/known-limitations-and-deferred-work:
-  en: fc0c6a6af7b475d9
-  zh: cc76885c1175e44a
+  en: cedce529e3c52c68
+  zh: c973861de275a386
 /deepseek-ai-dsh-acp/known-limitations-and-deferred-work/dev-note:
   en: e67f633dc6fe7773
   zh: 3bb0c20c93f16f98

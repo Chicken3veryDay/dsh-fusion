@@ -81,6 +81,15 @@ A failure to append `turn/start` or `turn/end` rejects the prompt even when a pr
 
 Without a model selection, configuration returns no options and skips catalog access. A configuration request cancelled before admission rejects before catalog access. Session configuration offers opaque provider/model choices from the live LLM service catalog and a `reasoning_effort` selector when the exact model declares one. A `model` change accepts exactly an opaque value the server produces, for a registered provider whose adapter lets an interface select that model (the LLM service's `canSelectModel`), or the current selection; it makes no catalog listing for an adapter that answers locally, so a previously offered model stays selectable while its provider's listing fails. The state a change returns re-projects the latest listed catalog instead of listing again. An option change records the Session selection and takes effect at the next model step, including a continuation in the current turn; an already prepared step and its retries keep their captured selection. Image admission checks the selection current when admission begins. Resume restores a recorded selection even when no request has used it yet. ACP clients are trusted controllers: stdio MCP entries authorize their absolute commands and environment, HTTP entries authorize their absolute HTTP(S) URLs and headers, and any initial connection or discovery failure rolls back the unpublished Agent. Unsupported surfaces are omitted or rejected: `session/load`, deletion, fork, additional directories, SSE or ACP-transport MCP, modes, commands, plans, terminals, client filesystem operations, and elicitation.
 
+<a id="recipient-and-latest-input-context"></a>
+### Recipient and latest-input context
+
+Every request of a session's Agent also carries one generated `acp-context` message after the admitted client input. It declares the fixed recipient class `ACP automation` for that session, names the message id of the latest client input this server admitted, and states the current goal phase when a goal service is mounted (`unavailable` when it is not). Nothing in the request format changes: the client sends the same `session/prompt`, and a role stated in prompt prose does not change the recipient class.
+
+The admitted input keeps `source.kind: 'user'`, its exact content, and an `input: { kind: 'acp' }` annotation; the packet is a `snapshot`-form fact that grants no authority. A newer input moves the reference only. It does not replace, expire, or reinterpret an earlier instruction, and it creates no goal or task. Input without the annotation, including older history and goal continuations, is never attributed to this channel: while no tagged input exists the packet reports the latest input as unknown. Tool continuations and retries repeat nothing; a new packet is logged when its facts change or compaction removes it from the conversation. Spawned and forked Agents do not receive the packet as their own recipient declaration.
+
+The packet is operational context. It does not assign a worker or reviewer role, identify a task, or reduce the instructions the Agent receives; `dsh --profile acp` loads workspace instructions in [strict mode](../../context/agent-instructions/README.md#strict-loading), which keeps every applicable rule whole or refuses the request before dispatch.
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -108,10 +117,15 @@ The decision history lives in the [ACP as an automation-only protocol note](../.
 | [`src/index.ts`](src/index.ts) | Plugin entry: `Config` schema, `AgentSideConnection` wiring, per-session records, admission and settlement, teardown |
 | [`src/content.ts`](src/content.ts) | Wire-content admission and projection: image validation, route recheck, prompt reconstruction, assistant block conversion |
 | [`src/codec.ts`](src/codec.ts) | Pure turn-ending to ACP `stopReason` mapping |
+| [`src/context.ts`](src/context.ts) | Recipient/latest-input/goal packet provider, its `acpContext` projection, and the `acp-context` message source |
 
 ### Admission and prompt settlement
 
 Each session permits one in-flight prompt. Admission validates the whole prompt batch, snapshots the selected route, rechecks the exact Agent identity and image capability, persists image attachments, and only then queues the user message — a cancellation that wins admission never enqueues a late turn. Once queued, the session module associates the snapshot with the inbox message until claim and pins the same provider, model, and reasoning effort across prompt variables and every model step in that turn. Per-session update delivery is serialized; committed images are re-read and integrity-verified, so a missing or corrupt image in an assistant message fails the correlated prompt instead of emitting a placeholder. A tool result image that cannot be read is replaced by the text `[Image unavailable: the attachment could not be read.]`, so the call's terminal `tool_call_update`, nested or not, still arrives with the tool's own status. Settlement precedence is explicit cancellation, committed-output failure, interval-wide Agent failure, then the correlated turn ending.
+
+### Recipient context
+
+`AcpSession` stamps only input that passed content admission, using the existing user-message path. The plugin registers one host-only `acpContext` projection that retains the latest tagged input reference and the newest packet's text and position; the first request reads the pending tagged input, later attempts read the committed projection. Each Agent receives its own `system-prompt/request-context` listener through its unpublished scope, prepended so it reads goal state after every other provider has settled. A goal change during request preparation appends a log event, so the loop's admission re-validation also retries a stale packet. The packet is returned uncommitted, and the loop alone logs it after provider preparation, so cancellation records neither a packet nor a pointer. Session creation awaits the projection registration and fails with its error.
 
 ### Teardown and connection ownership
 
@@ -135,6 +149,20 @@ Read these pages when the package-level contract is not enough. They move from t
 
 <a id="model-experience"></a>
 ## Model Experience
+
+### Recipient, latest-input, and state context
+
+#### What the model sees
+
+One short user-role snapshot after each new client input, fixed in this form: the heading line marking it as generated facts with no authority, the recipient declaration with the session id, the latest client input as `message <id>` with whether its text is still in the conversation, the goal phase and round counts without the objective, and a pointer to the runtime context for directory, sandbox, approval, and delegation facts. A repeated request or tool continuation sees the same single packet.
+
+#### Token effect
+
+About 120 tokens per logged packet. It is logged again only when the latest input, goal phase, or compaction state changes.
+
+#### KV Cache effect
+
+Append-only: a packet joins the history after the client input it names; an unchanged state adds nothing.
 
 ### Prompt content
 
@@ -175,6 +203,7 @@ These limits define when this package is a poor fit or needs special operational
 - **Raster prompt images only** — PNG, JPEG, WebP, and GIF require a durable attachment store and an exact image-capable route.
 - **MCP tools only** — MCP resources and prompts have no DSH consumer.
 - **Nested `run_code` calls are parented by `_meta`** — a call made inside a `run_code` program arrives as its own `tool_call` and `tool_call_update` keyed by its sub-call id (`<run_code id>:ptc:<n>`), with `_meta["dsh/parentToolCallId"]` naming the program call, because ACP has no parent field. A program that requests a wider sandbox mode raises one permission request for that execution, naming the `run_code` call, whose `tool_call` update (titled `run_code`, input carrying the program description and the requested sandbox mode and justification) precedes it; the request carries no separate reason text. Nested tools keep their own policies, so a nested call can raise its own permission request after its own `tool_call`.
+- **Recipient context is not task curation** — the packet names the latest admitted client input and goal phase. Worker or reviewer assignment, task identity and replacement, work scopes, curated optional evidence, and meaningful instruction reduction remain future work, and earlier lossy compaction of older user instructions keeps its existing semantics.
 - **No transcript replay or interactive extensions** — session deletion, fork, `session/load`, modes, commands, plans, terminals, client filesystem operations, and elicitation remain outside this automation surface.
 
 <a id="dev-note"></a>

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/acp-context-and-strict-instructions/guide.md
+/:
+  en: 00f4ddd1e46ca7b1
+  zh: 90f0717ee6d007f4
+/acp-profile-adds-recipient-context-and-strict-workspace-instructions:
+  en: 1974be8cbaec5006
+  zh: 1a4786711896ca71
+/acp-profile-adds-recipient-context-and-strict-workspace-instructions/change:
+  en: d4b09b53b97610d7
+  zh: d65c2c9c09abbe44
+/acp-profile-adds-recipient-context-and-strict-workspace-instructions/migration:
+  en: a0855d2b78c76064
+  zh: 626e9b7d58f5e08d

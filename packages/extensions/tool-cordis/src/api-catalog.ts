@@ -8625,7 +8625,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MessageSourceMap',
-    declaration: 'export interface MessageSourceMap {\n    user: {\n        kind: \'user\';\n    };\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n    \'system-prompt\': SystemPromptMessageSource;\n}',
+    declaration: 'export interface MessageSourceMap {\n    user: UserMessageSource;\n    model: ModelMessageSource;\n    tool: ToolMessageSource;\n    \'system-prompt\': SystemPromptMessageSource;\n}',
   },
   {
     name: 'MetadataReceipt',
@@ -11656,8 +11656,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface UpdateTicketAttentionRequest {\n    readonly ticketId: TicketId;\n    readonly expectedRevision: number;\n    readonly actorId: SessionId;\n    readonly attentionId: TicketAttentionId;\n}',
   },
   {
+    name: 'UserInput',
+    declaration: 'export type UserInput = UserInputMap[keyof UserInputMap];',
+  },
+  {
+    name: 'UserInputMap',
+    declaration: 'export interface UserInputMap {\n    acp: {\n        readonly kind: \'acp\';\n    };\n}',
+  },
+  {
     name: 'UserMessage',
     declaration: 'export interface UserMessage extends MessageBase {\n    readonly role: \'user\';\n}',
+  },
+  {
+    name: 'UserMessageSource',
+    declaration: 'export interface UserMessageSource {\n    kind: \'user\';\n    input?: UserInput;\n}',
   },
   {
     name: 'VerifiedWebhookDelivery',
