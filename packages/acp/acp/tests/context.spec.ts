@@ -157,6 +157,16 @@ describe('ACP recipient, latest-input, and state context', () => {
     expect(dispatched).not.toContain('ship the slice')
   })
 
+  it('contributes neither goal text nor a packet to an Agent-scoped read that names no Agent', async () => {
+    harness = cleanup.adopt(await makeBridgeHarness({ script: [] }))
+    const agent = harness.ctx.agents.get(SessionId(await newSession(harness)))!
+    const scoped = { scope: agent }
+    const assembly = await harness.ctx.systemPrompt.assemble(scoped)
+    expect(assembly.contexts.find(context => context.name === 'acp:goal')?.text).toBe('')
+    await expect(harness.ctx.systemPrompt.requestContext(scoped, [])).resolves.toEqual([])
+    expect(harness.adapter.requests).toHaveLength(0)
+  })
+
   it('commits neither the input pointer nor a packet when preparation is cancelled', async () => {
     harness = cleanup.adopt(await makeBridgeHarness({ script: [textResponse('never sent')] }))
     const sessionId = await newSession(harness)
