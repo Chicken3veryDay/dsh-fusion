@@ -15,6 +15,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, errorChain, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { type Session, type SessionEvent, type SessionId, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import { AcpContentError, admitAcpPrompt } from './content.ts'
+import type { AcpContext } from './context.ts'
 import { turnEndToStopReason } from './codec.ts'
 import { mountAcpMcpServers } from './mcp.ts'
 import { AcpModelControl } from './model-control.ts'
@@ -30,6 +31,8 @@ interface SubagentLifecycle {
 
 /** Inputs shared by fresh and resumed ACP session construction. */
 interface AcpSessionBuildOptions {
+  /** Installs the recipient/input/state packet provider for this exact Agent. */
+  context: AcpContext
   cwd: string
   mcpServers: readonly McpServer[]
   agentOptions: AgentOptions
@@ -79,8 +82,9 @@ function internalError(detail: string): RequestError {
  * @param agentCtx - unpublished Agent scope.
  * @param options - workspace and MCP servers requested for the session.
  */
-async function composeAgent(agentCtx: Context, options: AcpSessionBuildOptions): Promise<void> {
+async function composeAgent(agentCtx: Context, sessionId: SessionId, options: AcpSessionBuildOptions): Promise<void> {
   installModelSelection(agentCtx)
+  options.context.install(agentCtx, sessionId)
   await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
 }
 
@@ -121,7 +125,7 @@ export class AcpSession {
       meta: { cwd: options.cwd },
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: agentCtx => composeAgent(agentCtx, options),
+      setup: agentCtx => composeAgent(agentCtx, options.sessionId, options),
     })
     return new AcpSession(ctx, handle, options.notify)
   }
@@ -139,7 +143,7 @@ export class AcpSession {
       resumeSessionId: options.sessionId,
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: agentCtx => composeAgent(agentCtx, options),
+      setup: agentCtx => composeAgent(agentCtx, options.sessionId, options),
     })
     return new AcpSession(ctx, handle, options.notify)
   }
@@ -267,7 +271,8 @@ export class AcpSession {
         }
         const message = createUserMessage({
           content,
-          source: { kind: 'user' },
+          // Only input admitted here carries the ACP channel; generated continuations never do.
+          source: { kind: 'user', input: { kind: 'acp' } },
         })
         inflight.messageId = message.id
         inflight.messageQueued = true

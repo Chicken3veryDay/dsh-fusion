@@ -94,7 +94,7 @@ describe('automation-only ACP bridge', () => {
     expect('messageId' in harness.updates[0]!).toBe(true)
     if ('messageId' in harness.updates[0]!) expect(typeof harness.updates[0].messageId).toBe('string')
     expect(harness.ctx.agents.get(SessionId(sessionId))?.session.header.cwd).toBe(process.cwd())
-    expect(harness.adapter.requests[0]?.messages.at(-1)?.content).toEqual([{ type: 'text', text: 'say hello' }])
+    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{ type: 'text', text: 'say hello' }])
   })
 
   it('closes one active session without affecting its neighbor', async () => {
@@ -899,7 +899,7 @@ describe('automation-only ACP bridge', () => {
       ],
     })
 
-    expect(harness.adapter.requests[0]?.messages.at(-1)?.content).toEqual([{ type: 'text', text: 'first second' }])
+    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{ type: 'text', text: 'first second' }])
   })
 
   it('admits mixed text/image prompts in wire order and logs references only', async () => {
@@ -921,7 +921,7 @@ describe('automation-only ACP bridge', () => {
 
     expect(resolve).toHaveBeenCalledWith('mock', 'mock', expect.any(AbortSignal))
     expect(harness.attachments?.saved.map(input => [...input.data])).toEqual([[1], [2]])
-    const requestContent = harness.adapter.requests[0]?.messages.at(-1)?.content
+    const requestContent = harness.adapter.requests[0]?.messages.at(-2)?.content
     expect(requestContent?.map(block => block.type)).toEqual(['text', 'image', 'text', 'image', 'text'])
     expect(requestContent?.[0]).toEqual({ type: 'text', text: 'before' })
     expect(requestContent?.[2]).toEqual({ type: 'text', text: 'between' })
@@ -1021,7 +1021,7 @@ describe('automation-only ACP bridge', () => {
         { type: 'resource_link', name: 'notes.txt', uri: 'file:///tmp/notes.txt' },
       ],
     })
-    expect(harness.adapter.requests[0]?.messages.at(-1)?.content).toEqual([{
+    expect(harness.adapter.requests[0]?.messages.at(-2)?.content).toEqual([{
       type: 'text',
       text: 'summarize\n[resource_link name="notes.txt" uri="file:///tmp/notes.txt"]\n',
     }])

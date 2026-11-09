@@ -811,7 +811,7 @@ describe('ACP prompt lifecycle', () => {
     const releaseLate = Promise.withResolvers<undefined>()
     const stream = harness.adapter.stream.bind(harness.adapter)
     vi.spyOn(harness.adapter, 'stream').mockImplementation(async function* (options) {
-      if (options.messages.at(-1)?.content.some(block => block.type === 'text' && block.text === 'late child result')) {
+      if (options.messages.slice(-2).some(message => message.content.some(block => block.type === 'text' && block.text === 'late child result'))) {
         lateStarted.resolve(undefined)
         await releaseLate.promise
       }

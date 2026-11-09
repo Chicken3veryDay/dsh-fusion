@@ -50,6 +50,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { supportsAcpImagePrompts } from './content.ts'
+import { registerAcpContext } from './context.ts'
 import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
 import { AcpSession } from './session.ts'
@@ -58,7 +59,7 @@ const DEFAULT_SESSION_LIST_PAGE_SIZE = 100
 
 export const name = 'acp'
 /** Core services required by the standard automation controls. */
-export const inject = ['agents', 'llm', 'sessionPersistence', 'sessions']
+export const inject = ['agents', 'llm', 'sessionPersistence', 'sessionProjections', 'sessions']
 
 /** Preserve invalid-parameter detail in the SDK wire error message. */
 function invalidParams(detail: string): RequestError {
@@ -98,6 +99,8 @@ export function apply(ctx: Context, config: AcpConfig): void {
   // injected service during apply rather than reading it lazily in a callback.
   const persistence = ctx.sessionPersistence
   const logger = ctx.logger
+  // Session creation awaits this registration; a failure rejects each activation with its cause.
+  const contextReady = registerAcpContext(ctx)
   const sessionListPageSize = resolveSessionListPageSize(config.sessionListPageSize)
   const sessions = new Map<SessionId, AcpSession>()
   const activating = new Set<SessionId>()
@@ -207,6 +210,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       let record: AcpSession
       try {
         record = await AcpSession.create(ctx, {
+          context: await contextReady,
           sessionId,
           cwd: params.cwd,
           mcpServers: params.mcpServers,
@@ -257,6 +261,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         let record: AcpSession
         try {
           record = await AcpSession.resume(ctx, {
+            context: await contextReady,
             sessionId,
             cwd: params.cwd,
             mcpServers: params.mcpServers ?? [],

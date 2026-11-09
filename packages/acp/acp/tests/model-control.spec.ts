@@ -12,6 +12,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import LlmService, { ReasoningEffortId, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import * as PiAi from '@deepseek-ai/dsh-llm-pi-ai'
+import { registerAcpContext } from '../src/context.ts'
 import { AcpModelControl } from '../src/model-control.ts'
 import { AcpSession } from '../src/session.ts'
 import { makeBridgeHarness } from './harness.ts'
@@ -247,6 +248,7 @@ describe('ACP configuration admission', () => {
       return resolveModel(provider, model)
     }
     const record = await AcpSession.create(harness.ctx, {
+      context: await registerAcpContext(harness.ctx),
       sessionId: SessionId('cancelled-configuration'), cwd: process.cwd(), mcpServers: [],
       agentOptions: { provider: 'mock', model: 'mock' }, signal: new AbortController().signal,
       notify: async () => {},
