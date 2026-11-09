@@ -130,16 +130,17 @@ describe('ACP recipient, latest-input, and state context', () => {
   it('reads the goal after every other provider settles, so a change during collection reaches the dispatched packet', async () => {
     harness = await makeBridgeHarness({ script: [textResponse('ok')] })
     await harness.ctx.plugin(GoalService)
-    const sessionId = await newSession(harness)
-    const agent = harness.ctx.agents.get(SessionId(sessionId))!
     const reached = Promise.withResolvers<undefined>()
     const release = Promise.withResolvers<undefined>()
+    // Registered before the session exists, like a plugin loaded ahead of it: it wraps the ACP provider and settles last.
     harness.ctx.on('system-prompt/request-context', async (_context, _pending, next) => {
       const added = await next()
       reached.resolve(undefined)
       await release.promise
       return added
     })
+    const sessionId = await newSession(harness)
+    const agent = harness.ctx.agents.get(SessionId(sessionId))!
     const prompting = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'state changes mid-collection' }] })
     await reached.promise
     ;(harness.ctx.get('goals') as GoalService).create(agent, { objective: 'ship the slice' })
