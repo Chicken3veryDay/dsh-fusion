@@ -52,7 +52,7 @@ Existing records remain valid: a user source without input means no channel is r
 <a id="verification"></a>
 ## Verification
 
-pnpm exec vitest run packages/session/session-persistence-jsonl/tests/native-source-admission.spec.ts: 48 tests passed, including exact preservation of tagged, unknown-channel, acp-context, and untagged sources. pnpm exec vitest run packages/sdk/client/tests/acp-source-projection.spec.ts: 2 tests passed; uv run pytest python/sdk/tests/test_acp_source_projection.py: 1 test passed. pnpm exec vitest run packages/acp/acp/tests/context.spec.ts: 11 tests passed, including old untagged history resumed under the new writer. pnpm exec vitest run packages/experimental/auto-review/tests/auto-review.spec.ts: 43 tests passed.
+pnpm exec vitest run packages/session/session-persistence-jsonl/tests/native-source-admission.spec.ts: 48 tests passed, including exact preservation of tagged, unknown-channel, acp-context, and untagged sources. pnpm exec vitest run packages/sdk/client/tests/acp-source-projection.spec.ts: 3 tests passed, including the session log the shipped ACP profile wrote read through the process reader; uv run pytest python/sdk/tests/test_acp_source_projection.py: 2 tests passed, including the same product log. pnpm exec vitest run packages/acp/acp/tests/context.spec.ts: 11 tests passed, including old untagged history resumed under the new writer; context-recovery.spec.ts adds a cold process restart and valid, missing, and incompatible projection checkpoint recovery. pnpm exec vitest run packages/experimental/auto-review/tests/auto-review.spec.ts: 43 tests passed; mounted-instructions.spec.ts adds 3 tests with the mounted strict plugin.
 
 <a id="dev-note"></a>
 ## Dev Note

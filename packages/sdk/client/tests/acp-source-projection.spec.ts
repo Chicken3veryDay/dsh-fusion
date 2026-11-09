@@ -75,7 +75,8 @@ it('reads the ACP product session output through the process reader with each so
     // The goal fact arrives as a runtime-context section, a snapshot that carries no ACP channel or authority.
     expect(runtime!.source).toMatchObject({ kind: 'runtime-context', form: 'snapshot' })
     expect(runtime!.source).not.toHaveProperty('input')
-    expect((runtime!.source.sections as { name: string; text: string }[]).find(section => section.name === 'acp:goal')?.text).toBe('Goal: none.')
+    const sections = 'sections' in runtime!.source ? runtime!.source.sections : []
+    expect(sections.find(section => section.name === 'acp:goal')?.text).toBe('Goal: none.')
   } finally {
     await harness.close()
   }

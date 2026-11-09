@@ -1,7 +1,7 @@
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 import { createUserMessage, type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm'
 import ToolResultPruner, { PRUNE_MARKER } from '@deepseek-ai/dsh-compaction-tool-result-pruner'
-import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, SessionLogOffset, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -40,10 +40,10 @@ describe('transient provider failure', () => {
   it('retries the same request under one input pointer and one packet', async () => {
     const harness = cleanup.adopt(await makeBridgeHarness({ script: [errorResponse('transient boom'), textResponse('recovered')] }))
     let retried = false
-    harness.ctx.on('agent/request-error', () => {
+    harness.ctx.on('agent/request-error', async () => {
       if (retried) return undefined
       retried = true
-      return Promise.resolve({ kind: 'retry' as const })
+      return { kind: 'retry' as const }
     })
     const sessionId = await startSession(harness)
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] })
@@ -140,7 +140,7 @@ describe('projection checkpoints for a cold read', () => {
     const rebuilt = registry.restore(malformed, events, none, session.header, none).checkpoint[ACP_CONTEXT_PROJECTION_KEY]
     expect(rebuilt).toEqual(full)
 
-    const pastEnd = { ...earlier, [ACP_CONTEXT_PROJECTION_KEY]: { ...row, seq: events.length + 100 } }
+    const pastEnd = { ...earlier, [ACP_CONTEXT_PROJECTION_KEY]: { ...row, seq: SessionSeq(events.length + 100) } }
     expect(registry.restore(pastEnd, events, none, session.header, none).checkpoint[ACP_CONTEXT_PROJECTION_KEY]).toEqual(full)
   })
 })

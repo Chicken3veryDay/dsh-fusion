@@ -52,7 +52,7 @@ changes:
 <a id="verification"></a>
 ## 验证
 
-pnpm exec vitest run packages/session/session-persistence-jsonl/tests/native-source-admission.spec.ts：48 个测试通过，包括对带标记、未知通道、acp-context 与无标记来源的精确保留。pnpm exec vitest run packages/sdk/client/tests/acp-source-projection.spec.ts：2 个测试通过；uv run pytest python/sdk/tests/test_acp_source_projection.py：1 个测试通过。pnpm exec vitest run packages/acp/acp/tests/context.spec.ts：11 个测试通过，包括在新写入方下恢复旧的无标记历史。pnpm exec vitest run packages/experimental/auto-review/tests/auto-review.spec.ts：43 个测试通过。
+pnpm exec vitest run packages/session/session-persistence-jsonl/tests/native-source-admission.spec.ts：48 个测试通过，包括对带标记、未知通道、acp-context 与无标记来源的精确保留。pnpm exec vitest run packages/sdk/client/tests/acp-source-projection.spec.ts：3 个测试通过，包括通过进程读取方读取随附 ACP profile 写出的会话日志；uv run pytest python/sdk/tests/test_acp_source_projection.py：2 个测试通过，包括同一份产品日志。pnpm exec vitest run packages/acp/acp/tests/context.spec.ts：11 个测试通过，包括在新写入方下恢复旧的无标记历史；context-recovery.spec.ts 增加了冷进程重启，以及有效、缺失与不兼容投影检查点的恢复。pnpm exec vitest run packages/experimental/auto-review/tests/auto-review.spec.ts：43 个测试通过；mounted-instructions.spec.ts 增加了 3 个使用已挂载严格插件的测试。
 
 <a id="dev-note"></a>
 ## 开发备注

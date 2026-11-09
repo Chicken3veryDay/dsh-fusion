@@ -55,12 +55,13 @@ export class TestCleanup {
   /**
    * Make cleanup wait for a pending call, so a failing test never leaves it unsettled or its rejection unhandled.
    * Its outcome is ignored here; the test asserts it when it matters.
-   * @param pending - a promise the test started and may not await.
-   * @returns the same promise.
+   * @param pending - a call the test started and may not await.
+   * @returns the call's outcome as a promise.
    */
-  track<T>(pending: Promise<T>): Promise<T> {
-    this.defer(async () => { await pending.catch(() => undefined) })
-    return pending
+  track<T>(pending: T | PromiseLike<T>): Promise<T> {
+    const settled = Promise.resolve(pending)
+    this.defer(async () => { await settled.catch(() => undefined) })
+    return settled
   }
 
   /**
