@@ -71,6 +71,12 @@ function isAgentInstructionsMessage(message: UserMessage): boolean {
   return message.source.kind === 'agent-instructions'
 }
 
+/** Recognize an externally declared source in the merge-extensible message-source map. */
+function isRuntimeContextMessage(message: UserMessage): boolean {
+  const kind: string = message.source.kind
+  return kind === 'runtime-context'
+}
+
 function sameContextPayload(left: UserMessage, right: UserMessage): boolean {
   return isDeepStrictEqual(left.content, right.content)
     && isDeepStrictEqual(left.source, right.source)
@@ -361,9 +367,10 @@ export function apply(ctx: Context, config: Config): void {
     const desired = await compose(agent, signal, messages, pending, retriedTouches)
     signal.throwIfAborted()
     failedTouches.delete(agent)
-    // An empty first entry owns a no-step turn; keep context pending instead
-    // of turning it into a standalone request. Later entries may be tool continuations.
-    if (decision.kind === 'reject' || (step === 1 && decision.messages.length === 0)) {
+    // An empty or runtime-only first entry owns a no-step turn; keep instructions pending
+    // until input enters. Later entries may be tool continuations.
+    if (decision.kind === 'reject'
+      || (step === 1 && decision.messages.every(isRuntimeContextMessage))) {
       syncInbox(agent, messages, desired)
       return decision
     }
