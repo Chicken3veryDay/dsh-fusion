@@ -101,6 +101,31 @@ export type ContextFormed =
   | { readonly form: 'recall' }
 
 /**
+ * Producer-declared channel of one admitted user input, merge-extensible so
+ * each channel declares its own `kind` beside its producer. The annotation
+ * states which transport admitted the input; it neither grants nor removes
+ * authority, which stays with the enclosing `source.kind`.
+ */
+export interface UserInputMap {
+  /** Input admitted through the automation-only ACP bridge. */
+  acp: { readonly kind: 'acp' }
+}
+
+/** Any known user-input channel, derived from {@link UserInputMap}; fall through unknown kinds (merge-extensible). */
+export type UserInput = UserInputMap[keyof UserInputMap]
+
+/**
+ * Required source of a direct user message. The optional `input` annotation
+ * records the admitting channel of the exact content and is ignored by readers
+ * that do not know it; an absent annotation means the channel is unknown.
+ */
+export interface UserMessageSource {
+  kind: 'user'
+  /** Channel that admitted this input; absent on inputs from producers that declare none. */
+  input?: UserInput
+}
+
+/**
  * Where a message (or injected content) came from, in the harness's own
  * vocabulary. Merge-extensible sum type — each producer declares its own
  * `kind` in its own module; there is no shared catch-all `plugin` kind.
@@ -108,7 +133,7 @@ export type ContextFormed =
  * producer's kind, and consumers fall through unknown kinds.
  */
 export interface MessageSourceMap {
-  user: { kind: 'user' }
+  user: UserMessageSource
   model: ModelMessageSource
   tool: ToolMessageSource
   'system-prompt': SystemPromptMessageSource

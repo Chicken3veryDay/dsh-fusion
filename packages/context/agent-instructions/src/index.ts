@@ -16,6 +16,7 @@ import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
 import type { ToolExecution, ToolExecutionResult, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
+import { AgentInstructionsError } from './errors.ts'
 import { Config, resolveConfig, workspaceBaselineIdentity, type ResolvedConfig } from './config.ts'
 import { findProjectRoot, loadBaselineInstructionSet } from './files.ts'
 import { trimmedInstructionDigest } from './digest.ts'
@@ -31,6 +32,9 @@ import {
 import { instructionCandidateGroup, instructionScopeKey, scopeForDisplayPath, type AgentInstructionChange } from './render.ts'
 
 export { Config, name }
+export { AgentInstructionsError } from './errors.ts'
+export type { AgentInstructionsErrorCode } from './errors.ts'
+export type { InstructionLoadingMode } from './config.ts'
 /** Services required by workspace instruction projection. */
 export const inject = ['agents', 'workingDirectory']
 export {
@@ -84,6 +88,7 @@ function filePathFromExecution(exec: ToolExecution): string | undefined {
 
 export function apply(ctx: Context, config: Config): void {
   const resolved: ResolvedConfig = resolveConfig(config)
+  const strict = resolved.mode === 'strict'
   const instructionVersions: InstructionVersionCache = new WeakMap()
   const baselinePreparations = new WeakMap<Session, {
     identity: string
@@ -105,6 +110,9 @@ export function apply(ctx: Context, config: Config): void {
   // Execution ancestry and the enclosing durable step are the two commit
   // boundaries before an asynchronous projection may mutate the agent inbox.
   const stepTouches = new WeakMap<Session, ProjectionTouch[]>()
+  // Strict mode keeps a touch whose asynchronous refresh failed; the agent's next
+  // request retries it and stops on the same failure instead of proceeding without the rule.
+  const failedTouches = new WeakMap<Agent, Set<string>>()
 
   const compose = async (
     agent: Agent,
@@ -118,7 +126,15 @@ export function apply(ctx: Context, config: Config): void {
       return undefined
     }
     const fileSystem = ctx.get('fs')
-    if (fileSystem === undefined) return undefined
+    if (fileSystem === undefined) {
+      if (strict) {
+        throw new AgentInstructionsError(
+          'Strict workspace instruction loading needs a filesystem provider (ctx.fs) to read applicable rules; mount one or use mode "legacy".',
+          'AGENT_INSTRUCTIONS_FS_UNAVAILABLE',
+        )
+      }
+      return undefined
+    }
     const content: UserMessage['content'][number][] = []
     const changes: AgentInstructionChange[] = []
     let desiredBaseline = false
@@ -149,6 +165,7 @@ export function apply(ctx: Context, config: Config): void {
         localInstructionFileCandidates: resolved.localInstructionFileCandidates,
         projectRoot,
         replacePreviousBaseline,
+        strict,
         signal,
       }, fileSystem)
       const baseline = baselineInstructionState(instructions?.included ?? [])
@@ -288,7 +305,13 @@ export function apply(ctx: Context, config: Config): void {
     const previous = projectionTails.get(agent) ?? Promise.resolve()
     const current = previous.then(() => composeAndSync(agent, projectionLifecycle.signal, [], [touchedPath]))
       .catch((error: unknown) => {
-        if (!projectionLifecycle.signal.aborted) ctx.logger.warn('workspace instruction refresh failed: %o', error)
+        if (projectionLifecycle.signal.aborted) return
+        if (strict) {
+          const paths = failedTouches.get(agent) ?? new Set<string>()
+          paths.add(touchedPath)
+          failedTouches.set(agent, paths)
+        }
+        ctx.logger.warn('workspace instruction refresh failed: %o', error)
       })
     projectionTails.set(agent, current)
     void current.then(() => {
@@ -334,8 +357,10 @@ export function apply(ctx: Context, config: Config): void {
     const decision = await next()
     await waitForProjections(agent)
     const pending = agent.inbox.nextStep.filter(isAgentInstructionsMessage)
-    const desired = await compose(agent, signal, messages, pending)
+    const retriedTouches = [...failedTouches.get(agent) ?? []]
+    const desired = await compose(agent, signal, messages, pending, retriedTouches)
     signal.throwIfAborted()
+    failedTouches.delete(agent)
     // An empty first entry owns a no-step turn; keep context pending instead
     // of turning it into a standalone request. Later entries may be tool continuations.
     if (decision.kind === 'reject' || (step === 1 && decision.messages.length === 0)) {

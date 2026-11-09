@@ -14,6 +14,14 @@ const DEFAULT_LOCAL_INSTRUCTION_FILE_CANDIDATES = ['AGENTS.local.md', 'CLAUDE.lo
 const DEFAULT_MAX_SOURCE_BYTES = 1_048_576
 const RESERVED_PATH_SEGMENTS = new Set(['', '.', '..'])
 
+/**
+ * How instruction text that does not fit its limits is handled.
+ * `legacy` omits or truncates to fit the byte budget and ignores unreadable
+ * or oversized files; `strict` represents every applicable file in full or
+ * fails the dependent request with an {@link AgentInstructionsError}.
+ */
+export type InstructionLoadingMode = 'legacy' | 'strict'
+
 /** User-facing workspace instruction loader configuration. */
 export interface Config {
   /** Directory entries that identify the project root while walking upward from the current working directory. */
@@ -36,6 +44,13 @@ export interface Config {
    * under the same per-directory trimmed-content dedup; empty disables the overlay.
    */
   localInstructionFileCandidates?: string[]
+  /**
+   * `strict` requires lossless loading: a discovered applicable file that cannot be read,
+   * exceeds `maxSourceBytes`, or does not fit its complete chain in `maxBytes` stops the
+   * dependent request. `legacy` (the default) keeps omission and truncation for products that
+   * accept lossy instructions. Strict mode requires a positive finite `maxBytes`.
+   */
+  mode?: InstructionLoadingMode
 }
 
 export const Config: z<Config> = z.object({
@@ -44,6 +59,7 @@ export const Config: z<Config> = z.object({
   maxSourceBytes: z.number().step(1).min(1).default(DEFAULT_MAX_SOURCE_BYTES),
   instructionFileCandidates: z.array(z.string()).default([...DEFAULT_INSTRUCTION_FILE_CANDIDATES]),
   localInstructionFileCandidates: z.array(z.string()).default([...DEFAULT_LOCAL_INSTRUCTION_FILE_CANDIDATES]),
+  mode: z.union([z.const('legacy'), z.const('strict')]).default('legacy'),
 })
 
 /** Normalized instruction discovery configuration. */
@@ -59,6 +75,7 @@ export interface ResolvedDiscoveryConfig {
 export interface ResolvedConfig extends ResolvedDiscoveryConfig {
   maxBytes: number
   maxSourceBytes: number
+  mode: InstructionLoadingMode
 }
 
 /**
@@ -80,6 +97,8 @@ export function workspaceBaselineIdentity(
     maxSourceBytes: config.maxSourceBytes,
     instructionFileCandidates: config.instructionFileCandidates,
     localInstructionFileCandidates: config.localInstructionFileCandidates,
+    // Only strict loading adds a key, so a legacy baseline keeps the identity it recorded.
+    ...config.mode === 'strict' ? { mode: config.mode } : {},
   })
 }
 
@@ -88,8 +107,13 @@ export function workspaceBaselineIdentity(
  * Undeclared row fields cannot override the process home.
  * @param config - user-facing plugin configuration.
  * @returns normalized runtime configuration.
+ * @throws when strict loading is configured with a disabled (non-positive or non-finite) byte budget.
  */
 export function resolveConfig(config: Config): ResolvedConfig {
+  const mode = config.mode ?? 'legacy'
+  if (mode === 'strict' && (!Number.isFinite(config.maxBytes) || config.maxBytes <= 0)) {
+    throw new TypeError('agent-instructions: mode "strict" requires a positive finite maxBytes; a disabled budget would silently load no instructions')
+  }
   return {
     ...resolveDiscoveryConfig({
       ...config.projectRootMarkers === undefined ? {} : { projectRootMarkers: config.projectRootMarkers },
@@ -100,6 +124,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     }),
     maxBytes: config.maxBytes,
     maxSourceBytes: config.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES,
+    mode,
   }
 }
 

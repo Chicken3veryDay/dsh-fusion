@@ -11,6 +11,7 @@ import {
   DEFAULT_DSH_HOME_DISPLAY,
   DSH_HOME_ENV,
 } from '@deepseek-ai/dsh-home-paths'
+import { AgentInstructionsError } from './errors.ts'
 import type { InstructionFile, LoadedInstructionFile } from './files.ts'
 
 const SYSTEM_REMINDER_OPEN = '<system-reminder>'
@@ -275,11 +276,13 @@ function changedSectionText(item: ChangeRenderItem): string {
  * batch holding both can exceed `maxBytes` and is at most twice that size.
  * @param items - ordered state transitions and current file contents.
  * @param maxBytes - maximum UTF-8 bytes for each instruction chain in the rendered batch.
+ * @param strict - throw {@link AgentInstructionsError} when a chain does not fit, instead of omitting or truncating transitions.
  * @returns bounded prompt text and the transitions actually represented by it.
  */
 export function renderInstructionChanges(
   items: ChangeRenderItem[],
   maxBytes: number,
+  strict = false,
 ): { text: string; changes: AgentInstructionChange[] } {
   const byAbsolutePath = new Map(items.map(item => [item.file.absolutePath, item]))
   const style: RenderStyle = {
@@ -290,7 +293,10 @@ export function renderInstructionChanges(
       return item === undefined ? '' : changedSectionText({ ...item, file })
     },
   }
-  const rendered = renderInstructionChains(items.map(item => item.file), maxBytes, style)
+  const files = items.map(item => item.file)
+  const rendered = strict
+    ? renderStrictChains(files, maxBytes, style)
+    : renderInstructionChains(files, maxBytes, style)
   const represented = new Set(rendered.represented.map(file => file.absolutePath))
   return {
     text: rendered.text,
@@ -479,6 +485,56 @@ function renderInstructionChains(
   // (.agents/notes/implemented/architecture/2026-10-16-separate-instruction-chain-budgets.md).
   if (byteLength(text) > 2 * maxBytes) return whole
   return { text, omitted, truncated, represented, sections, intro }
+}
+
+function chainLabel(files: readonly InstructionFile[]): string {
+  return files.some(isUserGlobalInstruction) ? 'user-global' : 'project'
+}
+
+/**
+ * Render every file in full, or throw. Each chain (user-global, project) must fit
+ * `maxBytes` including its frame and intro, the same per-chain bound the legacy
+ * renderer applies; the merged frame then holds both chains and cannot exceed twice
+ * that bound. No file is omitted, truncated, or replaced by a marker.
+ */
+function renderStrictChains(
+  files: LoadedInstructionFile[],
+  maxBytes: number,
+  style: RenderStyle,
+): RenderedInstructionContext {
+  const userGlobal = files.filter(isUserGlobalInstruction)
+  const project = files.filter(file => !isUserGlobalInstruction(file))
+  for (const chain of [userGlobal, project]) {
+    if (chain.length === 0) continue
+    const needed = byteLength(buildInstructionText(chain, maxBytes, [], [], style))
+    if (needed > maxBytes) {
+      throw new AgentInstructionsError(
+        `Workspace instructions of the ${chainLabel(chain)} chain need ${needed} bytes with their frame but maxBytes is ${maxBytes} `
+        + `(files: ${chain.map(file => file.displayPath).join(', ')}); strict loading will not omit or truncate a rule. `
+        + 'Raise maxBytes or shorten the instruction files, then retry.',
+        'AGENT_INSTRUCTIONS_BUDGET_EXCEEDED',
+      )
+    }
+  }
+  const text = buildInstructionText(files, maxBytes, [], [], style)
+  return { text, omitted: [], truncated: [], represented: files, sections: files, intro: style.intro }
+}
+
+/**
+ * Render a baseline in full under the per-chain byte budget, or throw.
+ * @param files - loaded files ordered from broadest to most specific.
+ * @param options - per-chain rendering byte budget and whether this baseline supersedes a visible predecessor.
+ * @returns complete rendering and every file as represented.
+ * @throws {@link AgentInstructionsError} `AGENT_INSTRUCTIONS_BUDGET_EXCEEDED` naming the chain, needed bytes, and files.
+ * @internal
+ */
+export function renderStrictInstructionSet(
+  files: LoadedInstructionFile[],
+  options: { maxBytes: number; replacePreviousBaseline?: boolean },
+): { rendered: RenderedAgentInstructions; included: LoadedInstructionFile[] } {
+  const style = baselineRenderStyle(files, options.replacePreviousBaseline)
+  const { text, omitted, truncated, represented } = renderStrictChains(files, options.maxBytes, style)
+  return { rendered: { text, omitted, truncated }, included: represented }
 }
 
 /**

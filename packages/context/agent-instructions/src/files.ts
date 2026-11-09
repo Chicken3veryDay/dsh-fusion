@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { FileSystem, FsInfo, FsTarget, FsVersion } from '@deepseek-ai/dsh-fs'
 import { agentsHomeDisplay, dshHomeDisplay } from '@deepseek-ai/dsh-home-paths'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
+import { AgentInstructionsError } from './errors.ts'
 import { resolveConfig, resolveDiscoveryConfig, type ResolvedConfig, type ResolvedDiscoveryConfig } from './config.ts'
 import { trimmedInstructionDigest } from './digest.ts'
 import {
@@ -18,6 +19,7 @@ import {
   escapeProjectDisplayPath,
   instructionCandidateGroup,
   renderAgentInstructionSet,
+  renderStrictInstructionSet,
   scopeForDisplayPath,
   type RenderedAgentInstructions,
   USER_GLOBAL_DIRECTORY,
@@ -67,6 +69,8 @@ interface DiscoverOptions {
   instructionFileCandidates?: string[]
   localInstructionFileCandidates?: string[]
   projectRoot?: string
+  /** Fail instead of skipping a discovered candidate that cannot be probed or read. */
+  strict?: boolean
   signal?: AbortSignal
 }
 
@@ -169,6 +173,7 @@ async function fsStatFile(
   path: string,
   fileSystem: FileSystem,
   signal?: AbortSignal,
+  strict?: boolean,
 ): Promise<StatFileProbe> {
   // resolve() follows a final-component symlink to its target's stable identity;
   // stat then classifies that target. A link to a regular file loads, while a
@@ -183,9 +188,10 @@ async function fsStatFile(
       kind: 'present',
       info: { target, version: info.version, ...info.size === undefined ? {} : { size: info.size } },
     }
-  } catch {
+  } catch (error: unknown) {
     signal?.throwIfAborted()
-    return { kind: 'unavailable' }
+    // Strict loading separates a confirmed missing path from a probe failure it must report.
+    return strict === true && isMissingProviderPathError(error) ? { kind: 'absent' } : { kind: 'unavailable' }
   }
 }
 
@@ -193,8 +199,18 @@ async function statFile(
   path: string,
   fileSystem?: FileSystem,
   signal?: AbortSignal,
+  strict?: boolean,
 ): Promise<StatFileProbe> {
-  return fileSystem === undefined ? nodeStatFile(path, signal) : fsStatFile(path, fileSystem, signal)
+  return fileSystem === undefined ? nodeStatFile(path, signal) : fsStatFile(path, fileSystem, signal, strict)
+}
+
+/** Report a strict-mode probe failure for a candidate that may exist, so its rules cannot be skipped. */
+function unreadableCandidate(path: string, action: string): AgentInstructionsError {
+  return new AgentInstructionsError(
+    `Workspace instruction candidate ${path} could not be ${action}; `
+    + 'strict loading refuses to continue without every applicable rule. Fix its permissions or remove it, then retry.',
+    'AGENT_INSTRUCTIONS_SOURCE_UNREADABLE',
+  )
 }
 
 async function existsAsMarker(path: string, fileSystem?: FileSystem, signal?: AbortSignal): Promise<boolean> {
@@ -298,11 +314,12 @@ async function allExistingInstructionFiles(
   instructionFileCandidates: readonly string[],
   fileSystem?: FileSystem,
   signal?: AbortSignal,
+  strict?: boolean,
 ): Promise<DiscoveredInstructionFile[]> {
   const found: DiscoveredInstructionFile[] = []
   for (const candidate of instructionFileCandidates) {
     const path = join(dir, candidate)
-    const probe = await statFile(path, fileSystem, signal)
+    const probe = await statFile(path, fileSystem, signal, strict)
     switch (probe.kind) {
       case 'present':
         found.push({ absolutePath: path, displayPath: relativeDisplay(root, path), ...probe.info })
@@ -310,7 +327,9 @@ async function allExistingInstructionFiles(
       // A missing candidate is skipped; a transient provider failure skips only
       // that candidate so the remaining independent candidates still load.
       case 'absent':
+        continue
       case 'unavailable':
+        if (strict === true) throw unreadableCandidate(path, 'probed')
         continue
       /* v8 ignore next 2 -- StatFileProbe is closed; this arm only makes adding a kind a compile error. */
       default:
@@ -335,7 +354,7 @@ async function discoverInstructionFiles(
 
   for (const root of userGlobalRoots(config)) {
     const absolutePath = join(root.home, USER_GLOBAL_FILE)
-    const probe = await statFile(absolutePath, fileSystem, options.signal)
+    const probe = await statFile(absolutePath, fileSystem, options.signal, options.strict)
     switch (probe.kind) {
       case 'present':
         addFile({
@@ -345,7 +364,9 @@ async function discoverInstructionFiles(
         })
         continue
       case 'absent':
+        continue
       case 'unavailable':
+        if (options.strict === true) throw unreadableCandidate(absolutePath, 'probed')
         continue
       /* v8 ignore next 2 -- StatFileProbe is closed; this arm only makes adding a kind a compile error. */
       default:
@@ -358,7 +379,14 @@ async function discoverInstructionFiles(
     ?? await findProjectRoot(cwd, config.projectRootMarkers, fileSystem, options.signal)
   for (const dir of ancestorChain(projectRoot, cwd)) {
     for (const candidates of [config.instructionFileCandidates, config.localInstructionFileCandidates]) {
-      for (const file of await allExistingInstructionFiles(dir, projectRoot, candidates, fileSystem, options.signal)) {
+      for (const file of await allExistingInstructionFiles(
+        dir,
+        projectRoot,
+        candidates,
+        fileSystem,
+        options.signal,
+        options.strict,
+      )) {
         addFile(file)
       }
     }
@@ -384,17 +412,29 @@ async function* nodeTextChunks(path: string, signal?: AbortSignal): AsyncIterabl
   for await (const chunk of stream) yield String(chunk)
 }
 
+function oversizedSource(file: { absolutePath: string }, bytes: number, maxSourceBytes: number): AgentInstructionsError {
+  return new AgentInstructionsError(
+    `Workspace instruction file ${file.absolutePath} is at least ${bytes} bytes but maxSourceBytes is ${maxSourceBytes}; `
+    + 'strict loading will not ignore an applicable file. Raise maxSourceBytes or shorten the file, then retry.',
+    'AGENT_INSTRUCTIONS_SOURCE_TOO_LARGE',
+  )
+}
+
 async function readBounded(
   file: { absolutePath: string; target?: FsTarget; size?: number },
   maxSourceBytes: number,
   fileSystem?: FileSystem,
   signal?: AbortSignal,
+  strict?: boolean,
 ): Promise<string | undefined> {
   // TODO(total-instruction-read-bound): enforce an aggregate source budget
   // across a complete baseline or reconciliation batch; the render budget is
   // applied only after every accepted file has been read under this per-file cap.
   signal?.throwIfAborted()
-  if (file.size !== undefined && file.size > maxSourceBytes) return undefined
+  if (file.size !== undefined && file.size > maxSourceBytes) {
+    if (strict === true) throw oversizedSource(file, file.size, maxSourceBytes)
+    return undefined
+  }
   try {
     const chunks = fileSystem === undefined || file.target === undefined
       ? nodeTextChunks(file.absolutePath, signal)
@@ -404,14 +444,26 @@ async function readBounded(
     for await (const chunk of chunks) {
       signal?.throwIfAborted()
       bytes += Buffer.byteLength(chunk, 'utf8')
-      if (bytes > maxSourceBytes) return undefined
+      if (bytes > maxSourceBytes) {
+        if (strict === true) throw oversizedSource(file, bytes, maxSourceBytes)
+        return undefined
+      }
       parts.push(chunk)
     }
     signal?.throwIfAborted()
     return parts.join('')
-  } catch {
+  } catch (error: unknown) {
     signal?.throwIfAborted()
+    if (error instanceof AgentInstructionsError) throw error
     // A file may disappear or become unreadable after its metadata probe.
+    if (strict === true) {
+      throw new AgentInstructionsError(
+        `Workspace instruction file ${file.absolutePath} could not be read; `
+        + 'strict loading refuses to continue without every applicable rule. Fix its permissions or remove it, then retry.',
+        'AGENT_INSTRUCTIONS_SOURCE_UNREADABLE',
+        { cause: error },
+      )
+    }
     return undefined
   }
 }
@@ -470,13 +522,13 @@ export async function loadBaselineInstructionSet(
   options: LoadOptions,
   fileSystem?: FileSystem,
 ): Promise<RenderedInstructionSet | undefined> {
-  const config = resolveConfig(options)
+  const config = resolveConfig({ ...options, mode: options.strict === true ? 'strict' : 'legacy' })
   if (config.maxBytes <= 0 || !Number.isFinite(config.maxBytes)) return undefined
   if (config.maxSourceBytes <= 0 || !Number.isFinite(config.maxSourceBytes)) return undefined
   const discovered = await discoverInstructionFiles(options, fileSystem)
   const loaded: LoadedInstructionFile[] = []
   for (const file of discovered) {
-    const content = await readBounded(file, config.maxSourceBytes, fileSystem, options.signal)
+    const content = await readBounded(file, config.maxSourceBytes, fileSystem, options.signal, options.strict)
     if (content !== undefined) {
       loaded.push({
         absolutePath: file.absolutePath,
@@ -489,7 +541,7 @@ export async function loadBaselineInstructionSet(
   const kept = dedupInstructionFilesByCandidateGroup(loaded)
   if (kept.length === 0) {
     if (options.replacePreviousBaseline !== true) return undefined
-    const { rendered, included } = renderAgentInstructionSet([], {
+    const { rendered, included } = (options.strict === true ? renderStrictInstructionSet : renderAgentInstructionSet)([], {
       maxBytes: config.maxBytes,
       replacePreviousBaseline: true,
     })
@@ -501,7 +553,8 @@ export async function loadBaselineInstructionSet(
     }
   }
   const keptPaths = new Set(kept.map(file => file.absolutePath))
-  const { rendered, included } = renderAgentInstructionSet(kept, {
+  const renderSet = options.strict === true ? renderStrictInstructionSet : renderAgentInstructionSet
+  const { rendered, included } = renderSet(kept, {
     maxBytes: config.maxBytes,
     ...options.replacePreviousBaseline === undefined
       ? {}
@@ -554,6 +607,7 @@ export async function probeScopeInstruction(
   fileSystem: FileSystem,
   signal?: AbortSignal,
 ): Promise<ScopeInstructionProbe> {
+  const strict = resolved.mode === 'strict'
   const candidate = scopeInstructionFile(scope, projectRoot, resolved)
   // resolve() follows a final-component symlink; stat then classifies the target.
   // A non-file target (missing, or a link to a directory) is a confirmed absence;
@@ -563,8 +617,10 @@ export async function probeScopeInstruction(
   try {
     target = await fileSystem.resolve(candidate.absolutePath, signalOptions(signal))
     info = await fileSystem.stat(target, signal)
-  } catch {
+  } catch (error: unknown) {
     signal?.throwIfAborted()
+    if (strict && isMissingProviderPathError(error)) return { kind: 'absent' }
+    if (strict) throw unreadableCandidate(candidate.absolutePath, 'probed')
     return { kind: 'unavailable' }
   }
   if (info?.type !== 'file') return { kind: 'absent' }
@@ -583,6 +639,7 @@ export async function probeScopeInstruction(
  * @param maxSourceBytes - maximum UTF-8 bytes accepted from the source.
  * @param fileSystem - provider used for the streaming read.
  * @param signal - cancellation for provider streaming.
+ * @param strict - throw an {@link AgentInstructionsError} instead of returning undefined for an oversized or unreadable source.
  * @returns loaded content with the probed version, or undefined when unavailable.
  */
 export async function readScopeInstruction(
@@ -590,8 +647,9 @@ export async function readScopeInstruction(
   maxSourceBytes: number,
   fileSystem: FileSystem,
   signal?: AbortSignal,
+  strict?: boolean,
 ): Promise<LoadedInstructionFile | undefined> {
-  const content = await readBounded(file, maxSourceBytes, fileSystem, signal)
+  const content = await readBounded(file, maxSourceBytes, fileSystem, signal, strict)
   if (content === undefined) return undefined
   return {
     absolutePath: file.absolutePath,

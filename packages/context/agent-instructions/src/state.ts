@@ -404,7 +404,13 @@ export async function reconcileInstructionContext(
           && hasKeptTrimmed(group, cached.trimmedDigest)) continue
       }
 
-      const file = await readScopeInstruction(probedFile, resolved.maxSourceBytes, fileSystem, options.signal)
+      const file = await readScopeInstruction(
+        probedFile,
+        resolved.maxSourceBytes,
+        fileSystem,
+        options.signal,
+        resolved.mode === 'strict',
+      )
       if (file === undefined) {
         rollbackGroup()
         break
@@ -444,7 +450,7 @@ export async function reconcileInstructionContext(
     }
   }
   if (items.length === 0) return undefined
-  const rendered = renderInstructionChanges(items, resolved.maxBytes)
+  const rendered = renderInstructionChanges(items, resolved.maxBytes, resolved.mode === 'strict')
   // When no transition survived rendering (tiny budgets render notice-only
   // text), emit nothing and commit nothing — the uncommitted versions make the
   // next pass retry instead of spamming notice-only contexts.
