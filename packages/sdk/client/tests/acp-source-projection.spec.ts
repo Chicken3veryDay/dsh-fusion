@@ -8,6 +8,11 @@ const expectedPath = fileURLToPath(new URL('./expected/acp-source-projection.jso
 const pythonExpectedPath = fileURLToPath(new URL('../../../../python/sdk/tests/expected/acp-source-projection.json', import.meta.url))
 const fakeRuntime = fileURLToPath(new URL('./fake-runtime.ts', import.meta.url))
 
+function userMessageData(event: unknown): unknown {
+  if (typeof event !== 'object' || event === null || !('type' in event) || event.type !== 'user/message') return undefined
+  return 'data' in event ? event.data : undefined
+}
+
 interface Fixture {
   events: Array<{ type: string; data: { id: string; source: Record<string, unknown> } }>
   projection: unknown[]
@@ -36,9 +41,9 @@ it('preserves the ACP input annotation, unknown channels, and the generated pack
     }))).toEqual(fixture.projection)
     const notified: unknown[] = []
     for (const notification of result.notifications) {
-      if (notification.method === 'session.event' && notification.params.event.type === 'user/message') {
-        notified.push(notification.params.event.data)
-      }
+      if (notification.method !== 'session.event') continue
+      const data = userMessageData(notification.params.event)
+      if (data !== undefined) notified.push(data)
     }
     expect(notified).toEqual(fixture.events.map(event => event.data))
   } finally {

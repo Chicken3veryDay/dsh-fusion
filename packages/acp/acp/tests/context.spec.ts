@@ -23,7 +23,7 @@ async function newSession(harness: BridgeHarness): Promise<string> {
 const textOf = (message: { readonly content: readonly { readonly type: string; readonly text?: string }[] }): string =>
   message.content.map(block => block.text ?? '').join('')
 
-function eventsOf(harness: BridgeHarness, sessionId: string): SessionEvent[] {
+function eventsOf(harness: BridgeHarness, sessionId: string): readonly SessionEvent[] {
   const agent = harness.ctx.agents.get(SessionId(sessionId))
   if (agent === undefined) throw new Error('missing agent')
   return agent.session.snapshotEvents()
