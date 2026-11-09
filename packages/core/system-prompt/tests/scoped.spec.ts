@@ -236,11 +236,12 @@ describe('scoped assemble dispatch', () => {
       scope.ctx.systemPrompt.section({ name: 'policy', order: 20, text, revision: () => state })
       scope.ctx.systemPrompt.section({ name: 'early', order: 10, text: 'early', revision: () => 'fixed' })
       const context = { scope: scopeKeyOf(scope) }
-      expect(ctx.systemPrompt.sectionRevisions(context)).toEqual([['early', 'fixed'], ['policy', 'before']])
+      const named = (entries: readonly (readonly [string, string, number])[]) => entries.map(([name, revision]) => [name, revision])
+      expect(named(ctx.systemPrompt.sectionRevisions(context))).toEqual([['early', 'fixed'], ['policy', 'before']])
       state = 'after'
-      expect(ctx.systemPrompt.sectionRevisions(context)).toEqual([['early', 'fixed'], ['policy', 'after']])
+      expect(named(ctx.systemPrompt.sectionRevisions(context))).toEqual([['early', 'fixed'], ['policy', 'after']])
       expect(text).not.toHaveBeenCalled()
-      expect(ctx.systemPrompt.sectionRevisions()).toEqual([['policy', 'global']])
+      expect(named(ctx.systemPrompt.sectionRevisions())).toEqual([['policy', 'global']])
     } finally {
       await ctx.fiber.dispose()
     }
@@ -258,14 +259,58 @@ describe('scoped assemble dispatch', () => {
       scope.ctx.systemPrompt.context({ name: 'early', order: 10, text: 'early', revision: () => 'fixed' })
       scope.ctx.systemPrompt.context({ name: 'kept', order: 30, required: true, text: 'kept', revision: () => 'required' })
       const context = { scope: scopeKeyOf(scope) }
-      expect(ctx.systemPrompt.contextRevisions(context)).toEqual([['early', 'fixed'], ['fact', 'before'], ['kept', 'required']])
+      const named = (entries: readonly (readonly [string, string, number])[]) => entries.map(([name, revision]) => [name, revision])
+      expect(named(ctx.systemPrompt.contextRevisions(context))).toEqual([['early', 'fixed'], ['fact', 'before'], ['kept', 'required']])
       state = 'after'
-      expect(ctx.systemPrompt.contextRevisions(context)).toEqual([['early', 'fixed'], ['fact', 'after'], ['kept', 'required']])
+      expect(named(ctx.systemPrompt.contextRevisions(context))).toEqual([['early', 'fixed'], ['fact', 'after'], ['kept', 'required']])
       expect(text).not.toHaveBeenCalled()
-      expect(ctx.systemPrompt.contextRevisions()).toEqual([['fact', 'global']])
+      expect(named(ctx.systemPrompt.contextRevisions())).toEqual([['fact', 'global']])
       const suppress = scope.ctx.systemPrompt.suppressRuntimeContext()
-      expect(ctx.systemPrompt.contextRevisions(context)).toEqual([['kept', 'required']])
+      expect(named(ctx.systemPrompt.contextRevisions(context))).toEqual([['kept', 'required']])
       suppress()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('distinguishes the registration behind equal revisions of sections and contexts', async () => {
+    const ctx = await mount()
+    try {
+      const scope = await mintScope(ctx, 'registration-revisions')
+      const context = { scope: scopeKeyOf(scope) }
+      const read = () => ({ sections: ctx.systemPrompt.sectionRevisions(context), contexts: ctx.systemPrompt.contextRevisions(context) })
+      const section = { name: 'policy', order: 20, text: 'first', revision: () => '0' }
+      const fact = { name: 'fact', order: 20, text: 'first', revision: () => '0' }
+      const removeSection = ctx.systemPrompt.section(section)
+      const removeFact = ctx.systemPrompt.context(fact)
+      const first = read()
+      expect(read()).toEqual(first)
+
+      removeSection()
+      removeFact()
+      const replaceSection = ctx.systemPrompt.section({ ...section, text: 'second' })
+      const replaceFact = ctx.systemPrompt.context({ ...fact, text: 'second' })
+      const replaced = read()
+      expect(replaced.sections).toEqual([['policy', '0', expect.any(Number)]])
+      expect(replaced.contexts).toEqual([['fact', '0', expect.any(Number)]])
+      expect(replaced.sections[0]![2]).not.toBe(first.sections[0]![2])
+      expect(replaced.contexts[0]![2]).not.toBe(first.contexts[0]![2])
+
+      const shadowSection = scope.ctx.systemPrompt.section({ ...section, text: 'scoped' })
+      const shadowFact = scope.ctx.systemPrompt.context({ ...fact, text: 'scoped' })
+      const shadowed = read()
+      expect(shadowed.sections[0]![2]).not.toBe(replaced.sections[0]![2])
+      expect(shadowed.contexts[0]![2]).not.toBe(replaced.contexts[0]![2])
+      shadowSection()
+      shadowFact()
+      expect(read()).toEqual(replaced)
+
+      // Registering the same object again keeps its number: it renders the same text from the same inputs.
+      replaceSection()
+      replaceFact()
+      ctx.systemPrompt.section(section)
+      ctx.systemPrompt.context(fact)
+      expect(read()).toEqual(first)
     } finally {
       await ctx.fiber.dispose()
     }

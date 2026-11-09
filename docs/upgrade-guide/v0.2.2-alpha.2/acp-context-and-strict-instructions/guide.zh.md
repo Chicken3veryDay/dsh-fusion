@@ -10,9 +10,9 @@ description: "ACP profile 现在严格加载工作区指令，在每条客户端
 
 `dsh --profile acp` 把其 `agent-instructions` 配置项替换为 `mode: strict`。已发现的适用指令文件无法读取、文件超过 `maxSourceBytes`，或某条链的完整渲染超过 `maxBytes` 时，请求现在会在模型派发之前以 `AgentInstructionsError` 失败。此前该 profile 会省略或截断这些文本并继续。其他 profile 保持 `mode: legacy`。
 
-每条 ACP 准入的客户端输入都会以 `source: { kind: 'user', input: { kind: 'acp' } }` 及其确切内容记录，其后每个 Session 会收到一条 `source.kind: 'acp-context'` 的生成 `user/message`。该消息声明接收方 `ACP automation` 并指明最近准入的输入。它是 `snapshot` 形式的事实，不带权限。目标状态改为作为运行时上下文快照的 `acp:goal` 段出现（长度超过 64 个字符的阻塞原因代码会被显式省略说明取代）。此前写入的 Session 日志仍然有效，且没有标注。
+每条 ACP 准入的客户端输入都会以 `source: { kind: 'user', input: { kind: 'acp' } }` 及其确切内容记录，其后每个 Session 会收到一条 `source.kind: 'acp-context'` 的生成 `user/message`。该消息声明接收方 `ACP automation` 并指明最近准入的输入。它是 `snapshot` 形式的事实，不带权限。目标状态改为作为运行时上下文快照的 `acp:goal` 段出现（长度超过新增 `goalReasonCodeLimit` 设置（默认 64）的阻塞原因代码会被显式省略说明取代）。此前写入的 Session 日志仍然有效，且没有标注。
 
-`@deepseek-ai/dsh-acp` 现在要求其 `inject` 列表包含 `sessionProjections` 与 `systemPrompt`，依赖 `zod`，并可选地读取 `goals` 服务。其 `apply` 为异步：冲突的 `acpContext` 投影注册会使插件激活失败。`PromptContext` 增加可选的 `revision`，`SystemPrompt` 增加 `contextRevisions()`，并新增 `GOAL_STATE` 上下文顺序。`UserMessage.source` 增加可选的 `input` 字段，`MessageSourceMap` 增加 `acp-context`。同版本 Session 读取方继续可用：[持久化记录](../../../persistence-changes/2026-11-08-acp-input-context.zh.md)列出了两个读取方向。
+`@deepseek-ai/dsh-acp` 现在要求其 `inject` 列表包含 `sessionProjections` 与 `systemPrompt`，依赖 `zod`，并可选地读取 `goals` 服务。其 `apply` 为异步：冲突的 `acpContext` 投影注册会使插件激活失败。`PromptContext` 增加可选的 `revision`，`SystemPrompt` 增加 `contextRevisions()`，`sectionRevisions()` 与 `contextRevisions()` 返回 `RegistrationRevision` 条目 `[name, revision, registration]`，并新增 `GOAL_STATE` 上下文顺序。首批只含运行时上下文快照的轮次（例如唤醒输入已被移除的轮次）现在不打开步骤、不调用模型即结束。`UserMessage.source` 增加可选的 `input` 字段，`MessageSourceMap` 增加 `acp-context`。同版本 Session 读取方继续可用：[持久化记录](../../../persistence-changes/2026-11-08-acp-input-context.zh.md)列出了两个读取方向。
 
 ## 迁移
 

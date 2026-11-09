@@ -54,11 +54,17 @@ export type AcpContextState = z.infer<typeof acpContextStateSchema>
 /** Projection key owned by the ACP context. */
 export const ACP_CONTEXT_PROJECTION_KEY = 'acpContext'
 
-/**
- * Longest goal block reason code the goal context prints. Codes are lower-kebab-case classifications,
- * so a longer one is detail beyond what the model needs; the context states that it omitted it.
- */
-export const GOAL_REASON_CODE_LIMIT = 64
+/** Default of the ACP `goalReasonCodeLimit` Config field. */
+export const DEFAULT_GOAL_REASON_CODE_LIMIT = 64
+
+/** Resolved settings of the ACP context. */
+export interface AcpContextSpec {
+  /**
+   * Longest goal block reason code, in UTF-16 code units, the goal context prints; a positive safe integer.
+   * A longer code is replaced by an omission that states its length and this limit.
+   */
+  readonly goalReasonCodeLimit: number
+}
 
 /**
  * Whether a committed or pending user message was admitted as ACP client input.
@@ -108,18 +114,18 @@ function inputLine(id: MessageId | null, standing: InputStanding): string {
 
 /**
  * Goal state as the runtime context states it. A missing service is unavailable, never inactive, and an
- * optional block reason code beyond {@link GOAL_REASON_CODE_LIMIT} is replaced by an explicit omission.
+ * optional block reason code longer than `limit` is replaced by an explicit omission.
  */
-function goalText(agent: Agent, goals: GoalService | undefined): string {
+function goalText(agent: Agent, goals: GoalService | undefined, limit: number): string {
   if (goals === undefined) return 'Goal: unavailable (no goal service is mounted).'
   const goal = goals.get(agent)
   if (goal === undefined) return 'Goal: none.'
   let reason = ''
   if (goal.blockedReason !== undefined) {
     const { code } = goal.blockedReason
-    reason = code.length <= GOAL_REASON_CODE_LIMIT
+    reason = code.length <= limit
       ? `, reason ${code}`
-      : `, reason code omitted (${code.length} characters; limit ${GOAL_REASON_CODE_LIMIT})`
+      : `, reason code omitted (${code.length} characters; limit ${limit})`
   }
   return `Goal: ${goal.phase}${reason}, round ${goal.roundsStarted} of ${goal.maxGoalRounds}; the objective is supplied by the goal itself.`
 }
@@ -148,9 +154,10 @@ export interface AcpContext {
 /**
  * Register the ACP context projection under the plugin's lifetime.
  * @param ctx - ACP plugin context with the session projection registry.
+ * @param spec - resolved ACP context settings.
  * @returns the installer once registration completes; registration failure rejects.
  */
-export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
+export async function registerAcpContext(ctx: Context, spec: AcpContextSpec): Promise<AcpContext> {
   const handle: ProjectionHandle<AcpContextState> = await ctx.sessionProjections.register(acpContextProjection)
   ctx.fiber.assertActive()
   return {
@@ -159,7 +166,7 @@ export async function registerAcpContext(ctx: Context): Promise<AcpContext> {
         const agent = context.agent
         // Scope routing keyed by Agent identity confines this contribution to its Agent, even against another
         // Agent with the same session id; the id check is a second guard that also narrows `context.agent`.
-        return agent === undefined || agent.session.id !== sessionId ? '' : goalText(agent, ctx.get('goals'))
+        return agent === undefined || agent.session.id !== sessionId ? '' : goalText(agent, ctx.get('goals'), spec.goalReasonCodeLimit)
       }
       agentCtx.systemPrompt.context({
         name: 'acp:goal',

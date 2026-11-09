@@ -47,6 +47,7 @@ Every session the server creates uses the provider and model configured here. Bo
 | `provider` | — | Provider route for every session's agent |
 | `model` | — | Model for every session's agent |
 | `sessionListPageSize` | `100` | Maximum summaries returned in one `session/list` page |
+| `goalReasonCodeLimit` | `64` | Longest goal block reason code, in UTF-16 code units, that the goal runtime context prints; a positive integer |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-acp) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -84,7 +85,7 @@ Without a model selection, configuration returns no options and skips catalog ac
 <a id="recipient-and-latest-input-context"></a>
 ### Recipient and latest-input context
 
-Every request of a session's Agent also carries one generated `acp-context` message after the admitted client input. It declares the fixed recipient class `ACP automation` for that session and names the message id of the latest client input this server admitted. Goal state is not packet text: an `acp:goal` runtime-context section states the phase, round counts, and a block reason code when it is at most 64 characters (a longer code is replaced by an explicit omission with its length), or `unavailable` when no goal service is mounted. Nothing in the request format changes: the client sends the same `session/prompt`, and a role stated in prompt prose does not change the recipient class.
+Every request of a session's Agent also carries one generated `acp-context` message after the admitted client input. It declares the fixed recipient class `ACP automation` for that session and names the message id of the latest client input this server admitted. Goal state is not packet text: an `acp:goal` runtime-context section states the phase, round counts, and a block reason code when it is at most `goalReasonCodeLimit` characters (a longer code is replaced by an explicit omission with its length), or `unavailable` when no goal service is mounted. Nothing in the request format changes: the client sends the same `session/prompt`, and a role stated in prompt prose does not change the recipient class.
 
 The admitted input keeps `source.kind: 'user'`, its exact content, and an `input: { kind: 'acp' }` annotation; the packet is a `snapshot`-form fact that grants no authority. A newer input moves the reference only. It does not replace, expire, or reinterpret an earlier instruction, and it creates no goal or task. Input without the annotation, including older history and goal continuations, is never attributed to this channel: while no tagged input exists the packet reports the latest input as unknown. Tool continuations and retries repeat nothing; a new packet is logged when its facts change or compaction removes it from the conversation. Spawned and forked Agents do not receive the packet as their own recipient declaration.
 
@@ -158,7 +159,7 @@ One short user-role snapshot after each new client input, fixed in this form: th
 
 #### Token effect
 
-About 100 tokens per logged packet and about 20 for the goal line. The packet is logged again only when the latest input or its compaction state changes; the goal line rides in the runtime-context snapshot, which is logged again only when a fact in it changes.
+About 100 tokens per logged packet and about 20 for the goal line, plus a block reason code of at most `goalReasonCodeLimit` characters. The packet is logged again only when the latest input or its compaction state changes; the goal line rides in the runtime-context snapshot, which is logged again only when a fact in it changes.
 
 #### KV Cache effect
 

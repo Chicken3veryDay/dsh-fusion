@@ -5,6 +5,8 @@ import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TestCleanup } from './cleanup.ts'
 import { makeBridgeHarness, textResponse, type BridgeHarness } from './harness.ts'
+import { DEFAULT_GOAL_REASON_CODE_LIMIT } from '../src/context.ts'
+import { Config as AcpConfig } from '../src/index.ts'
 
 const cleanup = new TestCleanup()
 afterEach(async () => { vi.restoreAllMocks(); await cleanup.run() })
@@ -129,5 +131,47 @@ describe('goal detail in the context', () => {
     expect(line).toContain('blocked')
     expect(line).toContain('reason code omitted (100000 characters; limit 64)')
     expect(request.some(message => textOf(message).includes('x'.repeat(65)))).toBe(false)
+  })
+
+  it('applies a configured reason code limit to the shown code, the omission, and its accounting', async () => {
+    const { harness, sessionId, goals } = await mountedSession({
+      script: { config: { goalReasonCodeLimit: 23 }, script: [textResponse('one'), textResponse('two'), textResponse('three')] },
+    })
+    const agent = agentOf(harness, sessionId)
+    goals.block(agent, goals.create(agent, { objective: 'configured bound' }), { code: 'external-policy-blocked', message: 'blocked' })
+    await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'exact fit' }] })
+    expect(currentGoalLine(harness.adapter.requests[0]!.messages))
+      .toBe('Goal: blocked, reason external-policy-blocked, round 0 of 256; the objective is supplied by the goal itself.')
+
+    goals.block(agent, goals.resume(agent, goals.get(agent)!), { code: 'external-policy-blocked-x', message: 'blocked' })
+    await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'one over' }] })
+    expect(currentGoalLine(harness.adapter.requests[1]!.messages))
+      .toBe('Goal: blocked, reason code omitted (25 characters; limit 23), round 0 of 256; the objective is supplied by the goal itself.')
+    expect(loggedRuntimeContext(agent.session.snapshotEvents()))
+      .toContain('reason code omitted (25 characters; limit 23)')
+
+    goals.block(agent, goals.resume(agent, goals.get(agent)!), { code: 'y'.repeat(100_000), message: 'blocked' })
+    await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'huge' }] })
+    const line = currentGoalLine(harness.adapter.requests[2]!.messages)
+    expect(line).toBe('Goal: blocked, reason code omitted (100000 characters; limit 23), round 0 of 256; the objective is supplied by the goal itself.')
+    expect(harness.adapter.requests[2]!.messages.some(message => textOf(message).includes('y'.repeat(24)))).toBe(false)
+  })
+})
+
+describe('goal reason code limit configuration', () => {
+  it('defaults to 64 and accepts a positive integer override', () => {
+    expect(AcpConfig({}).goalReasonCodeLimit).toBe(DEFAULT_GOAL_REASON_CODE_LIMIT)
+    expect(DEFAULT_GOAL_REASON_CODE_LIMIT).toBe(64)
+    expect(AcpConfig({ goalReasonCodeLimit: 1 }).goalReasonCodeLimit).toBe(1)
+    expect(AcpConfig({ goalReasonCodeLimit: 4096 }).goalReasonCodeLimit).toBe(4096)
+  })
+
+  it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, Number.NaN, '64'])('rejects %s in the Config schema', (value) => {
+    expect(() => AcpConfig({ goalReasonCodeLimit: value as number })).toThrow()
+  })
+
+  it.each([0, 1.5, Number.POSITIVE_INFINITY])('fails activation of a direct apply call with %s', async (value) => {
+    await expect(makeBridgeHarness({ config: { goalReasonCodeLimit: value } }))
+      .rejects.toThrow(/goalReasonCodeLimit must be a positive safe integer/)
   })
 })

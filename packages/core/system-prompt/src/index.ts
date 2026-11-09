@@ -114,6 +114,13 @@ export interface PromptContext {
   readonly revision?: (context: AssembleContext) => string
 }
 
+/**
+ * One declared revision of an effective registered section or runtime context. `registration` is the
+ * {@link SystemPrompt} service's number for the registered object; equal numbers denote the same object, so a
+ * removed, replaced, or newly shadowing registration reads differently even when it declares an equal revision.
+ */
+export type RegistrationRevision = readonly [name: string, revision: string, registration: number]
+
 /** One section of an assembly: {@link PromptSection} with its text resolved. */
 export interface AssembledSection {
   /** The contributing section's unique name. */
@@ -487,6 +494,8 @@ export class SystemPrompt extends Service {
     () => { this.ctx.emit('system-prompt/change') },
   )
   private readonly toolOrder: string[] | undefined
+  private readonly registrations = new WeakMap<PromptSection | PromptContext, number>()
+  private lastRegistration = 0
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'systemPrompt')
@@ -525,11 +534,28 @@ export class SystemPrompt extends Service {
     if (!Number.isFinite(section.order)) {
       throw new TypeError(`prompt section "${section.name}" order must be a finite number`)
     }
+    this.identify(section)
     return this.layers.effect(
       this.ctx,
       layer => layer.sections.insert(section.name, section),
       { label: 'systemPrompt.section()' },
     )
+  }
+
+  /**
+   * Number a section or context object once, at its first registration.
+   * @param entry - the registered section or context object.
+   * @returns the object's registration number.
+   */
+  private identify(entry: PromptSection | PromptContext): number {
+    let registration = this.registrations.get(entry)
+    if (registration === undefined) this.registrations.set(entry, registration = ++this.lastRegistration)
+    return registration
+  }
+
+  /** Pair a registered entry's declared revision with its registration number. */
+  private revisionOf(entry: PromptSection | PromptContext, revision: string): RegistrationRevision {
+    return [entry.name, revision, this.identify(entry)]
   }
 
   /**
@@ -560,6 +586,7 @@ export class SystemPrompt extends Service {
     if (!Number.isFinite(context.order)) {
       throw new TypeError(`prompt context "${context.name}" order must be a finite number`)
     }
+    this.identify(context)
     return this.layers.effect(
       this.ctx,
       layer => layer.contexts.insert(context.name, context),
@@ -667,12 +694,12 @@ export class SystemPrompt extends Service {
    * without rendering section text. Call it in the same synchronous step that
    * starts {@link assemble} to capture the revisions that assembly renders.
    * @param context - the same scope and plugin-defined assembly fields as the assembly.
-   * @returns one `[name, revision]` entry per revisioned section, in section order.
+   * @returns one {@link RegistrationRevision} per revisioned section, in section order.
    */
-  sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[] {
+  sectionRevisions(context: AssembleContext = {}): readonly RegistrationRevision[] {
     return [...this.layers.merge(context.scope, layer => layer.sections).values()]
       .sort(comparePromptSections)
-      .flatMap(section => section.revision === undefined ? [] : [[section.name, section.revision(context)] as const])
+      .flatMap(section => section.revision === undefined ? [] : [this.revisionOf(section, section.revision(context))])
   }
 
   /**
@@ -680,15 +707,15 @@ export class SystemPrompt extends Service {
    * without rendering context text. Call it in the same synchronous step that renders
    * the context text it describes. Suppression applies as in {@link refreshContext}.
    * @param context - the same scope and plugin-defined assembly fields as the rendering.
-   * @returns one `[name, revision]` entry per revisioned context, in context order.
+   * @returns one {@link RegistrationRevision} per revisioned context, in context order.
    */
-  contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[] {
+  contextRevisions(context: AssembleContext = {}): readonly RegistrationRevision[] {
     const suppressed = !this.layers.global.runtimeContextSuppressors.isEmpty()
       || this.layers.chainLayers(context.scope).some(layer => !layer.runtimeContextSuppressors.isEmpty())
     return [...this.layers.merge(context.scope, layer => layer.contexts).values()]
       .filter(entry => !suppressed || entry.required === true)
       .sort((a, b) => a.order - b.order)
-      .flatMap(entry => entry.revision === undefined ? [] : [[entry.name, entry.revision(context)] as const])
+      .flatMap(entry => entry.revision === undefined ? [] : [this.revisionOf(entry, entry.revision(context))])
   }
 
   /**

@@ -130,6 +130,17 @@ interface AssembledContext {
 }
 ```
 
+`RegistrationRevision` is one entry that `sectionRevisions()` and `contextRevisions()` return. The registration number distinguishes the declaring object, so request admission treats a removed, replaced, or newly shadowing registration as a change even when the declared revision is equal.
+
+```ts type-equiv
+/**
+ * One declared revision of an effective registered section or runtime context. `registration` is the
+ * {@link SystemPrompt} service's number for the registered object; equal numbers denote the same object, so a
+ * removed, replaced, or newly shadowing registration reads differently even when it declares an equal revision.
+ */
+type RegistrationRevision = readonly [name: string, revision: string, registration: number]
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -231,18 +242,18 @@ refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptA
  * without rendering section text. Call it in the same synchronous step that
  * starts {@link assemble} to capture the revisions that assembly renders.
  * @param context - the same scope and plugin-defined assembly fields as the assembly.
- * @returns one `[name, revision]` entry per revisioned section, in section order.
+ * @returns one {@link RegistrationRevision} per revisioned section, in section order.
  */
-sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
+sectionRevisions(context: AssembleContext = {}): readonly RegistrationRevision[]
 
 /**
  * Read the current revision of every effective runtime context that declares one,
  * without rendering context text. Call it in the same synchronous step that renders
  * the context text it describes. Suppression applies as in {@link refreshContext}.
  * @param context - the same scope and plugin-defined assembly fields as the rendering.
- * @returns one `[name, revision]` entry per revisioned context, in context order.
+ * @returns one {@link RegistrationRevision} per revisioned context, in context order.
  */
-contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]
+contextRevisions(context: AssembleContext = {}): readonly RegistrationRevision[]
 
 /**
  * Assemble global and scoped providers, detach tool parameters, apply

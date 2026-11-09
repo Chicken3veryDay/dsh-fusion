@@ -88,7 +88,7 @@ turn/start
   snapshot Session model selection
   -> agent/pre-step; at fallback: admit tools, assemble prompt + tool schemas, project runtime context
                                      reject | enter(messages, startsRequestSeries?)
-     reject, or a first enter rewritten empty -> close the turn with no step
+     reject, or a first enter without input -> close the turn with no step
      agent/step-accepted
      step/start
      agent/request -> prepareCall (cancellation commits neither system nor users)

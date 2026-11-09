@@ -27,6 +27,11 @@ export interface AcpConfig {
   model?: string
   /** Maximum summaries returned by one session/list page. */
   sessionListPageSize?: number
+  /**
+   * Longest goal block reason code, in UTF-16 code units, the goal runtime context prints; a positive integer.
+   * A longer code is replaced by an explicit omission.
+   */
+  goalReasonCodeLimit?: number
   /** Runtime-only transport override; production uses stdio. */
   stream?: Stream
 }
@@ -4082,7 +4087,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-system-prompt`
 
-- `source`: [`packages/core/system-prompt/src/index.ts:304`](../packages/core/system-prompt/src/index.ts)
+- `source`: [`packages/core/system-prompt/src/index.ts:311`](../packages/core/system-prompt/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the deployment-authored fragment of the system prompt (see {@link Config.personaPrefix} for its contract). */

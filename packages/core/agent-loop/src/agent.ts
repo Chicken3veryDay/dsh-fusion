@@ -34,7 +34,7 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import type { EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnEndReason, UserMessage } from '@deepseek-ai/dsh-session'
 import { canonicalHeader, headerEquals, ToolCallRecovery } from '@deepseek-ai/dsh-session'
 import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
-import type { AssembleContext, PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type { AssembleContext, PromptAssembly, RegistrationRevision } from '@deepseek-ai/dsh-system-prompt'
 import { ToolActivationError, ToolAdmissionError, ToolBatchExecutionError } from '@deepseek-ai/dsh-tools'
 import type { ResolvedToolSet, ToolDefinition, ToolExecutor } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
@@ -75,8 +75,8 @@ interface RequestInputs {
 
 /** Revisions that registered sections and runtime contexts declared for one assembly context. */
 interface RenderRevisions {
-  readonly sections: readonly (readonly [name: string, revision: string])[]
-  readonly contexts: readonly (readonly [name: string, revision: string])[]
+  readonly sections: readonly RegistrationRevision[]
+  readonly contexts: readonly RegistrationRevision[]
 }
 
 /** Loop-owned nodes committed in this attempt but not yet sent to a model. */
@@ -112,6 +112,11 @@ type PreparedStep =
      */
     tools: PreparedTools
   }
+
+/** Whether two captured string sequences hold equal values in the same order. */
+function sameStrings(before: readonly string[], after: readonly string[]): boolean {
+  return before.length === after.length && before.every((value, index) => after[index] === value)
+}
 
 /** Remove adapter-derived values before plugins propose the next request config. */
 function requestProposal(header: EpochHeader): LlmCallConfig {
@@ -480,8 +485,8 @@ export class ReactLoopAgent implements Agent {
     inputs: RequestInputs, toolSet: ResolvedToolSet, selection: Readonly<ModelSelection>, signal: AbortSignal,
   ): boolean {
     const current = this.readRevisions({ ...assembleContextFor(this, signal), modelSelection: selection, toolSet })
-    const same = (accepted: readonly string[], read: RenderRevisions['sections']): boolean =>
-      accepted.length === read.length && accepted.every((revision, index) => JSON.stringify(read[index]) === revision)
+    const same = (accepted: readonly string[], read: readonly RegistrationRevision[]): boolean =>
+      sameStrings(accepted, read.map(entry => JSON.stringify(entry)))
     return same(inputs.sections, current.sections) && same(inputs.contextRevisions, current.contexts)
   }
 
@@ -508,7 +513,8 @@ export class ReactLoopAgent implements Agent {
 
   /**
    * Resolve once after preparation and all pending message commits, including retries. An unchanged tuple
-   * keeps the accepted prompt and cache prefix; changed definitions, executor, context, or section revisions reassemble.
+   * keeps the accepted prompt and cache prefix; changed definitions, executor, context text, or section or
+   * context revisions, including the registration that declares one, reassemble.
    * Claiming listeners never rerun; a final validation bounds reconciliation without reselection.
    */
   private async reselectForRequest(decision: Extract<PreparedStep, { kind: 'enter' }>, signal: AbortSignal): Promise<void> {
@@ -536,10 +542,9 @@ export class ReactLoopAgent implements Agent {
   /** Compare new inputs with the captured sequence, never with the previous selection's live view. */
   private sameRequestInputs(before: RequestInputs, after: RequestInputs): boolean {
     return this.sameToolInputs(before, after)
-      && before.contexts.length === after.contexts.length
-      && before.contexts.every((hash, index) => after.contexts[index] === hash)
-      && before.sections.length === after.sections.length
-      && before.sections.every((revision, index) => after.sections[index] === revision)
+      && sameStrings(before.contexts, after.contexts)
+      && sameStrings(before.sections, after.sections)
+      && sameStrings(before.contextRevisions, after.contextRevisions)
   }
 
   /** Compare admission identities and ordering without rereading ordinary runtime facts. */
@@ -604,9 +609,9 @@ export class ReactLoopAgent implements Agent {
         }
         try {
           if (turnEnds && decision.messages.length === 0) break
-          // A removed waking message or an enter decision rewritten to empty
-          // still owns the initial turn boundary, but it spends no model call.
-          if (phase.step === 0 && decision.messages.length === 0) {
+          // A removed waking message or an enter decision rewritten to carry no input still owns the
+          // initial turn boundary, but it spends no model call; a runtime-context snapshot is not input.
+          if (phase.step === 0 && decision.messages.every(message => message.source.kind === 'runtime-context')) {
             turnEnds = { kind: 'completed' }
             return false
           }

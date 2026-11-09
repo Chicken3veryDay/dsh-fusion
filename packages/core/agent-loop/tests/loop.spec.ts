@@ -908,6 +908,60 @@ describe('agent loop', () => {
     }
   })
 
+  it.each(['removed', 'rewritten'] as const)('spends no step on a first batch %s to only its runtime-context snapshot', async (how) => {
+    const adapter = new MockAdapter([textResponse('unexpected')])
+    const ctx = await harness(adapter)
+    try {
+      ctx.systemPrompt.context({ name: 'directory', order: 0, required: true, text: 'Current working directory: /workspace.' })
+      const agent = await ctx.agentLoop.create(SessionId(`runtime-context-only-${how}`), { provider: 'mock', model: 'mock' })
+      if (how === 'removed') {
+        ctx.on('agent/inbox/inserted', ({ agent: subject, message }) => { subject.inbox.remove(message.id) })
+      } else {
+        ctx.on('agent/pre-step', async (_payload, next) => {
+          const decision = await next()
+          return decision.kind === 'reject'
+            ? decision
+            : { ...decision, messages: decision.messages.filter(message => message.source.kind === 'runtime-context') }
+        })
+      }
+      send(agent, 'do not admit')
+      await agent.whenIdle()
+      const events = agent.session.snapshotEvents()
+      expect(adapter.requests).toHaveLength(0)
+      expect(events.filter(event => event.type === 'user/message')).toHaveLength(0)
+      expect(events.filter(event => event.type === 'step/start')).toHaveLength(0)
+      expect(events.filter(event => event.type === 'turn/end').map(event => event.data.reason.kind)).toEqual(['completed'])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('enters a first step whose empty claim a pre-step listener fills with input', async () => {
+    const adapter = new MockAdapter([textResponse('worked')])
+    const ctx = await harness(adapter)
+    try {
+      ctx.systemPrompt.context({ name: 'directory', order: 0, required: true, text: 'Current working directory: /workspace.' })
+      const agent = await ctx.agentLoop.create(SessionId('runtime-context-autonomous-input'), { provider: 'mock', model: 'mock' })
+      ctx.on('agent/inbox/inserted', ({ agent: subject, message }) => {
+        if (message.source.kind === 'user') subject.inbox.remove(message.id)
+      })
+      ctx.on('agent/pre-step', async ({ step }, next) => {
+        const decision = await next()
+        if (decision.kind === 'reject' || step !== 1) return decision
+        const input = createUserMessage({ content: [{ type: 'text', text: 'autonomous input' }], source: { kind: 'test' } })
+        return { ...decision, messages: [input, ...decision.messages] }
+      })
+      send(agent, 'removed')
+      await agent.whenIdle()
+      expect(adapter.requests).toHaveLength(1)
+      expect(userTexts(agent)).toContain('autonomous input')
+      expect(userTexts(agent)).not.toContain('removed')
+      expect(adapter.requests[0]!.messages.some(message => message.role === 'user' && message.source?.kind === 'runtime-context')).toBe(true)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('clears compacted runtime context after the active set becomes empty', async () => {
     const adapter = new MockAdapter([textResponse('one'), textResponse('two')])
     const ctx = await harness(adapter)

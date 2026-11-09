@@ -973,9 +973,7 @@ describe('ACP prompt lifecycle', () => {
   })
 
   it('cancels a prompt removed before its turn claims it', async () => {
-    harness = await makeBridgeHarness({ script: [] })
-    // A runtime-context snapshot alone would make the empty claim spend a model call.
-    harness.ctx.systemPrompt.suppressRuntimeContext()
+    harness = await makeBridgeHarness({ script: [textResponse('unexpected')] })
     const sessionId = await newSession(harness)
     const dispose = harness.ctx.on('agent/inbox/inserted', ({ agent, message }) => {
       if (message.source.kind === 'user') agent.inbox.remove(message.id)
@@ -984,6 +982,9 @@ describe('ACP prompt lifecycle', () => {
     await expect(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] }))
       .resolves.toEqual({ stopReason: 'cancelled' })
     dispose()
+    expect(harness.adapter.requests).toHaveLength(0)
+    const events = harness.ctx.agents.get(SessionId(sessionId))!.session.snapshotEvents()
+    expect(events.filter(event => event.type === 'user/message' || event.type === 'step/start' || event.type.startsWith('tool/'))).toEqual([])
   })
 
   it('rejects a prompt when pre-step fails inside its open turn', async () => {

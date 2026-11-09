@@ -50,7 +50,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { supportsAcpImagePrompts } from './content.ts'
-import { registerAcpContext } from './context.ts'
+import { DEFAULT_GOAL_REASON_CODE_LIMIT, registerAcpContext } from './context.ts'
 import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
 import { AcpSession } from './session.ts'
@@ -79,6 +79,11 @@ export interface AcpConfig {
   model?: string
   /** Maximum summaries returned by one session/list page. */
   sessionListPageSize?: number
+  /**
+   * Longest goal block reason code, in UTF-16 code units, the goal runtime context prints; a positive integer.
+   * A longer code is replaced by an explicit omission.
+   */
+  goalReasonCodeLimit?: number
   /** Runtime-only transport override; production uses stdio. */
   stream?: Stream
 }
@@ -87,6 +92,7 @@ export const Config: Schema<AcpConfig> = Schema.object({
   provider: Schema.string(),
   model: Schema.string(),
   sessionListPageSize: Schema.natural().min(1).default(DEFAULT_SESSION_LIST_PAGE_SIZE),
+  goalReasonCodeLimit: Schema.natural().min(1).default(DEFAULT_GOAL_REASON_CODE_LIMIT),
 })
 
 /**
@@ -103,7 +109,8 @@ export async function apply(ctx: Context, config: AcpConfig): Promise<void> {
   // injected service during apply rather than reading it lazily in a callback.
   const persistence = ctx.sessionPersistence
   const logger = ctx.logger
-  const acpContext = await registerAcpContext(ctx)
+  const goalReasonCodeLimit = resolveGoalReasonCodeLimit(config.goalReasonCodeLimit)
+  const acpContext = await registerAcpContext(ctx, { goalReasonCodeLimit })
   const sessionListPageSize = resolveSessionListPageSize(config.sessionListPageSize)
   const sessions = new Map<SessionId, AcpSession>()
   const activating = new Set<SessionId>()
@@ -469,6 +476,20 @@ function resolveSessionListPageSize(value: number | undefined): number {
     throw new Error('acp: sessionListPageSize must be a positive safe integer')
   }
   /* v8 ignore stop */
+  return resolved
+}
+
+/**
+ * Resolve and validate the deployment-owned goal reason code limit. Direct `apply` callers bypass the Config schema.
+ * @param value - configured limit, or `undefined` for the default.
+ * @returns the positive safe-integer limit.
+ * @throws {Error} when the limit is not a positive safe integer.
+ */
+function resolveGoalReasonCodeLimit(value: number | undefined): number {
+  const resolved = value ?? DEFAULT_GOAL_REASON_CODE_LIMIT
+  if (!Number.isSafeInteger(resolved) || resolved < 1) {
+    throw new Error(`acp: goalReasonCodeLimit must be a positive safe integer, got ${String(resolved)}`)
+  }
   return resolved
 }
 

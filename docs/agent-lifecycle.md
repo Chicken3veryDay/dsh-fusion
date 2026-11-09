@@ -29,7 +29,7 @@ sequenceDiagram
   Driver->>Prompt: <code>system-prompt/assemble</code> waterfall with the step tool set
   Driver->>Hooks: <code>agent/pre-step</code> waterfall
   Hooks-->>Driver: authoritative reject or enter(messages)
-  alt proposed step rejected or first batch empty
+  alt proposed step rejected or first batch has no message besides runtime context
     Driver-->>Driver: claimed batch stays removed, the open turn spends no step
   else pre-step or step preparation failed
     Driver->>Session: proposed <code>step/start</code>, empty <code>system/message</code> head if none exists, claimed <code>user/message</code>s, <code>step/end</code>

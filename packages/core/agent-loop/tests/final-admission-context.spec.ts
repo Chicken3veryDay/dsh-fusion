@@ -145,3 +145,137 @@ describe('final request admission of runtime context', () => {
     expect(lastState(adapter.requests[1]!.messages)).toBe('state=initial')
   })
 })
+
+/** The last runtime-context snapshot and the system prompt text one request carries. */
+function requestText(request: MockAdapter['requests'][number]): { runtime: string; system: string } {
+  const runtime = request.messages.filter(message => message.role === 'user' && message.source?.kind === 'runtime-context')
+  return {
+    runtime: runtime.map(textOf).at(-1) ?? '',
+    system: request.messages.filter(message => message.role === 'system').map(textOf).join('\n'),
+  }
+}
+
+/** The newest committed runtime-context snapshot, which a later request carries. */
+function loggedRuntime(agent: Agent): string {
+  return agent.session.snapshotEvents().flatMap(event =>
+    event.type === 'user/message' && event.data.source.kind === 'runtime-context' ? [textOf(event.data)] : []).at(-1) ?? ''
+}
+
+/** Registrations a {@link registrationChange} fixture installs before its first request. */
+interface LiveRegistrations {
+  readonly ctx: Context
+  readonly agent: Agent
+  /** Disposes the global revisioned `test:live` context. */
+  readonly removeContext: () => void
+  /** Disposes the global revisioned `test:live` section. */
+  readonly removeSection: () => void
+}
+
+/**
+ * Register a revisioned `test:live` context and section that both declare revision "0", plus a context only the
+ * assembly waterfall adds, and send one request. Then apply `change` once inside the activation predicate of a tool
+ * registered afterwards, which request admission evaluates at its last await, and send a second request.
+ */
+async function registrationChange(change: (live: LiveRegistrations) => void) {
+  const adapter = new MockAdapter([textResponse('one'), textResponse('two')])
+  const { ctx, agent } = await harness(adapter)
+  const live: LiveRegistrations = {
+    ctx,
+    agent,
+    removeContext: ctx.systemPrompt.context({ name: 'test:live', order: 100, text: 'RETIRED_CONTEXT', revision: () => '0' }),
+    removeSection: ctx.systemPrompt.section({ name: 'test:live', order: 100, text: 'RETIRED_SECTION', revision: () => '0' }),
+  }
+  ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+    const assembly = await next()
+    return { ...assembly, contexts: [...assembly.contexts, { name: 'test:waterfall', text: 'WATERFALL_CONTEXT' }] }
+  })
+  await send(agent, 'first')
+  let noticed = false
+  let changed = false
+  ctx.on('session/event', (_session, event) => {
+    if (event.type === 'developer/message' && event.data.message.source.kind === 'tool-registry') noticed = true
+  })
+  ctx.tools.register(defineContentToolFixture({
+    name: 'late-tool', description: 'Registered after the first request.', parameters: {},
+    execute: () => Promise.resolve([{ type: 'text', text: 'unused' }]),
+  }), {
+    when: () => {
+      if (noticed && !changed) {
+        changed = true
+        change(live)
+      }
+      return true
+    },
+  })
+  await send(agent, 'second')
+  expect(changed).toBe(true)
+  expect(adapter.requests).toHaveLength(2)
+  expect(agent.session.snapshotEvents().filter(event => event.type === 'turn/end').map(event => event.data.reason.kind))
+    .toEqual(['completed', 'completed'])
+  const dispatched = requestText(adapter.requests[1]!)
+  // The request carries the newest committed snapshot, so the log reconstructs exactly what was dispatched.
+  expect(loggedRuntime(agent)).toBe(dispatched.runtime)
+  return { ...dispatched, logged: loggedRuntime(agent) }
+}
+
+describe('final request admission of registration changes', () => {
+  it('dispatches and logs no removed revisioned context', async () => {
+    const result = await registrationChange((live) => { live.removeContext() })
+    expect(result.runtime).not.toContain('RETIRED_CONTEXT')
+    expect(result.logged).not.toContain('RETIRED_CONTEXT')
+    expect(result.runtime).toContain('WATERFALL_CONTEXT')
+  })
+
+  it('dispatches and logs a same-name replacement that declares an equal revision', async () => {
+    const result = await registrationChange((live) => {
+      live.removeContext()
+      live.ctx.systemPrompt.context({ name: 'test:live', order: 100, text: 'CURRENT_CONTEXT', revision: () => '0' })
+    })
+    expect(result.runtime).toContain('CURRENT_CONTEXT')
+    expect(result.runtime).not.toContain('RETIRED_CONTEXT')
+    expect(result.logged).toContain('CURRENT_CONTEXT')
+    expect(result.runtime).toContain('WATERFALL_CONTEXT')
+  })
+
+  it('dispatches and logs a nearer Agent-scoped override that declares an equal revision', async () => {
+    const result = await registrationChange((live) => {
+      live.agent.ctx.systemPrompt.context({ name: 'test:live', order: 100, text: 'CURRENT_CONTEXT', revision: () => '0' })
+    })
+    expect(result.runtime).toContain('CURRENT_CONTEXT')
+    expect(result.runtime).not.toContain('RETIRED_CONTEXT')
+    expect(result.logged).toContain('CURRENT_CONTEXT')
+  })
+
+  it('dispatches and logs no suppressed optional context', async () => {
+    const result = await registrationChange((live) => { live.ctx.systemPrompt.suppressRuntimeContext() })
+    expect(result.runtime).not.toBe('')
+    expect(result.runtime).not.toContain('RETIRED_CONTEXT')
+    expect(result.logged).not.toContain('RETIRED_CONTEXT')
+  })
+
+  it('dispatches and logs a revisioned context registered at the last await', async () => {
+    const result = await registrationChange((live) => {
+      live.ctx.systemPrompt.context({ name: 'test:new', order: 200, text: 'NEW_CONTEXT', revision: () => '0' })
+    })
+    expect(result.runtime).toContain('NEW_CONTEXT')
+    expect(result.runtime).toContain('RETIRED_CONTEXT')
+    expect(result.logged).toContain('NEW_CONTEXT')
+  })
+
+  it('dispatches a same-name section replacement that declares an equal revision', async () => {
+    const result = await registrationChange((live) => {
+      live.removeSection()
+      live.ctx.systemPrompt.section({ name: 'test:live', order: 100, text: 'CURRENT_SECTION', revision: () => '0' })
+    })
+    expect(result.system).toContain('CURRENT_SECTION')
+    expect(result.system).not.toContain('RETIRED_SECTION')
+  })
+
+  it('dispatches a nearer Agent-scoped section override that declares an equal revision', async () => {
+    const result = await registrationChange((live) => {
+      live.agent.ctx.systemPrompt.section({ name: 'test:live', order: 100, text: 'CURRENT_SECTION', revision: () => '0' })
+    })
+    expect(result.system).toContain('CURRENT_SECTION')
+    expect(result.system).not.toContain('RETIRED_SECTION')
+  })
+})

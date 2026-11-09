@@ -4283,16 +4283,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the accepted assembly with current runtime-context provider text.',
       },
       {
-        signature: 'sectionRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]',
+        signature: 'sectionRevisions(context: AssembleContext = {}): readonly RegistrationRevision[]',
         description: 'Read the current revision of every effective section that declares one, without rendering section text. Call it in the same synchronous step that starts assemble to capture the revisions that assembly renders.',
         parameters: [{ name: 'context', description: 'the same scope and plugin-defined assembly fields as the assembly.' }],
-        returns: 'one `[name, revision]` entry per revisioned section, in section order.',
+        returns: 'one {@link RegistrationRevision} per revisioned section, in section order.',
       },
       {
-        signature: 'contextRevisions(context: AssembleContext = {}): readonly (readonly [name: string, revision: string])[]',
+        signature: 'contextRevisions(context: AssembleContext = {}): readonly RegistrationRevision[]',
         description: 'Read the current revision of every effective runtime context that declares one, without rendering context text. Call it in the same synchronous step that renders the context text it describes. Suppression applies as in refreshContext.',
         parameters: [{ name: 'context', description: 'the same scope and plugin-defined assembly fields as the rendering.' }],
-        returns: 'one `[name, revision]` entry per revisioned context, in context order.',
+        returns: 'one {@link RegistrationRevision} per revisioned context, in context order.',
       },
       {
         signature: 'async assemble(context: AssembleContext = {}): Promise<PromptAssembly>',
@@ -9238,6 +9238,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface RegisteredTool {\n    readonly definition: ToolDefinition;\n}',
   },
   {
+    name: 'RegistrationRevision',
+    declaration: 'export type RegistrationRevision = readonly [\n    name: string,\n    revision: string,\n    registration: number\n];',
+  },
+  {
     name: 'Registry',
     declaration: 'export type Registry = string | null;',
   },
@@ -10863,7 +10867,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SystemPrompt',
-    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    sectionRevisions(context: AssembleContext = {}): readonly (readonly [\n        name: string,\n        revision: string\n    ])[];\n    contextRevisions(context: AssembleContext = {}): readonly (readonly [\n        name: string,\n        revision: string\n    ])[];\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
+    declaration: 'export class SystemPrompt extends Service {\n    static Config: z<Config>;\n    constructor(ctx: Context, config: Config);\n    section(section: PromptSection): () => void;\n    getSectionOrder(name: PromptSectionOrderName): number;\n    getContextOrder(name: PromptContextOrderName): number;\n    context(context: PromptContext): () => void;\n    suppressRuntimeContext(): () => void;\n    tools(provider: (context: AssembleContext) => ToolProviderResult): () => void;\n    variable(name: string, provider: (context: AssembleContext) => string | undefined): () => void;\n    async requestContext(context: AssembleContext = {}, pending: readonly UserMessage[] = []): Promise<UserMessage[]>;\n    refreshContext(assembly: PromptAssembly, context: AssembleContext = {}): PromptAssembly;\n    sectionRevisions(context: AssembleContext = {}): readonly RegistrationRevision[];\n    contextRevisions(context: AssembleContext = {}): readonly RegistrationRevision[];\n    async assemble(context: AssembleContext = {}): Promise<PromptAssembly>;\n}',
   },
   {
     name: 'SystemPromptMessageSource',
